@@ -60,6 +60,18 @@ describe('QualityWarningBanner', () => {
     )
   })
 
+  it('renders a status notice when the assessment itself failed, rather than nothing', () => {
+    render(
+      <QualityWarningBanner
+        status="error"
+        assessment={null}
+        dismissed={false}
+        proceedAnyway={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('status')).toHaveTextContent(/couldn't check/i)
+  })
+
   it('renders nothing when the assessment passes', () => {
     const { container } = render(
       <QualityWarningBanner

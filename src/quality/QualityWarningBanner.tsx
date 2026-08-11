@@ -21,7 +21,18 @@ export function QualityWarningBanner({
   proceedAnyway,
 }: QualityWarningBannerProps) {
   if (status === 'assessing') {
-    return <p role="status">Checking video quality…</p>
+    return (
+      <p role="status">
+        Checking video quality… (the preview will jump briefly while we sample
+        frames)
+      </p>
+    )
+  }
+
+  if (status === 'error') {
+    return (
+      <p role="status">Couldn't check video quality — you can still proceed.</p>
+    )
   }
 
   if (

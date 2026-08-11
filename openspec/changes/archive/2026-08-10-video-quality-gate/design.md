@@ -118,3 +118,16 @@ resets to `false` whenever a new clip reaches `'ready'`, and is never persisted 
 - `seekTo`'s timeout fallback means a sample can, in the worst case (every seek timing out),
   effectively be evaluated at whatever `currentTime` the seek left the element at rather than the
   intended timestamp — accepted as a graceful-degradation trade-off over hanging the assessment.
+- Wiring `useVideoQualityGate` into `App.tsx` was the first thing to actually import
+  `@tensorflow-models/pose-detection` from the app's entry point (ticket #3 shipped the package
+  but nothing imported it eagerly before this change). That surfaced a production build failure:
+  `pose-detection`'s ESM bundle statically imports `Pose` from `@mediapipe/pose`, but that package
+  isn't real ESM/CJS (no static exports), so Vite/Rollup fails with `MISSING_EXPORT`. This app only
+  ever selects the MoveNet/TFJS backend — `@mediapipe/pose`'s `Pose` class is only ever constructed
+  by `pose-detection`'s BlazePose-mediapipe-runtime detector, a code path this app never reaches —
+  so the import exists purely to satisfy static module resolution, not runtime behavior. Fixed with
+  a `vite.config.ts` `resolve.alias` mapping `@mediapipe/pose` to a local stub module
+  (`src/pose/backends/__shims__/mediapipe-pose.ts`) exporting an empty `Pose` class. Confirmed (not
+  just assumed) that lazy/dynamic-importing `pose-detection` instead would not have avoided this —
+  the bundler still needs to statically resolve the named binding within whatever chunk the package
+  lands in, split or not.

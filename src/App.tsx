@@ -7,6 +7,15 @@ export function App() {
   const videoSource = useVideoSource()
   const qualityGate = useVideoQualityGate(videoSource)
 
+  // "Proceed anyway" unmounts the alert that currently holds focus — without
+  // this, focus silently drops to <body>, disorienting keyboard/screen-reader
+  // users (the same bug class already fixed once in WebcamCapture on #4).
+  // The video element is a stable, already-visible next target.
+  const handleProceedAnyway = () => {
+    qualityGate.proceedAnyway()
+    videoSource.videoRef.current?.focus()
+  }
+
   return (
     <main>
       <h1>Strides</h1>
@@ -17,7 +26,7 @@ export function App() {
           status={qualityGate.status}
           assessment={qualityGate.assessment}
           dismissed={qualityGate.dismissed}
-          proceedAnyway={qualityGate.proceedAnyway}
+          proceedAnyway={handleProceedAnyway}
         />
       )}
     </main>
