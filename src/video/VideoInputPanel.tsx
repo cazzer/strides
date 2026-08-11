@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import type { ReactNode } from 'react'
 import { FileUpload } from './FileUpload'
 import { WebcamCapture } from './WebcamCapture'
 import type { VideoSource } from './types'
@@ -6,6 +7,12 @@ import type { VideoSource } from './types'
 export interface VideoInputPanelProps {
   /** Owned by the caller (e.g. `App.tsx`) via `useVideoSource()`. */
   videoSource: VideoSource
+  /**
+   * Rendered inside the same positioned wrapper as `<video>`, e.g. `SkeletonOverlay` (#8) — lets
+   * a caller layer a canvas overlay directly on top of the canonical video element without this
+   * component needing to know anything about what's being overlaid.
+   */
+  children?: ReactNode
 }
 
 type Tab = 'record' | 'upload'
@@ -16,7 +23,7 @@ type Tab = 'record' | 'upload'
  * or care which path produced the loaded video — that distinction stops
  * existing once `videoSource.status` changes.
  */
-export function VideoInputPanel({ videoSource }: VideoInputPanelProps) {
+export function VideoInputPanel({ videoSource, children }: VideoInputPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>('record')
   const [isRecording, setIsRecording] = useState(false)
 
@@ -80,7 +87,19 @@ export function VideoInputPanel({ videoSource }: VideoInputPanelProps) {
         </div>
       )}
 
-      <video ref={videoRef} controls playsInline hidden={status === 'empty'} />
+      {/*
+        Always mounted (never conditionally rendered on `status`) — `useVideoSource.load()`
+        reads `videoRef.current` synchronously and no-ops if it's null (see
+        `useVideoSource.test.ts`'s "does nothing if load() is called with no video element
+        attached"), so the picker's `load()` calls, made while `status` is still `'empty'`,
+        depend on this element already being mounted. Only the `hidden` attribute — not DOM
+        presence — reflects `status`. The wrapper gives an overlay (e.g. `SkeletonOverlay`, #8)
+        a `position: relative` stage to be positioned against as a sibling of `<video>`.
+      */}
+      <div className="video-input-panel__stage" style={{ position: 'relative' }}>
+        <video ref={videoRef} controls playsInline hidden={status === 'empty'} />
+        {status !== 'empty' && children}
+      </div>
 
       {status === 'ready' && (
         <button type="button" onClick={reset}>

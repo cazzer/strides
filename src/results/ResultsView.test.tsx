@@ -1,0 +1,178 @@
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { ResultsView } from './ResultsView'
+import type { VideoAnalysisState } from './types'
+import type { FormHeuristicsResult } from '../heuristics/types'
+
+function makeHeuristics(): FormHeuristicsResult {
+  const base = {
+    unit: 'ratio' as const,
+    confidence: 0.9,
+    viewFit: 'primary' as const,
+    interpolatedFraction: 0,
+    frameCoverage: 1,
+    sampleSize: 10,
+    caveat: null,
+  }
+  return {
+    view: {
+      view: 'side',
+      confidence: 0.9,
+      diagnostics: {
+        bilateralSpreadRatio: 0.2,
+        sagittalExcursionRatio: 0.9,
+        frameCoverage: 1,
+      },
+    },
+    verticalOscillation: {
+      ...base,
+      metric: 'verticalOscillation',
+      value: 0.1,
+      series: [{ timestamp: 0, value: 0.1 }],
+    },
+    trunkLean: { ...base, metric: 'trunkLean', value: 5, unit: 'degrees' },
+    overstriding: { ...base, metric: 'overstriding', value: 0.1 },
+  }
+}
+
+function makeAnalysis(
+  overrides: Partial<VideoAnalysisState> = {},
+): VideoAnalysisState {
+  return {
+    phase: 'idle',
+    progress: 0,
+    isPausedMidAnalysis: false,
+    robustFrames: null,
+    heuristics: null,
+    error: null,
+    start: vi.fn(),
+    reset: vi.fn(),
+    ...overrides,
+  }
+}
+
+function renderResultsView(
+  props: Partial<
+    Pick<
+      Parameters<typeof ResultsView>[0],
+      'analysis' | 'qualityAssessing' | 'onTryAgain'
+    >
+  > = {},
+) {
+  const onTryAgain = props.onTryAgain ?? vi.fn()
+  render(
+    <ResultsView
+      analysis={props.analysis ?? makeAnalysis()}
+      qualityAssessing={props.qualityAssessing ?? false}
+      onTryAgain={onTryAgain}
+    />,
+  )
+  return { onTryAgain }
+}
+
+describe('ResultsView', () => {
+  it('enables the Analyze button when idle and quality gate is not assessing', () => {
+    renderResultsView()
+    expect(screen.getByRole('button', { name: /analyze/i })).toBeEnabled()
+  })
+
+  it('disables the Analyze button while the quality gate is assessing', () => {
+    renderResultsView({ qualityAssessing: true })
+    expect(screen.getByRole('button', { name: /analyze/i })).toBeDisabled()
+  })
+
+  it('disables the Analyze button once a run has started', () => {
+    renderResultsView({ analysis: makeAnalysis({ phase: 'sampling' }) })
+    expect(screen.getByRole('button', { name: /analyze/i })).toBeDisabled()
+  })
+
+  it('re-enables Analyze once a run completes, so the same clip can be re-analyzed', () => {
+    renderResultsView({
+      analysis: makeAnalysis({ phase: 'ready', heuristics: makeHeuristics() }),
+    })
+    expect(screen.getByRole('button', { name: /analyze again/i })).toBeEnabled()
+  })
+
+  it('re-enables Analyze after an error, so the user can retry via the primary button too', () => {
+    renderResultsView({
+      analysis: makeAnalysis({
+        phase: 'error',
+        error: { kind: 'unknown', message: 'Something broke.' },
+      }),
+    })
+    expect(screen.getByRole('button', { name: /analyze again/i })).toBeEnabled()
+  })
+
+  it('calls start() when the Analyze button is clicked', () => {
+    const analysis = makeAnalysis()
+    renderResultsView({ analysis })
+    fireEvent.click(screen.getByRole('button', { name: /analyze/i }))
+    expect(analysis.start).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a progress readout with percentage while sampling', () => {
+    renderResultsView({
+      analysis: makeAnalysis({ phase: 'sampling', progress: 0.42 }),
+    })
+    expect(screen.getByRole('status').textContent).toMatch(/42%/)
+  })
+
+  it('shows a processing readout while processing', () => {
+    renderResultsView({
+      analysis: makeAnalysis({ phase: 'processing', progress: 1 }),
+    })
+    expect(screen.getByRole('status').textContent).toMatch(/processing/i)
+  })
+
+  it('mentions the pause when analysis is paused mid-sampling', () => {
+    renderResultsView({
+      analysis: makeAnalysis({
+        phase: 'sampling',
+        progress: 0.2,
+        isPausedMidAnalysis: true,
+      }),
+    })
+    expect(screen.getByRole('status').textContent).toMatch(/paused/i)
+  })
+
+  it('announces completion once ready', () => {
+    renderResultsView({
+      analysis: makeAnalysis({ phase: 'ready', heuristics: makeHeuristics() }),
+    })
+    expect(screen.getByRole('status').textContent).toMatch(/complete/i)
+  })
+
+  it('shows an error alert and calls onTryAgain (not analysis.reset directly) from its button', () => {
+    const analysis = makeAnalysis({
+      phase: 'error',
+      error: { kind: 'detector-unavailable', message: 'Detector not ready.' },
+    })
+    const { onTryAgain } = renderResultsView({ analysis })
+
+    expect(screen.getByRole('alert').textContent).toMatch(/detector not ready/i)
+    fireEvent.click(screen.getByRole('button', { name: /try again/i }))
+    // The alert unmounts on click and holds focus until then -- moving focus somewhere stable
+    // is the caller's job (see App.tsx's handleTryAgain), which is exactly why this button
+    // calls the injected onTryAgain prop rather than analysis.reset directly.
+    expect(onTryAgain).toHaveBeenCalledTimes(1)
+    expect(analysis.reset).not.toHaveBeenCalled()
+  })
+
+  it('renders the metrics panel once phase is ready', () => {
+    renderResultsView({
+      analysis: makeAnalysis({ phase: 'ready', heuristics: makeHeuristics() }),
+    })
+    expect(
+      screen.getByRole('region', { name: /form metrics/i }),
+    ).toBeInTheDocument()
+  })
+
+  it('does not render results or status content while idle', () => {
+    renderResultsView()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('region', { name: /form metrics/i }),
+    ).not.toBeInTheDocument()
+  })
+})

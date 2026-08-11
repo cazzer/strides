@@ -38,9 +38,22 @@ export interface MetricResult {
   caveat: string | null
 }
 
+export interface TimeseriesPoint {
+  timestamp: number
+  /** (hipY - runMeanHipY) / torsoLengthPx, sign-flipped so positive = higher on screen.
+   *  null where hip position wasn't resolvable that frame — a real gap, not interpolated for charting. */
+  value: number | null
+}
+
+export interface VerticalOscillationResult extends MetricResult {
+  metric: 'verticalOscillation'
+  /** One entry per input RobustPoseFrame, timestamp-aligned 1:1. Empty only when bodyScale was null. */
+  series: TimeseriesPoint[]
+}
+
 export interface FormHeuristicsResult {
   view: ViewDetectionResult
-  verticalOscillation: MetricResult
+  verticalOscillation: VerticalOscillationResult
   trunkLean: MetricResult
   overstriding: MetricResult
 }

@@ -32,6 +32,9 @@ describe('computeFormHeuristics', () => {
     expect(result.verticalOscillation.viewFit).toBe('primary')
     expect(result.trunkLean.viewFit).toBe('primary')
     expect(result.overstriding.viewFit).toBe('primary')
+
+    // #8's waveform chart needs the timeseries, timestamp-aligned 1:1 with the input frames.
+    expect(result.verticalOscillation.series).toHaveLength(frames.length)
   })
 
   it('produces the same view label and per-metric results as calling detectView + each metric directly', () => {
@@ -68,5 +71,6 @@ describe('computeFormHeuristics', () => {
     expect(result.verticalOscillation.confidence).toBe(0)
     expect(result.trunkLean.confidence).toBe(0)
     expect(result.overstriding.confidence).toBe(0)
+    expect(result.verticalOscillation.series).toEqual([])
   })
 })

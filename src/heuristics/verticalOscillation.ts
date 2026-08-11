@@ -1,13 +1,23 @@
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
-import type { HeuristicsConfig, MetricResult, View } from './types'
+import type {
+  HeuristicsConfig,
+  MetricResult,
+  TimeseriesPoint,
+  VerticalOscillationResult,
+  View,
+} from './types'
 import { estimateBodyScale } from './bodyScale'
 import { resolveMidpoint } from './keypoints'
 import { findLocalExtrema } from './extrema'
 import { computeMetricConfidence } from './confidence'
 import { median } from './mathUtils'
 
-function nullResult(viewFit: MetricResult['viewFit'], caveat: string): MetricResult {
+function nullResult(
+  viewFit: MetricResult['viewFit'],
+  caveat: string,
+  series: TimeseriesPoint[] = [],
+): VerticalOscillationResult {
   return {
     metric: 'verticalOscillation',
     value: null,
@@ -18,6 +28,7 @@ function nullResult(viewFit: MetricResult['viewFit'], caveat: string): MetricRes
     frameCoverage: 0,
     sampleSize: 0,
     caveat,
+    series,
   }
 }
 
@@ -34,7 +45,7 @@ export function computeVerticalOscillation(
   frames: RobustPoseFrame[],
   view: View,
   config: HeuristicsConfig = DEFAULT_HEURISTICS_CONFIG,
-): MetricResult {
+): VerticalOscillationResult {
   const viewFitEntry = config.viewFitTable.verticalOscillation[view]
   const bodyScale = estimateBodyScale(frames)
 
@@ -49,23 +60,50 @@ export function computeVerticalOscillation(
 
   let interpolatedCount = 0
   let resolvedCount = 0
-  const series = frames.map((frame) => {
+  let hipYSum = 0
+  // One entry per frame — `null` where the hip wasn't resolvable that frame, preserving
+  // timestamp alignment with `frames` regardless of resolvability (unlike the extrema-detection
+  // series below, which only needs a value/timestamp pair for resolvable samples).
+  const rawHipY: Array<number | null> = frames.map((frame) => {
     const hipMid = resolveMidpoint(frame, 'left_hip', 'right_hip')
     if (hipMid === null) return null
     resolvedCount += 1
     if (hipMid.interpolated) interpolatedCount += 1
-    return { t: frame.timestamp, v: hipMid.y }
+    hipYSum += hipMid.y
+    return hipMid.y
   })
 
   if (resolvedCount === 0) {
-    return nullResult(viewFitEntry.fit, 'No resolvable hip position in this clip.')
+    return nullResult(
+      viewFitEntry.fit,
+      'No resolvable hip position in this clip.',
+      frames.map((frame) => ({ timestamp: frame.timestamp, value: null })),
+    )
   }
 
   const frameCoverage = resolvedCount / frames.length
   const interpolatedFraction = interpolatedCount / resolvedCount
 
+  // The run mean is the charting baseline, not a physical quantity — it just centers the
+  // waveform around 0 so the chart reads as "bounce above/below typical", independent of where
+  // in the frame the runner happened to be positioned.
+  const runMeanHipY = hipYSum / resolvedCount
+  const series: TimeseriesPoint[] = frames.map((frame, i) => {
+    const y = rawHipY[i]
+    return {
+      timestamp: frame.timestamp,
+      // Sign-flipped: image-y grows downward, so a smaller y (higher on screen) should read as
+      // a positive bounce.
+      value: y === null ? null : (runMeanHipY - y) / torsoLengthPx,
+    }
+  })
+
   const minProminenceAbs = config.verticalOscillationMinProminenceRatio * torsoLengthPx
-  const extrema = findLocalExtrema(series, minProminenceAbs)
+  const extremaSeries = frames.map((frame, i) => {
+    const y = rawHipY[i]
+    return y === null ? null : { t: frame.timestamp, v: y }
+  })
+  const extrema = findLocalExtrema(extremaSeries, minProminenceAbs)
 
   // Pair consecutive opposite-sign extrema into half-cycle amplitudes. findLocalExtrema already
   // guarantees strict alternation within one contiguous run, but two separate runs on either side
@@ -86,6 +124,7 @@ export function computeVerticalOscillation(
     return nullResult(
       viewFitEntry.fit,
       'Hip position was tracked, but no complete vertical-oscillation cycle was detected.',
+      series,
     )
   }
 
@@ -115,5 +154,6 @@ export function computeVerticalOscillation(
     frameCoverage,
     sampleSize,
     caveat,
+    series,
   }
 }

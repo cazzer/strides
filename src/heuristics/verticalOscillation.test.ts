@@ -35,6 +35,11 @@ describe('computeVerticalOscillation', () => {
     expect(result.confidence).toBeCloseTo(1)
     expect(result.viewFit).toBe('primary')
     expect(result.caveat).toBeNull()
+    expect(result.series).toHaveLength(frames.length)
+    expect(result.series.every((point) => point.value !== null)).toBe(true)
+    expect(result.series.map((point) => point.timestamp)).toEqual(
+      frames.map((frame) => frame.timestamp),
+    )
   })
 
   it('a front-view clip: still a reasonable value, confidence discounted by the 0.85 multiplier', () => {
@@ -47,6 +52,7 @@ describe('computeVerticalOscillation', () => {
     // Same reasoning as the side-view case, but viewFitMultiplier is 0.85 instead of 1.0.
     expect(result.confidence).toBeCloseTo(0.85)
     expect(result.viewFit).toBe('tolerated')
+    expect(result.series).toHaveLength(frames.length)
   })
 
   it('a heavily-interpolated/unrecoverable stream: reduced confidence, no crash, a non-null value', () => {
@@ -89,6 +95,9 @@ describe('computeVerticalOscillation', () => {
     // Visibly reduced from the ~1.0 a clean, fully-resolvable clip would get.
     expect(result.confidence).toBeLessThan(0.9)
     expect(result.confidence).toBeGreaterThan(0)
+    expect(result.series).toHaveLength(robustFrames.length)
+    // The two gapped stretches were unrecoverable — a real gap, not interpolated for charting.
+    expect(result.series.some((point) => point.value === null)).toBe(true)
   })
 
   it('returns a null value and 0 confidence when no hip position is resolvable at all', () => {
@@ -108,5 +117,23 @@ describe('computeVerticalOscillation', () => {
     expect(result.value).toBeNull()
     expect(result.confidence).toBe(0)
     expect(result.caveat).not.toBeNull()
+    // Stripping hips also makes bodyScale unresolvable (it needs hip+shoulder together in the
+    // same frame) — per the `series` contract, empty only when bodyScale is null, which is
+    // exactly the case here.
+    expect(result.series).toEqual([])
+  })
+
+  it('populates series even when hip is tracked but no complete cycle is detected', () => {
+    // Zero bounce amplitude: hip position is fully tracked (body scale resolves), but no
+    // extremum ever clears the prominence threshold, so there's no computable amplitude.
+    const frames = generateSyntheticGait({ ...BASE_PARAMS, verticalBouncePx: 0, view: 'side' })
+
+    const result = computeVerticalOscillation(frames, 'side')
+
+    expect(result.value).toBeNull()
+    expect(result.sampleSize).toBe(0)
+    expect(result.caveat).toMatch(/no complete vertical-oscillation cycle/i)
+    expect(result.series).toHaveLength(frames.length)
+    expect(result.series.every((point) => point.value !== null)).toBe(true)
   })
 })
