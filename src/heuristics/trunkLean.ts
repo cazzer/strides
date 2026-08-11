@@ -15,7 +15,10 @@ import { median } from './mathUtils'
  */
 const MIN_TRUNK_LEAN_SAMPLE_SIZE = 10
 
-function nullResult(viewFit: MetricResult['viewFit'], caveat: string): MetricResult {
+function nullResult(
+  viewFit: MetricResult['viewFit'],
+  caveat: string,
+): MetricResult {
   return {
     metric: 'trunkLean',
     value: null,
@@ -59,7 +62,11 @@ export function computeTrunkLean(
   let interpolatedCount = 0
   const leanValues: number[] = []
   for (const frame of frames) {
-    const shoulderMid = resolveMidpoint(frame, 'left_shoulder', 'right_shoulder')
+    const shoulderMid = resolveMidpoint(
+      frame,
+      'left_shoulder',
+      'right_shoulder',
+    )
     const hipMid = resolveMidpoint(frame, 'left_hip', 'right_hip')
     if (shoulderMid === null || hipMid === null) continue
 
@@ -79,7 +86,10 @@ export function computeTrunkLean(
   }
 
   if (leanValues.length === 0) {
-    return nullResult(viewFitEntry.fit, 'No resolvable torso position in this clip.')
+    return nullResult(
+      viewFitEntry.fit,
+      'No resolvable torso position in this clip.',
+    )
   }
 
   const frameCoverage = leanValues.length / frames.length
@@ -105,6 +115,11 @@ export function computeTrunkLean(
   if (viewFitEntry.fit === 'unsuitable') {
     caveats.push(
       `Trunk lean is a sagittal-plane measurement and is not reliable from a ${view} view.`,
+    )
+  }
+  if (leanValues.length < MIN_TRUNK_LEAN_SAMPLE_SIZE) {
+    caveats.push(
+      `Only ${leanValues.length} resolvable frame(s) (recommend at least ${MIN_TRUNK_LEAN_SAMPLE_SIZE}) — confidence reduced accordingly.`,
     )
   }
 

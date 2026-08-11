@@ -17,7 +17,11 @@ describe('computeTrunkLean', () => {
     // (torsoOffset()), and travel direction is unambiguously forward (+1) since hip-x advances
     // steadily -- so atan2(dx, -dy) recovers trunkLeanDeg exactly on every single frame, and the
     // median of a constant series is that same constant.
-    const frames = generateSyntheticGait({ ...BASE_PARAMS, trunkLeanDeg: 8, view: 'side' })
+    const frames = generateSyntheticGait({
+      ...BASE_PARAMS,
+      trunkLeanDeg: 8,
+      view: 'side',
+    })
 
     const result = computeTrunkLean(frames, 'side')
 
@@ -31,7 +35,11 @@ describe('computeTrunkLean', () => {
   })
 
   it('a front-view clip: value is 0 (shoulders/hips stay x-aligned), viewFit unsuitable, low confidence', () => {
-    const frames = generateSyntheticGait({ ...BASE_PARAMS, trunkLeanDeg: 8, view: 'front' })
+    const frames = generateSyntheticGait({
+      ...BASE_PARAMS,
+      trunkLeanDeg: 8,
+      view: 'front',
+    })
 
     const result = computeTrunkLean(frames, 'front')
 
@@ -67,6 +75,33 @@ describe('computeTrunkLean', () => {
     // viewFitMultiplier 1, frameCoverage 1, interpolatedFraction 0, sampleSize factor 1,
     // travelDirectionKnown false -> the only active penalty is the 0.5 travel-direction factor.
     expect(result.confidence).toBeCloseTo(0.5, 5)
+  })
+
+  it('few resolvable frames: caveat names the shortfall, mirroring overstriding/verticalOscillation', () => {
+    const leanDeg = 6
+    const leanRad = (leanDeg * Math.PI) / 180
+    const torsoLength = 150
+    const dx = torsoLength * Math.sin(leanRad)
+    const dy = -torsoLength * Math.cos(leanRad)
+
+    // 5 frames (< MIN_TRUNK_LEAN_SAMPLE_SIZE), each shifted in x so net hip displacement clears
+    // the travel-direction threshold -- isolates the sample-size caveat from the
+    // travel-direction-unknown one, which is covered by a separate test above.
+    const frames = Array.from({ length: 5 }, (_, i) => {
+      const hipX = 200 + i * 20
+      return buildFrame({
+        left_hip: { x: hipX, y: 400 },
+        right_hip: { x: hipX, y: 400 },
+        left_shoulder: { x: hipX + dx, y: 400 + dy },
+        right_shoulder: { x: hipX + dx, y: 400 + dy },
+      })
+    })
+
+    const result = computeTrunkLean(frames, 'side')
+
+    expect(result.sampleSize).toBe(5)
+    expect(result.caveat).toContain('Only 5 resolvable frame(s)')
+    expect(result.confidence).toBeLessThan(1)
   })
 
   it('returns a null value and 0 confidence when no torso position is resolvable', () => {
