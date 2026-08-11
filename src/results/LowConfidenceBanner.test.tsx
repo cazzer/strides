@@ -45,6 +45,10 @@ function makeHeuristics(
     },
     trunkLean: makeMetric({ metric: 'trunkLean' }),
     overstriding: makeMetric({ metric: 'overstriding', unit: 'ratio' }),
+    cadence: makeMetric({ metric: 'cadence', unit: 'stepsPerMinute', value: 170 }),
+    kneeFlexion: makeMetric({ metric: 'kneeFlexion' }),
+    armSwingSymmetry: makeMetric({ metric: 'armSwingSymmetry', unit: 'percent', value: 0.9 }),
+    footStrikePattern: makeMetric({ metric: 'footStrikePattern', unit: 'ratio' }),
     ...overrides,
   }
 }

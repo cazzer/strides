@@ -5,7 +5,15 @@ export interface LowConfidenceBannerProps {
   heuristics: FormHeuristicsResult
 }
 
-const METRIC_IDS = ['verticalOscillation', 'trunkLean', 'overstriding'] as const
+const METRIC_IDS = [
+  'verticalOscillation',
+  'trunkLean',
+  'overstriding',
+  'cadence',
+  'kneeFlexion',
+  'armSwingSymmetry',
+  'footStrikePattern',
+] as const
 
 /**
  * Pure function of `heuristics` — no hook, no lifecycle. Renders nothing unless at least one

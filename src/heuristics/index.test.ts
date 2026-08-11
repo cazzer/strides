@@ -23,15 +23,34 @@ describe('computeFormHeuristics', () => {
     expect(result.verticalOscillation.metric).toBe('verticalOscillation')
     expect(result.trunkLean.metric).toBe('trunkLean')
     expect(result.overstriding.metric).toBe('overstriding')
+    expect(result.cadence.metric).toBe('cadence')
+    expect(result.footStrikePattern.metric).toBe('footStrikePattern')
 
     expect(result.verticalOscillation.value).not.toBeNull()
     expect(result.trunkLean.value).not.toBeNull()
     expect(result.overstriding.value).not.toBeNull()
+    expect(result.cadence.value).not.toBeNull()
+    expect(result.footStrikePattern.value).not.toBeNull()
+    // generateSyntheticGait's elbow/wrist keypoints are static relative to the shoulder (this
+    // shared fixture has no arm-swing motion), so armSwingSymmetry correctly reports null here
+    // ("no complete arm-swing cycle") rather than a fabricated value — see armSwingSymmetry.test.ts
+    // for dedicated coverage of a clip that actually swings, including its own view-gating case.
+    expect(result.armSwingSymmetry.value).toBeNull()
+    expect(result.armSwingSymmetry.confidence).toBe(0)
 
     // Every metric was gated using the same detected view, not recomputed independently.
     expect(result.verticalOscillation.viewFit).toBe('primary')
     expect(result.trunkLean.viewFit).toBe('primary')
     expect(result.overstriding.viewFit).toBe('primary')
+    expect(result.cadence.viewFit).toBe('primary')
+    expect(result.footStrikePattern.viewFit).toBe('primary')
+    // armSwingSymmetry is the mirror image of trunkLean/overstriding: side is its unsuitable
+    // view, not its primary one.
+    expect(result.armSwingSymmetry.viewFit).toBe('unsuitable')
+
+    // footStrikePattern's caveat is non-null even here, in the fully-populated clean case — the
+    // one metric where that's true by design (it's always a proxy, never a direct measurement).
+    expect(result.footStrikePattern.caveat).not.toBeNull()
 
     // #8's waveform chart needs the timeseries, timestamp-aligned 1:1 with the input frames.
     expect(result.verticalOscillation.series).toHaveLength(frames.length)
@@ -46,7 +65,7 @@ describe('computeFormHeuristics', () => {
     expect(orchestrated.view).toEqual(standaloneView)
   })
 
-  it('gates all three metrics consistently off an ambiguous view', () => {
+  it('gates all seven metrics consistently off an ambiguous view', () => {
     const frames = generateSyntheticGait({
       ...PARAMS,
       strideAmplitudePx: 20, // engineered BSR/SER disagreement, see viewDetection.test.ts
@@ -58,6 +77,11 @@ describe('computeFormHeuristics', () => {
     expect(result.verticalOscillation.viewFit).toBe('tolerated')
     expect(result.trunkLean.viewFit).toBe('unsuitable')
     expect(result.overstriding.viewFit).toBe('unsuitable')
+    // Cadence is view-tolerant like verticalOscillation, not hard-gated like trunkLean/
+    // overstriding — see viewFitTable.cadence in types.ts and design.md.
+    expect(result.cadence.viewFit).toBe('tolerated')
+    expect(result.armSwingSymmetry.viewFit).toBe('unsuitable')
+    expect(result.footStrikePattern.viewFit).toBe('unsuitable')
   })
 
   it('never throws on an empty frame list and returns a well-formed, non-null-crashing result', () => {
@@ -68,9 +92,16 @@ describe('computeFormHeuristics', () => {
     expect(result.verticalOscillation.value).toBeNull()
     expect(result.trunkLean.value).toBeNull()
     expect(result.overstriding.value).toBeNull()
+    expect(result.cadence.value).toBeNull()
+    expect(result.armSwingSymmetry.value).toBeNull()
+    expect(result.footStrikePattern.value).toBeNull()
     expect(result.verticalOscillation.confidence).toBe(0)
     expect(result.trunkLean.confidence).toBe(0)
     expect(result.overstriding.confidence).toBe(0)
+    expect(result.cadence.confidence).toBe(0)
+    expect(result.armSwingSymmetry.confidence).toBe(0)
+    expect(result.footStrikePattern.confidence).toBe(0)
+    expect(result.footStrikePattern.caveat).not.toBeNull()
     expect(result.verticalOscillation.series).toEqual([])
   })
 })

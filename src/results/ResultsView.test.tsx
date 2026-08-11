@@ -32,6 +32,15 @@ function makeHeuristics(): FormHeuristicsResult {
     },
     trunkLean: { ...base, metric: 'trunkLean', value: 5, unit: 'degrees' },
     overstriding: { ...base, metric: 'overstriding', value: 0.1 },
+    cadence: { ...base, metric: 'cadence', value: 170, unit: 'stepsPerMinute' },
+    kneeFlexion: { ...base, metric: 'kneeFlexion', value: 110, unit: 'degrees' },
+    armSwingSymmetry: { ...base, metric: 'armSwingSymmetry', value: 0.9, unit: 'percent' },
+    footStrikePattern: {
+      ...base,
+      metric: 'footStrikePattern',
+      value: 0.01,
+      caveat: 'Approximated from ankle position relative to the knee at footstrike.',
+    },
   }
 }
 

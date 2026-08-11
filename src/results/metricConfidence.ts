@@ -4,6 +4,10 @@ export const METRIC_LABELS: Record<MetricId, string> = {
   verticalOscillation: 'Vertical oscillation',
   trunkLean: 'Trunk lean',
   overstriding: 'Overstriding',
+  cadence: 'Cadence',
+  kneeFlexion: 'Knee flexion',
+  armSwingSymmetry: 'Arm swing symmetry',
+  footStrikePattern: 'Foot strike pattern',
 }
 
 /** Low-confidence threshold below which a metric is flagged — a judgment-call cutoff, not

@@ -48,3 +48,26 @@ export function clamp01(value: number): number {
   if (Number.isNaN(value)) return 0
   return Math.min(1, Math.max(0, value))
 }
+
+/**
+ * Interior angle at `vertex`, in degrees, between the rays vertex→a and vertex→b — the standard
+ * three-point joint-angle formula (e.g. hip-knee-ankle), used by kneeFlexion. Always in `[0,
+ * 180]` by construction (an absolute angular difference, wrapped).
+ *
+ * atan2-based rather than the law-of-cosines/`acos` form: `acos` loses precision as its argument
+ * approaches ±1 — exactly where a near-straight (180°) or near-fully-folded (0°) joint would need
+ * precision most — while two `atan2` calls plus a subtraction stay well-conditioned across the
+ * whole range. This mirrors the atan2 style `trunkLean.ts` already uses for its own angle, rather
+ * than introducing a second angle-computation convention.
+ */
+export function angleBetweenVectorsDeg(
+  vertex: { x: number; y: number },
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): number {
+  const angleToA = Math.atan2(a.y - vertex.y, a.x - vertex.x)
+  const angleToB = Math.atan2(b.y - vertex.y, b.x - vertex.x)
+  let diff = Math.abs(angleToA - angleToB)
+  if (diff > Math.PI) diff = 2 * Math.PI - diff
+  return (diff * 180) / Math.PI
+}

@@ -28,20 +28,37 @@ export function App() {
         </p>
       </header>
       <main className="mx-auto max-w-6xl px-4 sm:px-6 py-10 space-y-8 lg:grid lg:grid-cols-2 lg:items-start lg:gap-8 lg:space-y-0">
-        <VideoInputPanel videoSource={videoSource}>
-          {analysis.phase === 'ready' &&
-            analysis.robustFrames &&
-            videoSource.metadata && (
-              <SkeletonOverlay
-                videoRef={videoSource.videoRef}
-                frames={analysis.robustFrames}
-                metadata={videoSource.metadata}
-              />
-            )}
-        </VideoInputPanel>
-        {videoSource.status === 'ready' && (
-          <ResultsView analysis={analysis} onTryAgain={handleTryAgain} />
-        )}
+        {/*
+          Sticky video column: at `lg`+ (where the grid is active), stays pinned in the
+          viewport while the results column scrolls past it. The `top` offset matches the
+          fixed header's rendered height (measured in-browser, not assumed) so the two
+          `sticky` elements — header at `top-0`, this at `top-[headerHeight]` — stack flush
+          without overlapping. No sticky/offset below `lg`: it's a plain block in normal flow,
+          identical to the pre-sticky-layout behavior.
+        */}
+        <div className="lg:sticky lg:top-[86px]">
+          <VideoInputPanel videoSource={videoSource}>
+            {analysis.phase === 'ready' &&
+              analysis.robustFrames &&
+              videoSource.metadata && (
+                <SkeletonOverlay
+                  videoRef={videoSource.videoRef}
+                  frames={analysis.robustFrames}
+                  metadata={videoSource.metadata}
+                />
+              )}
+          </VideoInputPanel>
+        </div>
+        {/*
+          Results column: bounded to the remaining viewport height below the header and
+          scrolls independently at `lg`+, so a tall metrics list (seven cards) never pushes
+          the video out of view.
+        */}
+        <div className="lg:max-h-[calc(100vh-86px)] lg:overflow-y-auto">
+          {videoSource.status === 'ready' && (
+            <ResultsView analysis={analysis} onTryAgain={handleTryAgain} />
+          )}
+        </div>
       </main>
     </>
   )
