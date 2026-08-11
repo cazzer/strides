@@ -55,10 +55,12 @@ export interface GetUserMediaClassifiedError {
 export function classifyGetUserMediaError(
   error: unknown,
 ): GetUserMediaClassifiedError {
-  // getUserMedia/MediaRecorder failures are typically DOMExceptions, which
-  // (per spec) do NOT extend Error, so this can't rely on `instanceof
-  // Error` — just duck-type on `.name`, which both Error and DOMException
-  // instances carry.
+  // Duck-type on `.name` rather than `instanceof Error`. Real DOMException
+  // instances *are* Error instances in every environment this code runs in
+  // (browsers and this repo's jsdom test runner), but `.name` also handles
+  // error-shaped objects that aren't real Error/DOMException instances
+  // (e.g. objects crossing a realm boundary, or hand-built test doubles) —
+  // that's the case duck-typing buys over `instanceof`.
   const name =
     typeof error === 'object' && error !== null && 'name' in error
       ? String((error as { name: unknown }).name)

@@ -24,13 +24,18 @@ export function VideoInputPanel({ videoSource }: VideoInputPanelProps) {
   const showPicker = status === 'empty'
 
   return (
-    <section className="video-input-panel">
+    <section className="video-input-panel" aria-label="Video input">
       {showPicker && (
         <div className="video-input-panel__tabs">
           <button
             type="button"
             aria-pressed={activeTab === 'record'}
             disabled={isRecording && activeTab !== 'record'}
+            title={
+              isRecording && activeTab !== 'record'
+                ? "Can't switch while recording"
+                : undefined
+            }
             onClick={() => setActiveTab('record')}
           >
             Record
@@ -39,6 +44,11 @@ export function VideoInputPanel({ videoSource }: VideoInputPanelProps) {
             type="button"
             aria-pressed={activeTab === 'upload'}
             disabled={isRecording && activeTab !== 'upload'}
+            title={
+              isRecording && activeTab !== 'upload'
+                ? "Can't switch while recording"
+                : undefined
+            }
             onClick={() => setActiveTab('upload')}
           >
             Upload

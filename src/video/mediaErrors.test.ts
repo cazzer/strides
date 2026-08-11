@@ -85,4 +85,9 @@ describe('classifyGetUserMediaError', () => {
     expect(result.kind).toBe('unknown')
     expect(result.message.length).toBeGreaterThan(0)
   })
+
+  it('classifies a plain object with a matching .name, not just real Error/DOMException instances', () => {
+    const result = classifyGetUserMediaError({ name: 'NotAllowedError' })
+    expect(result.kind).toBe('permission-denied')
+  })
 })

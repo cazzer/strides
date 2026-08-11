@@ -51,6 +51,7 @@ export function WebcamCapture({
   const chunksRef = useRef<Blob[]>([])
   const frameRateHintRef = useRef<number | null>(null)
   const unmountedRef = useRef(false)
+  const stopButtonRef = useRef<HTMLButtonElement | null>(null)
 
   const stopAllTracks = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop())
@@ -72,6 +73,15 @@ export function WebcamCapture({
       state.kind === 'recording' || state.kind === 'stopping',
     )
   }, [state.kind, onRecordingStateChange])
+
+  // Move focus to the Stop button when recording begins — the Start button
+  // it replaces has just unmounted, so without this, keyboard/screen-reader
+  // users lose their place and land back on <body>.
+  useEffect(() => {
+    if (state.kind === 'recording') {
+      stopButtonRef.current?.focus()
+    }
+  }, [state.kind])
 
   const finalizeRecording = useCallback(() => {
     const mimeType = recorderRef.current?.mimeType
@@ -176,10 +186,23 @@ export function WebcamCapture({
       if (event.data.size > 0) chunksRef.current.push(event.data)
     }
     recorder.onstop = () => finalizeRecording()
+    recorder.onerror = () => {
+      chunksRef.current = []
+      recorderRef.current = null
+      stopAllTracks()
+      setState({
+        kind: 'error',
+        error: {
+          kind: 'device-error',
+          message:
+            'Recording failed unexpectedly. Try again, or upload a video file instead.',
+        },
+      })
+    }
 
     recorder.start()
     setState({ kind: 'recording' })
-  }, [finalizeRecording])
+  }, [finalizeRecording, stopAllTracks])
 
   const stopRecording = useCallback(() => {
     if (recorderRef.current && recorderRef.current.state !== 'inactive') {
@@ -200,6 +223,7 @@ export function WebcamCapture({
         autoPlay
         playsInline
         hidden={!isPreviewing}
+        aria-label="Camera preview"
       />
 
       {state.kind === 'idle' && (
@@ -212,8 +236,11 @@ export function WebcamCapture({
         <p role="status">Requesting camera access…</p>
       )}
 
+      {state.kind === 'recording' && <p role="status">Recording…</p>}
+
       {isPreviewing && (
         <button
+          ref={stopButtonRef}
           type="button"
           onClick={stopRecording}
           disabled={state.kind === 'stopping'}
