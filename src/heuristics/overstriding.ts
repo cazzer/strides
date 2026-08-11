@@ -5,8 +5,8 @@ import type { HeuristicsConfig, MetricResult, View } from './types'
 import { estimateBodyScale } from './bodyScale'
 import { estimateTravelDirection } from './travelDirection'
 import { resolveMidpoint, resolvePoint } from './keypoints'
-import { findLocalExtrema } from './extrema'
-import type { Extremum } from './extrema'
+import { detectFootstrikes } from './footstrikes'
+import type { FootstrikeCandidate } from './footstrikes'
 import { computeMetricConfidence } from './confidence'
 import { median } from './mathUtils'
 
@@ -40,40 +40,6 @@ function nullResult(
   }
 }
 
-interface FootstrikeCandidate {
-  frameIndex: number
-  timestamp: number
-  side: 'left' | 'right'
-}
-
-/**
- * `findLocalExtrema` gives every prominence-confirmed local max/min of one side's ankle-y series;
- * only the MAXIMA are candidate footstrikes (ankle.y largest ≈ foot lowest on screen ≈ closest to
- * the ground). This is an explicit approximation — there is no foot/toe keypoint or ground-plane
- * calibration anywhere in this pipeline, so "lowest visible ankle point" stands in for "ground
- * contact", which is a real but bounded source of error (see design.md).
- *
- * A simple greedy scan then enforces the minimum footstrike interval: real footstrikes can't be
- * closer together than a runner's fastest plausible cadence, so a candidate less than
- * `minIntervalSeconds` after the last KEPT one is almost certainly the same footstrike
- * re-detected across a couple of noisy frames, not a second one.
- */
-function extractFootstrikes(
-  extrema: Extremum[],
-  side: 'left' | 'right',
-  minIntervalSeconds: number,
-): FootstrikeCandidate[] {
-  const kept: FootstrikeCandidate[] = []
-  let lastTimestamp = -Infinity
-  for (const extremum of extrema) {
-    if (extremum.kind !== 'max') continue
-    if (extremum.timestamp - lastTimestamp < minIntervalSeconds) continue
-    kept.push({ frameIndex: extremum.index, timestamp: extremum.timestamp, side })
-    lastTimestamp = extremum.timestamp
-  }
-  return kept
-}
-
 /**
  * Overstriding: at each footstrike, how far ahead of the hip (in the direction of travel) the
  * foot lands, as a fraction of torso length. Positive = foot lands ahead of the hip.
@@ -100,20 +66,7 @@ export function computeOverstriding(
   const travelDirection = estimateTravelDirection(frames, bodyScale)
   const travelDirectionKnown = travelDirection !== 0
 
-  const minProminenceAbs = config.footstrikeMinProminenceRatio * torsoLengthPx
-
-  const candidates: FootstrikeCandidate[] = []
-  for (const side of ['left', 'right'] as const) {
-    const ankleName = ANKLE_NAME[side]
-    const series = frames.map((frame) => {
-      const ankle = resolvePoint(frame, ankleName)
-      return ankle === null ? null : { t: frame.timestamp, v: ankle.y }
-    })
-    const extrema = findLocalExtrema(series, minProminenceAbs)
-    candidates.push(
-      ...extractFootstrikes(extrema, side, config.footstrikeMinIntervalSeconds),
-    )
-  }
+  const candidates: FootstrikeCandidate[] = detectFootstrikes(frames, config)
 
   const candidateStrikeCount = candidates.length
   if (candidateStrikeCount === 0) {
