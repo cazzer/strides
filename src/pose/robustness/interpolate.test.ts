@@ -21,7 +21,10 @@ function makeFrame(opts: {
   return { keypoints, timestamp: opts.timestamp ?? 0 }
 }
 
-function findKeypoint(frame: ReturnType<typeof applyRobustness>[number], name: string) {
+function findKeypoint(
+  frame: ReturnType<typeof applyRobustness>[number],
+  name: string,
+) {
   const kp = frame.keypoints.find((k) => k.name === name)
   if (!kp) throw new Error(`keypoint ${name} not found`)
   return kp
@@ -191,6 +194,57 @@ describe('applyRobustness', () => {
     const otherName = COMMON_KEYPOINT_NAMES.find((n) => n !== LEFT_SHOULDER)!
     expect(findKeypoint(result[1], otherName).status).toBe('detected')
     expect(findKeypoint(result[1], otherName).x).toBe(999)
+  })
+
+  it('treats a zero-length gap between same-timestamp anchors as unrecoverable, not NaN', () => {
+    const samples: PoseSample[] = [
+      {
+        timestamp: 0,
+        frame: makeFrame({ score: 0.9, x: 0, y: 0, timestamp: 0 }),
+      },
+      { timestamp: 0, frame: null },
+      {
+        timestamp: 0,
+        frame: makeFrame({ score: 0.9, x: 10, y: 10, timestamp: 0 }),
+      },
+    ]
+
+    const result = applyRobustness(samples)
+
+    const mid = findKeypoint(result[1], LEFT_SHOULDER)
+    expect(mid.status).toBe('unrecoverable')
+    expect(mid.x).toBeNull()
+    expect(mid.y).toBeNull()
+    expect(mid.score).toBe(0)
+    expect(Number.isNaN(mid.x)).toBe(false)
+  })
+
+  it('is unrecoverable when anchor timestamps are out of order, not extrapolated', () => {
+    const samples: PoseSample[] = [
+      { timestamp: 1, frame: makeFrame({ score: 0.9, x: 0, y: 0 }) },
+      { timestamp: 0.5, frame: null },
+      { timestamp: 0, frame: makeFrame({ score: 0.9, x: 10, y: 10 }) },
+    ]
+
+    const result = applyRobustness(samples)
+
+    const mid = findKeypoint(result[1], LEFT_SHOULDER)
+    expect(mid.status).toBe('unrecoverable')
+    expect(mid.x).toBeNull()
+  })
+
+  it('lerps score toward distinct anchor values, not just echoing one side', () => {
+    const samples: PoseSample[] = [
+      { timestamp: 0, frame: makeFrame({ score: 0.4, x: 0, y: 0 }) },
+      { timestamp: 0.1, frame: makeFrame({ score: 0.1, x: 0, y: 0 }) },
+      { timestamp: 0.2, frame: makeFrame({ score: 0.8, x: 10, y: 10 }) },
+    ]
+
+    const result = applyRobustness(samples)
+
+    const mid = findKeypoint(result[1], LEFT_SHOULDER)
+    expect(mid.status).toBe('interpolated')
+    expect(mid.score).toBeCloseTo(0.6) // lerp(0.4, 0.8, 0.5)
   })
 
   it('respects a caller-supplied config instead of the defaults', () => {

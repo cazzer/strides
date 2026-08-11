@@ -2,8 +2,7 @@ import { COMMON_KEYPOINT_NAMES } from '../types'
 import type { Keypoint, PoseFrame } from '../types'
 
 export type RawKeypointState =
-  | { kind: 'present'; keypoint: Keypoint }
-  | { kind: 'missing' }
+  { kind: 'present'; keypoint: Keypoint } | { kind: 'missing' }
 
 export function classifyFrame(
   frame: PoseFrame | null,

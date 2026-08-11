@@ -46,7 +46,9 @@ describe('classifyFrame', () => {
   })
 
   it('classifies each keypoint independently within a mixed frame', () => {
-    const scores = COMMON_KEYPOINT_NAMES.map((_, i) => (i % 2 === 0 ? 0.9 : 0.1))
+    const scores = COMMON_KEYPOINT_NAMES.map((_, i) =>
+      i % 2 === 0 ? 0.9 : 0.1,
+    )
     const frame = buildFrame(scores)
 
     const states = classifyFrame(frame, 0.3)

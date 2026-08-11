@@ -55,22 +55,28 @@ function interpolateChannel(
       beforeState?.kind === 'present' ? beforeState.keypoint : undefined
 
     const afterIndex = runEnd
-    const afterState = afterIndex < states.length ? states[afterIndex] : undefined
-    const after = afterState?.kind === 'present' ? afterState.keypoint : undefined
+    const afterState =
+      afterIndex < states.length ? states[afterIndex] : undefined
+    const after =
+      afterState?.kind === 'present' ? afterState.keypoint : undefined
 
     const gapSeconds =
       before !== undefined && after !== undefined
         ? samples[afterIndex].timestamp - samples[beforeIndex].timestamp
         : Infinity
+    // gapSeconds > 0 (not >= 0): a zero-length gap between two same-timestamp
+    // anchors has no well-defined interpolation position (t = 0/0 = NaN) —
+    // treat it as unrecoverable rather than reporting a NaN as 'interpolated'.
     const recoverable =
       before !== undefined &&
       after !== undefined &&
-      gapSeconds >= 0 &&
+      gapSeconds > 0 &&
       gapSeconds <= maxGapSeconds
 
     for (let j = runStart; j < runEnd; j += 1) {
       if (recoverable && before !== undefined && after !== undefined) {
-        const t = (samples[j].timestamp - samples[beforeIndex].timestamp) / gapSeconds
+        const t =
+          (samples[j].timestamp - samples[beforeIndex].timestamp) / gapSeconds
         result[j] = {
           name,
           x: lerp(before.x, after.x, t),
@@ -79,7 +85,13 @@ function interpolateChannel(
           status: 'interpolated',
         }
       } else {
-        result[j] = { name, x: null, y: null, score: 0, status: 'unrecoverable' }
+        result[j] = {
+          name,
+          x: null,
+          y: null,
+          score: 0,
+          status: 'unrecoverable',
+        }
       }
     }
 
