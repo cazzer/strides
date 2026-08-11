@@ -1,0 +1,89 @@
+import { describe, expect, it } from 'vitest'
+import { computeMetricConfidence } from './confidence'
+
+const BASE = {
+  viewFitMultiplier: 1,
+  frameCoverage: 1,
+  interpolatedFraction: 0,
+  sampleSize: 10,
+  minRequiredSampleSize: 10,
+  interpolationConfidencePenalty: 0.5,
+}
+
+describe('computeMetricConfidence', () => {
+  it('returns 1 when every factor is fully favorable', () => {
+    expect(computeMetricConfidence(BASE)).toBeCloseTo(1)
+  })
+
+  it('multiplies in the view-fit multiplier directly', () => {
+    expect(computeMetricConfidence({ ...BASE, viewFitMultiplier: 0.5 })).toBeCloseTo(0.5)
+  })
+
+  it('multiplies in frame coverage directly', () => {
+    expect(computeMetricConfidence({ ...BASE, frameCoverage: 0.4 })).toBeCloseTo(0.4)
+  })
+
+  it('applies the interpolation penalty proportionally to interpolatedFraction', () => {
+    // 1 - 0.5 * 0.6 = 0.7
+    expect(
+      computeMetricConfidence({ ...BASE, interpolatedFraction: 0.6 }),
+    ).toBeCloseTo(0.7)
+  })
+
+  it('a fully-interpolated input is discounted by exactly interpolationConfidencePenalty', () => {
+    expect(
+      computeMetricConfidence({ ...BASE, interpolatedFraction: 1 }),
+    ).toBeCloseTo(1 - BASE.interpolationConfidencePenalty)
+  })
+
+  it('caps the sample-size factor at 1 rather than rewarding an oversized sample', () => {
+    const withExtra = computeMetricConfidence({ ...BASE, sampleSize: 1000 })
+    const atExact = computeMetricConfidence({ ...BASE, sampleSize: 10 })
+    expect(withExtra).toBeCloseTo(atExact)
+  })
+
+  it('scales the sample-size factor linearly below the minimum', () => {
+    // sampleSize/minRequiredSampleSize = 5/10 = 0.5
+    expect(computeMetricConfidence({ ...BASE, sampleSize: 5 })).toBeCloseTo(0.5)
+  })
+
+  it('does not divide by zero when minRequiredSampleSize is 0', () => {
+    expect(() =>
+      computeMetricConfidence({ ...BASE, sampleSize: 0, minRequiredSampleSize: 0 }),
+    ).not.toThrow()
+    expect(
+      computeMetricConfidence({ ...BASE, sampleSize: 0, minRequiredSampleSize: 0 }),
+    ).toBeCloseTo(1)
+  })
+
+  it('applies the 0.5 travel-direction-unknown penalty independently of the other factors', () => {
+    expect(
+      computeMetricConfidence({ ...BASE, travelDirectionKnown: false }),
+    ).toBeCloseTo(0.5)
+  })
+
+  it('defaults travelDirectionKnown to true when omitted', () => {
+    const { ...withoutTravelDirection } = BASE
+    expect(computeMetricConfidence(withoutTravelDirection)).toBeCloseTo(1)
+  })
+
+  it('compounds multiple moderate penalties into a lower overall confidence', () => {
+    const result = computeMetricConfidence({
+      ...BASE,
+      viewFitMultiplier: 0.8,
+      frameCoverage: 0.8,
+      interpolatedFraction: 0.2,
+    })
+    // 0.8 * 0.8 * (1 - 0.5*0.2) * 1 * 1 = 0.8*0.8*0.9 = 0.576
+    expect(result).toBeCloseTo(0.576)
+  })
+
+  it('always returns a value clamped to [0, 1]', () => {
+    const result = computeMetricConfidence({
+      ...BASE,
+      viewFitMultiplier: 2, // out-of-range input should still clamp
+    })
+    expect(result).toBeLessThanOrEqual(1)
+    expect(result).toBeGreaterThanOrEqual(0)
+  })
+})
