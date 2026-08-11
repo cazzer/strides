@@ -8,6 +8,7 @@ import { trimToPresenceWindow } from '../heuristics/presenceWindow'
 import { sampleClip } from './sampleClip'
 import type { SampleClipHandle } from './sampleClip'
 import { computeAnalysisDiagnostics } from './analysisDiagnostics'
+import { resolveSamplingRobustnessConfig } from './samplingRobustnessConfig'
 import type { VideoAnalysisState } from './types'
 
 function idleState(): Omit<VideoAnalysisState, 'start' | 'reset'> {
@@ -118,6 +119,11 @@ export function useVideoAnalysis(
     const runId = ++runIdRef.current
     setState({ ...idleState(), phase: 'sampling' })
 
+    // Resolved once per run — the sampling/robustness plane as one object, defaulting to
+    // today's existing constants unless a dev-only eval-harness override is present. See
+    // samplingRobustnessConfig.ts.
+    const samplingRobustnessConfig = resolveSamplingRobustnessConfig()
+
     const { promise, handle } = sampleClip(
       video,
       detector,
@@ -131,6 +137,8 @@ export function useVideoAnalysis(
           if (runIdRef.current !== runId) return
           setState((s) => ({ ...s, isPausedMidAnalysis: paused }))
         },
+        maxConsecutiveErrors: samplingRobustnessConfig.maxConsecutiveErrors,
+        detectionTimeoutMs: samplingRobustnessConfig.detectionTimeoutMs,
       },
     )
     handleRef.current = handle
@@ -194,7 +202,7 @@ export function useVideoAnalysis(
         // interpolate.ts's existing gapSeconds > 0 guard already degrades non-positive gaps to
         // 'unrecoverable' rather than crashing, so this is belt-and-suspenders.
         const sorted = [...samples].sort((a, b) => a.timestamp - b.timestamp)
-        const robustFrames = applyRobustness(sorted)
+        const robustFrames = applyRobustness(sorted, samplingRobustnessConfig.robustness)
         // Metrics are computed over the presence-trimmed window (excludes stretches where the
         // subject isn't in frame at all) so frameCoverage/confidence aren't diluted by dead time
         // — but `robustFrames` itself stays untrimmed below, for the skeleton overlay and

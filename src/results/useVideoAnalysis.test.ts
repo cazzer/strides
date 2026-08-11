@@ -1,11 +1,12 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PoseDetector } from '../pose/detector'
 import type { VideoMetadata, VideoSource } from '../video/types'
 import type { RobustKeypoint, RobustPoseFrame } from '../pose/robustness/types'
 import type { FormHeuristicsResult } from '../heuristics/types'
 import type { SampleClipHandle } from './sampleClip'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
+import { DEFAULT_SAMPLING_ROBUSTNESS_CONFIG } from './samplingRobustnessConfig'
 
 const { sampleClipMock, applyRobustnessMock, computeFormHeuristicsMock } = vi.hoisted(
   () => ({
@@ -17,6 +18,11 @@ const { sampleClipMock, applyRobustnessMock, computeFormHeuristicsMock } = vi.ho
 
 vi.mock('./sampleClip', () => ({
   sampleClip: sampleClipMock,
+  // samplingRobustnessConfig.ts imports these two constants directly from this module for its
+  // default -- mocking the module wholesale drops them unless re-provided here, with the same
+  // real values sampleClip.ts itself exports.
+  DEFAULT_MAX_CONSECUTIVE_ERRORS: 30,
+  DEFAULT_DETECTION_TIMEOUT_MS: 5000,
 }))
 
 vi.mock('../pose/robustness/interpolate', () => ({
@@ -191,6 +197,11 @@ beforeEach(() => {
   }))
 })
 
+afterEach(() => {
+  vi.unstubAllEnvs()
+  delete window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__
+})
+
 describe('useVideoAnalysis', () => {
   it('starts idle when the video is not yet ready', () => {
     const videoSource = makeVideoSource({ status: 'empty' })
@@ -269,11 +280,14 @@ describe('useVideoAnalysis', () => {
 
     await waitFor(() => expect(result.current.phase).toBe('ready'))
 
-    expect(applyRobustnessMock).toHaveBeenCalledWith([
-      { timestamp: 0.1, frame: null },
-      { timestamp: 0.2, frame: null },
-      { timestamp: 0.3, frame: null },
-    ])
+    expect(applyRobustnessMock).toHaveBeenCalledWith(
+      [
+        { timestamp: 0.1, frame: null },
+        { timestamp: 0.2, frame: null },
+        { timestamp: 0.3, frame: null },
+      ],
+      DEFAULT_SAMPLING_ROBUSTNESS_CONFIG.robustness,
+    )
     expect(computeFormHeuristicsMock).toHaveBeenCalledWith(FAKE_ROBUST_FRAMES)
     expect(result.current.robustFrames).toBe(FAKE_ROBUST_FRAMES)
     expect(result.current.heuristics).toBe(FAKE_HEURISTICS)
@@ -467,6 +481,47 @@ describe('useVideoAnalysis', () => {
 
     logSpy.mockRestore()
     vi.unstubAllEnvs()
+  })
+
+  it('uses the default sampling/robustness config when no override is present', async () => {
+    const videoSource = makeVideoSource()
+    const detector = makeFakeDetector()
+    renderHook(() => useVideoAnalysis(videoSource, detector))
+
+    await waitFor(() => expect(sampleClipMock).toHaveBeenCalled())
+    const [, , , opts] = sampleClipMock.mock.calls[0]
+    expect(opts.maxConsecutiveErrors).toBe(DEFAULT_SAMPLING_ROBUSTNESS_CONFIG.maxConsecutiveErrors)
+    expect(opts.detectionTimeoutMs).toBe(DEFAULT_SAMPLING_ROBUSTNESS_CONFIG.detectionTimeoutMs)
+  })
+
+  it('honors a dev-only window override for the sampling/robustness config', async () => {
+    window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = {
+      maxConsecutiveErrors: 7,
+      detectionTimeoutMs: 1234,
+      robustness: { minKeypointConfidence: 0.9 },
+    }
+
+    const videoSource = makeVideoSource()
+    const detector = makeFakeDetector()
+    renderHook(() => useVideoAnalysis(videoSource, detector))
+
+    await waitFor(() => expect(sampleClipMock).toHaveBeenCalled())
+    const [, , , opts] = sampleClipMock.mock.calls[0]
+    expect(opts.maxConsecutiveErrors).toBe(7)
+    expect(opts.detectionTimeoutMs).toBe(1234)
+  })
+
+  it('ignores the window override outside a dev build', async () => {
+    vi.stubEnv('DEV', false)
+    window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = { maxConsecutiveErrors: 7 }
+
+    const videoSource = makeVideoSource()
+    const detector = makeFakeDetector()
+    renderHook(() => useVideoAnalysis(videoSource, detector))
+
+    await waitFor(() => expect(sampleClipMock).toHaveBeenCalled())
+    const [, , , opts] = sampleClipMock.mock.calls[0]
+    expect(opts.maxConsecutiveErrors).toBe(DEFAULT_SAMPLING_ROBUSTNESS_CONFIG.maxConsecutiveErrors)
   })
 
   it('stops the in-flight handle on unmount', () => {
