@@ -7,5 +7,16 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: './src/test/setup.ts',
+    // Vitest's default excludes don't cover this — without it, a sprint/tweak-spawned agent's
+    // isolated worktree (a full nested checkout under .claude/worktrees/) gets walked too,
+    // silently running every test twice (once from the real tree, once from the worktree copy).
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/cypress/**',
+      '**/.{idea,git,cache,output,temp}/**',
+      '**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build}.config.*',
+      '**/.claude/worktrees/**',
+    ],
   },
 })
