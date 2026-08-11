@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { createDetector } from '../pose/detector'
 import type { PoseDetector } from '../pose/detector'
 import type { VideoSource } from '../video/types'
 import { assessVideoQuality } from './assessVideoQuality'
@@ -15,15 +14,15 @@ export interface QualityGateState {
 }
 
 /**
- * Runs the whole-clip quality assessment whenever `videoSource` reaches `'ready'` for a
- * newly loaded clip. Lazily creates a single `PoseDetector` and caches it in a ref for
- * the hook's lifetime, reused across re-loaded clips to avoid repeatedly paying the
- * model-load cost; disposed only on unmount. `PoseDetector` has no cancel/abort hook, so
- * a superseded clip's in-flight assessment is left to finish in the background — a
- * monotonic run id is used to discard its result instead of applying it to state.
+ * Runs the whole-clip quality assessment whenever `videoSource` reaches `'ready'` for a newly
+ * loaded clip. The `PoseDetector` is owned by the caller (`usePoseDetector()`, shared with
+ * `useVideoAnalysis`, #8) rather than created here — `checkConfidence`'s existing `detector:
+ * null` fail-open handling covers the case where the detector hasn't finished loading yet or
+ * failed to load at all, so this hook doesn't need its own detector lifecycle.
  */
 export function useVideoQualityGate(
   videoSource: VideoSource,
+  detector: PoseDetector | null,
 ): QualityGateState {
   const { status: videoStatus, metadata, videoRef } = videoSource
 
@@ -33,26 +32,7 @@ export function useVideoQualityGate(
   )
   const [dismissed, setDismissed] = useState(false)
 
-  const detectorRef = useRef<PoseDetector | null>(null)
-  const detectorPromiseRef = useRef<Promise<PoseDetector> | null>(null)
   const runIdRef = useRef(0)
-
-  const getDetector = useCallback(async (): Promise<PoseDetector | null> => {
-    if (detectorRef.current) return detectorRef.current
-    if (!detectorPromiseRef.current) {
-      detectorPromiseRef.current = createDetector({ backend: 'movenet' })
-    }
-    try {
-      const detector = await detectorPromiseRef.current
-      detectorRef.current = detector
-      return detector
-    } catch {
-      // Detector creation failed (e.g. no WebGL). Fail open: proceed with detector: null,
-      // so checkConfidence reports 'error' rather than blocking the rest of the assessment.
-      detectorPromiseRef.current = null
-      return null
-    }
-  }, [])
 
   useEffect(() => {
     const video = videoRef.current
@@ -63,9 +43,6 @@ export function useVideoQualityGate(
     setDismissed(false)
 
     void (async () => {
-      const detector = await getDetector()
-      if (runIdRef.current !== runId) return
-
       try {
         const result = await assessVideoQuality({ video, metadata, detector })
         if (runIdRef.current !== runId) return
@@ -76,14 +53,7 @@ export function useVideoQualityGate(
         setStatus('error')
       }
     })()
-  }, [videoStatus, metadata, videoRef, getDetector])
-
-  // Dispose the cached detector once, on unmount — not per-clip.
-  useEffect(() => {
-    return () => {
-      detectorRef.current?.dispose()
-    }
-  }, [])
+  }, [videoStatus, metadata, videoRef, detector])
 
   const proceedAnyway = useCallback(() => {
     setDismissed(true)
