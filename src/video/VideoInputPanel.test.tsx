@@ -1,8 +1,12 @@
 import { createRef } from 'react'
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { VideoInputPanel } from './VideoInputPanel'
 import type { VideoSource } from './types'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 function makeVideoSource(overrides: Partial<VideoSource> = {}): VideoSource {
   return {
@@ -35,6 +39,20 @@ describe('VideoInputPanel', () => {
     expect(
       screen.queryByRole('button', { name: /start recording/i }),
     ).not.toBeInTheDocument()
+  })
+
+  it('calls videoSource.load with the fetched blob when the demo video button is used', async () => {
+    const blob = new Blob(['content'], { type: 'video/mp4' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, blob: () => Promise.resolve(blob) }),
+    )
+
+    const videoSource = makeVideoSource()
+    render(<VideoInputPanel videoSource={videoSource} />)
+    fireEvent.click(screen.getByRole('button', { name: /try a demo video/i }))
+
+    await waitFor(() => expect(videoSource.load).toHaveBeenCalledWith(blob))
   })
 
   it('calls videoSource.load when a file is selected on the Upload tab', () => {

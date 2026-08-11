@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
+import { DemoVideoButton } from './DemoVideoButton'
 import { FileUpload } from './FileUpload'
 import { WebcamCapture } from './WebcamCapture'
 import type { VideoSource } from './types'
@@ -76,6 +77,10 @@ export function VideoInputPanel({ videoSource, children }: VideoInputPanelProps)
 
       {showPicker && activeTab === 'upload' && (
         <FileUpload onSelected={(file) => load(file)} />
+      )}
+
+      {showPicker && (
+        <DemoVideoButton onLoaded={(blob) => load(blob)} disabled={isRecording} />
       )}
 
       {status === 'loading' && <p role="status">Processing video…</p>}
