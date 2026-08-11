@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PoseDetector } from '../pose/detector'
-import type { VideoSource } from '../video/types'
+import type { VideoMetadata, VideoSource } from '../video/types'
 import { applyRobustness } from '../pose/robustness/interpolate'
 import type { PoseSample } from '../pose/robustness/types'
 import { computeFormHeuristics } from '../heuristics/index'
@@ -43,6 +43,11 @@ export function useVideoAnalysis(
 
   const runIdRef = useRef(0)
   const handleRef = useRef<SampleClipHandle | null>(null)
+  // Tracks which clip's `metadata` auto-start has already fired for, so it fires at most once
+  // per freshly loaded clip — not every time `phase` happens to return to 'idle' (e.g. an
+  // explicit `reset()`, or a stale run being abandoned). A new clip's `metadata` is always a new
+  // object identity, so this needs no separate reset step of its own.
+  const autoStartedForRef = useRef<VideoMetadata | null>(null)
 
   const abandonActiveRun = () => {
     handleRef.current?.stop()
@@ -104,6 +109,9 @@ export function useVideoAnalysis(
     }
 
     handleRef.current?.stop()
+    // Clear any loop left armed by a previous run's ready-state loop-restart (see the effect
+    // below) — a looping video never fires `ended`, which sampleClip relies on to resolve.
+    video.loop = false
     const runId = ++runIdRef.current
     setState({ ...idleState(), phase: 'sampling' })
 
@@ -125,9 +133,11 @@ export function useVideoAnalysis(
     handleRef.current = handle
 
     // sampleClip deliberately doesn't call play() itself (see its docstring) — it must happen
-    // here, synchronously within this same click-handler call stack, to count as a user gesture
-    // under browser autoplay policy. Without this the video never advances, rVFC never fires
-    // past the first frame, and the run hangs at 0% forever.
+    // here. Muted unconditionally: a manual "Analyze" click satisfies autoplay policy via its
+    // synchronous call stack regardless, but start() is also called from the auto-start effect
+    // below (no such call stack), so muting here — rather than only for that path — keeps one
+    // code path reliable everywhere clips carry no audio the app uses anyway.
+    video.muted = true
     video.play().catch((err: unknown) => {
       handle.stop()
       if (runIdRef.current !== runId) return
@@ -208,6 +218,41 @@ export function useVideoAnalysis(
       }
     })()
   }, [detector, videoRef, metadata])
+
+  // Once analysis reaches 'ready', sampling has already left the video paused at 'ended' (see
+  // sampleClip's docstring) — restart it with looping enabled so the skeleton overlay keeps
+  // replaying instead of sitting on the last frame. Muted because this play() call happens well
+  // outside the "Analyze" click's synchronous call stack, where autoplay policy is unreliable.
+  useEffect(() => {
+    if (state.phase !== 'ready') return
+    const video = videoRef.current
+    if (!video) return
+    video.muted = true
+    video.loop = true
+    video.currentTime = 0
+    video.play().catch(() => {
+      // Autoplay still blocked: loop stays armed for whenever playback next starts.
+    })
+  }, [state.phase, videoRef])
+
+  // Auto-starts analysis the moment a freshly loaded clip is ready and a detector exists — no
+  // explicit click required. Doesn't fire while `detector` is `null` (still loading, or it never
+  // loads at all); either way the manual "Analyze" control remains available as a fallback and
+  // surfaces the real `detector-unavailable` error if the detector truly never becomes available.
+  // Fires at most once per clip (`autoStartedForRef`) — otherwise an explicit `reset()` back to
+  // `'idle'` while the same clip is still `'ready'` would immediately auto-restart itself.
+  useEffect(() => {
+    if (
+      videoSource.status !== 'ready' ||
+      state.phase !== 'idle' ||
+      !detector ||
+      !metadata ||
+      autoStartedForRef.current === metadata
+    )
+      return
+    autoStartedForRef.current = metadata
+    start()
+  }, [videoSource.status, state.phase, detector, metadata, start])
 
   return { ...state, start, reset }
 }

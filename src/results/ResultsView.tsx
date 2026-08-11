@@ -1,17 +1,13 @@
 import type { VideoAnalysisState } from './types'
+import { LowConfidenceBanner } from './LowConfidenceBanner'
 import { MetricsPanel } from './MetricsPanel'
 
 export interface ResultsViewProps {
   analysis: VideoAnalysisState
-  /** Gates the Analyze button — analysis and the quality-gate assessment share one detector
-   * (see `usePoseDetector`), and while quality assessment is mid-flight it's actively seeking
-   * the shared, visible `<video>` element, so starting analysis at the same time would race it
-   * for playback control. Quality assessment finishes in well under a second in practice. */
-  qualityAssessing: boolean
-  /** Called instead of `analysis.reset` directly for "Try again" — mirrors
-   * `QualityWarningBanner`'s `proceedAnyway` prop: the alert this button lives in unmounts the
-   * instant it's clicked, so whoever composes this component (`App.tsx`) needs the chance to
-   * move focus somewhere stable first, the same fix already applied there and in `WebcamCapture`. */
+  /** Called instead of `analysis.reset` directly for "Try again" — the alert this button lives
+   * in unmounts the instant it's clicked, so whoever composes this component (`App.tsx`) needs
+   * the chance to move focus somewhere stable first, the same fix already applied there and in
+   * `WebcamCapture`. */
   onTryAgain: () => void
 }
 
@@ -31,22 +27,15 @@ function progressLabel(
  * itself. Renders the "Analyze" button, a progress readout while sampling/processing, and once
  * `phase === 'ready'`, the metrics panel (which itself renders the vertical-oscillation chart).
  */
-export function ResultsView({
-  analysis,
-  qualityAssessing,
-  onTryAgain,
-}: ResultsViewProps) {
+export function ResultsView({ analysis, onTryAgain }: ResultsViewProps) {
   const { phase, progress, isPausedMidAnalysis, heuristics, error, start } =
     analysis
   // 'ready'/'error' don't disable the button -- Analyze must stay re-runnable after a
   // completed or failed run, not get stuck permanently disabled with no way forward.
-  const analyzeDisabled =
-    qualityAssessing || phase === 'sampling' || phase === 'processing'
-  const analyzeDisabledReason = qualityAssessing
-    ? 'Waiting for the video-quality check to finish'
-    : analyzeDisabled
-      ? 'Analysis already in progress'
-      : undefined
+  const analyzeDisabled = phase === 'sampling' || phase === 'processing'
+  const analyzeDisabledReason = analyzeDisabled
+    ? 'Analysis already in progress'
+    : undefined
 
   return (
     <section className="space-y-6" aria-label="Analysis results">
@@ -84,7 +73,8 @@ export function ResultsView({
       )}
 
       {phase === 'ready' && heuristics && (
-        <div className="results-view__results">
+        <div className="results-view__results space-y-4">
+          <LowConfidenceBanner heuristics={heuristics} />
           <MetricsPanel heuristics={heuristics} />
           {/*
             Save/export (e.g. Google Drive) is explicitly out of scope for this build — this is

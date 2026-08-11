@@ -36,6 +36,12 @@ function makeMetadata(overrides: Partial<VideoMetadata> = {}): VideoMetadata {
 // re-renders (never inline `makeVideoSource()` directly in a `renderHook(() => ...)` callback)
 // — `useVideoAnalysis` auto-resets whenever `videoSource.metadata`'s *identity* changes, so a
 // fresh object on every render would loop forever.
+//
+// NOTE: `status: 'ready'` is the default — combined with a non-null `detector`, this means the
+// hook's auto-start effect (see `useVideoAnalysis.ts`) fires `start()` on mount for most tests
+// below. Tests exercising `start()`/`reset()` mechanics directly rely on that auto-fire instead
+// of calling `start()` manually; tests specifically about the *pre-ready* state pass
+// `status: 'empty'` to keep it from firing.
 function makeVideoSource(overrides: Partial<VideoSource> = {}): VideoSource {
   const video = document.createElement('video')
   return {
@@ -113,11 +119,17 @@ beforeEach(() => {
   computeFormHeuristicsMock.mockReset()
   applyRobustnessMock.mockReturnValue(FAKE_ROBUST_FRAMES)
   computeFormHeuristicsMock.mockReturnValue(FAKE_HEURISTICS)
+  // Default: never resolves, so tests that don't care about sampling's outcome don't need to
+  // supply their own implementation just to satisfy the auto-start effect firing on mount.
+  sampleClipMock.mockImplementation(() => ({
+    promise: new Promise(() => {}),
+    handle: makeFakeHandle(),
+  }))
 })
 
 describe('useVideoAnalysis', () => {
-  it('starts idle', () => {
-    const videoSource = makeVideoSource()
+  it('starts idle when the video is not yet ready', () => {
+    const videoSource = makeVideoSource({ status: 'empty' })
     const detector = makeFakeDetector()
     const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
     expect(result.current.phase).toBe('idle')
@@ -125,8 +137,25 @@ describe('useVideoAnalysis', () => {
     expect(result.current.heuristics).toBeNull()
   })
 
-  it('start() reports a detector-unavailable error when detector is null', () => {
+  it('auto-starts analysis once the video is ready and a detector is available', () => {
     const videoSource = makeVideoSource()
+    const detector = makeFakeDetector()
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+    expect(result.current.phase).toBe('sampling')
+    expect(sampleClipMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not auto-start while no detector is available', () => {
+    const videoSource = makeVideoSource()
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, null))
+
+    expect(result.current.phase).toBe('idle')
+    expect(sampleClipMock).not.toHaveBeenCalled()
+  })
+
+  it('start() reports a detector-unavailable error when detector is null', () => {
+    const videoSource = makeVideoSource({ status: 'empty' })
     const { result } = renderHook(() => useVideoAnalysis(videoSource, null))
 
     act(() => {
@@ -138,7 +167,7 @@ describe('useVideoAnalysis', () => {
   })
 
   it('start() reports an error when no video element is attached', () => {
-    const videoSource = makeVideoSource({ videoRef: { current: null } })
+    const videoSource = makeVideoSource({ status: 'empty', videoRef: { current: null } })
     const detector = makeFakeDetector()
     const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
 
@@ -163,9 +192,6 @@ describe('useVideoAnalysis', () => {
     const detector = makeFakeDetector()
     const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
 
-    act(() => {
-      result.current.start()
-    })
     expect(result.current.phase).toBe('sampling')
 
     const outOfOrderSamples = [
@@ -203,10 +229,6 @@ describe('useVideoAnalysis', () => {
     const detector = makeFakeDetector()
     const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
 
-    act(() => {
-      result.current.start()
-    })
-
     await act(async () => {
       rejectSampling(new Error('broken detector'))
     })
@@ -225,10 +247,6 @@ describe('useVideoAnalysis', () => {
     const videoSource = makeVideoSource()
     const detector = makeFakeDetector()
     const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
-
-    act(() => {
-      result.current.start()
-    })
     expect(result.current.phase).toBe('sampling')
 
     act(() => {
@@ -240,7 +258,7 @@ describe('useVideoAnalysis', () => {
     expect(result.current.robustFrames).toBeNull()
   })
 
-  it('auto-resets to idle when videoSource.metadata identity changes mid-analysis', () => {
+  it('abandons the old run and auto-starts a new one when videoSource.metadata identity changes mid-analysis', () => {
     const handle = makeFakeHandle()
     sampleClipMock.mockImplementation(() => ({
       promise: new Promise(() => {}),
@@ -254,19 +272,81 @@ describe('useVideoAnalysis', () => {
         useVideoAnalysis(props.videoSource, props.detector),
       { initialProps: { videoSource: initialVideoSource, detector } },
     )
-
-    act(() => {
-      result.current.start()
-    })
     expect(result.current.phase).toBe('sampling')
 
+    // The new clip is also immediately 'ready' (as it would be for e.g. the demo video button),
+    // so the old run is abandoned and a fresh one auto-starts for the new clip in the same tick.
     const nextVideoSource = makeVideoSource({ metadata: makeMetadata({ width: 999 }) })
     act(() => {
       rerender({ videoSource: nextVideoSource, detector })
     })
 
     expect(handle.stop).toHaveBeenCalledTimes(1)
-    expect(result.current.phase).toBe('idle')
+    expect(result.current.phase).toBe('sampling')
+  })
+
+  it('loops the video, muted, once analysis reaches ready', async () => {
+    sampleClipMock.mockImplementation(() => ({
+      promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+      handle: makeFakeHandle(),
+    }))
+
+    const video = document.createElement('video')
+    const videoSource = makeVideoSource({ videoRef: { current: video } })
+    const detector = makeFakeDetector()
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+
+    expect(video.loop).toBe(true)
+    expect(video.muted).toBe(true)
+  })
+
+  it('mutes the video before restarting playback for the loop', async () => {
+    sampleClipMock.mockImplementation(() => ({
+      promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+      handle: makeFakeHandle(),
+    }))
+
+    const video = document.createElement('video')
+    let mutedAtLoopRestart: boolean | undefined
+    let playCallCount = 0
+    vi.spyOn(video, 'play').mockImplementation(() => {
+      playCallCount += 1
+      // The first play() call is sampling's own (the auto-start effect firing on mount); the
+      // loop-restart is the second.
+      if (playCallCount === 2) mutedAtLoopRestart = video.muted
+      return Promise.resolve()
+    })
+
+    const videoSource = makeVideoSource({ videoRef: { current: video } })
+    const detector = makeFakeDetector()
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+
+    expect(playCallCount).toBe(2)
+    expect(mutedAtLoopRestart).toBe(true)
+  })
+
+  it('clears the loop before a new run starts, so sampling can detect ended', async () => {
+    sampleClipMock.mockImplementation(() => ({
+      promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+      handle: makeFakeHandle(),
+    }))
+
+    const video = document.createElement('video')
+    const videoSource = makeVideoSource({ videoRef: { current: video } })
+    const detector = makeFakeDetector()
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+    expect(video.loop).toBe(true)
+
+    act(() => {
+      result.current.start()
+    })
+    expect(video.loop).toBe(false)
   })
 
   it('stops the in-flight handle on unmount', () => {
@@ -278,11 +358,7 @@ describe('useVideoAnalysis', () => {
 
     const videoSource = makeVideoSource()
     const detector = makeFakeDetector()
-    const { result, unmount } = renderHook(() => useVideoAnalysis(videoSource, detector))
-
-    act(() => {
-      result.current.start()
-    })
+    const { unmount } = renderHook(() => useVideoAnalysis(videoSource, detector))
 
     unmount()
     expect(handle.stop).toHaveBeenCalledTimes(1)

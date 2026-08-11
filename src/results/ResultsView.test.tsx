@@ -53,32 +53,20 @@ function makeAnalysis(
 
 function renderResultsView(
   props: Partial<
-    Pick<
-      Parameters<typeof ResultsView>[0],
-      'analysis' | 'qualityAssessing' | 'onTryAgain'
-    >
+    Pick<Parameters<typeof ResultsView>[0], 'analysis' | 'onTryAgain'>
   > = {},
 ) {
   const onTryAgain = props.onTryAgain ?? vi.fn()
   render(
-    <ResultsView
-      analysis={props.analysis ?? makeAnalysis()}
-      qualityAssessing={props.qualityAssessing ?? false}
-      onTryAgain={onTryAgain}
-    />,
+    <ResultsView analysis={props.analysis ?? makeAnalysis()} onTryAgain={onTryAgain} />,
   )
   return { onTryAgain }
 }
 
 describe('ResultsView', () => {
-  it('enables the Analyze button when idle and quality gate is not assessing', () => {
+  it('enables the Analyze button when idle', () => {
     renderResultsView()
     expect(screen.getByRole('button', { name: /analyze/i })).toBeEnabled()
-  })
-
-  it('disables the Analyze button while the quality gate is assessing', () => {
-    renderResultsView({ qualityAssessing: true })
-    expect(screen.getByRole('button', { name: /analyze/i })).toBeDisabled()
   })
 
   it('disables the Analyze button once a run has started', () => {
@@ -165,6 +153,28 @@ describe('ResultsView', () => {
     expect(
       screen.getByRole('region', { name: /form metrics/i }),
     ).toBeInTheDocument()
+  })
+
+  it('does not show the low-confidence banner when every metric is high confidence', () => {
+    renderResultsView({
+      analysis: makeAnalysis({ phase: 'ready', heuristics: makeHeuristics() }),
+    })
+    expect(
+      screen.queryByText(/lower-confidence results/i),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows the low-confidence banner when a metric is flagged', () => {
+    const heuristics = makeHeuristics()
+    renderResultsView({
+      analysis: makeAnalysis({
+        phase: 'ready',
+        heuristics: { ...heuristics, trunkLean: { ...heuristics.trunkLean, value: null } },
+      }),
+    })
+    expect(screen.getByText(/lower-confidence results/i)).toHaveTextContent(
+      /trunk lean/i,
+    )
   })
 
   it('does not render results or status content while idle', () => {

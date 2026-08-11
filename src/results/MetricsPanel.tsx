@@ -1,16 +1,10 @@
 import type { ReactNode } from 'react'
-import type { MetricId, MetricResult } from '../heuristics/types'
-import type { FormHeuristicsResult } from '../heuristics/types'
+import type { FormHeuristicsResult, MetricId, MetricResult } from '../heuristics/types'
 import { VerticalOscillationChart } from './VerticalOscillationChart'
+import { LOW_CONFIDENCE_THRESHOLD, METRIC_LABELS, isMetricFlagged } from './metricConfidence'
 
 export interface MetricsPanelProps {
   heuristics: FormHeuristicsResult
-}
-
-const METRIC_LABELS: Record<MetricId, string> = {
-  verticalOscillation: 'Vertical oscillation',
-  trunkLean: 'Trunk lean',
-  overstriding: 'Overstriding',
 }
 
 const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
@@ -21,11 +15,6 @@ const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
   overstriding:
     "How far your foot lands ahead of your hips at footstrike, relative to your torso length — a proxy for braking-force risk.",
 }
-
-/** Low-confidence threshold below which the panel calls extra attention to a metric's caveat —
- * a judgment-call cutoff, not derived from the heuristics engine itself (which only guarantees
- * confidence is 0..1, forced to 0 when value is null). */
-const LOW_CONFIDENCE_THRESHOLD = 0.4
 
 function formatValue(metric: MetricResult): string {
   if (metric.value === null) return 'Not available'
@@ -46,10 +35,7 @@ interface MetricCardProps {
 }
 
 function MetricCard({ metric, chart }: MetricCardProps) {
-  const isFlagged =
-    metric.value === null ||
-    metric.confidence < LOW_CONFIDENCE_THRESHOLD ||
-    metric.viewFit === 'unsuitable'
+  const isFlagged = isMetricFlagged(metric)
 
   return (
     <article
@@ -94,7 +80,10 @@ function MetricCard({ metric, chart }: MetricCardProps) {
  */
 export function MetricsPanel({ heuristics }: MetricsPanelProps) {
   return (
-    <section className="metrics-panel grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-label="Form metrics">
+    <section
+      className="metrics-panel @container grid gap-4 @lg:grid-cols-2 @3xl:grid-cols-3"
+      aria-label="Form metrics"
+    >
       <MetricCard
         metric={heuristics.verticalOscillation}
         chart={<VerticalOscillationChart series={heuristics.verticalOscillation.series} />}
