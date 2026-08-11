@@ -128,6 +128,13 @@ export interface HeuristicsConfig {
    * as forefoot. See `footStrikePattern.ts` / design.md for why this is symmetric and why 0.05. */
   footStrikeMidfootBandRatio: number // 0.05
 
+  /** Minimum run of consecutive frames with a resolvable shoulder+hip position required to start
+   * or end the presence window (`presenceWindow.ts`) — below this, a single spurious detection in
+   * an otherwise-empty scene can't anchor the window and pull dead time back into it. A
+   * judgment-call threshold, not derived from real footage; cheaply tunable here if it turns out
+   * wrong. */
+  presenceMinConsecutiveFrames: number // 3
+
   /** A fully-interpolated input is trusted at this fraction relative to a fully-detected one. */
   interpolationConfidencePenalty: number // 0.5 — fully-interpolated input trusted at 50%
 
@@ -207,6 +214,7 @@ export const DEFAULT_HEURISTICS_CONFIG: HeuristicsConfig = {
   kneeFlexionMinProminenceDegrees: 20,
   armSwingMinProminenceRatio: 0.03,
   footStrikeMidfootBandRatio: 0.05,
+  presenceMinConsecutiveFrames: 3,
   interpolationConfidencePenalty: 0.5,
   viewFitTable: DEFAULT_VIEW_FIT_TABLE,
 }

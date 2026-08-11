@@ -4,6 +4,7 @@ import type { VideoMetadata, VideoSource } from '../video/types'
 import { applyRobustness } from '../pose/robustness/interpolate'
 import type { PoseSample } from '../pose/robustness/types'
 import { computeFormHeuristics } from '../heuristics/index'
+import { trimToPresenceWindow } from '../heuristics/presenceWindow'
 import { sampleClip } from './sampleClip'
 import type { SampleClipHandle } from './sampleClip'
 import { computeAnalysisDiagnostics } from './analysisDiagnostics'
@@ -194,7 +195,11 @@ export function useVideoAnalysis(
         // 'unrecoverable' rather than crashing, so this is belt-and-suspenders.
         const sorted = [...samples].sort((a, b) => a.timestamp - b.timestamp)
         const robustFrames = applyRobustness(sorted)
-        const heuristics = computeFormHeuristics(robustFrames)
+        // Metrics are computed over the presence-trimmed window (excludes stretches where the
+        // subject isn't in frame at all) so frameCoverage/confidence aren't diluted by dead time
+        // — but `robustFrames` itself stays untrimmed below, for the skeleton overlay and
+        // diagnostics, which should keep showing the full, honest picture of the whole clip.
+        const heuristics = computeFormHeuristics(trimToPresenceWindow(robustFrames))
         const diagnostics = computeAnalysisDiagnostics(sorted, robustFrames, heuristics)
         if (runIdRef.current !== runId) return
         setState({

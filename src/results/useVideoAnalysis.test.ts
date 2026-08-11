@@ -2,9 +2,10 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PoseDetector } from '../pose/detector'
 import type { VideoMetadata, VideoSource } from '../video/types'
-import type { RobustPoseFrame } from '../pose/robustness/types'
+import type { RobustKeypoint, RobustPoseFrame } from '../pose/robustness/types'
 import type { FormHeuristicsResult } from '../heuristics/types'
 import type { SampleClipHandle } from './sampleClip'
+import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 
 const { sampleClipMock, applyRobustnessMock, computeFormHeuristicsMock } = vi.hoisted(
   () => ({
@@ -59,8 +60,27 @@ function makeFakeDetector(): PoseDetector {
   return { estimatePose: vi.fn(), dispose: vi.fn() }
 }
 
+// A full, valid 12-keypoint frame (all resolvable) -- `trimToPresenceWindow` runs for real
+// against this (it's cheap/pure, not mocked like sampleClip/applyRobustness/
+// computeFormHeuristics are), so this fixture must satisfy RobustPoseFrame's documented "always
+// 12 keypoints" contract or `resolveMidpoint` throws on a missing keypoint.
+function makeFakeKeypoints(): RobustKeypoint[] {
+  return COMMON_KEYPOINT_NAMES.map((name) => ({
+    name,
+    status: 'detected',
+    x: 1,
+    y: 1,
+    score: 0.9,
+  }))
+}
+
+// At least `presenceMinConsecutiveFrames` (3, the default) frames, all present, so
+// `trimToPresenceWindow` is a no-op on this fixture -- tests asserting exactly what
+// computeFormHeuristics was called with need the trim to not have changed anything.
 const FAKE_ROBUST_FRAMES: RobustPoseFrame[] = [
-  { timestamp: 0, keypoints: [], source: 'detected' },
+  { timestamp: 0, keypoints: makeFakeKeypoints(), source: 'detected' },
+  { timestamp: 0.1, keypoints: makeFakeKeypoints(), source: 'detected' },
+  { timestamp: 0.2, keypoints: makeFakeKeypoints(), source: 'detected' },
 ]
 
 const FAKE_HEURISTICS: FormHeuristicsResult = {

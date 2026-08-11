@@ -6,6 +6,7 @@ import { estimateBodyScale } from './bodyScale'
 import { resolvePoint } from './keypoints'
 import { detectFootstrikes } from './footstrikes'
 import { computeMetricConfidence } from './confidence'
+import { median } from './mathUtils'
 
 /**
  * Roughly one full gait cycle's worth of footstrikes (two per leg) — the same judgment-call
@@ -36,8 +37,9 @@ function nullResult(viewFit: MetricResult['viewFit'], caveat: string): MetricRes
 }
 
 /**
- * Cadence: footstrikes per minute, both legs combined — `detectFootstrikes(frames, config).length
- * / (clip duration in minutes)`. Real-time playback is assumed: `RobustPoseFrame.timestamp` is
+ * Cadence: footstrikes per minute, both legs combined — `60 / median(consecutive
+ * inter-footstrike-interval seconds)`, from `detectFootstrikes(frames, config)`'s
+ * timestamp-ordered candidates. Real-time playback is assumed: `RobustPoseFrame.timestamp` is
  * `video.currentTime`, a media-time value independent of however fast frames were sampled or the
  * clip is played back, so this holds regardless of playback rate — no separate time-signature
  * handling needed.
@@ -45,10 +47,14 @@ function nullResult(viewFit: MetricResult['viewFit'], caveat: string): MetricRes
  * View-tolerant, like vertical oscillation, not hard-gated like trunk lean/overstriding — see
  * design.md and this metric's `viewFitTable.cadence` entry in types.ts for the full reasoning.
  *
- * Clip duration is `frames[frames.length - 1].timestamp - frames[0].timestamp`, not just the last
- * frame's timestamp: the two coincide whenever sampling starts at t=0 (the common case), but
- * computing the true span is no more expensive and stays correct if that assumption ever doesn't
- * hold (e.g. a future caller trimming a leading segment before this runs).
+ * Deliberately NOT `strikeCount / clipDuration`: that divides by total elapsed time, which is
+ * diluted by any dead time in the clip — before the first footstrike, after the last, or a
+ * mid-clip tracking dropout — and would systematically underestimate cadence whenever any of
+ * that exists. The median-interval computation only ever looks at the gaps between footstrikes
+ * that were actually detected, so dead time simply doesn't produce an interval to include, and a
+ * single anomalously long interval (e.g. spanning a brief occlusion) is naturally down-weighted
+ * by the median rather than dragging a mean toward it. See
+ * `openspec/changes/presence-window-and-cadence-robustness/design.md` for the full reasoning.
  */
 export function computeCadence(
   frames: RobustPoseFrame[],
@@ -68,17 +74,28 @@ export function computeCadence(
   const candidates = detectFootstrikes(frames, config)
   const strikeCount = candidates.length
 
+  // Need at least two footstrikes to have an interval between them at all — one (or zero) is
+  // "no cadence could be measured", not a value of 0.
   if (strikeCount === 0) {
     return nullResult(viewFitEntry.fit, 'No footstrikes could be detected in this clip.')
   }
-
-  const durationMinutes =
-    (frames[frames.length - 1].timestamp - frames[0].timestamp) / 60
-
-  if (durationMinutes <= 0) {
+  if (strikeCount === 1) {
     return nullResult(
       viewFitEntry.fit,
-      'Clip duration could not be determined (frames span no measurable elapsed time).',
+      'Only one footstrike was detected — at least two are needed to measure an interval between them.',
+    )
+  }
+
+  const intervals: number[] = []
+  for (let i = 1; i < candidates.length; i += 1) {
+    intervals.push(candidates[i].timestamp - candidates[i - 1].timestamp)
+  }
+  const medianIntervalSec = median(intervals)
+
+  if (medianIntervalSec <= 0) {
+    return nullResult(
+      viewFitEntry.fit,
+      'Footstrikes were detected, but their timing could not produce a measurable interval.',
     )
   }
 
@@ -98,10 +115,10 @@ export function computeCadence(
   // step that can itself fail (no hip lookup) — every detected candidate contributes directly to
   // the count. Coverage instead falls back to how much of the clip could be tracked at all
   // (`bodyScale.sampleCoverage`): a clip with long untracked stretches could easily have missed
-  // footstrikes during those gaps without candidates or duration reflecting that, so it's a
-  // meaningful independent confidence signal here rather than a redundant one.
+  // footstrikes during those gaps without candidates reflecting that, so it's a meaningful
+  // independent confidence signal here rather than a redundant one.
   const frameCoverage = bodyScale.sampleCoverage
-  const value = strikeCount / durationMinutes
+  const value = 60 / medianIntervalSec
 
   const confidence = computeMetricConfidence({
     viewFitMultiplier: viewFitEntry.multiplier,

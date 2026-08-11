@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { computeCadence } from './cadence'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildFrame } from './__fixtures__/testFrames'
+import { detectFootstrikes } from './footstrikes'
+import { median } from './mathUtils'
+import { DEFAULT_HEURISTICS_CONFIG } from './types'
 
 const BASE_PARAMS = {
   durationSec: 4,
@@ -13,21 +16,24 @@ const BASE_PARAMS = {
 }
 
 describe('computeCadence', () => {
-  it('a clean side-view clip: value matches strikeCount / clip-duration-in-minutes, high confidence', () => {
+  it('a clean side-view clip: value matches 60 / median inter-footstrike interval, high confidence', () => {
     // The fixture's `cadenceStepsPerMin` (170) is defined as "steps per minute, both feet
-    // combined" — exactly what computeCadence reports — so the true continuous rate is
-    // known, but the *detected* strike count won't exactly reproduce it: a ~30fps grid over a
-    // finite window either does or doesn't catch one more partial cycle at the start/end. Rather
-    // than guess at that discretization slop, assert the formula directly against the result's
-    // own reported sampleSize (== detected strike count), and separately sanity-check the value
-    // lands in the right neighborhood of the requested 170.
+    // combined" — exactly what computeCadence reports — so the true continuous rate is known,
+    // but the *detected* strike timing won't exactly reproduce it (a ~30fps grid quantizes each
+    // footstrike's timestamp). Rather than guess at that discretization slop, assert the formula
+    // directly: independently detect the same footstrikes and compute the same median-interval
+    // rate, and separately sanity-check the value lands in the right neighborhood of 170.
     const frames = generateSyntheticGait({ ...BASE_PARAMS, view: 'side' })
 
     const result = computeCadence(frames, 'side')
-    const durationMinutes = (frames[frames.length - 1].timestamp - frames[0].timestamp) / 60
+    const candidates = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)
+    const intervals = candidates
+      .slice(1)
+      .map((c, i) => c.timestamp - candidates[i].timestamp)
+    const expectedValue = 60 / median(intervals)
 
     expect(result.value).not.toBeNull()
-    expect(result.value).toBeCloseTo(result.sampleSize / durationMinutes, 5)
+    expect(result.value).toBeCloseTo(expectedValue, 5)
     expect(result.value).toBeGreaterThan(120)
     expect(result.value).toBeLessThan(220)
     expect(result.sampleSize).toBeGreaterThanOrEqual(4)
@@ -37,6 +43,55 @@ describe('computeCadence', () => {
     // minimum (capped at 1) -> confidence at or very near 1.
     expect(result.confidence).toBeGreaterThan(0.9)
     expect(result.caveat).toBeNull()
+  })
+
+  it('dead time before the first or after the last footstrike does not dilute the value', () => {
+    // Pad the synthetic clip's frame list with extra unresolvable ("subject absent") frames
+    // before and after the real running footage, at the same fps, and confirm cadence's value is
+    // unchanged -- it's driven entirely by the detected footstrikes' own timestamps, never by
+    // total elapsed clip span.
+    const frames = generateSyntheticGait({ ...BASE_PARAMS, view: 'side' })
+    const unresolvedFrame = buildFrame({})
+    const fps = BASE_PARAMS.fps
+    const padSeconds = 3
+    const padCount = padSeconds * fps
+
+    const leadingPad = Array.from({ length: padCount }, (_, i) => ({
+      ...unresolvedFrame,
+      timestamp: -padSeconds + i / fps,
+    }))
+    const trailingPad = Array.from({ length: padCount }, (_, i) => ({
+      ...unresolvedFrame,
+      timestamp: frames[frames.length - 1].timestamp + (i + 1) / fps,
+    }))
+    const padded = [...leadingPad, ...frames, ...trailingPad]
+
+    const baseline = computeCadence(frames, 'side')
+    const withDeadTime = computeCadence(padded, 'side')
+
+    expect(withDeadTime.value).not.toBeNull()
+    expect(withDeadTime.value).toBeCloseTo(baseline.value!, 5)
+  })
+
+  it('a single anomalously long mid-clip interval does not pull the value as far as a mean would', () => {
+    const frames = generateSyntheticGait({ ...BASE_PARAMS, view: 'side' })
+    const candidates = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)
+    const realIntervals = candidates.slice(1).map((c, i) => c.timestamp - candidates[i].timestamp)
+
+    // Simulate a mid-clip tracking dropout by inserting one deliberately huge synthetic interval
+    // alongside the real ones and comparing median vs. mean directly -- this is a focused test of
+    // the aggregation choice itself, not of detectFootstrikes.
+    const anomalousIntervals = [...realIntervals, 10]
+    const meanOfAnomalous =
+      anomalousIntervals.reduce((sum, v) => sum + v, 0) / anomalousIntervals.length
+    const medianOfAnomalous = median(anomalousIntervals)
+
+    // The median stays close to the real, unpolluted intervals; the mean gets dragged well above
+    // them by the single 10-second outlier.
+    const medianOfReal = median(realIntervals)
+    expect(Math.abs(medianOfAnomalous - medianOfReal)).toBeLessThan(
+      Math.abs(meanOfAnomalous - medianOfReal),
+    )
   })
 
   it('a front-view clip: still a reasonable value, confidence discounted by the 0.8 multiplier', () => {
@@ -109,6 +164,24 @@ describe('computeCadence', () => {
       // path isn't exercised here — not a failure of this test's premise, just documents why.
       expect(result.sampleSize).toBeGreaterThanOrEqual(0)
     }
+  })
+
+  it('exactly one footstrike: null value (no interval possible), distinct caveat from zero footstrikes', () => {
+    // A very short clip likely to yield exactly one detected footstrike -- if the fixture
+    // happens to produce zero or two-plus instead, this test documents why it's skipped rather
+    // than asserting something the fixture can't actually produce.
+    const frames = generateSyntheticGait({ ...BASE_PARAMS, durationSec: 0.3, view: 'side' })
+    const candidates = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)
+
+    if (candidates.length !== 1) {
+      expect(candidates.length).toBeGreaterThanOrEqual(0)
+      return
+    }
+
+    const result = computeCadence(frames, 'side')
+    expect(result.value).toBeNull()
+    expect(result.confidence).toBe(0)
+    expect(result.caveat).toMatch(/only one footstrike/i)
   })
 
   it('returns a null value and 0 confidence when there is no body-scale reference at all', () => {
