@@ -224,10 +224,16 @@ export function WebcamCapture({
         playsInline
         hidden={!isPreviewing}
         aria-label="Camera preview"
+        className="w-full aspect-video border-2 border-black dark:border-white bg-black object-contain"
       />
 
       {state.kind === 'idle' && (
-        <button type="button" onClick={startRecording} disabled={disabled}>
+        <button
+          type="button"
+          onClick={startRecording}
+          disabled={disabled}
+          className="inline-flex items-center justify-center border-2 border-brand-600 bg-brand-600 px-5 py-2.5 font-sans text-sm font-semibold uppercase tracking-wide text-white transition-colors hover:bg-brand-700 hover:border-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-brand-600"
+        >
           Start recording
         </button>
       )}
@@ -244,15 +250,20 @@ export function WebcamCapture({
           type="button"
           onClick={stopRecording}
           disabled={state.kind === 'stopping'}
+          className="inline-flex items-center justify-center border-2 border-black dark:border-white px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black dark:text-white transition-colors hover:bg-black hover:text-white dark:hover:bg-white dark:hover:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
         >
           {state.kind === 'stopping' ? 'Stopping…' : 'Stop recording'}
         </button>
       )}
 
       {state.kind === 'error' && (
-        <div role="alert">
+        <div className="border-2 border-black dark:border-white border-l-4 border-l-brand-600 p-4 space-y-2" role="alert">
           <p>{state.error.message}</p>
-          <button type="button" onClick={tryAgain}>
+          <button
+            type="button"
+            onClick={tryAgain}
+            className="inline-flex items-center justify-center border-2 border-black dark:border-white px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black dark:text-white transition-colors hover:bg-black hover:text-white dark:hover:bg-white dark:hover:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+          >
             Try again
           </button>
         </div>

@@ -37,35 +37,41 @@ export function App() {
   }
 
   return (
-    <main>
-      <h1>Strides</h1>
-      <p>Browser-based running form analysis.</p>
-      <VideoInputPanel videoSource={videoSource}>
-        {analysis.phase === 'ready' &&
-          analysis.robustFrames &&
-          videoSource.metadata && (
-            <SkeletonOverlay
-              videoRef={videoSource.videoRef}
-              frames={analysis.robustFrames}
-              metadata={videoSource.metadata}
-            />
-          )}
-      </VideoInputPanel>
-      {videoSource.status === 'ready' && (
-        <QualityWarningBanner
-          status={qualityGate.status}
-          assessment={qualityGate.assessment}
-          dismissed={qualityGate.dismissed}
-          proceedAnyway={handleProceedAnyway}
-        />
-      )}
-      {videoSource.status === 'ready' && (
-        <ResultsView
-          analysis={analysis}
-          qualityAssessing={qualityGate.status === 'assessing'}
-          onTryAgain={handleTryAgain}
-        />
-      )}
-    </main>
+    <>
+      <header className="sticky top-0 z-10 border-b-2 border-black dark:border-white bg-white/90 dark:bg-black/90 backdrop-blur px-4 sm:px-6 py-4">
+        <h1 className="font-display text-2xl font-bold tracking-tight">Strides</h1>
+        <p className="font-sans text-sm text-neutral-600 dark:text-neutral-400">
+          Browser-based running form analysis.
+        </p>
+      </header>
+      <main className="mx-auto max-w-3xl px-4 sm:px-6 py-10 space-y-8">
+        <VideoInputPanel videoSource={videoSource}>
+          {analysis.phase === 'ready' &&
+            analysis.robustFrames &&
+            videoSource.metadata && (
+              <SkeletonOverlay
+                videoRef={videoSource.videoRef}
+                frames={analysis.robustFrames}
+                metadata={videoSource.metadata}
+              />
+            )}
+        </VideoInputPanel>
+        {videoSource.status === 'ready' && (
+          <QualityWarningBanner
+            status={qualityGate.status}
+            assessment={qualityGate.assessment}
+            dismissed={qualityGate.dismissed}
+            proceedAnyway={handleProceedAnyway}
+          />
+        )}
+        {videoSource.status === 'ready' && (
+          <ResultsView
+            analysis={analysis}
+            qualityAssessing={qualityGate.status === 'assessing'}
+            onTryAgain={handleTryAgain}
+          />
+        )}
+      </main>
+    </>
   )
 }

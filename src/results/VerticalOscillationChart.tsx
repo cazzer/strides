@@ -41,7 +41,7 @@ export function VerticalOscillationChart({ series }: VerticalOscillationChartPro
 
   if (series.length === 0 || resolvedValues.length === 0) {
     return (
-      <p className="vertical-oscillation-chart__empty">
+      <p className="vertical-oscillation-chart__empty font-sans text-xs text-neutral-500 dark:text-neutral-400">
         No vertical oscillation waveform available for this clip.
       </p>
     )
@@ -63,12 +63,13 @@ export function VerticalOscillationChart({ series }: VerticalOscillationChartPro
   const hasGaps = segments.length > 1
 
   return (
-    <figure className="vertical-oscillation-chart">
+    <figure className="vertical-oscillation-chart space-y-1">
       <svg
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         role="img"
         aria-labelledby="vertical-oscillation-chart-title"
         preserveAspectRatio="xMidYMid meet"
+        className="text-brand-600 dark:text-brand-400"
       >
         <title id="vertical-oscillation-chart-title">
           Vertical oscillation over the course of the run
@@ -107,7 +108,7 @@ export function VerticalOscillationChart({ series }: VerticalOscillationChartPro
           {maxT.toFixed(1)}s
         </text>
       </svg>
-      <figcaption>
+      <figcaption className="font-sans text-xs text-neutral-500 dark:text-neutral-400">
         Hip bounce relative to torso length, sampled across the {maxT.toFixed(1)}s clip.
         {hasGaps &&
           ' Gaps in the line mark stretches where hip position could not be tracked.'}

@@ -49,14 +49,21 @@ export function QualityWarningBanner({
   )
 
   return (
-    <div role="alert" className="quality-warning-banner">
+    <div
+      role="alert"
+      className="border-2 border-black dark:border-white border-l-4 border-l-brand-600 p-4 space-y-3"
+    >
       <p>This video may produce unreliable results:</p>
-      <ul>
+      <ul className="list-disc pl-5 space-y-1 text-sm">
         {failedChecks.map((check) => (
           <li key={check.id}>{check.message}</li>
         ))}
       </ul>
-      <button type="button" onClick={proceedAnyway}>
+      <button
+        type="button"
+        onClick={proceedAnyway}
+        className="inline-flex items-center justify-center border-2 border-black dark:border-white px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black dark:text-white transition-colors hover:bg-black hover:text-white dark:hover:bg-white dark:hover:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+      >
         Proceed anyway
       </button>
     </div>

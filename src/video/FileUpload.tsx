@@ -22,13 +22,14 @@ export function FileUpload({ onSelected, disabled = false }: FileUploadProps) {
   }
 
   return (
-    <label className="file-upload">
+    <label className="group inline-flex w-full cursor-pointer flex-col items-center gap-2 border-2 border-dashed border-black dark:border-white p-8 text-center hover:bg-neutral-100 dark:hover:bg-neutral-900 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-brand-600">
       <span>Choose a video file</span>
       <input
         type="file"
         accept="video/*"
         onChange={handleChange}
         disabled={disabled}
+        className="sr-only"
       />
     </label>
   )

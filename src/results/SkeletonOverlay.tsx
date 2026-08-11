@@ -125,7 +125,7 @@ export function SkeletonOverlay({ videoRef, frames, metadata }: SkeletonOverlayP
       width={metadata.width}
       height={metadata.height}
       aria-hidden="true"
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
+      className="absolute inset-0 w-full h-full"
     />
   )
 }
