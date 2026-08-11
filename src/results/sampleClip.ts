@@ -20,9 +20,38 @@ export interface SampleClipOptions {
   /** Genuinely broken detector (e.g. lost WebGL context) vs. an isolated missed frame — this is
    * the threshold that distinguishes the two failure classes. Default 30. */
   maxConsecutiveErrors?: number
+  /** A single `estimatePose` call that never settles (hangs) would otherwise leave `inFlight`
+   * permanently non-null, silently halting all further sampling for the rest of the clip without
+   * ever tripping `maxConsecutiveErrors` (which only counts rejections). This bounds any single
+   * attempt so a hang degrades into a normal counted error instead of a silent full stop.
+   * Default 5000ms. */
+  detectionTimeoutMs?: number
 }
 
 export const DEFAULT_MAX_CONSECUTIVE_ERRORS = 30
+export const DEFAULT_DETECTION_TIMEOUT_MS = 5000
+
+class DetectionTimeoutError extends Error {}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () =>
+        reject(new DetectionTimeoutError(`Detection timed out after ${ms}ms`)),
+      ms,
+    )
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (err) => {
+        clearTimeout(timer)
+        reject(err)
+      },
+    )
+  })
+}
 
 /**
  * Plays `video` once at 1x and samples it via `requestVideoFrameCallback`, self-throttled to
@@ -54,6 +83,7 @@ export function sampleClip(
     onProgress,
     onPausedChange,
     maxConsecutiveErrors = DEFAULT_MAX_CONSECUTIVE_ERRORS,
+    detectionTimeoutMs = DEFAULT_DETECTION_TIMEOUT_MS,
   } = opts
 
   const samples: PoseSample[] = []
@@ -118,13 +148,18 @@ export function sampleClip(
 
     if (!inFlight) {
       const t = metadata.mediaTime
-      inFlight = Promise.resolve()
-        .then(() => detector.estimatePose(video))
+      inFlight = withTimeout(detector.estimatePose(video), detectionTimeoutMs)
         .then((frame) => {
+          // Cancellation can land between this attempt starting and settling (e.g. `stop()`
+          // mid-detection) — `finish()`/`abort()` already resolved/rejected the outer promise
+          // with a snapshot of `samples`, so a late push here would silently mutate an array
+          // the caller may already treat as final.
+          if (cancelled) return
           samples.push({ timestamp: t, frame })
           consecutiveErrors = 0
         })
         .catch(() => {
+          if (cancelled) return
           samples.push({ timestamp: t, frame: null })
           consecutiveErrors += 1
           if (consecutiveErrors >= maxConsecutiveErrors) {
@@ -137,7 +172,7 @@ export function sampleClip(
         })
         .finally(() => {
           inFlight = null
-          if (durationSec > 0) {
+          if (!cancelled && durationSec > 0) {
             onProgress?.(Math.min(t / durationSec, 1))
           }
         })

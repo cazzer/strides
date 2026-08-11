@@ -156,3 +156,51 @@ the ticket's literal acceptance criterion — is satisfied by direct, fast, real
   implementation environment has no browser, camera, or WebGL available. Automated coverage
   (unit/component tests, `tsc -b`, `vite build`, `eslint`) stands in for it; a manual pass is
   flagged as an explicit follow-up before this ships to real users.
+
+## Post-review fixes
+
+Code review caught several issues the automated suite couldn't, precisely because none of it
+exercises real playback — each is a good illustration of the gap the still-outstanding manual
+pass above is meant to close:
+
+- **`video.play()` was never called anywhere.** `sampleClip`'s docstring said the caller
+  (`useVideoAnalysis.start()`) was responsible for it (autoplay policy requires it happen
+  synchronously in the click handler), but `start()` never actually called it. In a real browser
+  this meant the video never advanced past frame one, `requestVideoFrameCallback` fired at most
+  once, `ended` never fired, and "Analyze" hung at 0% forever with no way to recover short of the
+  user manually pressing the native video's own play button. Fixed by calling `video.play()` in
+  `start()`, right after registering the `sampleClip` handle, with a `.catch` that surfaces a
+  `phase: 'error'` if the browser refuses (e.g. a stricter autoplay policy than expected).
+- **`sampleClip`'s in-flight detection could mutate `samples` after cancellation.** `stop()`
+  resolves the returned promise synchronously with the current `samples` array, but the
+  in-flight `estimatePose` call's `.then`/`.catch`/`.finally` had no guard against still running
+  afterward — a late resolution could push into (and thus silently mutate) an array the caller
+  already treats as final. Fixed by checking `cancelled` at the top of each handler.
+- **The circuit breaker only counted rejections, not hangs.** A single `estimatePose` call that
+  never settles would leave `inFlight` permanently non-null, silently halting all further
+  sampling for the rest of the clip without ever tripping `maxConsecutiveErrors`. Fixed by
+  wrapping each attempt in a 5-second timeout (`withTimeout`/`DEFAULT_DETECTION_TIMEOUT_MS`) so a
+  hang degrades into a normal counted error instead of a silent full stop.
+- **The quality gate could flash a spurious "couldn't check confidence" result.** `detector` alone
+  can't distinguish "the shared detector is still loading" from "it failed" — both are `null`.
+  Since loading is the near-universal state on first render, the gate would previously assess
+  immediately with `detector: null`, show a degraded result, then self-correct a moment later once
+  the detector actually resolved (via its existing `detector` dependency / stale-run discard).
+  Fixed by threading `usePoseDetector`'s `status` through as a third `useVideoQualityGate`
+  parameter and waiting out `status === 'loading'` before assessing at all — only a genuine
+  `'error'` proceeds immediately with `detector: null`, per the existing fail-open design.
+- **Two accessibility regressions of a bug class already fixed twice in this codebase** (#4's
+  `WebcamCapture`, #6's `QualityWarningBanner`): `ResultsView`'s "Try again" button called
+  `analysis.reset` directly, unmounting its own `role="alert"` wrapper while it held focus,
+  dropping focus to `<body>`. Fixed the same way as the prior two instances — the button now
+  calls an injected `onTryAgain` prop, and `App.tsx` wraps `analysis.reset` with a
+  `videoRef.current?.focus()` call, matching `handleProceedAnyway`'s existing shape exactly.
+- **"Analyze" got stuck permanently disabled after a successful run.** `analyzeDisabled` included
+  `phase !== 'idle'`, which is also true for `'ready'` — with no re-run affordance rendered in
+  that phase, a user who wanted to re-check the same clip had no path forward and no explanation.
+  Fixed: only `'sampling'`/`'processing'` (plus `qualityAssessing`) disable the button now; the
+  label switches to "Analyze again" once a run has completed or errored, and a `title` explains
+  *why* it's disabled during the states where it still is (mirroring `VideoInputPanel`'s
+  disabled-tab `title` pattern from #4). Also added a `role="status"` "Analysis complete."
+  announcement on the `'ready'` transition, closing a related gap where a screen-reader user got
+  no signal that results had appeared.

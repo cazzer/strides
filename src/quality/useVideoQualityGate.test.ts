@@ -83,7 +83,7 @@ beforeEach(() => {
 describe('useVideoQualityGate', () => {
   it('starts idle when the video source is not ready', () => {
     const { result } = renderHook(() =>
-      useVideoQualityGate(makeVideoSource(), makeFakeDetector()),
+      useVideoQualityGate(makeVideoSource(), makeFakeDetector(), 'ready'),
     )
     expect(result.current.status).toBe('idle')
     expect(result.current.assessment).toBeNull()
@@ -101,7 +101,7 @@ describe('useVideoQualityGate', () => {
 
     const { result, rerender } = renderHook(
       (props: { videoSource: VideoSource; detector: PoseDetector | null }) =>
-        useVideoQualityGate(props.videoSource, props.detector),
+        useVideoQualityGate(props.videoSource, props.detector, 'ready'),
       {
         initialProps: {
           videoSource: makeVideoSource(),
@@ -137,7 +137,7 @@ describe('useVideoQualityGate', () => {
 
     const { result, rerender } = renderHook(
       (props: { videoSource: VideoSource; detector: PoseDetector | null }) =>
-        useVideoQualityGate(props.videoSource, props.detector),
+        useVideoQualityGate(props.videoSource, props.detector, 'ready'),
       {
         initialProps: {
           videoSource: makeVideoSource(),
@@ -177,7 +177,7 @@ describe('useVideoQualityGate', () => {
 
   it('proceedAnyway() sets dismissed to true', () => {
     const { result } = renderHook(() =>
-      useVideoQualityGate(makeVideoSource(), makeFakeDetector()),
+      useVideoQualityGate(makeVideoSource(), makeFakeDetector(), 'ready'),
     )
     act(() => {
       result.current.proceedAnyway()
@@ -196,7 +196,7 @@ describe('useVideoQualityGate', () => {
 
     const { result, rerender } = renderHook(
       (props: { videoSource: VideoSource; detector: PoseDetector | null }) =>
-        useVideoQualityGate(props.videoSource, props.detector),
+        useVideoQualityGate(props.videoSource, props.detector, 'ready'),
       {
         initialProps: {
           videoSource: makeVideoSource(),
@@ -243,12 +243,12 @@ describe('useVideoQualityGate', () => {
     expect(result.current.assessment).toEqual(currentAssessment)
   })
 
-  it('passes a null detector through to assessVideoQuality without blocking the assessment', async () => {
+  it('passes a null detector through to assessVideoQuality without blocking the assessment, once detector loading has failed', async () => {
     assessVideoQualityMock.mockResolvedValue(passAssessment())
 
     const { result, rerender } = renderHook(
       (props: { videoSource: VideoSource; detector: PoseDetector | null }) =>
-        useVideoQualityGate(props.videoSource, props.detector),
+        useVideoQualityGate(props.videoSource, props.detector, 'error'),
       {
         initialProps: {
           videoSource: makeVideoSource(),
@@ -270,6 +270,65 @@ describe('useVideoQualityGate', () => {
     await waitFor(() => expect(result.current.status).toBe('ready'))
     expect(assessVideoQualityMock).toHaveBeenCalledWith(
       expect.objectContaining({ detector: null }),
+    )
+  })
+
+  it('waits out detectorStatus === "loading" instead of assessing with a not-yet-ready detector', async () => {
+    assessVideoQualityMock.mockResolvedValue(passAssessment())
+
+    interface Props {
+      videoSource: VideoSource
+      detector: PoseDetector | null
+      detectorStatus: 'loading' | 'ready' | 'error'
+    }
+    const initialProps: Props = {
+      videoSource: makeVideoSource(),
+      detector: null,
+      detectorStatus: 'loading',
+    }
+
+    const { result, rerender } = renderHook(
+      (props: Props) =>
+        useVideoQualityGate(
+          props.videoSource,
+          props.detector,
+          props.detectorStatus,
+        ),
+      { initialProps },
+    )
+
+    act(() => {
+      rerender({
+        videoSource: makeVideoSource({
+          status: 'ready',
+          metadata: makeMetadata(),
+        }),
+        detector: null,
+        detectorStatus: 'loading',
+      })
+    })
+
+    // Video is ready, but the shared detector is still loading -- must not fire yet, and
+    // must not show a spurious "no detector" result in the meantime.
+    expect(result.current.status).toBe('idle')
+    expect(assessVideoQualityMock).not.toHaveBeenCalled()
+
+    const detector = makeFakeDetector()
+    await act(async () => {
+      rerender({
+        videoSource: makeVideoSource({
+          status: 'ready',
+          metadata: makeMetadata(),
+        }),
+        detector,
+        detectorStatus: 'ready',
+      })
+    })
+
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(assessVideoQualityMock).toHaveBeenCalledTimes(1)
+    expect(assessVideoQualityMock).toHaveBeenCalledWith(
+      expect.objectContaining({ detector }),
     )
   })
 })

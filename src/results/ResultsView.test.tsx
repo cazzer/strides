@@ -18,7 +18,11 @@ function makeHeuristics(): FormHeuristicsResult {
     view: {
       view: 'side',
       confidence: 0.9,
-      diagnostics: { bilateralSpreadRatio: 0.2, sagittalExcursionRatio: 0.9, frameCoverage: 1 },
+      diagnostics: {
+        bilateralSpreadRatio: 0.2,
+        sagittalExcursionRatio: 0.9,
+        frameCoverage: 1,
+      },
     },
     verticalOscillation: {
       ...base,
@@ -31,7 +35,9 @@ function makeHeuristics(): FormHeuristicsResult {
   }
 }
 
-function makeAnalysis(overrides: Partial<VideoAnalysisState> = {}): VideoAnalysisState {
+function makeAnalysis(
+  overrides: Partial<VideoAnalysisState> = {},
+): VideoAnalysisState {
   return {
     phase: 'idle',
     progress: 0,
@@ -45,94 +51,128 @@ function makeAnalysis(overrides: Partial<VideoAnalysisState> = {}): VideoAnalysi
   }
 }
 
+function renderResultsView(
+  props: Partial<
+    Pick<
+      Parameters<typeof ResultsView>[0],
+      'analysis' | 'qualityAssessing' | 'onTryAgain'
+    >
+  > = {},
+) {
+  const onTryAgain = props.onTryAgain ?? vi.fn()
+  render(
+    <ResultsView
+      analysis={props.analysis ?? makeAnalysis()}
+      qualityAssessing={props.qualityAssessing ?? false}
+      onTryAgain={onTryAgain}
+    />,
+  )
+  return { onTryAgain }
+}
+
 describe('ResultsView', () => {
   it('enables the Analyze button when idle and quality gate is not assessing', () => {
-    render(<ResultsView analysis={makeAnalysis()} qualityAssessing={false} />)
+    renderResultsView()
     expect(screen.getByRole('button', { name: /analyze/i })).toBeEnabled()
   })
 
   it('disables the Analyze button while the quality gate is assessing', () => {
-    render(<ResultsView analysis={makeAnalysis()} qualityAssessing={true} />)
+    renderResultsView({ qualityAssessing: true })
     expect(screen.getByRole('button', { name: /analyze/i })).toBeDisabled()
   })
 
   it('disables the Analyze button once a run has started', () => {
-    render(
-      <ResultsView
-        analysis={makeAnalysis({ phase: 'sampling' })}
-        qualityAssessing={false}
-      />,
-    )
+    renderResultsView({ analysis: makeAnalysis({ phase: 'sampling' }) })
     expect(screen.getByRole('button', { name: /analyze/i })).toBeDisabled()
+  })
+
+  it('re-enables Analyze once a run completes, so the same clip can be re-analyzed', () => {
+    renderResultsView({
+      analysis: makeAnalysis({ phase: 'ready', heuristics: makeHeuristics() }),
+    })
+    expect(screen.getByRole('button', { name: /analyze again/i })).toBeEnabled()
+  })
+
+  it('re-enables Analyze after an error, so the user can retry via the primary button too', () => {
+    renderResultsView({
+      analysis: makeAnalysis({
+        phase: 'error',
+        error: { kind: 'unknown', message: 'Something broke.' },
+      }),
+    })
+    expect(screen.getByRole('button', { name: /analyze again/i })).toBeEnabled()
   })
 
   it('calls start() when the Analyze button is clicked', () => {
     const analysis = makeAnalysis()
-    render(<ResultsView analysis={analysis} qualityAssessing={false} />)
+    renderResultsView({ analysis })
     fireEvent.click(screen.getByRole('button', { name: /analyze/i }))
     expect(analysis.start).toHaveBeenCalledTimes(1)
   })
 
   it('shows a progress readout with percentage while sampling', () => {
-    render(
-      <ResultsView
-        analysis={makeAnalysis({ phase: 'sampling', progress: 0.42 })}
-        qualityAssessing={false}
-      />,
-    )
+    renderResultsView({
+      analysis: makeAnalysis({ phase: 'sampling', progress: 0.42 }),
+    })
     expect(screen.getByRole('status').textContent).toMatch(/42%/)
   })
 
   it('shows a processing readout while processing', () => {
-    render(
-      <ResultsView
-        analysis={makeAnalysis({ phase: 'processing', progress: 1 })}
-        qualityAssessing={false}
-      />,
-    )
+    renderResultsView({
+      analysis: makeAnalysis({ phase: 'processing', progress: 1 }),
+    })
     expect(screen.getByRole('status').textContent).toMatch(/processing/i)
   })
 
   it('mentions the pause when analysis is paused mid-sampling', () => {
-    render(
-      <ResultsView
-        analysis={makeAnalysis({
-          phase: 'sampling',
-          progress: 0.2,
-          isPausedMidAnalysis: true,
-        })}
-        qualityAssessing={false}
-      />,
-    )
+    renderResultsView({
+      analysis: makeAnalysis({
+        phase: 'sampling',
+        progress: 0.2,
+        isPausedMidAnalysis: true,
+      }),
+    })
     expect(screen.getByRole('status').textContent).toMatch(/paused/i)
   })
 
-  it('shows an error alert with a working try-again button', () => {
+  it('announces completion once ready', () => {
+    renderResultsView({
+      analysis: makeAnalysis({ phase: 'ready', heuristics: makeHeuristics() }),
+    })
+    expect(screen.getByRole('status').textContent).toMatch(/complete/i)
+  })
+
+  it('shows an error alert and calls onTryAgain (not analysis.reset directly) from its button', () => {
     const analysis = makeAnalysis({
       phase: 'error',
       error: { kind: 'detector-unavailable', message: 'Detector not ready.' },
     })
-    render(<ResultsView analysis={analysis} qualityAssessing={false} />)
+    const { onTryAgain } = renderResultsView({ analysis })
 
     expect(screen.getByRole('alert').textContent).toMatch(/detector not ready/i)
     fireEvent.click(screen.getByRole('button', { name: /try again/i }))
-    expect(analysis.reset).toHaveBeenCalledTimes(1)
+    // The alert unmounts on click and holds focus until then -- moving focus somewhere stable
+    // is the caller's job (see App.tsx's handleTryAgain), which is exactly why this button
+    // calls the injected onTryAgain prop rather than analysis.reset directly.
+    expect(onTryAgain).toHaveBeenCalledTimes(1)
+    expect(analysis.reset).not.toHaveBeenCalled()
   })
 
   it('renders the metrics panel once phase is ready', () => {
-    render(
-      <ResultsView
-        analysis={makeAnalysis({ phase: 'ready', heuristics: makeHeuristics() })}
-        qualityAssessing={false}
-      />,
-    )
-    expect(screen.getByRole('region', { name: /form metrics/i })).toBeInTheDocument()
+    renderResultsView({
+      analysis: makeAnalysis({ phase: 'ready', heuristics: makeHeuristics() }),
+    })
+    expect(
+      screen.getByRole('region', { name: /form metrics/i }),
+    ).toBeInTheDocument()
   })
 
   it('does not render results or status content while idle', () => {
-    render(<ResultsView analysis={makeAnalysis()} qualityAssessing={false} />)
+    renderResultsView()
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(screen.queryByRole('region', { name: /form metrics/i })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('region', { name: /form metrics/i }),
+    ).not.toBeInTheDocument()
   })
 })

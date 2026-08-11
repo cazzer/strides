@@ -8,9 +8,17 @@ export interface ResultsViewProps {
    * the shared, visible `<video>` element, so starting analysis at the same time would race it
    * for playback control. Quality assessment finishes in well under a second in practice. */
   qualityAssessing: boolean
+  /** Called instead of `analysis.reset` directly for "Try again" — mirrors
+   * `QualityWarningBanner`'s `proceedAnyway` prop: the alert this button lives in unmounts the
+   * instant it's clicked, so whoever composes this component (`App.tsx`) needs the chance to
+   * move focus somewhere stable first, the same fix already applied there and in `WebcamCapture`. */
+  onTryAgain: () => void
 }
 
-function progressLabel(phase: VideoAnalysisState['phase'], progress: number): string {
+function progressLabel(
+  phase: VideoAnalysisState['phase'],
+  progress: number,
+): string {
   if (phase === 'sampling') {
     return `Analyzing… ${Math.round(progress * 100)}%`
   }
@@ -23,27 +31,48 @@ function progressLabel(phase: VideoAnalysisState['phase'], progress: number): st
  * itself. Renders the "Analyze" button, a progress readout while sampling/processing, and once
  * `phase === 'ready'`, the metrics panel (which itself renders the vertical-oscillation chart).
  */
-export function ResultsView({ analysis, qualityAssessing }: ResultsViewProps) {
-  const { phase, progress, isPausedMidAnalysis, heuristics, error, start, reset } = analysis
-  const analyzeDisabled = qualityAssessing || phase !== 'idle'
+export function ResultsView({
+  analysis,
+  qualityAssessing,
+  onTryAgain,
+}: ResultsViewProps) {
+  const { phase, progress, isPausedMidAnalysis, heuristics, error, start } =
+    analysis
+  // 'ready'/'error' don't disable the button -- Analyze must stay re-runnable after a
+  // completed or failed run, not get stuck permanently disabled with no way forward.
+  const analyzeDisabled =
+    qualityAssessing || phase === 'sampling' || phase === 'processing'
+  const analyzeDisabledReason = qualityAssessing
+    ? 'Waiting for the video-quality check to finish'
+    : analyzeDisabled
+      ? 'Analysis already in progress'
+      : undefined
 
   return (
     <section className="results-view" aria-label="Analysis results">
-      <button type="button" onClick={start} disabled={analyzeDisabled}>
-        Analyze
+      <button
+        type="button"
+        onClick={start}
+        disabled={analyzeDisabled}
+        title={analyzeDisabledReason}
+      >
+        {phase === 'ready' || phase === 'error' ? 'Analyze again' : 'Analyze'}
       </button>
 
       {(phase === 'sampling' || phase === 'processing') && (
         <p role="status">
           {progressLabel(phase, progress)}
-          {isPausedMidAnalysis && ' — paused, resume playback to continue analyzing'}
+          {isPausedMidAnalysis &&
+            ' — paused, resume playback to continue analyzing'}
         </p>
       )}
+
+      {phase === 'ready' && <p role="status">Analysis complete.</p>}
 
       {phase === 'error' && error && (
         <div role="alert">
           <p>{error.message}</p>
-          <button type="button" onClick={reset}>
+          <button type="button" onClick={onTryAgain}>
             Try again
           </button>
         </div>

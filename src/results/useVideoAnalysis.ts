@@ -87,7 +87,8 @@ export function useVideoAnalysis(
         phase: 'error',
         error: {
           kind: 'detector-unavailable',
-          message: 'The pose detector is not ready yet — try again in a moment.',
+          message:
+            'The pose detector is not ready yet — try again in a moment.',
         },
       })
       return
@@ -106,17 +107,42 @@ export function useVideoAnalysis(
     const runId = ++runIdRef.current
     setState({ ...idleState(), phase: 'sampling' })
 
-    const { promise, handle } = sampleClip(video, detector, metadata.durationSec, {
-      onProgress: (fraction) => {
-        if (runIdRef.current !== runId) return
-        setState((s) => ({ ...s, progress: fraction }))
+    const { promise, handle } = sampleClip(
+      video,
+      detector,
+      metadata.durationSec,
+      {
+        onProgress: (fraction) => {
+          if (runIdRef.current !== runId) return
+          setState((s) => ({ ...s, progress: fraction }))
+        },
+        onPausedChange: (paused) => {
+          if (runIdRef.current !== runId) return
+          setState((s) => ({ ...s, isPausedMidAnalysis: paused }))
+        },
       },
-      onPausedChange: (paused) => {
-        if (runIdRef.current !== runId) return
-        setState((s) => ({ ...s, isPausedMidAnalysis: paused }))
-      },
-    })
+    )
     handleRef.current = handle
+
+    // sampleClip deliberately doesn't call play() itself (see its docstring) — it must happen
+    // here, synchronously within this same click-handler call stack, to count as a user gesture
+    // under browser autoplay policy. Without this the video never advances, rVFC never fires
+    // past the first frame, and the run hangs at 0% forever.
+    video.play().catch((err: unknown) => {
+      handle.stop()
+      if (runIdRef.current !== runId) return
+      setState({
+        ...idleState(),
+        phase: 'error',
+        error: {
+          kind: 'unknown',
+          message:
+            err instanceof Error
+              ? `Could not start video playback: ${err.message}`
+              : 'Could not start video playback to begin analysis.',
+        },
+      })
+    })
 
     void (async () => {
       let samples: PoseSample[]
@@ -139,7 +165,11 @@ export function useVideoAnalysis(
       }
 
       if (runIdRef.current !== runId) return
-      setState((s) => ({ ...s, phase: 'processing', isPausedMidAnalysis: false }))
+      setState((s) => ({
+        ...s,
+        phase: 'processing',
+        isPausedMidAnalysis: false,
+      }))
 
       // Yield one tick so 'processing' is an observable render before the (fast, but
       // synchronous) robustness + heuristics pass below runs.
@@ -170,7 +200,9 @@ export function useVideoAnalysis(
           error: {
             kind: 'unknown',
             message:
-              err instanceof Error ? err.message : 'Analysis failed unexpectedly.',
+              err instanceof Error
+                ? err.message
+                : 'Analysis failed unexpectedly.',
           },
         })
       }

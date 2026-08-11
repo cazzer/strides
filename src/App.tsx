@@ -13,7 +13,11 @@ export function App() {
   // WebGL/model-load cost twice (quality-gate-then-analyze happens on every session) is a
   // guaranteed, avoidable cost, not a hypothetical one.
   const poseDetector = usePoseDetector()
-  const qualityGate = useVideoQualityGate(videoSource, poseDetector.detector)
+  const qualityGate = useVideoQualityGate(
+    videoSource,
+    poseDetector.detector,
+    poseDetector.status,
+  )
   const analysis = useVideoAnalysis(videoSource, poseDetector.detector)
 
   // "Proceed anyway" unmounts the alert that currently holds focus — without
@@ -25,18 +29,27 @@ export function App() {
     videoSource.videoRef.current?.focus()
   }
 
+  // Same fix, same reason: "Try again" unmounts the alert that holds focus when the
+  // analysis error clears.
+  const handleTryAgain = () => {
+    analysis.reset()
+    videoSource.videoRef.current?.focus()
+  }
+
   return (
     <main>
       <h1>Strides</h1>
       <p>Browser-based running form analysis.</p>
       <VideoInputPanel videoSource={videoSource}>
-        {analysis.phase === 'ready' && analysis.robustFrames && videoSource.metadata && (
-          <SkeletonOverlay
-            videoRef={videoSource.videoRef}
-            frames={analysis.robustFrames}
-            metadata={videoSource.metadata}
-          />
-        )}
+        {analysis.phase === 'ready' &&
+          analysis.robustFrames &&
+          videoSource.metadata && (
+            <SkeletonOverlay
+              videoRef={videoSource.videoRef}
+              frames={analysis.robustFrames}
+              metadata={videoSource.metadata}
+            />
+          )}
       </VideoInputPanel>
       {videoSource.status === 'ready' && (
         <QualityWarningBanner
@@ -50,6 +63,7 @@ export function App() {
         <ResultsView
           analysis={analysis}
           qualityAssessing={qualityGate.status === 'assessing'}
+          onTryAgain={handleTryAgain}
         />
       )}
     </main>
