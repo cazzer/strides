@@ -31,7 +31,7 @@ export function VideoInputPanel({ videoSource, children }: VideoInputPanelProps)
   const showPicker = status === 'empty'
 
   return (
-    <section className="video-input-panel" aria-label="Video input">
+    <section className="video-input-panel space-y-4" aria-label="Video input">
       {showPicker && (
         <div className="flex border-2 border-black dark:border-white divide-x-2 divide-black dark:divide-white w-fit">
           <button
@@ -81,7 +81,7 @@ export function VideoInputPanel({ videoSource, children }: VideoInputPanelProps)
       {status === 'loading' && <p role="status">Processing video…</p>}
 
       {status === 'error' && error && (
-        <div className="border-2 border-black dark:border-white border-l-4 border-l-brand-600 p-4 space-y-2" role="alert">
+        <div className="border-2 border-black dark:border-white border-l-4 border-l-brand-600 dark:border-l-brand-400 p-4 space-y-2" role="alert">
           <p>{error.message}</p>
           <button
             type="button"
@@ -102,13 +102,13 @@ export function VideoInputPanel({ videoSource, children }: VideoInputPanelProps)
         presence — reflects `status`. The wrapper gives an overlay (e.g. `SkeletonOverlay`, #8)
         a `position: relative` stage to be positioned against as a sibling of `<video>`.
       */}
-      <div className="relative w-full aspect-video border-2 border-black dark:border-white bg-neutral-100 dark:bg-neutral-900 overflow-hidden">
+      <div className="relative w-fit max-w-full border-2 border-black dark:border-white bg-neutral-100 dark:bg-neutral-900">
         <video
           ref={videoRef}
           controls
           playsInline
           hidden={status === 'empty'}
-          className="w-full h-full object-contain bg-black"
+          className="block max-w-full h-auto bg-black"
         />
         {status !== 'empty' && children}
       </div>

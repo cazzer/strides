@@ -53,7 +53,11 @@ function MetricCard({ metric, chart }: MetricCardProps) {
 
   return (
     <article
-      className={`metrics-panel__card border-2 border-black dark:border-white p-5 space-y-2 ${isFlagged ? 'opacity-85 border-brand-600 dark:border-brand-400' : ''}`}
+      className={`metrics-panel__card border-2 p-5 space-y-2 ${
+        isFlagged
+          ? 'opacity-85 border-brand-600 dark:border-brand-400'
+          : 'border-black dark:border-white'
+      }`}
       data-flagged={isFlagged}
       aria-label={METRIC_LABELS[metric.metric]}
     >

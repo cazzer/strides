@@ -216,7 +216,7 @@ export function WebcamCapture({
   const isPreviewing = state.kind === 'recording' || state.kind === 'stopping'
 
   return (
-    <div className="webcam-capture">
+    <div className="webcam-capture space-y-4">
       <video
         ref={previewRef}
         muted
@@ -232,7 +232,7 @@ export function WebcamCapture({
           type="button"
           onClick={startRecording}
           disabled={disabled}
-          className="inline-flex items-center justify-center border-2 border-brand-600 bg-brand-600 px-5 py-2.5 font-sans text-sm font-semibold uppercase tracking-wide text-white transition-colors hover:bg-brand-700 hover:border-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-brand-600"
+          className="inline-flex items-center justify-center border-2 border-brand-700 bg-brand-700 px-5 py-2.5 font-sans text-sm font-semibold uppercase tracking-wide text-white transition-colors hover:bg-brand-800 hover:border-brand-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-brand-700"
         >
           Start recording
         </button>
@@ -257,7 +257,7 @@ export function WebcamCapture({
       )}
 
       {state.kind === 'error' && (
-        <div className="border-2 border-black dark:border-white border-l-4 border-l-brand-600 p-4 space-y-2" role="alert">
+        <div className="border-2 border-black dark:border-white border-l-4 border-l-brand-600 dark:border-l-brand-400 p-4 space-y-2" role="alert">
           <p>{state.error.message}</p>
           <button
             type="button"

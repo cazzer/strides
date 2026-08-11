@@ -38,7 +38,7 @@ export function App() {
 
   return (
     <>
-      <header className="sticky top-0 z-10 border-b-2 border-black dark:border-white bg-white/90 dark:bg-black/90 backdrop-blur px-4 sm:px-6 py-4">
+      <header className="sticky top-0 z-10 border-b-2 border-black dark:border-white bg-white dark:bg-black px-4 sm:px-6 py-4">
         <h1 className="font-display text-2xl font-bold tracking-tight">Strides</h1>
         <p className="font-sans text-sm text-neutral-600 dark:text-neutral-400">
           Browser-based running form analysis.

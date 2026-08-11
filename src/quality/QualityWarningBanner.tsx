@@ -51,7 +51,7 @@ export function QualityWarningBanner({
   return (
     <div
       role="alert"
-      className="border-2 border-black dark:border-white border-l-4 border-l-brand-600 p-4 space-y-3"
+      className="border-2 border-black dark:border-white border-l-4 border-l-brand-600 dark:border-l-brand-400 p-4 space-y-3"
     >
       <p>This video may produce unreliable results:</p>
       <ul className="list-disc pl-5 space-y-1 text-sm">
