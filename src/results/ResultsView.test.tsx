@@ -53,6 +53,7 @@ function makeAnalysis(
     isPausedMidAnalysis: false,
     robustFrames: null,
     heuristics: null,
+    diagnostics: null,
     error: null,
     start: vi.fn(),
     reset: vi.fn(),

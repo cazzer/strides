@@ -393,6 +393,62 @@ describe('useVideoAnalysis', () => {
     expect(video.loop).toBe(false)
   })
 
+  it('populates diagnostics once ready, null before', async () => {
+    sampleClipMock.mockImplementation(() => ({
+      promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+      handle: makeFakeHandle(),
+    }))
+
+    const videoSource = makeVideoSource()
+    const detector = makeFakeDetector()
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+    expect(result.current.diagnostics).toBeNull()
+
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+    expect(result.current.diagnostics).not.toBeNull()
+    expect(result.current.diagnostics?.metrics.trunkLean.value).toBe(5)
+  })
+
+  it('logs diagnostics to the console once ready, in a dev build', async () => {
+    sampleClipMock.mockImplementation(() => ({
+      promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+      handle: makeFakeHandle(),
+    }))
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    const videoSource = makeVideoSource()
+    const detector = makeFakeDetector()
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+
+    const call = logSpy.mock.calls.find((args) => args[0] === '[analysis-diagnostics]')
+    expect(call).toBeDefined()
+    expect(() => JSON.parse(call![1] as string)).not.toThrow()
+
+    logSpy.mockRestore()
+  })
+
+  it('does not log diagnostics outside a dev build', async () => {
+    vi.stubEnv('DEV', false)
+    sampleClipMock.mockImplementation(() => ({
+      promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+      handle: makeFakeHandle(),
+    }))
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    const videoSource = makeVideoSource()
+    const detector = makeFakeDetector()
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+
+    const call = logSpy.mock.calls.find((args) => args[0] === '[analysis-diagnostics]')
+    expect(call).toBeUndefined()
+
+    logSpy.mockRestore()
+    vi.unstubAllEnvs()
+  })
+
   it('stops the in-flight handle on unmount', () => {
     const handle = makeFakeHandle()
     sampleClipMock.mockImplementation(() => ({

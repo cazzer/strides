@@ -6,6 +6,7 @@ import type { PoseSample } from '../pose/robustness/types'
 import { computeFormHeuristics } from '../heuristics/index'
 import { sampleClip } from './sampleClip'
 import type { SampleClipHandle } from './sampleClip'
+import { computeAnalysisDiagnostics } from './analysisDiagnostics'
 import type { VideoAnalysisState } from './types'
 
 function idleState(): Omit<VideoAnalysisState, 'start' | 'reset'> {
@@ -15,6 +16,7 @@ function idleState(): Omit<VideoAnalysisState, 'start' | 'reset'> {
     isPausedMidAnalysis: false,
     robustFrames: null,
     heuristics: null,
+    diagnostics: null,
     error: null,
   }
 }
@@ -193,6 +195,7 @@ export function useVideoAnalysis(
         const sorted = [...samples].sort((a, b) => a.timestamp - b.timestamp)
         const robustFrames = applyRobustness(sorted)
         const heuristics = computeFormHeuristics(robustFrames)
+        const diagnostics = computeAnalysisDiagnostics(sorted, robustFrames, heuristics)
         if (runIdRef.current !== runId) return
         setState({
           phase: 'ready',
@@ -200,6 +203,7 @@ export function useVideoAnalysis(
           isPausedMidAnalysis: false,
           robustFrames,
           heuristics,
+          diagnostics,
           error: null,
         })
       } catch (err) {
@@ -253,6 +257,16 @@ export function useVideoAnalysis(
     autoStartedForRef.current = metadata
     start()
   }, [videoSource.status, state.phase, detector, metadata, start])
+
+  // Development-only: auto-logs the full diagnostics object once a run reaches 'ready', for
+  // driving the app via browser automation across a batch of test clips and reading the result
+  // back out of the console — see analysisDiagnostics.ts. import.meta.env.DEV lets the bundler
+  // dead-code-eliminate this whole branch from a production build, not just skip it at runtime.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    if (state.phase !== 'ready' || !state.diagnostics) return
+    console.log('[analysis-diagnostics]', JSON.stringify(state.diagnostics))
+  }, [state.phase, state.diagnostics])
 
   return { ...state, start, reset }
 }
