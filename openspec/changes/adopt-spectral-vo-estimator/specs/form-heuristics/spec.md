@@ -20,7 +20,8 @@ system SHALL report `value: null` and `confidence: 0` with a non-null caveat, an
 a value derived from that fit by any other code path. The total coefficient of determination MAY be
 reported as a diagnostic but SHALL NOT be used as the gate.
 
-The system SHALL report `sampleSize` for this metric as the number of COMPLETE gait cycles observed,
+The system SHALL report `sampleSize` for this metric as the number of complete BOUNCE cycles
+observed (one bounce per STEP, i.e. half a full gait cycle, not a full gait cycle itself),
 `floor(spanSeconds × f*)`, and SHALL NOT report a value when fewer than one complete cycle was
 observed.
 

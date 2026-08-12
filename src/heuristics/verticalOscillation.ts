@@ -87,10 +87,11 @@ function caveatForFailure(reason: SpectralFitFailureReason, sampleCount: number)
  * `null` with a caveat naming why. The chart `series` is populated regardless, so a clip with no
  * reportable number still shows its hip trace.
  *
- * `sampleSize` is the count of COMPLETE gait cycles observed (`floor(spanSeconds × frequencyHz)`),
- * not the half-cycle count the extrema estimator reported — the fit consumes the whole waveform,
- * so the cycle is its natural sample unit. Confidence uses the UNROUNDED cycle count; only the
- * reported field and the caveat text are floored.
+ * `sampleSize` is the count of complete BOUNCE cycles observed (`floor(spanSeconds ×
+ * frequencyHz)`) — one bounce per STEP, i.e. HALF a full gait cycle, not a full gait cycle itself
+ * — not the half-bounce-cycle count the extrema estimator reported — the fit consumes the whole
+ * waveform, so the cycle is its natural sample unit. Confidence uses the UNROUNDED cycle count;
+ * only the reported field and the caveat text are floored.
  *
  * ## View tolerance
  *

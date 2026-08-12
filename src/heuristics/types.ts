@@ -50,10 +50,11 @@ export interface MetricResult {
   /** Count of whatever the producing metric aggregates over — the unit differs per metric and is
    * documented in each module (resolvable frames for trunk lean, footstrikes for overstriding).
    * Vertical oscillation and cadence both read the shared hip-bounce spectral fit
-   * (`hipBounce.ts`) and report COMPLETE GAIT CYCLES observed — for cadence specifically, whose
-   * signal bounces once per STEP, that count is directly a step count, not a footstrike-detection
-   * count the way it was before this metric moved off `detectFootstrikes`. Neither metric counts
-   * the half-cycles an older extrema-pairing estimator used to report. */
+   * (`hipBounce.ts`) and report complete BOUNCE cycles observed — one bounce per STEP, i.e. HALF
+   * a full gait cycle, not a full gait cycle itself. For cadence specifically that count is
+   * directly a step count, not a footstrike-detection count the way it was before this metric
+   * moved off `detectFootstrikes`. Neither metric counts the half-BOUNCE-cycles an older
+   * extrema-pairing estimator used to report. */
   sampleSize: number
   /** Non-null for degraded/low-confidence results across every metric. `footStrikePattern` is the
    * one deliberate exception: it is a proxy (ankle-relative-to-knee position, not a direct
@@ -188,9 +189,10 @@ export interface HeuristicsConfig {
    * `verticalOscillationMinFitR2` together, not just one — deliberately not implemented here, see
    * the `derive-cadence-from-step-frequency` change's design.md. */
   cadenceMinFitR2: number // 0.30
-  /** Minimum COMPLETE GAIT CYCLE count below which confidence is penalized via the sampleSize
-   * factor. Full cycles, not half-cycles — the spectral estimator fits a whole waveform rather
-   * than pairing individual extrema, so its natural sample unit is the cycle. Cadence has its own,
+  /** Minimum complete BOUNCE CYCLE count below which confidence is penalized via the sampleSize
+   * factor — one bounce cycle is one STEP, HALF a full gait cycle, not a full gait cycle itself.
+   * Full bounce cycles, not half-bounce-cycles — the spectral estimator fits a whole waveform
+   * rather than pairing individual extrema, so its natural sample unit is the cycle. Cadence has its own,
    * higher minimum (`MIN_CADENCE_STEPS` in `cadence.ts`) rather than reusing this one — despite
    * both metrics now reading the same hip-bounce fit, cadence needs more cycles for adequate
    * FREQUENCY precision (a spectral estimator's frequency resolution improves with the SQUARE of
