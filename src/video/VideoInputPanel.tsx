@@ -4,6 +4,7 @@ import { DemoVideoButton } from './DemoVideoButton'
 import { FileUpload } from './FileUpload'
 import { WebcamCapture } from './WebcamCapture'
 import type { VideoSource } from './types'
+import parkApproachDemoUrl from './demo-clips/park-approach.mp4'
 
 export interface VideoInputPanelProps {
   /** Owned by the caller (e.g. `App.tsx`) via `useVideoSource()`. */
@@ -80,7 +81,15 @@ export function VideoInputPanel({ videoSource, children }: VideoInputPanelProps)
       )}
 
       {showPicker && (
-        <DemoVideoButton onLoaded={(blob) => load(blob)} disabled={isRecording} />
+        <div className="flex flex-wrap gap-2">
+          <DemoVideoButton onLoaded={(blob) => load(blob)} disabled={isRecording} />
+          <DemoVideoButton
+            onLoaded={(blob) => load(blob)}
+            disabled={isRecording}
+            videoUrl={parkApproachDemoUrl}
+            label="Try another demo (park, front view)"
+          />
+        </div>
       )}
 
       {status === 'loading' && <p role="status">Processing video…</p>}
