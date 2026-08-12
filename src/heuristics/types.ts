@@ -24,8 +24,9 @@ export type View = 'side' | 'front' | 'ambiguous'
  * resolves), same as every other bilateral-pair signal in this package.
  *
  * Nothing else reads this: cadence stays pinned to `hipMid` regardless of this setting (see
- * `cadence.ts`'s module doc), and `verticalOscillationCm` takes no config at all and stays
- * hip-based unconditionally.
+ * `cadence.ts`'s module doc), and `verticalOscillationCm` ignores it and stays hip-based
+ * unconditionally — that calculation does take a `HeuristicsConfig`, but reads it only for the
+ * shared spectral frequency grid, never for signal selection.
  */
 export type VerticalOscillationSignal = 'hipMid' | 'earMid'
 
@@ -229,8 +230,9 @@ export interface HeuristicsConfig {
    * decided by a pre-registered rule against a live integration-level A/B — see
    * `openspec/changes/widen-keypoints-selectable-vo-signal/design.md` for the numbers and the
    * rule as written. Affects `verticalOscillation` ONLY: cadence stays hip-pinned regardless
-   * (`cadence.ts`), and `verticalOscillationCm` takes no config and stays hip-based
-   * unconditionally. */
+   * (`cadence.ts`), and `verticalOscillationCm` ignores this key and stays hip-based
+   * unconditionally — it reads the config it is handed only for the shared spectral frequency
+   * grid. */
   verticalOscillationSignal: VerticalOscillationSignal // 'hipMid'
 
   /** Minimum prominence (as a fraction of torsoLengthPx) for an ankle-y extremum to count as a
