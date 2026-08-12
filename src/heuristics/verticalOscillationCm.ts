@@ -87,8 +87,9 @@ export interface ScaleCalibratedFit {
   sampleCount: number
   /** Time from the winning run's first to its last sample. */
   spanSeconds: number
-  /** `spanSeconds × frequencyHz`, fractional, for the winning run alone. `sampleSize` sums the
-   * floor of this across ALL contributing runs. */
+  /** `spanSeconds × frequencyHz`, fractional, for the winning run alone. `sampleSize` is the
+   * floor of the SUM of this across all contributing runs (floor once, after summing — two runs
+   * at 1.6 cycles each report 3, not 2). */
   observedCycles: number
 }
 

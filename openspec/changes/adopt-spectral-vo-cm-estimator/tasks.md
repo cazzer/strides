@@ -95,10 +95,10 @@ Cross-trial spread after: 0.008 cm (rule wanted ≤ 0.05 — met). Level: 4.79 c
 is BELOW the rule's 5.60 floor. **Rule fired; investigated, not tuned, not averaged away.**
 
 Finding: the new figure agrees with the *pixel* path's spectral fit on the identical clip. Pixel
-fit reports 42.24 px peak-to-peak; ÷ 871.9 px/m = 4.844 cm, against this path's 4.786 cm — 1.1%
+fit reports 42.24 px peak-to-peak; ÷ 871.9 px/m = 4.845 cm, against this path's 4.786 cm — 1.2%
 apart, with an identical winning frequency (1.52 Hz), identical sample count (57), identical span
 (2.24 s) and `sinusoidR2` within 0.003 (0.4860 vs. 0.4886). That is D5's affine-equivalence
-identity holding on real footage, the residual 1.1% being the real (mild, 1.011) scale drift
+identity holding on real footage, the residual ~1.2% being the real (mild, 1.011) scale drift
 making the delta-weighted conversion differ from a single median-scale division.
 
 So the drop is not this change introducing an error — it is the pipeline's two VO estimators,

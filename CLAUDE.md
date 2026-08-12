@@ -351,7 +351,7 @@ produced no `scaleCalibration` at all — the known cold-start flake, unrelated 
 tolerance for this swap was −7% (from #28's measured sine-underfit bias on the pixel path); the
 measured drop was −21%, so it was investigated rather than accepted or tuned away. The finding:
 the new centimetre figure agrees with the *pixel* path's spectral fit on the identical clip to
-within 1.1% (4.786 cm vs. 42.24 px ÷ 871.9 px/m = 4.844 cm), at exactly the same winning frequency
+within 1.2% (4.786 cm vs. 42.24 px ÷ 871.9 px/m = 4.845 cm), at exactly the same winning frequency
 (1.52 Hz), the same 57 samples, the same 2.24 s span, and a `sinusoidR2` within 0.003 (0.4860 vs.
 0.4886) — the affine-equivalence identity, holding on real footage. Before the swap the pipeline
 reported two mutually inconsistent amplitudes for the same clip (4.84 cm-equivalent from the fit,
@@ -371,8 +371,13 @@ wildly different number means the calibration is wrong and the centimetres shoul
 approach translation, and the measured effect is a 30% drop (median 14.9 → 10.2 cm) with the
 alternating large/small half-cycle pattern gone by construction. It is still not a *target* —
 there is no ground truth in centimetres for that clip; the watch's ~10% is a *ratio*, not
-centimetres, and is not comparable. The 6–13 cm literature range is the plausibility check, which
-both clips now sit in or just under.
+centimetres, and is not comparable. The 6–13 cm literature range is the plausibility check: park
+(10.2) now sits inside it, but track (4.79) reads ~20% BELOW the band's floor — a real shortfall,
+not a marginal one. The mechanism is the sine-underfit described above: at this clip's
+`sinusoidR2` ≈ 0.49 a single sinusoid explains under half the residual variance and necessarily
+underfits the peak excursions, so the fitted amplitude reads low on a peaky waveform. The
+pixel-space `verticalOscillation` ratio metric inherits the identical downward bias (same
+primitive, same clip, same R²) — the whole VO family reads low on peaky waveforms, consistently.
 
 ## Head-keypoint widening + vertical-oscillation signal A/B (2026-08-12)
 
