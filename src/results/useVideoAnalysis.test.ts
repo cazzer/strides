@@ -110,6 +110,7 @@ const FAKE_HEURISTICS: FormHeuristicsResult = {
     sampleSize: 5,
     caveat: null,
     series: [],
+    fit: null,
   },
   trunkLean: {
     metric: 'trunkLean',

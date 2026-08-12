@@ -38,6 +38,7 @@ function makeVerticalOscillation(
     sampleSize: 20,
     caveat: null,
     series,
+    fit: null,
     ...overrides,
   }
 }

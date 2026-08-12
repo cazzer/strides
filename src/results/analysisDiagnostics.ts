@@ -2,7 +2,12 @@ import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 import type { KeypointName } from '../pose/types'
 import type { PoseSample } from '../pose/robustness/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
-import type { FormHeuristicsResult, MetricId, ViewFit } from '../heuristics/types'
+import type {
+  FormHeuristicsResult,
+  MetricId,
+  VerticalOscillationFit,
+  ViewFit,
+} from '../heuristics/types'
 
 export interface KeypointResolutionStats {
   detected: number
@@ -29,6 +34,11 @@ export interface AnalysisDiagnostics {
   view: FormHeuristicsResult['view']
   keypoints: Record<KeypointName, KeypointResolutionStats>
   metrics: Record<MetricId, MetricDiagnostics>
+  /** Vertical oscillation's spectral-fit internals — fitted frequency, fit quality, cycle count.
+   * `null` whenever that metric reported no value, per its own `fit`/`value` invariant. Broken out
+   * rather than folded into `metrics.verticalOscillation` because `MetricDiagnostics` is uniform
+   * across all seven metrics on purpose, and only this one has a fit behind it. */
+  verticalOscillationFit: VerticalOscillationFit | null
 }
 
 function emptyKeypointStats(): Record<KeypointName, KeypointResolutionStats> {
@@ -83,5 +93,6 @@ export function computeAnalysisDiagnostics(
     view: heuristics.view,
     keypoints,
     metrics,
+    verticalOscillationFit: heuristics.verticalOscillation.fit,
   }
 }

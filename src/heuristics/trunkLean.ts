@@ -10,7 +10,7 @@ import { median } from './mathUtils'
 /**
  * A judgment-call minimum frame count for a stable median lean estimate — analogous in spirit to
  * `verticalOscillationMinCycles`, but scoped to its own constant because trunk lean's sample unit
- * is resolvable frames, not gait half-cycles, so the two aren't the same quantity. Not derived
+ * is resolvable frames, not complete gait cycles, so the two aren't the same quantity. Not derived
  * from real footage; cheaply tunable here if it turns out to be wrong.
  */
 const MIN_TRUNK_LEAN_SAMPLE_SIZE = 10

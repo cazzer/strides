@@ -9,6 +9,11 @@ export interface MetricConfidenceParams {
   /** Only relevant for trunkLean/overstriding, which need travel direction to sign their result.
    * Defaults to true (irrelevant) for metrics that don't depend on it. */
   travelDirectionKnown?: boolean
+  /** Only relevant for metrics whose value comes from fitting a model to the signal rather than
+   * reading it directly — currently just vertical oscillation's spectral sinusoid fit. Already
+   * mapped to [0, 1] by the producing metric, since what counts as a good fit is that metric's
+   * policy, not this function's. Defaults to 1 (irrelevant) for metrics that don't fit anything. */
+  fitQuality?: number
   interpolationConfidencePenalty: number
 }
 
@@ -24,6 +29,9 @@ export interface MetricConfidenceParams {
  *     frames) for the aggregate (median, etc.) to be stable, capped at 1 so a huge sample can't
  *     push confidence above what the other factors allow?
  *   - travelDirectionKnown: could the sign of a directional quantity even be resolved?
+ *   - fitQuality: for a metric that fits a model to the signal, how well did the model actually
+ *     describe it? (An estimator can have abundant, fully-detected, well-viewed input and still be
+ *     describing something that isn't there — a separate concern from every factor above.)
  * Multiplying independent penalties means several moderate concerns compound into a low overall
  * number faster than any single one would alone — a deliberate, conservative design choice.
  */
@@ -35,6 +43,7 @@ export function computeMetricConfidence(params: MetricConfidenceParams): number 
     sampleSize,
     minRequiredSampleSize,
     travelDirectionKnown = true,
+    fitQuality = 1,
     interpolationConfidencePenalty,
   } = params
 
@@ -48,7 +57,8 @@ export function computeMetricConfidence(params: MetricConfidenceParams): number 
     frameCoverage *
     (1 - interpolationConfidencePenalty * interpolatedFraction) *
     sampleSizeFactor *
-    (travelDirectionKnown ? 1 : 0.5)
+    (travelDirectionKnown ? 1 : 0.5) *
+    fitQuality
 
   return clamp01(confidence)
 }

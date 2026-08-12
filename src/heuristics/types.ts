@@ -47,6 +47,10 @@ export interface MetricResult {
   viewFit: ViewFit
   interpolatedFraction: number
   frameCoverage: number
+  /** Count of whatever the producing metric aggregates over — the unit differs per metric and is
+   * documented in each module (resolvable frames for trunk lean, footstrikes for overstriding and
+   * cadence, and, since vertical oscillation moved to a spectral fit, COMPLETE GAIT CYCLES rather
+   * than the half-cycles its extrema-pairing predecessor counted). */
   sampleSize: number
   /** Non-null for degraded/low-confidence results across every metric. `footStrikePattern` is the
    * one deliberate exception: it is a proxy (ankle-relative-to-knee position, not a direct
@@ -62,10 +66,45 @@ export interface TimeseriesPoint {
   value: number | null
 }
 
+/**
+ * Diagnostics from the spectral sinusoid fit that produced `VerticalOscillationResult.value` —
+ * enough to tell "this clip has a clean, unambiguous bounce rhythm" from "this number came out of
+ * a marginal fit" without re-running the estimator. Mirrors `SpectralFitSuccess` from
+ * `spectralFit.ts`, minus its discriminant and with the amplitude named in the units it is
+ * actually in (raw pixels, before torso normalization).
+ */
+export interface VerticalOscillationFit {
+  /** Winning candidate frequency from the configured grid, Hz. This is BOUNCE frequency — two
+   * bounces per gait cycle, so roughly twice stride frequency. */
+  frequencyHz: number
+  /** Fitted peak-to-peak bounce, in raw image pixels. `value` is this divided by `torsoLengthPx`. */
+  peakToPeakAmplitudePx: number
+  /** Partial R² of the sinusoid terms over a trend-only baseline — the number
+   * `verticalOscillationMinFitR2` gates on and the one that feeds confidence. */
+  sinusoidR2: number
+  /** R² against the raw hip trace. Diagnostic only: on a drifting clip the trend terms alone can
+   * push this near 1 while the oscillation explains almost nothing, and its denominator differs
+   * per clip, so it is not comparable across clips and is never gated on. */
+  totalR2: number
+  /** How well the best frequency outside a resolution-aware band around `frequencyHz` fits,
+   * relative to `frequencyHz` itself, in [0, 1]. Reported for diagnosis only — deliberately NOT
+   * wired into confidence, since no calibration evidence exists for what value should cost what. */
+  secondPeakRatio: number
+  /** Frames with a resolvable hip position that the fit was computed over. */
+  sampleCount: number
+  /** Time from the first to the last resolvable hip sample. */
+  spanSeconds: number
+  /** `spanSeconds × frequencyHz`, fractional. `sampleSize` is this floored. */
+  observedCycles: number
+}
+
 export interface VerticalOscillationResult extends MetricResult {
   metric: 'verticalOscillation'
   /** One entry per input RobustPoseFrame, timestamp-aligned 1:1. Empty only when bodyScale was null. */
   series: TimeseriesPoint[]
+  /** Non-null exactly when `value` is non-null — a reported value always has a fit behind it, and a
+   * fit that failed or fell below the quality gate never yields a value. */
+  fit: VerticalOscillationFit | null
 }
 
 export interface FormHeuristicsResult {
@@ -93,11 +132,29 @@ export interface HeuristicsConfig {
    * data. */
   minViewDetectionFrameCoverage: number // 0.4
 
-  /** Minimum prominence (as a fraction of torsoLengthPx) for a hip-y extremum to count as a real
-   * bounce rather than tracking jitter. */
-  verticalOscillationMinProminenceRatio: number // 0.03
-  /** Minimum half-cycle count below which confidence is penalized via the sampleSize factor. */
-  verticalOscillationMinCycles: number // 4
+  /** Lowest candidate bounce frequency for vertical oscillation's spectral fit, in Hz. Hip bounce
+   * happens twice per gait cycle, so 1.2 Hz corresponds to a ~72 steps/min shuffle — comfortably
+   * below any running cadence, and low enough to leave walking-speed footage detectable rather
+   * than silently forcing it onto a faster candidate. */
+  spectralFitMinFrequencyHz: number // 1.2
+  /** Highest candidate bounce frequency, in Hz — 4.0 corresponds to 240 steps/min, above any
+   * sustained human running cadence. Capping here rather than higher keeps the grid from offering
+   * candidates that can only be fitting per-frame tracking jitter. */
+  spectralFitMaxFrequencyHz: number // 4.0
+  /** Candidate-frequency spacing, in Hz. 0.02 over the 1.2-4.0 band is 141 candidates — finer than
+   * the frequency resolution any clip of a few seconds actually supports, so the grid is never the
+   * limiting factor, and cheap enough that the whole search is sub-millisecond. */
+  spectralFitFrequencyStepHz: number // 0.02
+  /** Minimum sinusoid PARTIAL R² (against a trend-only baseline, NOT total R²) for a vertical
+   * oscillation fit to report a value at all. Below this the metric returns `null` with a caveat
+   * rather than a number nobody should act on. See the change's design.md for the calibration:
+   * measured pure-noise partial R² at n=50 has p95 ≈ 0.22 and p99 ≈ 0.28, while the worst real
+   * trial observed scored 0.40. */
+  verticalOscillationMinFitR2: number // 0.30
+  /** Minimum COMPLETE GAIT CYCLE count below which confidence is penalized via the sampleSize
+   * factor. Full cycles, not half-cycles — the spectral estimator fits a whole waveform rather
+   * than pairing individual extrema, so its natural sample unit is the cycle. */
+  verticalOscillationMinCycles: number // 3
 
   /** Minimum prominence (as a fraction of torsoLengthPx) for an ankle-y extremum to count as a
    * footstrike — higher than vertical oscillation's because ankle detection is noisier. */
@@ -117,9 +174,9 @@ export interface HeuristicsConfig {
   kneeFlexionMinProminenceDegrees: number // 20
 
   /** Minimum prominence (as a fraction of torsoLengthPx) for a wrist-relative-to-shoulder-y
-   * extremum to count as a real half-swing rather than tracking jitter. Same order of magnitude as
-   * verticalOscillationMinProminenceRatio — both read a moderately large, roughly twice-per-stride
-   * vertical excursion. */
+   * extremum to count as a real half-swing rather than tracking jitter. Set to the same 0.03 that
+   * hip bounce used before it moved to a spectral fit: arm swing reads a comparable
+   * roughly-twice-per-stride vertical excursion, so the same jitter floor applies. */
   armSwingMinProminenceRatio: number // 0.03
 
   /** Half-width, as a fraction of torsoLengthPx, of the "midfoot" band in `footStrikePattern`'s
@@ -206,8 +263,11 @@ export const DEFAULT_HEURISTICS_CONFIG: HeuristicsConfig = {
   sideViewMinSagittalExcursionRatio: 0.8,
   frontViewMaxSagittalExcursionRatio: 0.4,
   minViewDetectionFrameCoverage: 0.4,
-  verticalOscillationMinProminenceRatio: 0.03,
-  verticalOscillationMinCycles: 4,
+  spectralFitMinFrequencyHz: 1.2,
+  spectralFitMaxFrequencyHz: 4.0,
+  spectralFitFrequencyStepHz: 0.02,
+  verticalOscillationMinFitR2: 0.3,
+  verticalOscillationMinCycles: 3,
   footstrikeMinProminenceRatio: 0.05,
   footstrikeMinIntervalSeconds: 0.25,
   overstrideFlagRatio: 0.15,

@@ -29,6 +29,7 @@ function makeHeuristics(): FormHeuristicsResult {
       metric: 'verticalOscillation',
       value: 0.1,
       series: [{ timestamp: 0, value: 0.1 }],
+      fit: null,
     },
     trunkLean: { ...base, metric: 'trunkLean', value: 5, unit: 'degrees' },
     overstriding: { ...base, metric: 'overstriding', value: 0.1 },
