@@ -44,6 +44,23 @@ describe('toPoseFrame', () => {
     expect(frame.timestamp).toBe(42.125)
   })
 
+  it('omits pixelsPerMeter entirely when no scale is supplied', () => {
+    const frame = toPoseFrame(MOVENET_RAW_KEYPOINTS, 1.5)
+
+    // The key must be absent, not present-and-undefined: backends that don't measure scale
+    // (MoveNet) must keep producing byte-for-byte the frame they produced before this existed.
+    expect('pixelsPerMeter' in frame).toBe(false)
+    expect(JSON.parse(JSON.stringify(frame))).toStrictEqual(
+      JSON.parse(JSON.stringify({ keypoints: frame.keypoints, timestamp: 1.5 })),
+    )
+  })
+
+  it('carries a supplied pixelsPerMeter through unchanged', () => {
+    const frame = toPoseFrame(MOVENET_RAW_KEYPOINTS, 1.5, 872.5)
+
+    expect(frame.pixelsPerMeter).toBe(872.5)
+  })
+
   it('defaults missing common keypoints to zero x/y/score', () => {
     const frame = toPoseFrame(
       MOVENET_RAW_KEYPOINTS.filter((k) => k.name !== 'left_ankle'),

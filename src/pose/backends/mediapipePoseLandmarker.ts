@@ -30,6 +30,89 @@ const MEDIAPIPE_POSE_LANDMARK_NAMES = [
 ]
 
 /**
+ * Indices into MEDIAPIPE_POSE_LANDMARK_NAMES for the four points forming the torso segment.
+ * Kept as raw indices (not name lookups) because `worldLandmarks` is a parallel, index-aligned
+ * array with no names of its own — the index IS the join key between the two arrays.
+ */
+const LEFT_SHOULDER = 11
+const RIGHT_SHOULDER = 12
+const LEFT_HIP = 23
+const RIGHT_HIP = 24
+
+interface Point3 {
+  x: number
+  y: number
+  z: number
+}
+
+function midpoint3(a: Point3, b: Point3): Point3 {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 }
+}
+
+/**
+ * Pixels per real-world meter for one frame: the torso (shoulder-mid → hip-mid) measured in the
+ * already-denormalized pixel space, divided by the same torso measured in `worldLandmarks`
+ * (meters). Torso is the same segment `estimateBodyScale` normalizes by downstream, so the two
+ * agree about what "body scale" means.
+ *
+ * The world distance is 3D (x, y, z), NOT the xy projection. MediaPipe's world z is noisy, and it
+ * is tempting to drop it for that reason — but measured across real clips the xy-projected torso
+ * was the LEAST stable of the variants tried (epic #27's investigation), because dropping z means
+ * the measured length shrinks and grows with the torso's rotation toward/away from the camera,
+ * which is a much larger effect than the z noise it avoids. The full 3D length is rotation-
+ * invariant by construction and came out stable (CV 2.3-2.7%).
+ *
+ * `worldLandmarks` are used for SCALE ONLY, never as a positional signal: they are hip-centered,
+ * i.e. the model has removed translation, so the body's actual movement through space (the thing
+ * vertical oscillation measures) is identically zero in that space.
+ *
+ * `landmark.visibility` deliberately does not gate this: it would introduce a threshold to tune,
+ * and would make the output depend on a confidence value that this backend's otherwise
+ * bit-deterministic path is free of. A geometrically degenerate measurement is rejected on its own
+ * merits below instead.
+ *
+ * Returns `undefined` — never 0/NaN/Infinity — when the measurement can't be trusted, so
+ * `toPoseFrame` omits the key entirely for that frame.
+ */
+function computePixelsPerMeter(
+  rawKeypoints: RawKeypoint[],
+  worldLandmarks: Point3[] | undefined,
+): number | undefined {
+  if (!worldLandmarks || worldLandmarks.length <= RIGHT_HIP) return undefined
+  if (rawKeypoints.length <= RIGHT_HIP) return undefined
+
+  const pixelMidX = (a: RawKeypoint, b: RawKeypoint) => (a.x + b.x) / 2
+  const pixelMidY = (a: RawKeypoint, b: RawKeypoint) => (a.y + b.y) / 2
+  // 2D in pixel space: the pixel keypoints have no z, and the series this scale later converts
+  // (hip-mid image y) lives in that same 2D space.
+  const torsoPx = Math.hypot(
+    pixelMidX(rawKeypoints[LEFT_SHOULDER], rawKeypoints[RIGHT_SHOULDER]) -
+      pixelMidX(rawKeypoints[LEFT_HIP], rawKeypoints[RIGHT_HIP]),
+    pixelMidY(rawKeypoints[LEFT_SHOULDER], rawKeypoints[RIGHT_SHOULDER]) -
+      pixelMidY(rawKeypoints[LEFT_HIP], rawKeypoints[RIGHT_HIP]),
+  )
+
+  const worldShoulderMid = midpoint3(
+    worldLandmarks[LEFT_SHOULDER],
+    worldLandmarks[RIGHT_SHOULDER],
+  )
+  const worldHipMid = midpoint3(worldLandmarks[LEFT_HIP], worldLandmarks[RIGHT_HIP])
+  const torsoMeters = Math.hypot(
+    worldShoulderMid.x - worldHipMid.x,
+    worldShoulderMid.y - worldHipMid.y,
+    worldShoulderMid.z - worldHipMid.z,
+  )
+
+  if (!Number.isFinite(torsoPx) || !Number.isFinite(torsoMeters)) return undefined
+  if (torsoMeters <= 0) return undefined
+
+  const pixelsPerMeter = torsoPx / torsoMeters
+  return Number.isFinite(pixelsPerMeter) && pixelsPerMeter > 0
+    ? pixelsPerMeter
+    : undefined
+}
+
+/**
  * A distinct runtime from `blazepose.ts`: this runs on MediaPipe's own WASM/GPU-delegate
  * pipeline via `@mediapipe/tasks-vision`, not through `@tensorflow-models/pose-detection`'s
  * `tfjs-core` op graph — a different execution path entirely, deliberately, to sidestep whatever
@@ -57,7 +140,14 @@ export async function createMediaPipePoseLandmarkerDetector(): Promise<PoseDetec
         y: landmark.y * video.videoHeight,
         score: landmark.visibility,
       }))
-      return toPoseFrame(rawKeypoints, video.currentTime)
+      return toPoseFrame(
+        rawKeypoints,
+        video.currentTime,
+        // `?.` rather than `[0]`: the type says worldLandmarks is always an array, but this is a
+        // WASM boundary — an older/newer runtime that simply doesn't populate it should degrade to
+        // "no scale on this backend", not throw on every frame.
+        computePixelsPerMeter(rawKeypoints, result.worldLandmarks?.[0]),
+      )
     },
     dispose(): void {
       landmarker.close()

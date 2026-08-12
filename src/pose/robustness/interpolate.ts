@@ -122,5 +122,8 @@ export function applyRobustness(
     timestamp: sample.timestamp,
     keypoints: channels.map((channel) => channel[sampleIndex]),
     source: sample.frame === null ? 'missing' : 'detected',
+    // Verbatim copy, deliberately outside the per-keypoint interpolation above — see the field's
+    // docstring on RobustPoseFrame for why a scale is never gap-filled the way a position is.
+    pixelsPerMeter: sample.frame?.pixelsPerMeter ?? null,
   }))
 }

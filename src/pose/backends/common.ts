@@ -8,9 +8,16 @@ export interface RawKeypoint {
   name?: string
 }
 
+/**
+ * `pixelsPerMeter` is spread in conditionally rather than assigned unconditionally: an explicit
+ * `pixelsPerMeter: undefined` is a *present* key as far as `toStrictEqual`, `in`, and
+ * `JSON.stringify` are concerned, and backends that don't measure scale (MoveNet) must keep
+ * producing exactly the frame they produced before this parameter existed.
+ */
 export function toPoseFrame(
   rawKeypoints: RawKeypoint[],
   timestamp: number,
+  pixelsPerMeter?: number,
 ): PoseFrame {
   const byName = new Map<string, RawKeypoint>()
   for (const raw of rawKeypoints) {
@@ -27,5 +34,9 @@ export function toPoseFrame(
     }
   })
 
-  return { keypoints, timestamp }
+  return {
+    keypoints,
+    timestamp,
+    ...(pixelsPerMeter === undefined ? {} : { pixelsPerMeter }),
+  }
 }

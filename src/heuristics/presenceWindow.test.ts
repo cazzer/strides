@@ -21,7 +21,12 @@ function makeFrame(timestamp: number, present: boolean): RobustPoseFrame {
       score: resolvable ? 0.9 : 0,
     }
   })
-  return { timestamp, source: present ? 'detected' : 'missing', keypoints }
+  return {
+    timestamp,
+    source: present ? 'detected' : 'missing',
+    keypoints,
+    pixelsPerMeter: null,
+  }
 }
 
 const CONFIG: HeuristicsConfig = { ...DEFAULT_HEURISTICS_CONFIG, presenceMinConsecutiveFrames: 3 }

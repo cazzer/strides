@@ -291,6 +291,43 @@ above). This pipeline's baseline hip-only reading on that clip: ~24-25% (stable 
 ground truth exists for the original side-view track demo clip — it's a stability/plausibility
 control only, never a target.
 
+## MediaPipe metric calibration — VO in real centimetres (2026-08-12)
+
+`[analysis-diagnostics]` gains a `scaleCalibration` block **only** on the
+`mediapipePoseLandmarker` backend — MoveNet runs have no such key at all (test
+`'scaleCalibration' in diagnostics`, not `!= null`; a MoveNet run still serializes to exactly the
+JSON it did before). It comes from the per-frame `pixelsPerMeter` the MediaPipe backend now
+derives from `worldLandmarks` (pixel torso ÷ **3D** world torso, shoulder-mid→hip-mid, landmark
+indices 11/12/23/24) and carries through `PoseFrame` → `RobustPoseFrame` verbatim, never
+interpolated.
+
+Fields: `verticalOscillationCm` (median half-cycle bounce, cm), `sampleSize` (half-cycles),
+`scaleDriftRatio`, `medianPixelsPerMeter`, `torsoMeters`, `scaleCoverage`, `integrationRuns`.
+Computed over the **presence-trimmed** window (unlike every other diagnostics field), so it lines
+up with the metrics beside it. `src/heuristics/verticalOscillationCm.ts`; the existing
+torso-length-ratio `verticalOscillation` metric is untouched.
+
+**The one correctness constraint**: the pixel→metre conversion integrates per-frame *deltas*
+(`Σ (y[k−1] − y[k]) / s̄[k]`, reset at every hip-tracking gap), never `y_px / s(t)`. Dividing
+absolute positions by a drifting scale reports the drift itself as bounce — measured as a 480 cm
+artifact on the approach clip. There's a regression test for exactly that case
+(`verticalOscillationCm.test.ts`).
+
+Expected live values (real GPU, MediaPipe deterministic — trials should be near-identical;
+>0.05 cm spread on the track clip is worth investigating rather than averaging away):
+
+| clip | VO_cm | driftRatio | torsoMeters | medianPxPerM |
+|---|---|---|---|---|
+| track (`try a demo video`) | 6.07–6.09 | ~1.01 | ~0.50 | ~872 |
+| park (`another demo`) | 14.9–15.7 | 3.9–5.4 | ~0.47 | ~530 |
+
+`torsoMeters` ≈ 0.5 is the sanity check — a human torso really is about half a metre, so a
+wildly different number means the calibration is wrong and the centimetres shouldn't be believed.
+**The park number is drift-inflated and is not a target**: that clip's subject runs at the camera,
+`scaleDriftRatio` says so, and approach-drift correction is deliberately unimplemented (see the
+change's `design.md`). The watch's ~10% is a *ratio*, not centimetres — not comparable. The 6–13
+cm literature range is the plausibility check the track clip passes.
+
 ## Backlog (assessed, not yet built)
 
 One more iteration plane was scoped but deferred as of 2026-08-11 — same "bundle into one

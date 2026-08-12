@@ -20,6 +20,9 @@ export interface PointSpec {
 export function buildFrame(
   points: Partial<Record<KeypointName, PointSpec | null>>,
   timestamp = 0,
+  /** Real-world scale for this frame; `null` (the default) is what every non-MediaPipe backend
+   * produces, so tests that don't care about scale calibration get the common case for free. */
+  pixelsPerMeter: number | null = null,
 ): RobustPoseFrame {
   const keypoints: RobustKeypoint[] = COMMON_KEYPOINT_NAMES.map((name) => {
     const spec = points[name]
@@ -40,5 +43,5 @@ export function buildFrame(
       status,
     }
   })
-  return { timestamp, keypoints, source: 'detected' }
+  return { timestamp, keypoints, source: 'detected', pixelsPerMeter }
 }

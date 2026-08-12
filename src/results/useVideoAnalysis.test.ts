@@ -84,9 +84,9 @@ function makeFakeKeypoints(): RobustKeypoint[] {
 // `trimToPresenceWindow` is a no-op on this fixture -- tests asserting exactly what
 // computeFormHeuristics was called with need the trim to not have changed anything.
 const FAKE_ROBUST_FRAMES: RobustPoseFrame[] = [
-  { timestamp: 0, keypoints: makeFakeKeypoints(), source: 'detected' },
-  { timestamp: 0.1, keypoints: makeFakeKeypoints(), source: 'detected' },
-  { timestamp: 0.2, keypoints: makeFakeKeypoints(), source: 'detected' },
+  { timestamp: 0, keypoints: makeFakeKeypoints(), source: 'detected', pixelsPerMeter: null },
+  { timestamp: 0.1, keypoints: makeFakeKeypoints(), source: 'detected', pixelsPerMeter: null },
+  { timestamp: 0.2, keypoints: makeFakeKeypoints(), source: 'detected', pixelsPerMeter: null },
 ]
 
 const FAKE_HEURISTICS: FormHeuristicsResult = {

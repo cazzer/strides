@@ -262,4 +262,49 @@ describe('applyRobustness', () => {
 
     expect(findKeypoint(result[1], LEFT_SHOULDER).status).toBe('interpolated')
   })
+
+  it('copies a detected frame\'s pixelsPerMeter through verbatim', () => {
+    const samples: PoseSample[] = [
+      {
+        timestamp: 0,
+        frame: { ...makeFrame({ score: 0.9, x: 0, y: 0 }), pixelsPerMeter: 872.5 },
+      },
+    ]
+
+    expect(applyRobustness(samples)[0].pixelsPerMeter).toBe(872.5)
+  })
+
+  it('reports a null scale for a missing frame and for a scale-less backend', () => {
+    const samples: PoseSample[] = [
+      { timestamp: 0, frame: makeFrame({ score: 0.9, x: 0, y: 0 }) },
+      { timestamp: 0.1, frame: null },
+    ]
+
+    const result = applyRobustness(samples)
+
+    expect(result[0].pixelsPerMeter).toBeNull()
+    expect(result[1].pixelsPerMeter).toBeNull()
+  })
+
+  it('never fabricates a scale for an interpolated frame, even between two scaled anchors', () => {
+    const samples: PoseSample[] = [
+      {
+        timestamp: 0,
+        frame: { ...makeFrame({ score: 0.9, x: 0, y: 0 }), pixelsPerMeter: 100 },
+      },
+      // Carries no scale of its own; a lerp of its neighbours would be 200.
+      { timestamp: 0.1, frame: makeFrame({ score: 0.1, x: 999, y: 999 }) },
+      {
+        timestamp: 0.2,
+        frame: { ...makeFrame({ score: 0.9, x: 10, y: 20 }), pixelsPerMeter: 300 },
+      },
+    ]
+
+    const result = applyRobustness(samples)
+
+    // The middle frame's keypoints ARE interpolated...
+    expect(findKeypoint(result[1], LEFT_SHOULDER).status).toBe('interpolated')
+    // ...and its scale is still null, not the 200 a positional-style lerp would have produced.
+    expect(result[1].pixelsPerMeter).toBeNull()
+  })
 })
