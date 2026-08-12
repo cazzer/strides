@@ -274,8 +274,12 @@ describe('computeVerticalOscillation', () => {
 
     expect(result.value).toBeCloseTo(20 / 150, 3)
     expect(result.sampleSize).toBe(2)
-    // Only the sample-size factor is below 1: 2/3.
-    expect(result.confidence).toBeCloseTo(2 / 3, 5)
+    // Only the sample-size factor is below 1, and it uses the UNROUNDED cycle count: the clip spans
+    // 0.9 s at 2.5 Hz = 2.25 cycles, so 2.25/3 = 0.75 — not 2/3. Flooring here would make 2.99
+    // cycles and 2.01 cycles score identically, a cliff smaller than the fit's own frequency
+    // resolution.
+    expect(result.fit?.observedCycles).toBeCloseTo(2.25, 6)
+    expect(result.confidence).toBeCloseTo(0.75, 5)
     expect(result.caveat).toMatch(/only 2 complete bounce cycle/i)
     expect(result.caveat).toMatch(/recommend at least 3/i)
   })

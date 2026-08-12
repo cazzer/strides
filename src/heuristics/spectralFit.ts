@@ -30,6 +30,14 @@ import { clamp01 } from './mathUtils'
  * A least-squares fit over the samples that actually exist has no such failure mode: a gap simply
  * contributes no equations. Irregular sampling is the point, not an obstacle to work around first.
  *
+ * To be precise about what this does and does not claim: this primitive DOES receive samples the
+ * upstream robustness layer already filled in by interpolation — `verticalOscillation` pushes every
+ * frame whose hip resolves, `'interpolated'` status included — and it cannot tell those apart from
+ * directly-detected ones. Accounting for that trust gap happens on the confidence side, via each
+ * caller's `interpolatedFraction`. The no-resampling argument is specifically about UNRECOVERABLE
+ * gaps: stretches the robustness layer refused to fill because there was no defensible basis for
+ * guessing, which this primitive likewise declines to fill.
+ *
  * ## Why normal equations
  *
  * The design matrix has five columns and (in practice) tens to hundreds of rows, and is

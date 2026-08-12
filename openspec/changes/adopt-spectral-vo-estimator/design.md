@@ -42,7 +42,7 @@ while the sinusoid's partial R² is 0.687. A total-R² gate would wave through e
 in need of gating. Total R² is also not comparable across clips — its denominator is whatever
 variance that clip happened to contain, drift included — so it is reported as a diagnostic only.
 
-**Why 0.30.** Two-sided calibration:
+**Why 0.30.** Two-sided calibration, **at the sample counts this metric actually operates at**:
 
 - *Above noise.* Fitting pure Gaussian noise at n = 50 over the shipped 1.2–4.0 Hz / 0.02 Hz grid
   (2000 seeds, measured in this change): median partial R² 0.115, p95 0.217, p99 0.283, max 0.418.
@@ -55,6 +55,25 @@ variance that clip happened to contain, drift included — so it is reported as 
 
 Live values measured on this change's own verification runs: track ≈ 0.83, park ≈ 0.69 — both
 comfortably clear.
+
+**The gate is n-dependent, and 0.30 is only valid near n ≈ 50 and above.** Two sinusoid parameters
+explain proportionally more of a shorter series by chance alone, so the pure-noise floor climbs
+steeply as the sample count falls — measured p95 of pure-noise partial R²: **0.22 at n = 50, 0.34 at
+n = 30, 0.44 at n = 20, 0.64 at n = 12**. At n = 12 (the primitive's own hard floor) a fixed 0.30
+gate is *below* the noise median and admits essentially anything. Vertical oscillation is safe here
+because real clips give it 47–81 resolvable hip samples (measured across the live verification runs
+below), comfortably in the calibrated regime — but the threshold must not be treated as a property
+of the estimator. **Any other caller of `fitSpectralSinusoid` operating at lower sample counts has
+to set its own policy**, which is precisely why the primitive holds only the well-posedness
+preconditions and leaves the quality gate to its callers (D2's division of responsibility).
+
+*Upgrade path, deliberately not implemented here.* The n-invariant form of this test is an F-test on
+the 2 sinusoid degrees of freedom against the n − 5 residual degrees of freedom, which converts the
+partial R² into a p-value whose meaning does not shift with sample count. That would replace a
+single tuned constant with a significance level, and would let every caller share one policy. It is
+out of scope for this ticket — it changes the shape of the config surface, and it needs its own
+calibration against the multiple-comparisons structure of a 141-candidate grid search, which is not
+a standard F-test assumption. Noted so the next person does not re-derive the problem from scratch.
 
 ## D3 — Confidence and sampleSize
 
@@ -84,7 +103,11 @@ fixture scores R² > 0.99 → fitQuality 1 → side-view confidence stays 1.0 an
 Live: track ≈ ×1.0 (R² 0.83 saturates), park ≈ ×0.77 (R² 0.687).
 
 **`sampleSize` = complete gait cycles**, `Math.floor(spanSeconds × frequencyHz)`, replacing the
-half-cycle count. The fit consumes the whole waveform rather than pairing individual extrema, so
+half-cycle count. The floor applies to the REPORTED field and the caveat text only; the confidence
+sample-size factor is fed the unrounded `observedCycles`. Flooring there would turn a difference far
+smaller than the fit's own frequency resolution into a confidence cliff — 2.99 cycles and 2.01
+cycles would score identically, and both would sit a third below 3.01. Concretely: the track demo
+clip observes 2.83–2.90 cycles, worth a ≈0.95 factor unrounded versus 0.667 floored. The fit consumes the whole waveform rather than pairing individual extrema, so
 the cycle is its natural sample unit. `verticalOscillationMinCycles` is repurposed to full cycles
 and its default drops 4 → 3, which keeps roughly the same real-world requirement (4 half-cycles was
 2 full cycles; 3 full cycles is a modest tightening, appropriate now that the estimator actually
@@ -183,6 +206,29 @@ Cited so a reviewer can confirm none of them needed a delta:
   strictly more paths than before (every no-value path with a resolvable hip trace).
 - analysis-diagnostics, **"Diagnostics aggregation"** — the new `verticalOscillationFit` key is
   purely additive to an aggregation the requirement describes in general terms.
+
+## Spec interactions and known follow-ups
+
+**One existing scenario is narrowed, deliberately.** form-heuristics'
+"Vertical oscillation is view-tolerant" → *"Front-view clip still produces a value"* reads: *WHEN
+vertical oscillation is computed against a `'front'`-classified clip **with resolvable hip motion**
+… THEN a non-null `value` is returned*. The new sub-0.30-R² path can now return `null` for a clip
+that has resolvable hip *positions* but no fittable *rhythm*. This sits within the slack in
+"resolvable hip motion" — a trace with no coherent oscillation does not have resolvable hip motion in
+the sense that scenario is about, and the requirement's actual subject is view tolerance (front view
+must not be withheld from *because it is front view*), which is untouched. No MODIFIED delta is
+raised for it on that reading. **Flagged here for the archive step**: if a reviewer disagrees with
+that reading, the fix is a MODIFIED block on that scenario, not a code change — the null path is the
+intended behavior either way.
+
+**Known imprecision in `secondPeakRatio`, not fixed here.** When the resolution-aware exclusion band
+`max(0.4 Hz, 1 / spanSeconds)` grows wider than the configured grid — which happens on very short
+spans, e.g. under ~0.7 s with the shipped 2.8 Hz-wide band — no candidate survives the exclusion and
+the ratio is reported as `0`, i.e. "one completely unambiguous rhythm". That is the opposite of what
+was actually established: nothing was compared. A `null`, or a `competitorsEvaluated` count
+alongside the ratio, would be honest. Left as-is because the field is diagnostic-only and wired into
+nothing (D3), and vertical oscillation's own one-cycle precondition already excludes most of the
+affected range. Worth fixing when a caller starts acting on the value.
 
 ## Rejected alternatives (evidence-based; out of scope for this ticket)
 

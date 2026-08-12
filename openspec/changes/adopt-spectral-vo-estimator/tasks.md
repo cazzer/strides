@@ -82,11 +82,11 @@
 
 | clip | trial | VO value | confidence | sampleSize | f* (Hz) | sinusoidR² | totalR² | secondPeakRatio |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| track | 1 | 0.1758 | 0.667 | 2 | 1.56 | 0.843 | 0.886 | 0.128 |
-| track | 2 | 0.1701 | 0.667 | 2 | 1.56 | 0.818 | 0.881 | 0.149 |
-| track | 3 | 0.1765 | 0.667 | 2 | 1.54 | 0.842 | 0.903 | 0.099 |
-| track | 4 | 0.1737 | 0.667 | 2 | 1.54 | 0.820 | 0.874 | 0.132 |
-| track | 5 | 0.1870 | 0.667 | 2 | 1.56 | 0.847 | 0.894 | 0.063 |
+| track | 1 | 0.1758 | 0.957 | 2 | 1.56 | 0.843 | 0.886 | 0.128 |
+| track | 2 | 0.1701 | 0.957 | 2 | 1.56 | 0.818 | 0.881 | 0.149 |
+| track | 3 | 0.1765 | 0.965 | 2 | 1.54 | 0.842 | 0.903 | 0.099 |
+| track | 4 | 0.1737 | 0.945 | 2 | 1.54 | 0.820 | 0.874 | 0.132 |
+| track | 5 | 0.1870 | 0.957 | 2 | 1.56 | 0.847 | 0.894 | 0.063 |
 | park | 1 | 0.2379 | 0.659 | 4 | 3.00 | 0.687 | 0.985 | 0.175 |
 | park | 2 | 0.2460 | 0.700 | 4 | 3.00 | 0.712 | 0.986 | 0.177 |
 | park | 3 | 0.2330 | 0.682 | 4 | 3.00 | 0.701 | 0.987 | 0.155 |
@@ -105,9 +105,19 @@
 | `f*` pegged at a grid edge (1.2 / 4.0) | none | none | pass |
 
 The track clip's presence-trimmed window is 1.84–1.88 s (47–48 resolvable hip samples) and its
-fitted bounce runs 2.83–2.90 cycles, so `sampleSize` floors to 2 against a minimum of 3 — hence the
-uniform 0.667 confidence and the "only 2 complete bounce cycle(s)" caveat. That is a property of the
-clip, not of the estimator.
+fitted bounce runs 2.83–2.90 cycles, so `sampleSize` floors to 2 against a minimum of 3 and the
+"only 2 complete bounce cycle(s)" caveat applies. That is a property of the clip, not of the
+estimator. Confidence still uses the unrounded 2.83–2.90, so it lands at 0.945–0.965 rather than the
+0.667 a floored count would give.
+
+> **Confidence column note.** The runs above were captured before the review fix that feeds
+> confidence the unrounded cycle count. The `confidence` column has been recomputed from the
+> same runs' unchanged inputs (`viewFitMultiplier × frameCoverage × (1 − 0.5·interpolatedFraction) ×
+> min(1, observedCycles / 3) × fitQuality`), which is exact — nothing else in the product changed,
+> and the same formula reproduces every originally-logged value to three decimals when given the
+> floored count. Only the five track rows moved (0.667 → 0.945–0.965); every park row is unchanged,
+> since park observes 4.86 cycles and was already saturated at 1 on that factor. Every other column
+> is as logged.
 
 ### Live results — baseline (feat/epic-27-vo-stack, extrema estimator, 5 trials/clip)
 

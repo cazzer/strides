@@ -90,7 +90,8 @@ function caveatForFailure(reason: SpectralFitFailureReason, sampleCount: number)
  *
  * `sampleSize` is the count of COMPLETE gait cycles observed (`floor(spanSeconds × frequencyHz)`),
  * not the half-cycle count the extrema estimator reported — the fit consumes the whole waveform,
- * so the cycle is its natural sample unit.
+ * so the cycle is its natural sample unit. Confidence uses the UNROUNDED cycle count; only the
+ * reported field and the caveat text are floored.
  *
  * ## View tolerance
  *
@@ -205,6 +206,10 @@ export function computeVerticalOscillation(
   }
 
   const value = fit.peakToPeakAmplitudePx / torsoLengthPx
+  // Reported as a whole count, because "2.87 cycles" is not a thing a reader can act on. Confidence
+  // below deliberately uses the FRACTIONAL count instead: flooring there would turn a difference
+  // smaller than the fit's own frequency resolution into a confidence cliff (2.99 cycles and 2.01
+  // cycles would score identically, and both far below 3.01).
   const sampleSize = Math.floor(fit.observedCycles)
 
   // Linear ramp from "just cleared the gate" (0) to "as good as a clean clip gets" (1). Denominator
@@ -219,7 +224,8 @@ export function computeVerticalOscillation(
     viewFitMultiplier: viewFitEntry.multiplier,
     frameCoverage,
     interpolatedFraction,
-    sampleSize,
+    // Fractional, not `sampleSize` — see the comment on `sampleSize` above.
+    sampleSize: fit.observedCycles,
     minRequiredSampleSize: config.verticalOscillationMinCycles,
     fitQuality,
     interpolationConfidencePenalty: config.interpolationConfidencePenalty,

@@ -147,9 +147,16 @@ export interface HeuristicsConfig {
   spectralFitFrequencyStepHz: number // 0.02
   /** Minimum sinusoid PARTIAL R² (against a trend-only baseline, NOT total R²) for a vertical
    * oscillation fit to report a value at all. Below this the metric returns `null` with a caveat
-   * rather than a number nobody should act on. See the change's design.md for the calibration:
-   * measured pure-noise partial R² at n=50 has p95 ≈ 0.22 and p99 ≈ 0.28, while the worst real
-   * trial observed scored 0.40. */
+   * rather than a number nobody should act on.
+   *
+   * **This number is calibrated for sample counts near n ≈ 50 and above**, which is where real
+   * clips land (47-81 resolvable hip samples across live verification runs). At n ≈ 50 the measured
+   * pure-noise partial R² has p95 ≈ 0.22 and p99 ≈ 0.28, against a worst observed real trial of
+   * 0.40 — so 0.30 sits in the gap. The noise floor rises sharply as n falls (measured p95: 0.34 at
+   * n=30, 0.44 at n=20, 0.64 at n=12), because two sinusoid parameters explain proportionally more
+   * of a shorter series by chance alone. A fixed R² threshold is therefore NOT n-invariant, and any
+   * other caller of `fitSpectralSinusoid` operating at low sample counts must set its own policy
+   * rather than reusing this value. See the change's design.md for the n-invariant upgrade path. */
   verticalOscillationMinFitR2: number // 0.30
   /** Minimum COMPLETE GAIT CYCLE count below which confidence is penalized via the sampleSize
    * factor. Full cycles, not half-cycles — the spectral estimator fits a whole waveform rather
