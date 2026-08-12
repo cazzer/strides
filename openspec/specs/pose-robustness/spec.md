@@ -7,9 +7,9 @@ crashing or feeding garbage into downstream heuristics, so that heuristics and t
 consume this layer's output type instead of the raw pose-detection output.
 ## Requirements
 ### Requirement: Per-keypoint confidence classification
-The system SHALL classify each of the 12 fixed keypoints in a pose sample as `'present'` or
-`'missing'` against a configurable confidence threshold, treating a `null` frame as all 12
-keypoints missing.
+The system SHALL classify each of the fixed keypoints (one per `COMMON_KEYPOINT_NAMES` entry) in
+a pose sample as `'present'` or `'missing'` against a configurable confidence threshold, treating
+a `null` frame as every keypoint missing.
 
 #### Scenario: Score at or above threshold is present
 - **WHEN** a keypoint's `score` is greater than or equal to `minKeypointConfidence`
@@ -21,8 +21,8 @@ keypoints missing.
 
 #### Scenario: Null frame yields all-missing classification
 - **WHEN** a `PoseSample`'s `frame` is `null`
-- **THEN** all 12 keypoints for that sample are classified `'missing'`, with no separate code
-  path from the low-score case
+- **THEN** every keypoint for that sample is classified `'missing'`, with no separate code path
+  from the low-score case
 
 ### Requirement: Bounded-window linear interpolation of gaps
 The system SHALL gap-fill a run of missing classifications for a given keypoint by linear
@@ -64,8 +64,9 @@ detection on one side (the start or end of the sequence), regardless of how shor
   run is a single sample long
 
 ### Requirement: Independent per-keypoint channels
-The system SHALL gap-fill each of the 12 keypoints independently, as its own 1-D time series
-across the sample sequence, rather than treating a frame as an atomic unit.
+The system SHALL gap-fill each keypoint (one per `COMMON_KEYPOINT_NAMES` entry) independently, as
+its own 1-D time series across the sample sequence, rather than treating a frame as an atomic
+unit.
 
 #### Scenario: One keypoint's gap does not affect another's status
 - **WHEN** one keypoint is missing across a run of samples while a different keypoint remains
@@ -100,7 +101,7 @@ keypoint from the output.
 #### Scenario: Unrecoverable keypoint has null coordinates
 - **WHEN** a keypoint's status resolves to `'unrecoverable'`
 - **THEN** its `x` and `y` fields are `null` and its `score` is `0`, and it is still present as
-  one of the 12 entries in `RobustPoseFrame.keypoints`
+  one of the `RobustPoseFrame.keypoints` entries, one per `COMMON_KEYPOINT_NAMES` name
 
 ### Requirement: Configurable threshold and window
 The system SHALL expose `minKeypointConfidence` and `maxGapSeconds` as fields of an overridable

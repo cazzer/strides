@@ -75,15 +75,15 @@ margin, since no principled margin exists when the signals disagree.
 
 ### Requirement: Vertical oscillation is view-tolerant
 
-The system SHALL compute vertical oscillation from hip-mid vertical motion for every detected
-view (`'side'`, `'front'`, `'ambiguous'`), applying a per-view confidence multiplier from
-`viewFitTable.verticalOscillation` (`side: 1.0`, `front: 0.85`, `ambiguous: 0.6`) rather than
-withholding the value outside side view.
+The system SHALL compute vertical oscillation from the configured vertical-oscillation input
+signal's vertical motion for every detected view (`'side'`, `'front'`, `'ambiguous'`), applying a
+per-view confidence multiplier from `viewFitTable.verticalOscillation` (`side: 1.0`, `front: 0.85`,
+`ambiguous: 0.6`) rather than withholding the value outside side view.
 
 #### Scenario: Front-view clip still produces a value
 
 - **WHEN** vertical oscillation is computed against a `'front'`-classified clip with resolvable
-  hip motion
+  motion in the configured signal
 - **THEN** a non-null `value` is returned with `viewFit: 'tolerated'` and confidence discounted by
   the `0.85` multiplier relative to an otherwise-identical side-view computation
 
@@ -162,80 +162,6 @@ view detection and each metric separately in the correct order.
 - **WHEN** `computeFormHeuristics` is called on a single frame sequence
 - **THEN** the returned `verticalOscillation.viewFit`, `trunkLean.viewFit`, and
   `overstriding.viewFit` all reflect the same `view.view` label present in the same result
-
-### Requirement: Cadence is computed from shared footstrike detection
-
-The system SHALL compute cadence as `60 / median(consecutive inter-footstrike-interval
-seconds)`, where the intervals are the timestamp differences between consecutive entries of
-`detectFootstrikes(frames, config)` (footstrikes across both legs, combined, timestamp-ordered),
-without reimplementing footstrike detection. This SHALL NOT divide by total elapsed clip
-duration — a rate computed that way is diluted by any dead time in the clip (before the first
-footstrike, after the last, or a mid-clip tracking dropout), systematically underestimating
-cadence whenever such dead time exists, which the median-interval computation is immune to by
-construction (dead time simply doesn't produce an inter-footstrike interval to include).
-
-#### Scenario: A clean side-view clip yields a resolvable cadence
-
-- **WHEN** cadence is computed against a `'side'`-classified clip with detectable footstrikes
-- **THEN** a non-null `value` in steps/minute is returned, `sampleSize` reflects the detected
-  footstrike count, and `value` is within a plausible range of the clip's true underlying cadence
-
-#### Scenario: Too few footstrikes to detect any cadence
-
-- **WHEN** cadence is computed against frames with fewer than 2 detected footstrikes (zero, from
-  no detectable footstrikes at all, or exactly one, which produces no interval)
-- **THEN** `value` is `null`, `confidence` is `0`, `sampleSize` is `0`, and `caveat` is non-null
-
-#### Scenario: No resolvable body-scale reference at all
-
-- **WHEN** cadence is computed against frames with no resolvable shoulder/hip position anywhere in
-  the clip
-- **THEN** `value` is `null`, `confidence` is `0`, and a non-null `caveat` names the missing
-  body-scale reference — distinct from the "too few footstrikes" caveat, matching the same
-  distinction `computeOverstriding` already makes for the same underlying reason
-
-#### Scenario: Dead time before the first or after the last footstrike does not dilute cadence
-
-- **WHEN** cadence is computed against a clip where the subject enters the frame partway through
-  and/or exits before the clip ends, with footstrikes detected only during the presence window
-- **THEN** `value` reflects the median interval between the detected footstrikes themselves, not
-  a rate diluted by dividing over the full (wider) clip duration
-
-#### Scenario: A mid-clip tracking dropout does not dilute cadence
-
-- **WHEN** cadence is computed against a clip with a temporary mid-clip tracking gap (e.g. brief
-  occlusion) that causes one inter-footstrike interval to be markedly longer than the others
-- **THEN** `value` reflects the median of all detected intervals, which is not pulled toward that
-  one anomalous interval the way a mean (or a single total-count-over-duration rate) would be
-
-#### Scenario: Zero-duration input never throws or produces NaN/Infinity
-
-- **WHEN** cadence is computed against frames that would produce a zero or otherwise degenerate
-  interval (e.g. multiple detected footstrikes sharing one timestamp)
-- **THEN** `value` is `null` (not `NaN` or `Infinity`), `confidence` is `0`, and no exception is
-  thrown
-
-### Requirement: Cadence is view-tolerant, with a front-view discount steeper than vertical oscillation's
-
-The system SHALL compute and return a cadence value for every detected view (`'side'`, `'front'`,
-`'ambiguous'`) — never substituting `null` purely because the view is unsuitable — applying a
-per-view confidence multiplier from `viewFitTable.cadence` (`side: 1.0`, `front: 0.8`, `ambiguous:
-0.6`), since footstrike timing is a vertical-axis (ankle-y) signal that projects onto image-y
-similarly regardless of camera facing direction, unlike the sagittal-plane quantities trunk lean
-and overstriding measure.
-
-#### Scenario: Front-view clip still produces a cadence value
-
-- **WHEN** cadence is computed against a `'front'`-classified clip with detectable footstrikes
-- **THEN** a non-null `value` is returned with `viewFit: 'tolerated'` and confidence discounted by
-  the `0.8` multiplier relative to an otherwise-identical side-view computation
-
-#### Scenario: Ambiguous-view clip still produces a cadence value
-
-- **WHEN** cadence is computed against an `'ambiguous'`-classified clip with detectable
-  footstrikes
-- **THEN** a non-null `value` is returned with `viewFit: 'tolerated'` and confidence discounted by
-  the `0.6` multiplier
 
 ### Requirement: Cadence participates in the shared orchestration and output contract
 
@@ -495,7 +421,8 @@ alongside which they are reported rather than being measured over a different sp
 ### Requirement: Vertical oscillation amplitude comes from a spectral sinusoid fit
 
 The system SHALL compute vertical oscillation's amplitude by fitting the model
-`v ≈ a·sin(2πft) + b·cos(2πft) + c + d·t + e·t²` to the resolvable hip-mid image-y samples by
+`v ≈ a·sin(2πft) + b·cos(2πft) + c + d·t + e·t²` to the resolvable image-y samples of the
+configured vertical-oscillation input signal (`verticalOscillationSignal`; hip-mid by default) by
 ordinary least squares, once per candidate frequency `f` on the grid defined by
 `spectralFitMinFrequencyHz`, `spectralFitMaxFrequencyHz` and `spectralFitFrequencyStepHz`,
 selecting the frequency `f*` with the smallest residual sum of squares, and reporting
@@ -630,4 +557,165 @@ carries a scale, rather than reporting a fabricated or zero measurement.
 - **THEN** its scale-drift ratio equals the last scale sample divided by the first, its
   torso-in-metres equals the pixel torso length divided by the median scale, and no reported field
   is `NaN` or `Infinity`
+
+### Requirement: Cadence is derived from the hip-bounce step frequency
+
+The system SHALL compute cadence by fitting the resolvable hip-mid image-y samples to the shared
+spectral sinusoid primitive (`fitSpectralSinusoid`, over the `spectralFitMinFrequencyHz`/
+`spectralFitMaxFrequencyHz`/`spectralFitFrequencyStepHz` grid already used by vertical
+oscillation), and reporting `value = frequencyHz × 60` — steps per minute, with no correction
+factor — since this pipeline's hip-mid trace bounces once per STEP (twice per full gait cycle).
+This SHALL NOT depend on footstrike detection (`detectFootstrikes`) or on `estimateBodyScale`, and
+SHALL reuse the identical hip-mid signal vertical oscillation fits, via a shared extractor.
+
+The system SHALL gate the result on the fit's sinusoid PARTIAL R² against `cadenceMinFitR2`. When
+the fit fails outright, completes fewer than one cycle, or its partial R² falls below
+`cadenceMinFitR2`, the system SHALL report `value: null`, `confidence: 0`, and a non-null caveat
+naming the specific reason — with NO fallback to any other estimator.
+
+The system SHALL report `sampleSize` as `floor(spanSeconds × frequencyHz)` — a STEP count — using
+the UNROUNDED cycle count to compute confidence's sample-size factor.
+
+#### Scenario: A clean side-view clip yields cadence from the fitted step frequency
+
+- **WHEN** cadence is computed against a `'side'`-classified clip whose hip-mid trace has a clean,
+  fittable bounce rhythm
+- **THEN** `value` equals the fitted bounce frequency (Hz) times 60, `sampleSize` is the floored
+  step count the fit observed, and `value` lands within a plausible range of the clip's true
+  underlying cadence
+
+#### Scenario: No fittable rhythm reports no value
+
+- **WHEN** the hip-mid trace's best-fitting frequency has a sinusoid partial R² below
+  `cadenceMinFitR2`, or the fit otherwise fails (too few samples, a degenerate/non-oscillating
+  signal)
+- **THEN** `value` is `null`, `confidence` is `0`, and `caveat` names the measured fit quality (or
+  failure reason) and the `cadenceMinFitR2` threshold where applicable
+
+#### Scenario: Under one complete step reports no value
+
+- **WHEN** the best-fitting frequency completes fewer than one full cycle within the span of the
+  resolvable hip samples
+- **THEN** `value` is `null`, `confidence` is `0`, and `caveat` states the clip is too short to
+  contain a complete step
+
+#### Scenario: No resolvable hips
+
+- **WHEN** no frame in the clip has a resolvable hip-mid position
+- **THEN** `value` is `null`, `confidence` is `0`, and a non-null `caveat` names the missing hip
+  position — cadence no longer requires a resolvable shoulder position the way its predecessor
+  (via `estimateBodyScale`) did
+
+#### Scenario: Dead time does not shift cadence
+
+- **WHEN** cadence is computed against a clip where the subject enters the frame partway through
+  and/or exits before the clip ends
+- **THEN** `value` reflects the fitted frequency over the resolvable hip samples, not diluted by
+  dead time before/after the subject's presence
+
+#### Scenario: Mid-clip gaps are fitted without resampling
+
+- **WHEN** cadence is computed against a clip with one or more stretches where the hip position is
+  unresolvable
+- **THEN** the fit is computed over the samples that exist, at their real timestamps, without
+  interpolating or resampling across the gap, and `frameCoverage` reflects the shortfall
+
+#### Scenario: A band-edge frequency is caveated
+
+- **WHEN** the fitted frequency lands within one grid step (`spectralFitFrequencyStepHz`) of
+  either `spectralFitMinFrequencyHz` or `spectralFitMaxFrequencyHz`
+- **THEN** the returned `caveat` names the searched frequency range, alongside any other caveat
+  that applies
+
+#### Scenario: Fit quality and step count both feed confidence
+
+- **WHEN** cadence reports a value from a fit whose partial R² clears `cadenceMinFitR2` but falls
+  short of a clean-clip fit, or whose step count falls below `MIN_CADENCE_STEPS`
+- **THEN** `confidence` is reduced proportionally by each shortfall that applies, on top of the
+  existing view-fit, frame-coverage and interpolation factors, and `caveat` is non-null
+
+#### Scenario: Degenerate input never throws or produces NaN
+
+- **WHEN** cadence is computed against an empty frame list, or frames that would otherwise produce
+  a degenerate fit
+- **THEN** `value` is `null` (never `NaN`), `confidence` is `0`, and no exception is thrown
+
+### Requirement: Cadence is view-tolerant, on the same terms as vertical oscillation
+
+The system SHALL compute and return a cadence value for every detected view (`'side'`, `'front'`,
+`'ambiguous'`) — never substituting `null` purely because the view is unsuitable — applying a
+per-view confidence multiplier from `viewFitTable.cadence` (`side: 1.0`, `front: 0.85`,
+`ambiguous: 0.6`) that is IDENTICAL to `viewFitTable.verticalOscillation`'s, since cadence now
+reads the same hip-mid vertical-axis signal vertical oscillation does and projects onto image-y
+the same way regardless of camera facing direction.
+
+#### Scenario: Front-view clip still produces a cadence value
+
+- **WHEN** cadence is computed against a `'front'`-classified clip with a resolvable, fittable
+  hip-mid bounce rhythm
+- **THEN** a non-null `value` is returned with `viewFit: 'tolerated'` and confidence discounted by
+  the `0.85` multiplier relative to an otherwise-identical side-view computation
+
+#### Scenario: Ambiguous-view clip still produces a cadence value
+
+- **WHEN** cadence is computed against an `'ambiguous'`-classified clip with a resolvable,
+  fittable hip-mid bounce rhythm
+- **THEN** a non-null `value` is returned with `viewFit: 'tolerated'` and confidence discounted by
+  the `0.6` multiplier
+
+### Requirement: Vertical oscillation's input signal is selectable
+
+The system SHALL expose `verticalOscillationSignal: 'hipMid' | 'earMid'` as a field of
+`HeuristicsConfig`, selecting which bilateral-pair midpoint vertical oscillation's spectral fit is
+computed against (`'hipMid'`: `left_hip`/`right_hip`; `'earMid'`: `left_ear`/`right_ear`),
+defaulting to `'hipMid'`.
+
+Bilateral-pair resolution within the configured signal SHALL use the same tolerant single-side
+fallback every other center-of-mass proxy in this package uses (flagged `interpolated: true` when
+only one side of the pair resolves). The system SHALL NOT substitute the OTHER signal's position on
+any frame where the configured signal's pair is unresolvable — an unresolvable configured signal
+SHALL contribute nothing to that frame (a `null` chart-series entry, and no sample handed to the
+spectral fit) rather than falling back.
+
+Every degraded-result caveat this metric produces SHALL name the signal that was actually tracked.
+
+Torso-length normalization (`estimateBodyScale`) and the scale-calibrated centimetre calculation
+(`verticalOscillationCm`) SHALL be unaffected by this setting, remaining hip/shoulder-based
+regardless of `verticalOscillationSignal`'s value.
+
+#### Scenario: Default is the hip midpoint
+
+- **WHEN** vertical oscillation is computed without an explicit `verticalOscillationSignal`
+  override
+- **THEN** the spectral fit is computed against the `left_hip`/`right_hip` midpoint, identical to
+  this metric's behavior before this setting existed
+
+#### Scenario: earMid is measured from the ear midpoint
+
+- **WHEN** vertical oscillation is computed with `verticalOscillationSignal: 'earMid'` against a
+  clip with resolvable ear positions
+- **THEN** the spectral fit is computed against the `left_ear`/`right_ear` midpoint instead of the
+  hip midpoint, and the resulting amplitude reflects head motion rather than pelvis motion
+
+#### Scenario: An unresolvable configured signal contributes nothing rather than falling back
+
+- **WHEN** the configured signal's pair is unresolvable on a given frame, while the OTHER
+  (unconfigured) signal's pair would have been resolvable on that same frame
+- **THEN** that frame contributes a `null` entry to the chart series and no sample to the spectral
+  fit — the metric never substitutes the unconfigured signal's position for the configured one
+
+#### Scenario: A single resolvable side stands in for the pair, flagged interpolated
+
+- **WHEN** only one side of the configured signal's pair (e.g. only the left ear, with
+  `verticalOscillationSignal: 'earMid'`) resolves on a given frame
+- **THEN** that single side's position stands in for the pair's midpoint on that frame, with the
+  frame's contribution flagged `interpolated`, the same tolerant fallback every other bilateral
+  center-of-mass signal in this package already uses
+
+#### Scenario: The centimetre calculation is unaffected by this setting
+
+- **WHEN** `verticalOscillationCm` is computed against a clip, regardless of what
+  `verticalOscillationSignal` is set to elsewhere in the same `HeuristicsConfig`
+- **THEN** its result is identical either way, since it does not read this setting and remains
+  hip-based unconditionally
 
