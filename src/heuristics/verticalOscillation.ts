@@ -9,9 +9,8 @@ import type {
   View,
 } from './types'
 import { estimateBodyScale } from './bodyScale'
-import { resolveMidpoint } from './keypoints'
-import { fitSpectralSinusoid } from './spectralFit'
-import type { SpectralFitFailureReason, SpectralSample } from './spectralFit'
+import { analyzeHipBounce } from './hipBounce'
+import type { SpectralFitFailureReason } from './spectralFit'
 import { computeMetricConfidence } from './confidence'
 import { clamp01 } from './mathUtils'
 
@@ -119,22 +118,14 @@ export function computeVerticalOscillation(
 
   const { torsoLengthPx } = bodyScale
 
-  let interpolatedCount = 0
-  let resolvedCount = 0
-  let hipYSum = 0
-  // One entry per frame — `null` where the hip wasn't resolvable that frame, preserving
-  // timestamp alignment with `frames` regardless of resolvability (unlike the fit's sample list
-  // below, which only carries the resolvable frames).
-  const rawHipY: Array<number | null> = frames.map((frame) => {
-    const hipMid = resolveMidpoint(frame, 'left_hip', 'right_hip')
-    if (hipMid === null) return null
-    resolvedCount += 1
-    if (hipMid.interpolated) interpolatedCount += 1
-    hipYSum += hipMid.y
-    return hipMid.y
-  })
+  // Traversal, interpolation accounting, and the fit itself are all owned by the shared
+  // hip-bounce signal module — see `hipBounce.ts` for why this is a signal extractor, not a
+  // metric, and why cadence independently re-derives the identical fit rather than this metric
+  // threading a shared result through the orchestrator.
+  const hipBounce = analyzeHipBounce(frames, config)
+  const rawHipY = hipBounce.hipY
 
-  if (resolvedCount === 0) {
+  if (hipBounce.resolvedCount === 0) {
     return nullResult(
       viewFitEntry.fit,
       'No resolvable hip position in this clip.',
@@ -142,13 +133,18 @@ export function computeVerticalOscillation(
     )
   }
 
-  const frameCoverage = resolvedCount / frames.length
-  const interpolatedFraction = interpolatedCount / resolvedCount
+  const frameCoverage = hipBounce.frameCoverage
+  const interpolatedFraction = hipBounce.interpolatedFraction
 
   // The run mean is the charting baseline, not a physical quantity — it just centers the
   // waveform around 0 so the chart reads as "bounce above/below typical", independent of where
-  // in the frame the runner happened to be positioned.
-  const runMeanHipY = hipYSum / resolvedCount
+  // in the frame the runner happened to be positioned. Computed here (chart-only concern), not in
+  // `hipBounce.ts`, from the shared `hipY` trace.
+  let hipYSum = 0
+  for (const y of rawHipY) {
+    if (y !== null) hipYSum += y
+  }
+  const runMeanHipY = hipYSum / hipBounce.resolvedCount
   const series: TimeseriesPoint[] = frames.map((frame, i) => {
     const y = rawHipY[i]
     return {
@@ -159,20 +155,7 @@ export function computeVerticalOscillation(
     }
   })
 
-  // Fit the RAW pixel trace, not the charting series above. The two differ by a sign flip and a
-  // normalization, neither of which the fit needs — and deriving the estimator's input from a
-  // presentation artifact would silently couple the number to any future chart tweak.
-  const fitSamples: SpectralSample[] = []
-  frames.forEach((frame, i) => {
-    const y = rawHipY[i]
-    if (y !== null) fitSamples.push({ t: frame.timestamp, v: y })
-  })
-
-  const spectralFit = fitSpectralSinusoid(fitSamples, {
-    minFrequencyHz: config.spectralFitMinFrequencyHz,
-    maxFrequencyHz: config.spectralFitMaxFrequencyHz,
-    frequencyStepHz: config.spectralFitFrequencyStepHz,
-  })
+  const spectralFit = hipBounce.fit
 
   if (!spectralFit.ok) {
     return nullResult(
