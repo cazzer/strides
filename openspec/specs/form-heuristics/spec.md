@@ -452,7 +452,10 @@ already left it). A frame only starts or ends the presence window once a short r
 consecutive trackable frames confirms it, so a single spurious detection cannot anchor the
 window on its own. This trim applies only to the frames handed to `computeFormHeuristics` — the
 canonical `RobustPoseFrame[]` used for the skeleton overlay, and the development-only analysis
-diagnostics, both continue to reflect the full, untrimmed clip.
+diagnostics, both continue to reflect the full, untrimmed clip, with one carve-out: the
+diagnostics' scale-calibration block is computed over the same trimmed window
+`computeFormHeuristics` receives, so that its figures are directly comparable to the metrics
+alongside which they are reported rather than being measured over a different span.
 
 #### Scenario: A clip with the subject absent at the start and end trims to the presence window
 
@@ -479,7 +482,8 @@ diagnostics, both continue to reflect the full, untrimmed clip.
 - **WHEN** analysis completes for a clip whose presence window is narrower than the full clip
 - **THEN** `VideoAnalysisState.robustFrames` (used by the skeleton overlay) and `diagnostics`
   (the development-only analysis diagnostics) both still reflect every sampled frame, not just
-  the presence window used internally by `computeFormHeuristics`
+  the presence window used internally by `computeFormHeuristics` — except the diagnostics'
+  scale-calibration block, which is computed over the presence window by design
 
 #### Scenario: No trackable frames anywhere leaves metrics computation unaffected
 
@@ -487,4 +491,142 @@ diagnostics, both continue to reflect the full, untrimmed clip.
 - **THEN** the presence window is empty and every metric falls back to its existing
   no-resolvable-body-scale-reference null result, exactly as it would for an all-unresolvable
   clip today
+
+### Requirement: Vertical oscillation amplitude comes from a spectral sinusoid fit
+
+The system SHALL compute vertical oscillation's amplitude by fitting the model
+`v ≈ a·sin(2πft) + b·cos(2πft) + c + d·t + e·t²` to the resolvable hip-mid image-y samples by
+ordinary least squares, once per candidate frequency `f` on the grid defined by
+`spectralFitMinFrequencyHz`, `spectralFitMaxFrequencyHz` and `spectralFitFrequencyStepHz`,
+selecting the frequency `f*` with the smallest residual sum of squares, and reporting
+`value = 2·√(a²+b²) / torsoLengthPx` — a PEAK-TO-PEAK amplitude normalized by the same clip-median
+torso length `estimateBodyScale` already provides, whose behavior is unchanged.
+
+The system SHALL fit the samples that exist, at their real timestamps, and SHALL NOT resample or
+interpolate the series onto a uniform grid before fitting.
+
+The system SHALL gate the result on the sinusoid's PARTIAL coefficient of determination,
+`1 − RSS(f*) / RSS_trendOnly`, where `RSS_trendOnly` is the residual sum of squares of the trend
+terms `c + d·t + e·t²` fitted alone. When that value is below `verticalOscillationMinFitR2`, the
+system SHALL report `value: null` and `confidence: 0` with a non-null caveat, and SHALL NOT report
+a value derived from that fit by any other code path. The total coefficient of determination MAY be
+reported as a diagnostic but SHALL NOT be used as the gate.
+
+The system SHALL report `sampleSize` for this metric as the number of COMPLETE gait cycles observed,
+`floor(spanSeconds × f*)`, and SHALL NOT report a value when fewer than one complete cycle was
+observed.
+
+#### Scenario: A clip with a clean bounce rhythm reports the fitted amplitude
+
+- **WHEN** vertical oscillation is computed against a clip whose hip-mid trace oscillates cleanly
+  within the configured frequency band
+- **THEN** `value` is the fitted peak-to-peak amplitude divided by `torsoLengthPx`, `sampleSize` is
+  the count of complete cycles the clip spans, and the reported fit diagnostics include the winning
+  frequency and the sinusoid partial R²
+
+#### Scenario: Irregular timestamps and mid-clip gaps are fitted without resampling
+
+- **WHEN** vertical oscillation is computed against a clip whose resolvable hip samples are
+  unevenly spaced, or are interrupted by one or more stretches where the hip was unresolvable
+- **THEN** the amplitude is recovered from the samples that exist, with the unresolvable stretches
+  contributing nothing rather than being filled in, and `frameCoverage` reflects the shortfall
+
+#### Scenario: Camera-approach drift does not inflate the reported amplitude
+
+- **WHEN** vertical oscillation is computed against a clip whose hip-mid trace carries slow linear
+  and quadratic drift far larger than the oscillation itself (e.g. a runner approaching the camera)
+- **THEN** the reported amplitude matches the amplitude that would be reported for the same
+  oscillation without the drift, because the model's `c + d·t + e·t²` terms absorb it
+
+#### Scenario: A fit below the quality threshold reports no value
+
+- **WHEN** the best-fitting frequency's sinusoid partial R² is below `verticalOscillationMinFitR2`
+- **THEN** `value` is `null`, `confidence` is `0`, and `caveat` names both the measured fit quality
+  and the configured minimum
+
+#### Scenario: A clip spanning under one complete cycle reports no value
+
+- **WHEN** the best-fitting frequency completes fewer than one full cycle within the span of the
+  resolvable hip samples
+- **THEN** `value` is `null`, `confidence` is `0`, and `caveat` states that the clip is too short to
+  contain a complete bounce cycle
+
+#### Scenario: A hip trace with no oscillation reports no value rather than zero
+
+- **WHEN** vertical oscillation is computed against a clip whose hip-mid trace is constant, or is a
+  pure trend the model's polynomial terms explain exactly
+- **THEN** `value` is `null` with a non-null caveat, never `0` — which would falsely claim a
+  measured absence of bounce rather than an inability to measure one — and never `NaN`
+
+#### Scenario: Fit quality and observed cycle count both feed confidence
+
+- **WHEN** vertical oscillation reports a value from a fit whose partial R² clears
+  `verticalOscillationMinFitR2` but falls short of a clean-clip fit, or whose complete-cycle count
+  falls below `verticalOscillationMinCycles`
+- **THEN** `confidence` is reduced proportionally by each shortfall that applies, on top of the
+  existing view-fit, frame-coverage and interpolation factors, and `caveat` is non-null
+
+#### Scenario: The chart series survives every no-value path
+
+- **WHEN** vertical oscillation reports `value: null` for any reason other than an unresolvable
+  body scale
+- **THEN** `series` is still populated with one timestamp-aligned entry per input frame, so the hip
+  trace remains chartable even when no amplitude is reportable
+
+### Requirement: Scale-calibrated vertical oscillation from integrated per-frame deltas
+The system SHALL provide a calculation, separate from and not altering `computeVerticalOscillation`,
+that converts the hip-midpoint vertical pixel series into real-world units using the per-frame
+`RobustPoseFrame.pixelsPerMeter` scale, and reports the median half-cycle bounce amplitude in
+centimetres. The conversion SHALL be performed by integrating per-frame *deltas* — accumulating
+`(y[k-1] - y[k]) / s̄[k]`, where `s̄[k]` is the mean of the two flanking frames' scales — and
+SHALL NOT divide absolute pixel positions by a per-frame scale, which fabricates enormous
+excursions whenever the scale drifts (a subject approaching the camera) even though the subject
+has not moved vertically at all. Integration SHALL restart from zero at every gap in the hip
+series, and amplitudes SHALL be paired only between consecutive opposite-kind extrema found
+within a single integration run, never across a run boundary — each run's cumulative series has
+its own arbitrary baseline, so a cross-run pair would report the difference between two unrelated
+baselines as if it were a bounce. The calculation SHALL return `null` when no frame in the input
+carries a scale, rather than reporting a fabricated or zero measurement.
+
+#### Scenario: Constant scale matches the pixel-path amplitude exactly
+- **WHEN** the calculation runs over a gapless hip series whose `pixelsPerMeter` is the same
+  constant `s` on every frame
+- **THEN** the reported centimetre amplitude equals the existing pixel-path amplitude divided by
+  `s` and converted to centimetres, to within floating-point tolerance, over the same number of
+  half-cycles
+
+#### Scenario: A drifting scale over a stationary subject fabricates no bounce
+- **WHEN** the hip's pixel position is constant across the clip while `pixelsPerMeter` drifts
+  substantially (for example tripling), a case in which dividing absolute positions by the
+  per-frame scale would report a multi-metre excursion
+- **THEN** the integrated-delta calculation reports no detected half-cycle: a `null` amplitude
+  with a sample size of zero
+
+#### Scenario: A real bounce under mild drift is recovered
+- **WHEN** the hip's pixel series encodes a known real-world bounce amplitude modulated by a
+  mildly drifting scale
+- **THEN** the reported centimetre amplitude is within ten percent of the known amplitude
+
+#### Scenario: Amplitudes are never paired across an integration-run boundary
+- **WHEN** the hip series contains an unresolvable gap splitting it into two runs whose pixel
+  positions differ by a large constant offset
+- **THEN** no reported amplitude corresponds to that inter-run offset; every amplitude comes from
+  a pair of extrema within one run
+
+#### Scenario: No scale anywhere yields no result
+- **WHEN** every frame's `pixelsPerMeter` is `null` (for example every backend other than
+  MediaPipe)
+- **THEN** the calculation returns `null` rather than a result object with null or zero fields
+
+#### Scenario: Partial scale coverage within a run still integrates
+- **WHEN** some frames within an integration run carry a scale and others do not
+- **THEN** the missing scales are filled by linear interpolation between the flanking scale
+  samples (held at the nearest value at the run's edges), the reported scale coverage is less than
+  one, and the amplitude is close to what fully-scaled frames would have produced
+
+#### Scenario: Reported statistics are finite and self-describing
+- **WHEN** the calculation returns a result
+- **THEN** its scale-drift ratio equals the last scale sample divided by the first, its
+  torso-in-metres equals the pixel torso length divided by the median scale, and no reported field
+  is `NaN` or `Infinity`
 
