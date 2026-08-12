@@ -56,6 +56,25 @@ describe('computeFormHeuristics', () => {
     expect(result.verticalOscillation.series).toHaveLength(frames.length)
   })
 
+  it('cadence and vertical oscillation agree exactly, since both fit the identical shared hip-bounce signal', () => {
+    // D2's drift guard: cadence.ts and verticalOscillation.ts each call `analyzeHipBounce`
+    // independently rather than sharing one computed result, on the theory that the fit is a
+    // pure function and both calls are bit-identical (see hipBounce.ts's module doc). If a future
+    // edit broke that -- e.g. one caller's config diverged from the other's, or one started
+    // filtering its input differently -- this is the assertion that would catch it.
+    const frames = generateSyntheticGait(PARAMS)
+
+    const result = computeFormHeuristics(frames)
+
+    expect(result.cadence.value).not.toBeNull()
+    expect(result.verticalOscillation.fit).not.toBeNull()
+    // Both sides compute `frequencyHz * 60` from the same bit-identical fit -- comparing the same
+    // operation against itself, not round-tripping through a division, which floating-point
+    // multiplication/division would not generally invert exactly.
+    expect(result.cadence.value).toBe(result.verticalOscillation.fit!.frequencyHz * 60)
+    expect(result.cadence.sampleSize).toBe(result.verticalOscillation.sampleSize)
+  })
+
   it('produces the same view label and per-metric results as calling detectView + each metric directly', () => {
     const frames = generateSyntheticGait(PARAMS)
 

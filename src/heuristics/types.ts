@@ -48,9 +48,13 @@ export interface MetricResult {
   interpolatedFraction: number
   frameCoverage: number
   /** Count of whatever the producing metric aggregates over — the unit differs per metric and is
-   * documented in each module (resolvable frames for trunk lean, footstrikes for overstriding and
-   * cadence, and, since vertical oscillation moved to a spectral fit, COMPLETE GAIT CYCLES rather
-   * than the half-cycles its extrema-pairing predecessor counted). */
+   * documented in each module (resolvable frames for trunk lean, footstrikes for overstriding).
+   * Vertical oscillation and cadence both read the shared hip-bounce spectral fit
+   * (`hipBounce.ts`) and report complete BOUNCE cycles observed — one bounce per STEP, i.e. HALF
+   * a full gait cycle, not a full gait cycle itself. For cadence specifically that count is
+   * directly a step count, not a footstrike-detection count the way it was before this metric
+   * moved off `detectFootstrikes`. Neither metric counts the half-BOUNCE-cycles an older
+   * extrema-pairing estimator used to report. */
   sampleSize: number
   /** Non-null for degraded/low-confidence results across every metric. `footStrikePattern` is the
    * one deliberate exception: it is a proxy (ankle-relative-to-knee position, not a direct
@@ -132,18 +136,22 @@ export interface HeuristicsConfig {
    * data. */
   minViewDetectionFrameCoverage: number // 0.4
 
-  /** Lowest candidate bounce frequency for vertical oscillation's spectral fit, in Hz. Hip bounce
-   * happens twice per gait cycle, so 1.2 Hz corresponds to a ~72 steps/min shuffle — comfortably
-   * below any running cadence, and low enough to leave walking-speed footage detectable rather
-   * than silently forcing it onto a faster candidate. */
+  /** Lowest candidate bounce frequency for the SHARED hip-bounce spectral fit
+   * (`hipBounce.ts`'s `analyzeHipBounce`, consumed by both vertical oscillation and cadence), in
+   * Hz. Hip bounce happens twice per gait cycle — once per STEP — so 1.2 Hz corresponds to a ~72
+   * steps/min shuffle (`1.2 × 60`) — comfortably below any running cadence, and low enough to
+   * leave walking-speed footage detectable rather than silently forcing it onto a faster
+   * candidate. */
   spectralFitMinFrequencyHz: number // 1.2
-  /** Highest candidate bounce frequency, in Hz — 4.0 corresponds to 240 steps/min, above any
-   * sustained human running cadence. Capping here rather than higher keeps the grid from offering
-   * candidates that can only be fitting per-frame tracking jitter. */
+  /** Highest candidate bounce frequency, in Hz, for the shared hip-bounce spectral fit — 4.0
+   * corresponds to 240 steps/min (`4.0 × 60`), above any sustained human running cadence. Capping
+   * here rather than higher keeps the grid from offering candidates that can only be fitting
+   * per-frame tracking jitter. */
   spectralFitMaxFrequencyHz: number // 4.0
-  /** Candidate-frequency spacing, in Hz. 0.02 over the 1.2-4.0 band is 141 candidates — finer than
-   * the frequency resolution any clip of a few seconds actually supports, so the grid is never the
-   * limiting factor, and cheap enough that the whole search is sub-millisecond. */
+  /** Candidate-frequency spacing, in Hz, for the shared hip-bounce spectral fit. 0.02 over the
+   * 1.2-4.0 band is 141 candidates — finer than the frequency resolution any clip of a few
+   * seconds actually supports (0.02 Hz = 1.2 steps/min), so the grid is never the limiting
+   * factor, and cheap enough that the whole search is sub-millisecond. */
   spectralFitFrequencyStepHz: number // 0.02
   /** Minimum sinusoid PARTIAL R² (against a trend-only baseline, NOT total R²) for a vertical
    * oscillation fit to report a value at all. Below this the metric returns `null` with a caveat
@@ -156,11 +164,42 @@ export interface HeuristicsConfig {
    * n=30, 0.44 at n=20, 0.64 at n=12), because two sinusoid parameters explain proportionally more
    * of a shorter series by chance alone. A fixed R² threshold is therefore NOT n-invariant, and any
    * other caller of `fitSpectralSinusoid` operating at low sample counts must set its own policy
-   * rather than reusing this value. See the change's design.md for the n-invariant upgrade path. */
+   * rather than reusing this value. See the change's design.md for the n-invariant upgrade path.
+   *
+   * `cadenceMinFitR2` (below) reuses this exact calibration at the exact same value, because
+   * cadence's fit reads the IDENTICAL hip-mid series at the IDENTICAL sample count — see that
+   * key's own doc for why the reuse is sound there specifically and not a general license to reuse
+   * this number at other sample counts. */
   verticalOscillationMinFitR2: number // 0.30
-  /** Minimum COMPLETE GAIT CYCLE count below which confidence is penalized via the sampleSize
-   * factor. Full cycles, not half-cycles — the spectral estimator fits a whole waveform rather
-   * than pairing individual extrema, so its natural sample unit is the cycle. */
+  /** Minimum sinusoid PARTIAL R² for cadence's hip-bounce fit (`hipBounce.ts`) to report a value.
+   * Same quantity, same gating discipline, and the same default as `verticalOscillationMinFitR2`
+   * — deliberately not a separate tuned constant, because cadence and vertical oscillation fit the
+   * IDENTICAL hip-mid series (`analyzeHipBounce` is called independently by each, over the same
+   * frames, producing a bit-identical fit) at the IDENTICAL sample count, so
+   * `verticalOscillationMinFitR2`'s calibration — 2000-seed pure-noise floor (p95 ≈ 0.22 at n=50)
+   * against a worst observed real trial of 0.397 — transfers exactly rather than needing its own
+   * derivation.
+   *
+   * **This calibration is n-dependent and does NOT transfer to a caller operating at a different
+   * sample count.** The pure-noise floor climbs steeply as n falls (measured p95: 0.34 at n=30,
+   * 0.44 at n=20, 0.64 at n=12) — 0.30 is safe here only because cadence, like vertical
+   * oscillation, operates at n ≈ 50+ in live footage (the same frames, hence the same resolvable-
+   * hip count). A future n-invariant replacement (an F-test on the fit's 2 sinusoid degrees of
+   * freedom against its residual degrees of freedom) would replace BOTH this key and
+   * `verticalOscillationMinFitR2` together, not just one — deliberately not implemented here, see
+   * the `derive-cadence-from-step-frequency` change's design.md. */
+  cadenceMinFitR2: number // 0.30
+  /** Minimum complete BOUNCE CYCLE count below which confidence is penalized via the sampleSize
+   * factor — one bounce cycle is one STEP, HALF a full gait cycle, not a full gait cycle itself.
+   * Full bounce cycles, not half-bounce-cycles — the spectral estimator fits a whole waveform
+   * rather than pairing individual extrema, so its natural sample unit is the cycle. Cadence has its own,
+   * higher minimum (`MIN_CADENCE_STEPS` in `cadence.ts`) rather than reusing this one — despite
+   * both metrics now reading the same hip-bounce fit, cadence needs more cycles for adequate
+   * FREQUENCY precision (a spectral estimator's frequency resolution improves with the SQUARE of
+   * observation time) where vertical oscillation only needs enough for a stable AMPLITUDE
+   * estimate — see `cadence.ts`'s doc on `MIN_CADENCE_STEPS` for the full reasoning. Documented at
+   * both sites deliberately, so the two minimums aren't "simplified" into one shared constant
+   * without re-deriving why they differ. */
   verticalOscillationMinCycles: number // 3
 
   /** Minimum prominence (as a fraction of torsoLengthPx) for an ankle-y extremum to count as a
@@ -226,20 +265,19 @@ export const DEFAULT_VIEW_FIT_TABLE: HeuristicsConfig['viewFitTable'] = {
   },
   /**
    * Cadence is view-tolerant, like verticalOscillation, NOT hard-gated like trunkLean/overstriding
-   * — see `openspec/changes/add-cadence-metric/design.md` for the full reasoning. Short version:
-   * cadence only needs footstrike TIMING (ankle-y crossing a local max), a vertical-axis signal
-   * that projects onto image-y similarly regardless of facing direction, same as hip-y bounce. It
-   * never reads the sagittal (fore-aft) axis that makes trunk lean/overstriding meaningless
-   * face-on. Front view still gets a real discount, slightly steeper than vertical oscillation's
-   * 0.85: near each footstrike the swing leg's ankle passes close to the stance leg's on screen
-   * face-on (an occlusion/crossing risk side view doesn't have, since the legs stay laterally
-   * separated on screen throughout the stride), and a missed or spurious extremum here directly
-   * biases the countable footstrike total rather than just adding noise to an already-averaged
-   * amplitude the way it would for vertical oscillation.
+   * — see `openspec/changes/derive-cadence-from-step-frequency/design.md` for the full reasoning.
+   * As of that change, cadence's multipliers are IDENTICAL to verticalOscillation's, not merely
+   * similar: both metrics now fit the exact same hip-mid vertical-axis signal
+   * (`hipBounce.ts`'s `analyzeHipBounce`), a signal that projects onto image-y similarly
+   * regardless of facing direction and never reads the sagittal (fore-aft) axis that makes trunk
+   * lean/overstriding meaningless face-on. Cadence previously carried a steeper 0.8 front-view
+   * discount justified by ankle-occlusion risk near a footstrike detection — that justification no
+   * longer applies now that cadence doesn't read ankle position at all, so the discount was
+   * relaxed to match vertical oscillation's 0.85 exactly.
    */
   cadence: {
     side: { fit: 'primary', multiplier: 1.0 },
-    front: { fit: 'tolerated', multiplier: 0.8 },
+    front: { fit: 'tolerated', multiplier: 0.85 },
     ambiguous: { fit: 'tolerated', multiplier: 0.6 },
   },
   // Same reasoning as trunkLean/overstriding: the hip-knee-ankle angle is a sagittal-plane
@@ -274,6 +312,7 @@ export const DEFAULT_HEURISTICS_CONFIG: HeuristicsConfig = {
   spectralFitMaxFrequencyHz: 4.0,
   spectralFitFrequencyStepHz: 0.02,
   verticalOscillationMinFitR2: 0.3,
+  cadenceMinFitR2: 0.3,
   verticalOscillationMinCycles: 3,
   footstrikeMinProminenceRatio: 0.05,
   footstrikeMinIntervalSeconds: 0.25,
