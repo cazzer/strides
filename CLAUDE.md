@@ -164,6 +164,133 @@ across all 3 trials this session — not yet confirmed whether that holds in gen
 coincidental to this clip/environment. For a real before/after comparison, run a few trials per
 variant and compare medians/ranges, not single runs.
 
+**Environment gotcha — no local Playwright install, and its cached browser binary is
+version-mismatched (2026-08-12).** This repo has no `playwright` devDependency. Driver scripts
+written here fail to resolve the import; run them from a sibling project that has `playwright`
+installed instead (`node script.mjs` with `cwd` in that project), or `npm i -D playwright`
+here if a persistent local install is preferred. Separately, `chromium.launch()`'s default
+version-pinned browser lookup can fail if the only cached binaries under
+`~/Library/Caches/ms-playwright/` don't match the installed `playwright` package's expected
+revision (`Executable doesn't exist at .../chromium_headless_shell-<rev>/...`). Bypass by
+pointing `executablePath` directly at a cached full-Chromium binary instead of `headless_shell`,
+e.g. `~/Library/Caches/ms-playwright/chromium-<rev>/chrome-mac-arm64/Google Chrome for
+Testing.app/Contents/MacOS/Google Chrome for Testing` — `ls
+~/Library/Caches/ms-playwright/` to see what's actually cached on the machine first. Still pass
+`args: ['--headless=new', '--enable-gpu', '--ignore-gpu-blocklist']`, same as above.
+
+**Testing a candidate calculation before it's wired into the pipeline.** To measure a new
+metric/normalization idea against real clips without touching the shipped calc: (1) write the
+candidate as a standalone function in its own `*.experimental.ts` file next to the metric it's
+iterating on, reusing existing primitives (`resolveMidpoint`/`resolvePoint`/`estimateBodyScale`/
+`findLocalExtrema`/`detectFootstrikes` etc. from `src/heuristics/`) rather than reinventing them;
+(2) temporarily import it into `useVideoAnalysis.ts`'s dev-only diagnostics effect (right after
+the existing `console.log('[analysis-diagnostics]', ...)` line) and log its result under its own
+console prefix, e.g. `console.log('[my-experiment]', JSON.stringify(result))`; (3) drive the app
+and capture that prefix via `page.on('console', ...)`, same as reading `[analysis-diagnostics]`;
+(4) **revert the instrumentation and delete the experimental file when done** —
+`git checkout -- src/results/useVideoAnalysis.ts` + `rm` the experimental file. Don't leave probe
+scaffolding in the shipped pipeline between experiments or after concluding one — every round
+this session followed exactly this cycle (add, measure, revert) rather than accumulating dead
+debug code.
+
+**Externally-sourced test clips (Google Drive links, phone recordings).** Google Drive direct-
+download works with plain `curl` for files small enough to skip the virus-scan interstitial —
+`curl -sL -c cookies.txt "https://drive.google.com/uc?export=download&id=<FILE_ID>" -o out.mov`;
+check the result with `file out.mov` (an HTML confirmation page vs. an actual `ISO Media` file is
+easy to tell apart). iPhone-recorded clips commonly arrive as HEVC-in-`.mov` — transcode to
+H.264 (`ffmpeg -i in.mov -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p -an out.mp4`)
+before using them in a Chromium-driven pipeline; HEVC decode support outside Safari is spotty and
+this app's canvas-based frame reads need a codec the browser can actually decode. **Container
+duration/frame-count metadata can lie** — `ffprobe -show_entries format=duration` and the video
+stream's declared `nb_frames` are not authoritative; cross-check with an actual decode pass
+(`ffmpeg -i in.mov -map 0:v:0 -c copy -f null - 2>&1 | grep time=` or
+`ffprobe -count_frames -show_entries stream=nb_read_frames`) — one clip this session declared 94
+frames in its container metadata but only 66 were actually decodable, which broke this app's
+frame-sampling loop down to a single sample for the whole clip (see "Vertical oscillation
+accuracy investigation" below).
+
+**Pulling and visually reviewing keyframes.** To sanity-check a calculated metric against what a
+human sees: log the algorithm's extrema/amplitude timestamps via the experimental-probe pattern
+above, then `ffmpeg -i clip.mp4 -ss <timestamp> -frames:v 1 -q:v 3 out.png` per timestamp (output
+seeking — `-ss` after `-i` — for frame-accurate extraction; the video is usually short enough
+that the slower full-decode isn't a real cost). Read the resulting PNGs directly (the `Read` tool
+renders images) rather than trying to reason about pixel positions from data alone. A
+`drawgrid=width=40:height=40` ffmpeg video filter overlaid before extraction turns this into an
+actual ruler for comparing vertical positions across frames when a precise measurement (not just
+a gut check) is needed — see the "Vertical oscillation accuracy investigation" section for a
+worked example (manual grid-pixel measurement landed close to, and in two cases above, this
+app's own calculated hip-bounce figures, which was evidence *against* the hip signal being
+noisy/inflated).
+
+## Vertical oscillation accuracy investigation (2026-08-12)
+
+The `verticalOscillation` metric (`src/heuristics/verticalOscillation.ts`) was suspected of
+reading too high (~18-25% of torso length on real clips) — this section records what was tried
+against real footage and what's still open. No code changed as a direct result of this
+investigation yet (see "Backlog"); the only shipped outcome so far is the second demo button
+(`src/video/demo-clips/park-approach.mp4`, added so the front-approach clip below is reproducible
+without an upload).
+
+**Hip-only signal vs. a 5-limb blend — blend rejected.** Tried averaging bilateral-pair midpoints
+across shoulders/elbows/wrists/knees/ankles (hip excluded) as an alternative center-of-mass
+proxy, on the theory that hip keypoints track less reliably than other joints. Manual grid-pixel
+measurement against fixed background references (a running track's lane markings, confirmed
+static camera) showed the *existing hip-only signal* tracks real visible bounce reasonably
+well — manual estimates ran as high or higher than the calculated hip value on both half-cycles
+checked, undercutting "hip is noisy." The blended signal showed a concrete artifact instead: a
+133px average-limb swing across just 0.08s (2 frames) — not a physically plausible body-
+translation speed, almost certainly a jittery wrist/elbow detection spike. Blending in fast-
+moving limb joints trades one noise source for a worse one. Not pursued further.
+
+**Camera-distance change is a real, separate bug.** `estimateBodyScale`
+(`src/heuristics/bodyScale.ts`) computes `torsoLengthPx` as a single clip-wide median. On a clip
+where the subject's on-screen size changes substantially (e.g. running toward a handheld camera
+rather than passing at fixed lateral distance — verified visually, on point: the subject's
+apparent size roughly tripled across one ~1.6s clip), a single global normalizer mis-sizes every
+amplitude that occurs away from the clip's "average" distance from camera. Two fixes tried:
+- **Per-half-cycle-local torso length** (`estimateBodyScale` re-run on just the frames spanning
+  each half-cycle): confirmed a safe no-op on a fixed-camera-distance clip (control), but
+  *unstable* on the short/noisy approach clip — two otherwise-identical runs produced 32.5% and
+  14.4% for the same clip, because which half-cycles even get detected varies run-to-run (GPU
+  non-determinism, see "Determinism caveat" above) and a half-cycle's own frame window is too
+  small a sample to estimate torso length reliably.
+- **Rolling-window smoothed per-frame torso length** (median over a ±8-frame window, resampled
+  at each extremum): same idea, slightly stabilized, same fundamental problem — the underlying
+  clip (1.65s, ~2-3 real strides) is too short for *any* normalization scheme to produce a
+  trustworthy single number. Per-half-cycle ratios within one run spanned 2.8%-59% — that spread
+  is a property of the clip, not of the normalizer.
+
+Conclusion: local/smoothed torso-length normalization is more correct in principle (verified
+harmless on a stable clip, and a global median is provably wrong under camera-distance change)
+but wasn't validated as an improvement on the one ground-truth clip available, because that clip
+is too short/noisy to validate anything against. Not yet shipped — see "Backlog".
+
+**Stride-length normalization — different, possibly more correct concept, but untestable on the
+available ground-truth clip.** Consumer running watches (Garmin, COROS) report two distinct VO
+metrics: raw VO in cm, and "Vertical Ratio" = VO_cm / stride_length_cm × 100, as a percentage.
+Since the user's ground-truth reading was given as a percentage ("~10%"), Vertical Ratio is the
+likely target — **inferred, not confirmed with the user**. This pipeline's existing calc
+normalizes by torso length, not stride length — a categorically different ratio with no
+principled reason to match a watch's number even if perfectly noise-free. Tried: bounce_px /
+stride_px (same pixel space, real-world scale cancels out, same trick torso-length normalization
+already relies on), stride length = same-side footstrike-to-footstrike horizontal hip
+displacement (`detectFootstrikes` from `src/heuristics/footstrikes.ts`, reused as-is). On the
+fixed-camera track clip this produced ~5-10% (vs. ~18-20% for the torso-length version) — much
+closer to a plausible real-world Vertical Ratio, though there's no ground truth for that clip to
+confirm against. **Could not be tested on the one clip with ground truth**: that clip's subject
+runs toward the camera, so net horizontal (x) displacement is near zero — confirmed independently
+by this pipeline's own `overstriding` metric, which already emits "direction of travel could not
+be determined" on that clip (`estimateTravelDirection` in `src/heuristics/travelDirection.ts`
+returns `0` below a half-torso-length displacement threshold). Pixel-space stride length simply
+isn't observable from this camera angle. A side-view/lateral-motion ground-truth clip is needed
+to actually validate this direction.
+
+**Ground truth available**: one real data point — a park clip (front/approach view, ~1.65s,
+now the second demo button) with a watch-measured reading of ~10% (assumed Vertical Ratio, see
+above). This pipeline's baseline hip-only reading on that clip: ~24-25% (stable across runs). No
+ground truth exists for the original side-view track demo clip — it's a stability/plausibility
+control only, never a target.
+
 ## Backlog (assessed, not yet built)
 
 One more iteration plane was scoped but deferred as of 2026-08-11 — same "bundle into one
@@ -190,3 +317,25 @@ too small/distant after downscaling to the model's fixed input size) doesn't hav
 stage at all yet; and the eval harness/comparison tooling itself (multi-trial, labeled,
 diffable) that would actually drive variants through these config planes hasn't been built —
 this doc covers how to do it by hand, not a scripted harness.
+
+From the vertical-oscillation accuracy investigation (2026-08-12, see section above), not yet
+built:
+- **Ship-or-don't decision on local/smoothed torso-length normalization** in
+  `computeVerticalOscillation` — a defensible correctness fix (global-median normalization is
+  provably wrong under camera-distance change, verified harmless on a stable clip) that wasn't
+  cleanly validated as an *improvement* because the only ground-truth clip is too short/noisy to
+  validate anything against. Needs either a decision to ship it anyway on correctness grounds, or
+  a better validation clip first.
+- **Confirm the Vertical-Ratio-vs-raw-VO assumption with the user** — this investigation targeted
+  matching VO_cm/stride_length_cm × 100 (a percentage) since the user's watch reading was given
+  as "~10%", but that's inferred from the unit, not confirmed. Changes which normalization
+  concept (torso-length vs. stride-length) is even the right target.
+- **A lateral-motion ground-truth clip** — the only clip with a known-correct reading (the park
+  demo, front/approach view) structurally can't validate stride-length normalization
+  (`estimateTravelDirection` returns indeterminate on it — no net horizontal pixel displacement
+  at that camera angle). Would need a side-view clip, filmed like the original track demo, with a
+  watch reading to actually test the stride-length direction.
+- **A longer or multi-trial-averaged ground-truth clip generally** — the park clip is ~1.65s
+  (~2-3 real strides); per-half-cycle bounce ratios within a single run spanned 2.8%-59%, and
+  which half-cycles even get detected varies between identical runs (GPU non-determinism). No
+  normalization scheme can be responsibly validated against a single short run of this clip.
