@@ -6,8 +6,6 @@ const { estimatePoses, dispose, createDetectorMock } = vi.hoisted(() => ({
   createDetectorMock: vi.fn(),
 }))
 
-vi.mock('@tensorflow/tfjs-backend-webgl', () => ({}))
-
 vi.mock('@tensorflow/tfjs-core', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('@tensorflow/tfjs-core')>()
@@ -28,8 +26,8 @@ vi.mock('@tensorflow-models/pose-detection', async (importOriginal) => {
 })
 
 import * as poseDetection from '@tensorflow-models/pose-detection'
-import { createMoveNetDetector } from './movenet'
-import { MOVENET_RAW_KEYPOINTS } from './__fixtures__/movenet-keypoints.fixture'
+import { createPoseNetDetector } from './posenet'
+import { POSENET_RAW_KEYPOINTS } from './__fixtures__/posenet-keypoints.fixture'
 import { COMMON_KEYPOINT_NAMES } from '../types'
 
 beforeEach(() => {
@@ -39,32 +37,20 @@ beforeEach(() => {
   createDetectorMock.mockResolvedValue({ estimatePoses, dispose })
 })
 
-describe('createMoveNetDetector', () => {
-  it('defaults to SinglePose Lightning on the WebGL backend', async () => {
-    await createMoveNetDetector()
+describe('createPoseNetDetector', () => {
+  it('initializes PoseNet on the WebGL backend, with the library default model config', async () => {
+    await createPoseNetDetector()
 
-    expect(createDetectorMock).toHaveBeenCalledWith(
-      poseDetection.SupportedModels.MoveNet,
-      { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING },
-    )
-  })
-
-  it('selects SinglePose Thunder when given modelType: "thunder"', async () => {
-    await createMoveNetDetector('thunder')
-
-    expect(createDetectorMock).toHaveBeenCalledWith(
-      poseDetection.SupportedModels.MoveNet,
-      { modelType: poseDetection.movenet.modelType.SINGLEPOSE_THUNDER },
-    )
+    expect(createDetectorMock).toHaveBeenCalledWith(poseDetection.SupportedModels.PoseNet)
   })
 
   it('maps a single-frame estimate to a PoseFrame using the shared fixture', async () => {
     estimatePoses.mockResolvedValue([
-      { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
+      { keypoints: POSENET_RAW_KEYPOINTS, score: 0.9 },
     ])
     const video = { currentTime: 12.5 } as HTMLVideoElement
 
-    const detector = await createMoveNetDetector()
+    const detector = await createPoseNetDetector()
     const frame = await detector.estimatePose(video)
 
     expect(estimatePoses).toHaveBeenCalledWith(video)
@@ -86,14 +72,14 @@ describe('createMoveNetDetector', () => {
     estimatePoses.mockResolvedValue([])
     const video = { currentTime: 3 } as HTMLVideoElement
 
-    const detector = await createMoveNetDetector()
+    const detector = await createPoseNetDetector()
     const frame = await detector.estimatePose(video)
 
     expect(frame).toBeNull()
   })
 
   it('dispose delegates to the underlying TF.js detector', async () => {
-    const detector = await createMoveNetDetector()
+    const detector = await createPoseNetDetector()
     detector.dispose()
 
     expect(dispose).toHaveBeenCalledTimes(1)

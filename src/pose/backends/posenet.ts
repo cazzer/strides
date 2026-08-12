@@ -1,26 +1,21 @@
-import '@tensorflow/tfjs-backend-webgl'
 import * as tf from '@tensorflow/tfjs-core'
 import * as poseDetection from '@tensorflow-models/pose-detection'
 import type { PoseDetector } from '../detector'
 import type { PoseFrame } from '../types'
 import { toPoseFrame } from './common'
 
-export type MoveNetModelType = 'lightning' | 'thunder'
-
-const MOVENET_MODEL_TYPES: Record<MoveNetModelType, string> = {
-  lightning: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
-  thunder: poseDetection.movenet.modelType.SINGLEPOSE_THUNDER,
-}
-
-export async function createMoveNetDetector(
-  modelType: MoveNetModelType = 'lightning',
-): Promise<PoseDetector> {
+/**
+ * No modelConfig passed — the library defaults to `MOBILENET_V1_CONFIG`
+ * (`posenet/constants.js`), same MobileNetV1/stride-16 preset TF's own examples use. PoseNet is
+ * MoveNet's older, superseded predecessor (see GitHub issue #26) — this backend exists for a
+ * lower-bound comparison, not as an accuracy candidate, so no reason to hand-tune its config.
+ */
+export async function createPoseNetDetector(): Promise<PoseDetector> {
   await tf.setBackend('webgl')
   await tf.ready()
 
   const rawDetector = await poseDetection.createDetector(
-    poseDetection.SupportedModels.MoveNet,
-    { modelType: MOVENET_MODEL_TYPES[modelType] },
+    poseDetection.SupportedModels.PoseNet,
   )
 
   return {

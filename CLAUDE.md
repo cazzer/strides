@@ -83,8 +83,13 @@ output.
 - `window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__` — partial
   `SamplingRobustnessConfig` (`src/results/samplingRobustnessConfig.ts`): keypoint-confidence
   filtering, interpolation gap tolerance, detection error tolerance, per-frame timeout.
-- Model-backend selection and math (`HeuristicsConfig`) selection don't have an override point
-  yet — deferred, see "Backlog" below.
+- `window.__STRIDES_POSE_BACKEND_OVERRIDE__` — partial `PoseDetectorConfig`
+  (`src/pose/poseBackendConfig.ts`): `{ backend: 'movenet' | 'blazepose' | 'posenet' |
+  'mediapipePoseLandmarker', movenetModelType?: 'lightning' | 'thunder' }`. `movenetModelType`
+  only matters when `backend: 'movenet'` (defaults to `'lightning'`); ignored otherwise. Read
+  once per detector creation in `usePoseDetector.ts`.
+- Math (`HeuristicsConfig`) selection doesn't have an override point yet — deferred, see
+  "Backlog" below.
 - **Set overrides with `page.addInitScript()`, not `page.evaluate()`.** Auto-analyze can start
   before an `evaluate()` call after `goto()` lands; `addInitScript()` guarantees the global
   exists before any page script runs, including before React mounts.
@@ -93,27 +98,91 @@ output.
 await page.addInitScript((override) => {
   window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = override
 }, { robustness: { minKeypointConfidence: 0.9 } })
+await page.addInitScript((backend) => {
+  window.__STRIDES_POSE_BACKEND_OVERRIDE__ = { backend }
+}, 'blazepose')
 await page.goto('http://localhost:5173')
 // ...drive the demo clip, capture [analysis-diagnostics] as above
 ```
 
-**Determinism caveat**: this pipeline is not bit-exact run-to-run even with identical input and
-config — GPU float non-associativity and minor frame-timing jitter produce small variance (e.g.
-74 vs. 75 detected frames across otherwise-identical trials, observed this session). For a real
-before/after comparison, run a few trials per variant and compare medians/ranges, not single
-runs.
+**Known issues — two of the four registered backends are broken (2026-08-11).** MoveNet is the
+only `@tensorflow-models/pose-detection` model in this installed version (`2.1.3`) confirmed
+working end-to-end in this environment; both non-MoveNet models from that same package fail, in
+different ways:
+- **`blazepose`** (`src/pose/backends/blazepose.ts`, `SupportedModels.BlazePose`, `runtime:
+  'tfjs'`) loads and runs — unit tests pass, model assets fetch fine — but live inference returns
+  `score: NaN` and `x/y/z: NaN` for every keypoint, every frame. Ruled out: GPU/WebGL float
+  precision (CPU backend reproduces it identically), model size (`lite` same as `full`), and the
+  stateful smoothing filter (`enableSmoothing: false` reproduces it too, and the symptom hits
+  frame 1 before filter state could accumulate). `pose-detection@2.1.3`'s declared peer range for
+  `tfjs-core` (`^4.10.0`) is satisfied by the installed `4.22.0`, so it isn't an obvious
+  declared-range version skew. Root cause not found — next things to try: a real (non-headless)
+  browser to rule out this specific Playwright/Chromium/macOS-ANGLE combination, or bisecting
+  `pose-detection` versions.
+- **`posenet`** (`src/pose/backends/posenet.ts`, `SupportedModels.PoseNet`) throws `Error: roi
+  width cannot be 0` (from the package's shared `shared/calculators/image_utils.js`
+  `validateSize`) on every single call to `estimatePoses`, tripping the app's
+  30-consecutive-failures abort within the first ~10s. Not investigated further — PoseNet is
+  MoveNet's superseded predecessor and was always a low-priority "if a lower baseline is useful"
+  backend (GitHub #26), not an accuracy candidate worth debugging a third-party ROI-calculator
+  bug for.
+
+**Working alternative — `mediapipePoseLandmarker`** (`src/pose/backends/mediapipePoseLandmarker.ts`,
+new `@mediapipe/tasks-vision` dependency). A different runtime entirely from the other three —
+MediaPipe's own WASM/GPU-delegate pipeline (`PoseLandmarker.detectForVideo`), not
+`@tensorflow-models/pose-detection`/`tfjs-core` — added specifically to sidestep the `blazepose`
+NaN bug, and it works: full analysis completes, all 7 metrics resolve. Not to be confused with
+the older, deprecated `@mediapipe/pose` package this repo already stubs out dead in
+`backends/__shims__/mediapipe-pose.ts` (unrelated package, still unused).
+
+**Pipeline comparison results (demo clip, 3 trials per variant, real GPU):**
+
+| | MoveNet Lightning (baseline) | MoveNet Thunder | MediaPipe PoseLandmarker |
+|---|---|---|---|
+| detectedFrames (median) | ~75-78 | 63 (one trial: 20 — cold-start-like anomaly, see below) | 57, identical all 3 trials |
+| detection ratio | ~0.34-0.35 | lower, more variable | ~0.26 |
+| view confidence | ~0.76-0.79 | 0.35-0.50 | ~0.68, identical all 3 trials |
+| run-to-run variance | normal (GPU float non-associativity) | high | near-zero — suspiciously more deterministic than the tfjs path |
+
+- **MoveNet Thunder is worse than Lightning here**, not better — lower coverage, lower confidence
+  on every metric, more variable. One Thunder trial sampled only 92 total frames vs. ~219-220 for
+  every other trial (all variants) — an anomaly not root-caused; possibly a heavier-model
+  cold-start effect distinct from the SwiftShader cold-start fluke below, not confirmed.
+- **MediaPipe PoseLandmarker disagrees with MoveNet on cadence and kneeFlexion specifically**
+  (166.7 steps/min vs. MoveNet's 107-125; ~100° vs. ~117-120°), while trunkLean and
+  footStrikePattern land close to MoveNet's values. Lower view confidence and detection ratio
+  than MoveNet Lightning. Whether MediaPipe or MoveNet is *more correct* on this clip is
+  unverified — no ground truth was established, this is a disagreement, not a verdict.
+- Full GitHub issues: #24 (MoveNet variant), #25 (MediaPipe Tasks Vision), #26 (PoseNet).
+
+**Determinism caveat**: the `tfjs-core` pipeline (MoveNet, BlazePose, PoseNet) is not bit-exact
+run-to-run even with identical input and config — GPU float non-associativity and minor
+frame-timing jitter produce small variance (e.g. 74 vs. 75 detected frames across
+otherwise-identical MoveNet trials, observed this session; much larger variance observed for
+MoveNet Thunder, see above). The MediaPipe Tasks Vision path was, by contrast, bit-identical
+across all 3 trials this session — not yet confirmed whether that holds in general or was
+coincidental to this clip/environment. For a real before/after comparison, run a few trials per
+variant and compare medians/ranges, not single runs.
 
 ## Backlog (assessed, not yet built)
 
-Two more iteration planes were scoped but deferred as of 2026-08-11 — same "bundle into one
-config, thread it through, dev-only override" pattern as the sampling/robustness plane above:
-- **Model/detection**: `src/pose/detector.ts` already has a backend registry
-  (`createDetector({ backend })`) — only `'movenet'` is wired up, and `movenet.ts` hardcodes
-  `SINGLEPOSE_LIGHTNING`. Needs the model/variant choice exposed as a runtime-selectable value,
-  not a second backend implementation (the registry already supports adding one later).
+One more iteration plane was scoped but deferred as of 2026-08-11 — same "bundle into one
+config, thread it through, dev-only override" pattern as the sampling/robustness and
+model-backend planes above:
 - **Math/heuristics**: `computeFormHeuristics` already takes a `HeuristicsConfig` — threshold
   iteration is free today, just needs the same override-point treatment for a harness to swap
   it without a code edit.
+
+Model/detection backend selection shipped 2026-08-11: `src/pose/detector.ts`'s registry now has
+`'movenet'`, `'blazepose'`, `'posenet'`, and `'mediapipePoseLandmarker'`, with a dev-only
+override point (`window.__STRIDES_POSE_BACKEND_OVERRIDE__`, see above). MoveNet's
+Lightning-vs-Thunder variant is exposed too, via the same override's `movenetModelType` field —
+tested, Thunder came out worse (see comparison results above). BlazePose's and MediaPipe
+PoseLandmarker's lite/full/heavy-equivalent variant selection is still hardcoded (`full`) —
+narrower follow-up if that granularity is ever needed. Status: `movenet` and
+`mediapipePoseLandmarker` work; `blazepose` and `posenet` are broken, see "Known issues" above.
+GitHub issues #24 (MoveNet variant — done, results recorded), #25 (MediaPipe Tasks Vision — done,
+works), #26 (PoseNet — done, confirmed broken, not worth further investment).
 
 Also flagged, not yet scoped: input preprocessing (resize/crop before detection — the actual
 root cause of this session's low-confidence demo-clip investigation, a 4K frame with the subject

@@ -1,10 +1,16 @@
 import { createMoveNetDetector } from './backends/movenet'
+import type { MoveNetModelType } from './backends/movenet'
+import { createBlazePoseDetector } from './backends/blazepose'
+import { createPoseNetDetector } from './backends/posenet'
+import { createMediaPipePoseLandmarkerDetector } from './backends/mediapipePoseLandmarker'
 import type { PoseFrame } from './types'
 
-export type PoseBackendId = 'movenet' // add 'blazepose' when that backend ships
+export type PoseBackendId = 'movenet' | 'blazepose' | 'posenet' | 'mediapipePoseLandmarker'
 
 export interface PoseDetectorConfig {
   backend: PoseBackendId
+  /** Only meaningful when backend: 'movenet'. Defaults to 'lightning'. */
+  movenetModelType?: MoveNetModelType
 }
 
 export interface PoseDetector {
@@ -12,8 +18,11 @@ export interface PoseDetector {
   dispose(): void
 }
 
-const backends: Record<PoseBackendId, () => Promise<PoseDetector>> = {
-  movenet: createMoveNetDetector,
+const backends: Record<PoseBackendId, (config: PoseDetectorConfig) => Promise<PoseDetector>> = {
+  movenet: (config) => createMoveNetDetector(config.movenetModelType),
+  blazepose: () => createBlazePoseDetector(),
+  posenet: () => createPoseNetDetector(),
+  mediapipePoseLandmarker: () => createMediaPipePoseLandmarkerDetector(),
 }
 
 // Intentionally not `async`: an async function can never throw synchronously to its
@@ -26,5 +35,5 @@ export function createDetector(
   if (!createBackendDetector) {
     throw new Error(`Unknown pose detector backend: ${config.backend}`)
   }
-  return createBackendDetector()
+  return createBackendDetector(config)
 }

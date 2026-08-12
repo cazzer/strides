@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createDetector } from './detector'
 import type { PoseDetector } from './detector'
+import { resolvePoseDetectorConfig } from './poseBackendConfig'
 
 export type PoseDetectorStatus = 'loading' | 'ready' | 'error'
 
@@ -27,7 +28,7 @@ export function usePoseDetector(): SharedPoseDetector {
   const getDetector = useCallback(async (): Promise<PoseDetector | null> => {
     if (detectorRef.current) return detectorRef.current
     if (!detectorPromiseRef.current) {
-      detectorPromiseRef.current = createDetector({ backend: 'movenet' })
+      detectorPromiseRef.current = createDetector(resolvePoseDetectorConfig())
     }
     try {
       const created = await detectorPromiseRef.current

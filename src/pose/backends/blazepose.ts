@@ -1,26 +1,22 @@
-import '@tensorflow/tfjs-backend-webgl'
 import * as tf from '@tensorflow/tfjs-core'
 import * as poseDetection from '@tensorflow-models/pose-detection'
 import type { PoseDetector } from '../detector'
 import type { PoseFrame } from '../types'
 import { toPoseFrame } from './common'
 
-export type MoveNetModelType = 'lightning' | 'thunder'
-
-const MOVENET_MODEL_TYPES: Record<MoveNetModelType, string> = {
-  lightning: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
-  thunder: poseDetection.movenet.modelType.SINGLEPOSE_THUNDER,
-}
-
-export async function createMoveNetDetector(
-  modelType: MoveNetModelType = 'lightning',
-): Promise<PoseDetector> {
+/**
+ * `runtime: 'tfjs'`, not `'mediapipe'` — the mediapipe runtime needs the real `@mediapipe/pose`
+ * package (WASM assets, non-bundler-friendly build), which this app deliberately stubs out at
+ * build time (see `backends/__shims__/mediapipe-pose.ts`) because nothing was meant to use it.
+ * The tfjs runtime gets BlazePose on the same plain-TFJS path MoveNet already uses.
+ */
+export async function createBlazePoseDetector(): Promise<PoseDetector> {
   await tf.setBackend('webgl')
   await tf.ready()
 
   const rawDetector = await poseDetection.createDetector(
-    poseDetection.SupportedModels.MoveNet,
-    { modelType: MOVENET_MODEL_TYPES[modelType] },
+    poseDetection.SupportedModels.BlazePose,
+    { runtime: 'tfjs', modelType: 'full' },
   )
 
   return {
