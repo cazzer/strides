@@ -53,8 +53,9 @@ interface SideSwing {
 }
 
 /**
- * Per-side wrist-relative-to-shoulder vertical (image-y) excursion, reusing the exact
- * amplitude-via-extrema approach `verticalOscillation.ts` uses for hip bounce. Vertical, not
+ * Per-side wrist-relative-to-shoulder vertical (image-y) excursion, read as paired extrema via the
+ * shared `findLocalExtrema` primitive (the approach `verticalOscillation.ts` used for hip bounce
+ * before it moved to a spectral sinusoid fit — see `spectralFit.ts`). Vertical, not
  * horizontal or angular, and wrist rather than elbow, per design.md's reasoning: the sagittal
  * shoulder-flexion rotation that drives arm swing is foreshortened face-on (this metric's primary
  * view), but the coupled elbow-flexion rise/fall of the forearm toward the chest on the forward
@@ -80,9 +81,9 @@ function computeSideSwing(
 
   const extrema = findLocalExtrema(series, minProminenceAbs)
 
-  // Pair consecutive opposite-kind extrema into half-cycle amplitudes — same logic as
-  // verticalOscillation.ts: two runs separated by an unrecoverable gap could both end/start on
-  // the same kind, and pairing those would fabricate an amplitude that was never observed.
+  // Pair consecutive opposite-kind extrema into half-cycle amplitudes. The same-kind skip is
+  // load-bearing: two runs separated by an unrecoverable gap could both end/start on the same
+  // kind, and pairing those would fabricate an amplitude that was never observed.
   const amplitudesPx: number[] = []
   for (let i = 1; i < extrema.length; i += 1) {
     if (extrema[i].kind === extrema[i - 1].kind) continue

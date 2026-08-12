@@ -67,6 +67,28 @@ describe('computeMetricConfidence', () => {
     expect(computeMetricConfidence(withoutTravelDirection)).toBeCloseTo(1)
   })
 
+  it('defaults fitQuality to 1 when omitted', () => {
+    // BASE deliberately omits it — every metric that doesn't fit a model to its signal must be
+    // unaffected by this factor existing.
+    expect(computeMetricConfidence(BASE)).toBeCloseTo(1)
+  })
+
+  it('multiplies in fit quality directly', () => {
+    expect(computeMetricConfidence({ ...BASE, fitQuality: 0.6 })).toBeCloseTo(0.6)
+  })
+
+  it('compounds fit quality with the other factors rather than overriding them', () => {
+    // 0.85 * 1 * 1 * 1 * 1 * 0.75 = 0.6375
+    expect(
+      computeMetricConfidence({ ...BASE, viewFitMultiplier: 0.85, fitQuality: 0.75 }),
+    ).toBeCloseTo(0.6375)
+  })
+
+  it('clamps an out-of-range fitQuality along with everything else', () => {
+    expect(computeMetricConfidence({ ...BASE, fitQuality: 3 })).toBe(1)
+    expect(computeMetricConfidence({ ...BASE, fitQuality: -2 })).toBe(0)
+  })
+
   it('compounds multiple moderate penalties into a lower overall confidence', () => {
     const result = computeMetricConfidence({
       ...BASE,

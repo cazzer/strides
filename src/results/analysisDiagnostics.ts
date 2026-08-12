@@ -2,7 +2,12 @@ import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 import type { KeypointName } from '../pose/types'
 import type { PoseSample } from '../pose/robustness/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
-import type { FormHeuristicsResult, MetricId, ViewFit } from '../heuristics/types'
+import type {
+  FormHeuristicsResult,
+  MetricId,
+  VerticalOscillationFit,
+  ViewFit,
+} from '../heuristics/types'
 import type { ScaleCalibratedVerticalOscillation } from '../heuristics/verticalOscillationCm'
 
 export interface KeypointResolutionStats {
@@ -30,6 +35,11 @@ export interface AnalysisDiagnostics {
   view: FormHeuristicsResult['view']
   keypoints: Record<KeypointName, KeypointResolutionStats>
   metrics: Record<MetricId, MetricDiagnostics>
+  /** Vertical oscillation's spectral-fit internals — fitted frequency, fit quality, cycle count.
+   * `null` whenever that metric reported no value, per its own `fit`/`value` invariant. Broken out
+   * rather than folded into `metrics.verticalOscillation` because `MetricDiagnostics` is uniform
+   * across all seven metrics on purpose, and only this one has a fit behind it. */
+  verticalOscillationFit: VerticalOscillationFit | null
   /**
    * Present only when the detection backend measured a real-world scale (today: MediaPipe Pose
    * Landmarker). The key is ABSENT — not `null`, not `undefined` — on every other backend, so a
@@ -96,6 +106,7 @@ export function computeAnalysisDiagnostics(
     view: heuristics.view,
     keypoints,
     metrics,
+    verticalOscillationFit: heuristics.verticalOscillation.fit,
     // Conditional spread, not `scaleCalibration: scaleCalibration ?? undefined`: an explicitly
     // `undefined` property is still a present key to `toStrictEqual`/`in`, and "this backend
     // doesn't measure scale" has to be indistinguishable from the pre-existing output shape.

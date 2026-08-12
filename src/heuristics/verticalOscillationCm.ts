@@ -1,10 +1,17 @@
 import type { RobustPoseFrame } from '../pose/robustness/types'
-import { DEFAULT_HEURISTICS_CONFIG } from './types'
-import type { HeuristicsConfig } from './types'
 import { estimateBodyScale } from './bodyScale'
 import { resolveMidpoint } from './keypoints'
 import { findLocalExtrema } from './extrema'
 import { median } from './mathUtils'
+
+/**
+ * Extremum prominence threshold as a fraction of torso length. Inherited from the pixel VO
+ * metric's old `verticalOscillationMinProminenceRatio` config default (0.03), which was deleted
+ * when that metric moved to a spectral fit — this module is now the only extrema-pairing VO
+ * estimator, so the threshold is its private policy (module-constant precedent: see
+ * MIN_CADENCE_SAMPLE_SIZE and friends).
+ */
+const CM_MIN_PROMINENCE_TORSO_RATIO = 0.03
 
 export interface ScaleCalibratedVerticalOscillation {
   /** Median half-cycle bounce amplitude in centimetres; null when no half-cycle was detected. */
@@ -198,7 +205,6 @@ function estimateAmplitudes(
  */
 export function computeVerticalOscillationCm(
   frames: RobustPoseFrame[],
-  config: HeuristicsConfig = DEFAULT_HEURISTICS_CONFIG,
 ): ScaleCalibratedVerticalOscillation | null {
   const scales = collectScales(frames)
   if (scales.length === 0) return null
@@ -208,14 +214,18 @@ export function computeVerticalOscillationCm(
 
   // The pixel-space prominence threshold, expressed in metres so it means the same thing against
   // the converted series — which keeps this calculation detecting the same cycles the pixel path
-  // detects under a constant scale. Without a body-scale reference there's no threshold to
+  // detected under a constant scale. Without a body-scale reference there's no threshold to
   // convert, so nothing can be measured.
+  //
+  // The 0.03 torso-length ratio was `verticalOscillationMinProminenceRatio` until the pixel VO
+  // metric moved to a spectral fit and deleted that config key (its extrema path no longer
+  // exists). This module still pairs extrema, so the threshold lives on here as its own policy
+  // constant rather than resurrecting a config key only one calculation reads.
   const torsoLengthPx = bodyScale?.torsoLengthPx ?? null
   const minProminenceMeters =
     torsoLengthPx === null
       ? null
-      : (config.verticalOscillationMinProminenceRatio * torsoLengthPx) /
-        medianPixelsPerMeter
+      : (CM_MIN_PROMINENCE_TORSO_RATIO * torsoLengthPx) / medianPixelsPerMeter
 
   const runs = buildRuns(frames)
   const amplitudesPerRun =

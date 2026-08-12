@@ -42,6 +42,7 @@ function makeHeuristics(overrides: Partial<FormHeuristicsResult> = {}): FormHeur
       sampleSize: 10,
       caveat: null,
       series: [],
+      fit: null,
     },
     trunkLean: makeMetric({ metric: 'trunkLean' }),
     overstriding: makeMetric({ metric: 'overstriding', unit: 'ratio' }),
@@ -155,6 +156,33 @@ describe('computeAnalysisDiagnostics', () => {
     )
     // 'view' is not a metric -- must not leak into the metrics map.
     expect('view' in diagnostics.metrics).toBe(false)
+  })
+
+  it("passes through vertical oscillation's spectral fit verbatim", () => {
+    const fit = {
+      frequencyHz: 2.84,
+      peakToPeakAmplitudePx: 33.2,
+      sinusoidR2: 0.72,
+      totalR2: 0.98,
+      secondPeakRatio: 0.21,
+      sampleCount: 84,
+      spanSeconds: 3.9,
+      observedCycles: 11.08,
+    }
+    const heuristics = makeHeuristics()
+    const diagnostics = computeAnalysisDiagnostics(
+      [],
+      [],
+      { ...heuristics, verticalOscillation: { ...heuristics.verticalOscillation, fit } },
+    )
+
+    expect(diagnostics.verticalOscillationFit).toBe(fit)
+  })
+
+  it('reports a null spectral fit when vertical oscillation produced no value', () => {
+    // The metric's own invariant: no value means no fit, and the diagnostics must not invent one.
+    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics())
+    expect(diagnostics.verticalOscillationFit).toBeNull()
   })
 
   it('handles empty samples and frames without throwing', () => {

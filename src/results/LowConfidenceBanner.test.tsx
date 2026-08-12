@@ -42,6 +42,7 @@ function makeHeuristics(
       sampleSize: 10,
       caveat: null,
       series: [],
+      fit: null,
     },
     trunkLean: makeMetric({ metric: 'trunkLean' }),
     overstriding: makeMetric({ metric: 'overstriding', unit: 'ratio' }),

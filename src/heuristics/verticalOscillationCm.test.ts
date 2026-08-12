@@ -66,10 +66,14 @@ describe('computeVerticalOscillationCm', () => {
     expect(pixelPath.value).not.toBeNull()
     expect(result).not.toBeNull()
     // The pixel path reports a fraction of torso length; converting it by hand through the same
-    // constant scale must land on the same centimetres, over the same half-cycles.
+    // constant scale must land on the same centimetres.
     const expectedCm = ((pixelPath.value ?? 0) * FIXTURE_TORSO_PX * 100) / scale
     expect(result?.verticalOscillationCm).toBeCloseTo(expectedCm, 9)
-    expect(result?.sampleSize).toBe(pixelPath.sampleSize)
+    // The two sampleSize fields count different things since the pixel metric moved to a
+    // spectral fit: this module reports paired half-cycle amplitudes, the pixel metric reports
+    // complete fitted cycles — equality is no longer expected, only that this fixture's
+    // deterministic half-cycle count comes out in full.
+    expect(result?.sampleSize).toBe(7)
     // 30px peak-to-trough / 300 px per metre = 0.1m.
     expect(result?.verticalOscillationCm).toBeCloseTo(10, 9)
   })
