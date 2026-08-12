@@ -13,6 +13,8 @@ export interface MetricsPanelProps {
 const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
   verticalOscillation:
     'How much your hips bounce up and down with each stride, relative to your torso length.',
+  verticalRatio:
+    "How much you bounce up and down relative to how far you travel each stride. This is the same concept a running watch calls 'vertical ratio', though this figure has not been validated against a watch reading.",
   trunkLean:
     'How far your torso leans forward or backward relative to your direction of travel.',
   overstriding:
@@ -98,7 +100,7 @@ function MetricCard({ metric, chart }: MetricCardProps) {
 }
 
 /**
- * Numeric readouts for all seven form heuristics, each with a plain-language label and a
+ * Numeric readouts for all eight form heuristics, each with a plain-language label and a
  * confidence/applicability indicator. A flagged metric (`value: null`, low confidence, or
  * `viewFit: 'unsuitable'`) gets a visibly different treatment — never color alone: the
  * confidence label text itself changes ("Low confidence" / "Not measurable"), the camera-angle
@@ -117,6 +119,7 @@ export function MetricsPanel({ heuristics }: MetricsPanelProps) {
         metric={heuristics.verticalOscillation}
         chart={<VerticalOscillationChart series={heuristics.verticalOscillation.series} />}
       />
+      <MetricCard metric={heuristics.verticalRatio} />
       <MetricCard metric={heuristics.trunkLean} />
       <MetricCard metric={heuristics.overstriding} />
       <MetricCard metric={heuristics.cadence} />

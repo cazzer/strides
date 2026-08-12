@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { computeFormHeuristics } from './index'
 import { detectView } from './viewDetection'
+import { estimateStrideLength } from './strideLength'
+import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 
 const PARAMS = {
@@ -21,12 +23,14 @@ describe('computeFormHeuristics', () => {
 
     expect(result.view.view).toBe('side')
     expect(result.verticalOscillation.metric).toBe('verticalOscillation')
+    expect(result.verticalRatio.metric).toBe('verticalRatio')
     expect(result.trunkLean.metric).toBe('trunkLean')
     expect(result.overstriding.metric).toBe('overstriding')
     expect(result.cadence.metric).toBe('cadence')
     expect(result.footStrikePattern.metric).toBe('footStrikePattern')
 
     expect(result.verticalOscillation.value).not.toBeNull()
+    expect(result.verticalRatio.value).not.toBeNull()
     expect(result.trunkLean.value).not.toBeNull()
     expect(result.overstriding.value).not.toBeNull()
     expect(result.cadence.value).not.toBeNull()
@@ -40,6 +44,7 @@ describe('computeFormHeuristics', () => {
 
     // Every metric was gated using the same detected view, not recomputed independently.
     expect(result.verticalOscillation.viewFit).toBe('primary')
+    expect(result.verticalRatio.viewFit).toBe('primary')
     expect(result.trunkLean.viewFit).toBe('primary')
     expect(result.overstriding.viewFit).toBe('primary')
     expect(result.cadence.viewFit).toBe('primary')
@@ -75,6 +80,30 @@ describe('computeFormHeuristics', () => {
     expect(result.cadence.sampleSize).toBe(result.verticalOscillation.sampleSize)
   })
 
+  it('vertical ratio and vertical oscillation agree exactly, since both read the identical shared hip-bounce fit', () => {
+    // D2/D6's drift guard (openspec/changes/add-vertical-ratio-metric/design.md): verticalRatio.ts
+    // always reads the hip-pinned analyzeHipBounce fit -- the SAME fit verticalOscillation.ts uses
+    // under the DEFAULT config (verticalOscillationSignal: 'hipMid'). This is default-config-scoped
+    // deliberately: an earMid VO-signal override would split verticalOscillation's fit from
+    // verticalRatio's hip-pinned one, by design (verticalRatio never follows that setting -- see
+    // verticalRatio.ts's module doc) -- so this equality would no longer hold under that override,
+    // and that's correct, not a bug to guard against here.
+    const frames = generateSyntheticGait(PARAMS)
+
+    const result = computeFormHeuristics(frames)
+    const stride = estimateStrideLength(frames, DEFAULT_HEURISTICS_CONFIG)
+
+    expect(result.verticalRatio.value).not.toBeNull()
+    expect(result.verticalOscillation.fit).not.toBeNull()
+    expect(stride.ok).toBe(true)
+    if (!stride.ok) return
+
+    expect(result.verticalRatio.value).toBe(
+      result.verticalOscillation.fit!.peakToPeakAmplitudePx / stride.strideLengthPx,
+    )
+    expect(result.verticalRatio.sampleSize).toBe(stride.pairCount)
+  })
+
   it('produces the same view label and per-metric results as calling detectView + each metric directly', () => {
     const frames = generateSyntheticGait(PARAMS)
 
@@ -84,7 +113,7 @@ describe('computeFormHeuristics', () => {
     expect(orchestrated.view).toEqual(standaloneView)
   })
 
-  it('gates all seven metrics consistently off an ambiguous view', () => {
+  it('gates all eight metrics consistently off an ambiguous view', () => {
     const frames = generateSyntheticGait({
       ...PARAMS,
       strideAmplitudePx: 20, // engineered BSR/SER disagreement, see viewDetection.test.ts
@@ -94,6 +123,11 @@ describe('computeFormHeuristics', () => {
 
     expect(result.view.view).toBe('ambiguous')
     expect(result.verticalOscillation.viewFit).toBe('tolerated')
+    // verticalRatio is hard-gated like trunkLean/overstriding, NOT view-tolerant like
+    // verticalOscillation, despite sharing its numerator with it — see types.ts's doc on
+    // viewFitTable.verticalRatio for why (a view-tolerant numerator paired with a
+    // view-degenerate denominator is worse than either alone).
+    expect(result.verticalRatio.viewFit).toBe('unsuitable')
     expect(result.trunkLean.viewFit).toBe('unsuitable')
     expect(result.overstriding.viewFit).toBe('unsuitable')
     // Cadence is view-tolerant like verticalOscillation, not hard-gated like trunkLean/
@@ -109,12 +143,14 @@ describe('computeFormHeuristics', () => {
 
     expect(result.view.view).toBe('ambiguous')
     expect(result.verticalOscillation.value).toBeNull()
+    expect(result.verticalRatio.value).toBeNull()
     expect(result.trunkLean.value).toBeNull()
     expect(result.overstriding.value).toBeNull()
     expect(result.cadence.value).toBeNull()
     expect(result.armSwingSymmetry.value).toBeNull()
     expect(result.footStrikePattern.value).toBeNull()
     expect(result.verticalOscillation.confidence).toBe(0)
+    expect(result.verticalRatio.confidence).toBe(0)
     expect(result.trunkLean.confidence).toBe(0)
     expect(result.overstriding.confidence).toBe(0)
     expect(result.cadence.confidence).toBe(0)

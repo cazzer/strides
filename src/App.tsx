@@ -51,7 +51,7 @@ export function App() {
         </div>
         {/*
           Results column: bounded to the remaining viewport height below the header and
-          scrolls independently at `lg`+, so a tall metrics list (seven cards) never pushes
+          scrolls independently at `lg`+, so a tall metrics list (eight cards) never pushes
           the video out of view.
         */}
         <div className="lg:max-h-[calc(100vh-86px)] lg:overflow-y-auto">

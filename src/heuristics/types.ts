@@ -34,6 +34,7 @@ export type ViewFit = 'primary' | 'tolerated' | 'unsuitable'
 
 export type MetricId =
   | 'verticalOscillation'
+  | 'verticalRatio'
   | 'trunkLean'
   | 'overstriding'
   | 'cadence'
@@ -60,10 +61,11 @@ export interface MetricResult {
   value: number | null
   /** 'ratio'/'degrees' are torso-length- or angle-relative, per the metric that produces them.
    * 'stepsPerMinute' is cadence's own physical unit. 'percent' is a dimensionless 0..1 comparison
-   * (currently just armSwingSymmetry's min(left,right)/max(left,right)) that is NOT a fraction of
-   * torso length — kept distinct from 'ratio' specifically because `formatValue` in
-   * MetricsPanel.tsx bakes "% of torso length" into 'ratio''s formatting, which would misstate a
-   * dimensionless ratio. */
+   * that is NOT a fraction of torso length — kept distinct from 'ratio' specifically because
+   * `formatValue` in MetricsPanel.tsx bakes "% of torso length" into 'ratio''s formatting, which
+   * would misstate a dimensionless ratio. Two metrics use it: armSwingSymmetry's
+   * min(left,right)/max(left,right), and verticalRatio's bounce/strideLength (both pixel-space
+   * ratios where real-world scale cancels — see verticalRatio.ts's module doc). */
   unit: 'ratio' | 'degrees' | 'stepsPerMinute' | 'percent'
   /** 0..1; forced 0 when value is null. */
   confidence: number
@@ -77,7 +79,10 @@ export interface MetricResult {
    * a full gait cycle, not a full gait cycle itself. For cadence specifically that count is
    * directly a step count, not a footstrike-detection count the way it was before this metric
    * moved off `detectFootstrikes`. Neither metric counts the half-BOUNCE-cycles an older
-   * extrema-pairing estimator used to report. */
+   * extrema-pairing estimator used to report. Vertical ratio's numerator reads that same shared
+   * fit, but its own `sampleSize` is NOT the bounce-cycle count — it's the stride-PAIR count from
+   * its own `estimateStrideLength` extractor (same-side consecutive-footstrike pairs), the sample
+   * its median (the ratio's denominator) actually aggregates over — see `verticalRatio.ts`. */
   sampleSize: number
   /** Non-null for degraded/low-confidence results across every metric. `footStrikePattern` is the
    * one deliberate exception: it is a proxy (ankle-relative-to-knee position, not a direct
@@ -137,6 +142,7 @@ export interface VerticalOscillationResult extends MetricResult {
 export interface FormHeuristicsResult {
   view: ViewDetectionResult
   verticalOscillation: VerticalOscillationResult
+  verticalRatio: MetricResult
   trunkLean: MetricResult
   overstriding: MetricResult
   cadence: MetricResult
@@ -285,6 +291,25 @@ export const DEFAULT_VIEW_FIT_TABLE: HeuristicsConfig['viewFitTable'] = {
     side: { fit: 'primary', multiplier: 1.0 },
     front: { fit: 'tolerated', multiplier: 0.85 },
     ambiguous: { fit: 'tolerated', multiplier: 0.6 },
+  },
+  /**
+   * Argued from stride OBSERVABILITY, not copied from trunkLean's/overstriding's identical-
+   * looking numbers (though they land the same) — see
+   * `openspec/changes/add-vertical-ratio-metric/design.md` D4 for the full reasoning. The
+   * numerator (hip bounce, from the same fit `verticalOscillation` uses) is view-TOLERANT; the
+   * denominator (stride length, a fore-aft/sagittal displacement) is not — it foreshortens toward
+   * zero away from a side-on camera angle, which INFLATES the ratio (a shrunk denominator) rather
+   * than just adding noise. A view-tolerant numerator paired with a view-degenerate denominator is
+   * worse than either alone: it produces a confidently-wrong number, not an obviously-degraded
+   * one, so `'unsuitable'` (matching the hard-gated sagittal metrics) is the only honest
+   * classification. `ambiguous` gets the same 0.2 (vs. front's 0.1) every other hard-gated
+   * sagittal metric uses, for the identical reason: an ambiguous view is weaker evidence against
+   * the metric than a confidently-front one.
+   */
+  verticalRatio: {
+    side: { fit: 'primary', multiplier: 1.0 },
+    front: { fit: 'unsuitable', multiplier: 0.1 },
+    ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
   },
   trunkLean: {
     side: { fit: 'primary', multiplier: 1.0 },

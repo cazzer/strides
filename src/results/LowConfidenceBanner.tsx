@@ -1,19 +1,22 @@
-import type { FormHeuristicsResult } from '../heuristics/types'
+import type { FormHeuristicsResult, MetricId } from '../heuristics/types'
 import { METRIC_LABELS, isMetricFlagged } from './metricConfidence'
 
 export interface LowConfidenceBannerProps {
   heuristics: FormHeuristicsResult
 }
 
-const METRIC_IDS = [
-  'verticalOscillation',
-  'trunkLean',
-  'overstriding',
-  'cadence',
-  'kneeFlexion',
-  'armSwingSymmetry',
-  'footStrikePattern',
-] as const
+/**
+ * Derived from `METRIC_LABELS`'s keys rather than hand-written: `METRIC_LABELS` is typed
+ * `Record<MetricId, string>`, so the compiler already enforces it has exactly one entry per
+ * `MetricId` — adding a metric to `MetricId` without adding it to `METRIC_LABELS` is a type error
+ * today. Deriving this list from those keys makes it impossible for the banner to silently omit a
+ * metric the way a second hand-written list (the previous shape of this constant) could.
+ * `Object.keys` iterates own enumerable string keys in insertion order, and `METRIC_LABELS` is
+ * declared in the same family-adjacent order every other `MetricId` enumeration in this codebase
+ * uses, so this is behavior-identical to the prior hand-written array — only the maintenance
+ * burden moves.
+ */
+const METRIC_IDS = Object.keys(METRIC_LABELS) as MetricId[]
 
 /**
  * Pure function of `heuristics` — no hook, no lifecycle. Renders nothing unless at least one

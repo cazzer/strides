@@ -31,6 +31,7 @@ function makeHeuristics(): FormHeuristicsResult {
       series: [{ timestamp: 0, value: 0.1 }],
       fit: null,
     },
+    verticalRatio: { ...base, metric: 'verticalRatio', value: 0.08, unit: 'percent' },
     trunkLean: { ...base, metric: 'trunkLean', value: 5, unit: 'degrees' },
     overstriding: { ...base, metric: 'overstriding', value: 0.1 },
     cadence: { ...base, metric: 'cadence', value: 170, unit: 'stepsPerMinute' },
