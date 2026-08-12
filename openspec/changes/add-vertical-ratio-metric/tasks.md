@@ -136,6 +136,26 @@
       `overstriding`'s caveat in the same diagnostics dump (divergence between the two metrics'
       travel-direction reads is a finding to report, not silently patch).
 
+      **Live results (recorded at review — the implementation run and an independent review
+      run, same machine, real GPU, MoveNet default):**
+
+      Implementation run, track clip, 5 trials: `verticalRatio.value` = 0.0598 / 0.0578 /
+      0.0657 / 0.0692 / 0.0725 (median **0.0657**, inside [0.04, 0.12]); `pairCount` = 3 on
+      every trial; derived stride px = 1102 / 1097 / 1109 / 1107 / 1047. Park clip, 5 trials:
+      `value === null` with the exact caveat prefix every trial; `overstriding` gated
+      identically (no divergence). Other seven metrics within previously recorded spreads
+      (VO 0.15–0.18, cadence 92–103 spm, ~75–76 detected frames).
+
+      Independent review run, track clip, 3 trials: 0.0712 / 0.0683 / 0.0721 (median 0.0712);
+      `pairCount` = 3 all trials; derived stride ≈ 1059–1111 px; stride/torso ≈ 2.5–2.6 —
+      self-consistent with a slow jog (cadence 92–95 spm in the same dumps), arguing against a
+      doubling artifact. Park: null all 3 trials, exact caveat.
+
+      **⚠ D3 upgrade trigger FIRED**: `pairCount` sat at exactly `MIN_STRIDE_PAIRS` (3) on all
+      8 track trials across both runs — never comfortably above the floor. Follow-up decision
+      needed (raise the minimum, or implement one of D3's deferred gap-tolerance mitigations);
+      see design.md D3.
+
 ## 10. Commit
 
 - [x] 10.1 Commit with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` trailer. No push,

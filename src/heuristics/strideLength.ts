@@ -85,6 +85,12 @@ const HIP_NAMES: [KeypointName, KeypointName] = ['left_hip', 'right_hip']
  * reads LOW (a runner would look like they bounce less, per stride, than they actually do).
  * Direction matters for anyone debugging a ratio that looks implausibly good.
  *
+ * A second, subtler bias runs the other way: the `d > 0` filter truncates the noise
+ * distribution for pairs whose TRUE displacement is near zero (a hesitant stride, mid-clip
+ * deceleration) — keeping only the positive measurements of a near-zero quantity biases the
+ * kept values upward. Immaterial on clips where real strides (~1000px) dwarf hip jitter, but
+ * worth knowing on slow or stop-start footage.
+ *
  * Two gap-tolerance mitigations were considered and rejected for now (not because they're wrong
  * in principle, but because neither has a calibration trigger yet):
  *
