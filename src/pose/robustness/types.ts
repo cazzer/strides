@@ -36,6 +36,18 @@ export interface RobustPoseFrame {
   keypoints: RobustKeypoint[]
   /** 'missing' iff the detector returned null for this sample. */
   source: FrameSource
+  /**
+   * Copied verbatim from `PoseSample.frame.pixelsPerMeter`; `null` when the sample had no frame,
+   * or the frame carried no scale (either the backend doesn't measure it, or that one frame's
+   * measurement wasn't trustworthy).
+   *
+   * NEVER interpolated, extrapolated, or smoothed — not even on frames whose keypoint positions
+   * this layer *does* gap-fill. A fabricated position is an approximation of the signal; a
+   * fabricated scale is a wrong conversion factor applied to a real signal, which corrupts every
+   * real-world measurement derived from it without looking like a gap. Required-nullable rather
+   * than optional so every construction site (fixtures included) has to state what it means.
+   */
+  pixelsPerMeter: number | null
 }
 
 export interface RobustnessConfig {

@@ -3,6 +3,7 @@ import type { KeypointName } from '../pose/types'
 import type { PoseSample } from '../pose/robustness/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { FormHeuristicsResult, MetricId, ViewFit } from '../heuristics/types'
+import type { ScaleCalibratedVerticalOscillation } from '../heuristics/verticalOscillationCm'
 
 export interface KeypointResolutionStats {
   detected: number
@@ -29,6 +30,17 @@ export interface AnalysisDiagnostics {
   view: FormHeuristicsResult['view']
   keypoints: Record<KeypointName, KeypointResolutionStats>
   metrics: Record<MetricId, MetricDiagnostics>
+  /**
+   * Present only when the detection backend measured a real-world scale (today: MediaPipe Pose
+   * Landmarker). The key is ABSENT — not `null`, not `undefined` — on every other backend, so a
+   * MoveNet run serializes to exactly the JSON it did before this existed, and a harness can test
+   * `'scaleCalibration' in diagnostics` to tell "not measured" from "measured nothing".
+   *
+   * Unlike every other field here, this one reflects the presence-trimmed window (the same frames
+   * `computeFormHeuristics` sees) rather than the full clip — it has to, for its figures to be
+   * comparable with the metrics it sits alongside.
+   */
+  scaleCalibration?: ScaleCalibratedVerticalOscillation
 }
 
 function emptyKeypointStats(): Record<KeypointName, KeypointResolutionStats> {
@@ -48,6 +60,7 @@ export function computeAnalysisDiagnostics(
   samples: PoseSample[],
   robustFrames: RobustPoseFrame[],
   heuristics: FormHeuristicsResult,
+  scaleCalibration?: ScaleCalibratedVerticalOscillation | null,
 ): AnalysisDiagnostics {
   const detectedFrames = samples.filter((s) => s.frame !== null).length
 
@@ -83,5 +96,9 @@ export function computeAnalysisDiagnostics(
     view: heuristics.view,
     keypoints,
     metrics,
+    // Conditional spread, not `scaleCalibration: scaleCalibration ?? undefined`: an explicitly
+    // `undefined` property is still a present key to `toStrictEqual`/`in`, and "this backend
+    // doesn't measure scale" has to be indistinguishable from the pre-existing output shape.
+    ...(scaleCalibration == null ? {} : { scaleCalibration }),
   }
 }

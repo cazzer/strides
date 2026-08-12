@@ -14,6 +14,12 @@ export interface SyntheticGaitParams {
   /** Constant forward lean angle, in degrees (only expressed in the 'side' geometry). */
   trunkLeanDeg: number
   view: 'side' | 'front'
+  /**
+   * Real-world scale attached to every generated frame. Omitted (→ `null` per frame) by default,
+   * matching every backend except MediaPipe. A function form lets a test generate a *drifting*
+   * scale (the camera-approach case) without hand-building frames.
+   */
+  pixelsPerMeter?: number | ((t: number, frameIndex: number) => number | null)
 }
 
 /**
@@ -84,7 +90,15 @@ export function generateSyntheticGait(params: SyntheticGaitParams): RobustPoseFr
     verticalBouncePx,
     trunkLeanDeg,
     view,
+    pixelsPerMeter,
   } = params
+
+  const scaleAt = (t: number, frameIndex: number): number | null => {
+    if (pixelsPerMeter === undefined) return null
+    return typeof pixelsPerMeter === 'function'
+      ? pixelsPerMeter(t, frameIndex)
+      : pixelsPerMeter
+  }
 
   // 2 steps (left + right) per full stride.
   const strideFreqHz = cadenceStepsPerMin / 120
@@ -164,7 +178,12 @@ export function generateSyntheticGait(params: SyntheticGaitParams): RobustPoseFr
       }
     })
 
-    frames.push({ timestamp: t, keypoints, source: 'detected' })
+    frames.push({
+      timestamp: t,
+      keypoints,
+      source: 'detected',
+      pixelsPerMeter: scaleAt(t, i),
+    })
   }
 
   return frames

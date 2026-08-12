@@ -59,6 +59,7 @@ function makeRobustFrame(
   return {
     timestamp: 0,
     source: 'detected',
+    pixelsPerMeter: null,
     keypoints: COMMON_KEYPOINT_NAMES.map((name) => {
       const status = overrides[name] ?? 'detected'
       return {
@@ -171,5 +172,37 @@ describe('computeAnalysisDiagnostics', () => {
       interpolated: 0,
       unrecoverable: 0,
     })
+  })
+
+  it('omits scaleCalibration entirely when none was computed', () => {
+    const omitted = computeAnalysisDiagnostics([], [], makeHeuristics())
+    const explicitlyNull = computeAnalysisDiagnostics([], [], makeHeuristics(), null)
+
+    // `in`, not a null/undefined comparison: a MoveNet run has to serialize to exactly the JSON it
+    // did before this key existed, so "absent" and "present but empty" are different outcomes.
+    expect('scaleCalibration' in omitted).toBe(false)
+    expect('scaleCalibration' in explicitlyNull).toBe(false)
+    expect(JSON.stringify(omitted)).toBe(JSON.stringify(explicitlyNull))
+  })
+
+  it('surfaces a supplied scaleCalibration verbatim', () => {
+    const scaleCalibration = {
+      verticalOscillationCm: 6.07,
+      sampleSize: 9,
+      scaleDriftRatio: 1.004,
+      medianPixelsPerMeter: 872.3,
+      torsoMeters: 0.503,
+      scaleCoverage: 0.98,
+      integrationRuns: 2,
+    }
+
+    const diagnostics = computeAnalysisDiagnostics(
+      [],
+      [],
+      makeHeuristics(),
+      scaleCalibration,
+    )
+
+    expect(diagnostics.scaleCalibration).toEqual(scaleCalibration)
   })
 })
