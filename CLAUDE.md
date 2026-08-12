@@ -321,6 +321,10 @@ Expected live values (real GPU, MediaPipe deterministic — trials should be nea
 | track (`try a demo video`) | 6.07–6.09 | ~1.01 | ~0.50 | ~872 |
 | park (`another demo`) | 14.9–15.7 | 3.9–5.4 | ~0.47 | ~530 |
 
+`driftRatio` is last measured scale ÷ first — a two-sample statistic, so one noisy endpoint
+frame swings it trial-to-trial (hence 3.9–5.4 on park) even on this otherwise-deterministic
+backend, while VO_cm itself stays stable. Treat it as a flag, not a measurement.
+
 `torsoMeters` ≈ 0.5 is the sanity check — a human torso really is about half a metre, so a
 wildly different number means the calibration is wrong and the centimetres shouldn't be believed.
 **The park number is drift-inflated and is not a target**: that clip's subject runs at the camera,
