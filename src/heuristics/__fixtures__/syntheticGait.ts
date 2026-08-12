@@ -20,6 +20,14 @@ export interface SyntheticGaitParams {
    * scale (the camera-approach case) without hand-building frames.
    */
   pixelsPerMeter?: number | ((t: number, frameIndex: number) => number | null)
+  /**
+   * Peak-to-peak head (ear-mid) bounce as a fraction of `verticalBouncePx`, the hip's peak-to-peak
+   * bounce — i.e. `earMid`'s expected vertical-oscillation value is hand-computable as
+   * `verticalBouncePx * headBounceDamping / TORSO_LENGTH_PX`. Defaults to 0.85, the midpoint of
+   * the 0.80–0.92 ratio measured between hip-mid and ear-mid signals in epic #27's integration-
+   * level A/B (see `openspec/changes/widen-keypoints-selectable-vo-signal/design.md`).
+   */
+  headBounceDamping?: number
 }
 
 /**
@@ -52,6 +60,22 @@ const FRONT_VIEW_ANKLE_SWAY_FACTOR = 0.15
  * to make footstrikes detectable, and doesn't feed into any hand-computed expected value. */
 const ANKLE_LIFT_PX = 50
 
+/** Default peak-to-peak head bounce as a fraction of the hip's — see `SyntheticGaitParams`'s
+ * `headBounceDamping` doc. */
+const DEFAULT_HEAD_BOUNCE_DAMPING = 0.85
+/** Rigid vertical offset from the shoulder midpoint's own (bounce-free) baseline up to the head
+ * midpoint's baseline — a plausible neck-to-head-center distance, not measured from footage.
+ * Constant across every frame: the head doesn't get closer to or further from the shoulders as
+ * either bounces, only the two baselines differ. */
+const HEAD_ABOVE_SHOULDER_PX = 60
+/** Left/right ear x-spread around the head midpoint in side view — small but nonzero, same reason
+ * as SIDE_VIEW_BILATERAL_OFFSET_PX: bilateral-pair resolution always needs two distinct points. */
+const SIDE_VIEW_EAR_SPREAD_PX = 8
+/** True ear-to-ear spread, fully visible face-on — narrower than FRONT_VIEW_BILATERAL_OFFSET_PX's
+ * shoulder spread, since a head is narrower than shoulders. A documented judgment call, not a
+ * measurement. */
+const FRONT_VIEW_EAR_SPREAD_PX = 70
+
 function detectedKeypoint(name: KeypointName, x: number, y: number): RobustKeypoint {
   return { name, x, y, score: 0.9, status: 'detected' }
 }
@@ -80,6 +104,15 @@ function torsoOffset(leanDeg: number): { dx: number; dy: number } {
  * so its single per-stride maximum (the footstrike proxy) always lands exactly when the ankle is
  * at its peak forward sway — making the expected overstride ratio hand-computable as
  * `strideAmplitudePx / TORSO_LENGTH_PX` for both legs, independent of ANKLE_LIFT_PX.
+ *
+ * The head (nose + ears) is a rigid unit offset above the shoulder midpoint's own bounce-free
+ * baseline, oscillating at the SAME phase/frequency as the hip bounce but with its own
+ * (damped) amplitude — `verticalBouncePx * headBounceDamping / 2` half-amplitude — rather than
+ * literally inheriting the shoulder's full-amplitude motion, so that `earMid`'s expected
+ * vertical-oscillation value is hand-computable as `verticalBouncePx * headBounceDamping /
+ * TORSO_LENGTH_PX`, independent of `HEAD_ABOVE_SHOULDER_PX`. Both ears share the head's y exactly
+ * (only x differs, view-appropriately spread), same construction `hipY`/`shoulderY` already use
+ * for their own bilateral pairs. Nose is x-centered on the head midpoint, at the same y.
  */
 export function generateSyntheticGait(params: SyntheticGaitParams): RobustPoseFrame[] {
   const {
@@ -91,6 +124,7 @@ export function generateSyntheticGait(params: SyntheticGaitParams): RobustPoseFr
     trunkLeanDeg,
     view,
     pixelsPerMeter,
+    headBounceDamping = DEFAULT_HEAD_BOUNCE_DAMPING,
   } = params
 
   const scaleAt = (t: number, frameIndex: number): number | null => {
@@ -145,6 +179,17 @@ export function generateSyntheticGait(params: SyntheticGaitParams): RobustPoseFr
     const rightKneeX = (rightHipX + rightAnkleX) / 2
     const rightKneeY = (hipMidY + rightAnkleY) / 2
 
+    // Rigid offset above the shoulder midpoint's own bounce-free baseline (HIP_BASE_Y + dy, dy
+    // constant across frames), not above the moving shoulderMidY — see the module doc for why.
+    const headBaseY = HIP_BASE_Y + dy - HEAD_ABOVE_SHOULDER_PX
+    const headBounceAmplitude = (verticalBouncePx * headBounceDamping) / 2
+    const headMidX = shoulderMidX
+    const headMidY =
+      headBaseY + headBounceAmplitude * Math.sin(2 * Math.PI * (2 * strideFreqHz) * t)
+    const earSpread = view === 'side' ? SIDE_VIEW_EAR_SPREAD_PX : FRONT_VIEW_EAR_SPREAD_PX
+    const leftEarX = headMidX - earSpread / 2
+    const rightEarX = headMidX + earSpread / 2
+
     const keypoints: RobustKeypoint[] = COMMON_KEYPOINT_NAMES.map((name) => {
       switch (name) {
         case 'left_shoulder':
@@ -171,6 +216,12 @@ export function generateSyntheticGait(params: SyntheticGaitParams): RobustPoseFr
           return detectedKeypoint(name, leftShoulderX, shoulderMidY + 80)
         case 'right_wrist':
           return detectedKeypoint(name, rightShoulderX, shoulderMidY + 80)
+        case 'nose':
+          return detectedKeypoint(name, headMidX, headMidY)
+        case 'left_ear':
+          return detectedKeypoint(name, leftEarX, headMidY)
+        case 'right_ear':
+          return detectedKeypoint(name, rightEarX, headMidY)
         default: {
           const exhaustiveCheck: never = name
           throw new Error(`unhandled keypoint name: ${String(exhaustiveCheck)}`)

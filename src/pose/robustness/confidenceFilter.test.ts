@@ -38,10 +38,10 @@ describe('classifyFrame', () => {
     expect(states.every((s) => s.kind === 'present')).toBe(true)
   })
 
-  it('classifies all 12 keypoints as missing when the frame is null', () => {
+  it('classifies every keypoint as missing when the frame is null', () => {
     const states = classifyFrame(null, 0.3)
 
-    expect(states).toHaveLength(12)
+    expect(states).toHaveLength(COMMON_KEYPOINT_NAMES.length)
     expect(states.every((s) => s.kind === 'missing')).toBe(true)
   })
 

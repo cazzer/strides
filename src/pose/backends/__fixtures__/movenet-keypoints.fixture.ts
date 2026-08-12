@@ -1,9 +1,9 @@
 import type { RawKeypoint } from '../common'
 
 /**
- * A hand-built 17-entry raw keypoint set matching MoveNet's full COCO output,
- * including the 5 face points (nose, eyes, ears) that fall outside the
- * COMMON_KEYPOINT_NAMES subset and must be dropped by toPoseFrame.
+ * A hand-built 17-entry raw keypoint set matching MoveNet's full COCO output, including the 2
+ * eye points that fall outside the COMMON_KEYPOINT_NAMES subset (nose and both ears are in it)
+ * and must be dropped by toPoseFrame.
  */
 export const MOVENET_RAW_KEYPOINTS: RawKeypoint[] = [
   { name: 'nose', x: 320, y: 100, score: 0.98 },

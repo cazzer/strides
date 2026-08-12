@@ -204,4 +204,35 @@ describe('computeVerticalOscillationCm', () => {
     // 5 of 11 frames measured — the dropped run's frames stay in the denominator.
     expect(result?.scaleCoverage).toBeCloseTo(5 / 11, 9)
   })
+
+  it('stays hip-based regardless of verticalOscillationSignal — takes no config and never reads ear position', () => {
+    // computeVerticalOscillationCm's signature has no config parameter at all (unlike
+    // computeVerticalOscillation), so there is nothing to "set" here — this pins that fact by
+    // giving the two head keypoints a wildly different bounce (3x, via headBounceDamping) than
+    // the hips and confirming the centimetre figure is identical to a clip whose head bounces
+    // exactly like its hips. If this module ever started reading left_ear/right_ear, this would
+    // catch it.
+    const scale = 300
+    const hipBounceFrames = sinusoidFixture(scale)
+    const wildHeadBounceFrames = generateSyntheticGait({
+      durationSec: 2,
+      fps: FPS,
+      cadenceStepsPerMin: 90,
+      strideAmplitudePx: 40,
+      verticalBouncePx: 30,
+      trunkLeanDeg: 5,
+      view: 'side',
+      pixelsPerMeter: scale,
+      headBounceDamping: 3.0,
+    })
+
+    const hipResult = computeVerticalOscillationCm(hipBounceFrames)
+    const wildHeadResult = computeVerticalOscillationCm(wildHeadBounceFrames)
+
+    expect(hipResult?.verticalOscillationCm).not.toBeNull()
+    expect(wildHeadResult?.verticalOscillationCm).toBeCloseTo(
+      hipResult!.verticalOscillationCm!,
+      9,
+    )
+  })
 })

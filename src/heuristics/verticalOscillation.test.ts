@@ -6,6 +6,23 @@ import { applyRobustness } from '../pose/robustness/interpolate'
 import type { PoseSample, RobustPoseFrame } from '../pose/robustness/types'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 import type { Keypoint, PoseFrame } from '../pose/types'
+import { DEFAULT_HEURISTICS_CONFIG } from './types'
+
+/** Strips the given keypoint name(s) to `'unrecoverable'` on every frame — same technique the
+ * "no resolvable hip position" test below uses for hips, reused here for ears. */
+function stripToUnrecoverable(
+  frames: RobustPoseFrame[],
+  names: string[],
+): RobustPoseFrame[] {
+  return frames.map((frame) => ({
+    ...frame,
+    keypoints: frame.keypoints.map((kp) =>
+      names.includes(kp.name)
+        ? { ...kp, x: null, y: null, score: 0, status: 'unrecoverable' as const }
+        : kp,
+    ),
+  }))
+}
 
 const BASE_PARAMS = {
   durationSec: 4,
@@ -258,5 +275,60 @@ describe('computeVerticalOscillation', () => {
         }
       }
     }
+  })
+
+  describe('verticalOscillationSignal: earMid', () => {
+    const EAR_MID_CONFIG = {
+      ...DEFAULT_HEURISTICS_CONFIG,
+      verticalOscillationSignal: 'earMid' as const,
+    }
+
+    it('recovers verticalBouncePx * headBounceDamping / torsoLengthPx from the synthetic head model', () => {
+      // syntheticGait's default headBounceDamping is 0.85 -- see that fixture's own doc.
+      const frames = generateSyntheticGait({ ...BASE_PARAMS, verticalBouncePx: 20, view: 'side' })
+
+      const result = computeVerticalOscillation(frames, 'side', EAR_MID_CONFIG)
+
+      expect(result.value).not.toBeNull()
+      expect(result.value).toBeCloseTo((20 * 0.85) / 150, 3)
+      expect(result.fit?.peakToPeakAmplitudePx).toBeCloseTo(20 * 0.85, 1)
+    })
+
+    it('caveats name the head/ear signal, not "hip"', () => {
+      const frames = generateSyntheticGait({ ...BASE_PARAMS, verticalBouncePx: 20, view: 'side' })
+      const strippedEars = stripToUnrecoverable(frames, ['left_ear', 'right_ear'])
+
+      const result = computeVerticalOscillation(strippedEars, 'side', EAR_MID_CONFIG)
+
+      expect(result.value).toBeNull()
+      expect(result.caveat).toMatch(/head \(ear-midpoint\) position/i)
+      expect(result.caveat).not.toMatch(/hip/i)
+    })
+
+    it('does NOT fall back to hipMid when the configured earMid signal is unresolvable — hipMid on the identical frames still reports a value', () => {
+      const frames = generateSyntheticGait({ ...BASE_PARAMS, verticalBouncePx: 20, view: 'side' })
+      // Ears stripped; hips untouched, so hipMid remains fully resolvable on these exact frames.
+      const strippedEars = stripToUnrecoverable(frames, ['left_ear', 'right_ear'])
+
+      const earMidResult = computeVerticalOscillation(strippedEars, 'side', EAR_MID_CONFIG)
+      const hipMidResult = computeVerticalOscillation(strippedEars, 'side', DEFAULT_HEURISTICS_CONFIG)
+
+      expect(earMidResult.value).toBeNull()
+      expect(earMidResult.caveat).not.toBeNull()
+      expect(hipMidResult.value).not.toBeNull()
+      expect(hipMidResult.value).toBeCloseTo(20 / 150, 3)
+    })
+
+    it('a single resolvable ear stands in for the pair, flagged interpolated, same as resolveMidpoint everywhere else', () => {
+      const frames = generateSyntheticGait({ ...BASE_PARAMS, verticalBouncePx: 20, view: 'side' })
+      // Only right_ear is stripped -- left_ear alone resolves every frame, forcing
+      // resolveMidpoint's single-side fallback on all of them.
+      const singleEar = stripToUnrecoverable(frames, ['right_ear'])
+
+      const result = computeVerticalOscillation(singleEar, 'side', EAR_MID_CONFIG)
+
+      expect(result.value).not.toBeNull()
+      expect(result.interpolatedFraction).toBeGreaterThan(0)
+    })
   })
 })

@@ -7,6 +7,28 @@
  */
 export type View = 'side' | 'front' | 'ambiguous'
 
+/**
+ * Which bilateral-pair midpoint vertical oscillation fits its spectral sinusoid against.
+ * `'hipMid'` (the pelvis, via `left_hip`/`right_hip`) is the default and the metric's original,
+ * validated signal — a genuine center-of-mass proxy, and what `verticalOscillationCm`'s
+ * calibrated centimetre figure is anchored to regardless of this setting. `'earMid'` (the head,
+ * via `left_ear`/`right_ear`) reads a physically different quantity — head bounce, damped
+ * roughly 0.80–0.92x relative to the pelvis (epic #27's integration-level A/B) — not a
+ * center-of-mass proxy at all, but measured more stable run-to-run on both evaluated clips.
+ *
+ * Selection is per-run, not per-frame: `verticalOscillation.ts` resolves ONE pair for the whole
+ * clip and never falls back to the other signal on a frame where the configured one is
+ * unresolvable — see `verticalOscillation.ts`'s module doc for why a per-frame fallback would
+ * corrupt the fit. Within the chosen signal, `resolveMidpoint`'s existing tolerant single-side
+ * fallback still applies (one ear, or one hip, standing in for its pair when only one side
+ * resolves), same as every other bilateral-pair signal in this package.
+ *
+ * Nothing else reads this: cadence stays pinned to `hipMid` regardless of this setting (see
+ * `cadence.ts`'s module doc), and `verticalOscillationCm` takes no config at all and stays
+ * hip-based unconditionally.
+ */
+export type VerticalOscillationSignal = 'hipMid' | 'earMid'
+
 export type ViewFit = 'primary' | 'tolerated' | 'unsuitable'
 
 export type MetricId =
@@ -202,6 +224,15 @@ export interface HeuristicsConfig {
    * without re-deriving why they differ. */
   verticalOscillationMinCycles: number // 3
 
+  /** Which bilateral-pair midpoint vertical oscillation fits its spectral sinusoid against — see
+   * `VerticalOscillationSignal`'s own doc for the full semantic tradeoff. Defaults to `'hipMid'`,
+   * decided by a pre-registered rule against a live integration-level A/B — see
+   * `openspec/changes/widen-keypoints-selectable-vo-signal/design.md` for the numbers and the
+   * rule as written. Affects `verticalOscillation` ONLY: cadence stays hip-pinned regardless
+   * (`cadence.ts`), and `verticalOscillationCm` takes no config and stays hip-based
+   * unconditionally. */
+  verticalOscillationSignal: VerticalOscillationSignal // 'hipMid'
+
   /** Minimum prominence (as a fraction of torsoLengthPx) for an ankle-y extremum to count as a
    * footstrike — higher than vertical oscillation's because ankle detection is noisier. */
   footstrikeMinProminenceRatio: number // 0.05
@@ -314,6 +345,7 @@ export const DEFAULT_HEURISTICS_CONFIG: HeuristicsConfig = {
   verticalOscillationMinFitR2: 0.3,
   cadenceMinFitR2: 0.3,
   verticalOscillationMinCycles: 3,
+  verticalOscillationSignal: 'hipMid',
   footstrikeMinProminenceRatio: 0.05,
   footstrikeMinIntervalSeconds: 0.25,
   overstrideFlagRatio: 0.15,

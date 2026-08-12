@@ -105,4 +105,33 @@ describe('detectView', () => {
     expect(result.view).toBe('ambiguous')
     expect(result.confidence).toBe(0)
   })
+
+  it('is a no-op with respect to head keypoints — identical output whether nose/ears are wildly placed or fully unrecoverable', () => {
+    // detectView reads shoulders/hips (bilateral spread) and ankles/hips (sagittal excursion) by
+    // name only — see viewDetection.ts's module doc. Widening COMMON_KEYPOINT_NAMES to include
+    // nose/left_ear/right_ear must not change this function's output at all, regardless of what
+    // those three keypoints' positions or resolvability are.
+    const frames = generateSyntheticGait({ ...BASE_PARAMS, strideAmplitudePx: 80, view: 'side' })
+    const baseline = detectView(frames)
+
+    const wildlyPlacedHead = frames.map((frame) => ({
+      ...frame,
+      keypoints: frame.keypoints.map((kp) =>
+        kp.name === 'nose' || kp.name === 'left_ear' || kp.name === 'right_ear'
+          ? { ...kp, x: 999999, y: -999999 }
+          : kp,
+      ),
+    }))
+    const unrecoverableHead = frames.map((frame) => ({
+      ...frame,
+      keypoints: frame.keypoints.map((kp) =>
+        kp.name === 'nose' || kp.name === 'left_ear' || kp.name === 'right_ear'
+          ? { ...kp, x: null, y: null, score: 0, status: 'unrecoverable' as const }
+          : kp,
+      ),
+    }))
+
+    expect(detectView(wildlyPlacedHead)).toEqual(baseline)
+    expect(detectView(unrecoverableHead)).toEqual(baseline)
+  })
 })

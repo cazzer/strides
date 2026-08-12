@@ -101,6 +101,29 @@ describe('computeAnalysisDiagnostics', () => {
     })
   })
 
+  it('the keypoints record has one entry per COMMON_KEYPOINT_NAMES name, and head counts aggregate like any other', () => {
+    const frames = [
+      makeRobustFrame(),
+      makeRobustFrame({ nose: 'interpolated' }),
+      makeRobustFrame({ left_ear: 'unrecoverable', right_ear: 'unrecoverable' }),
+    ]
+    const diagnostics = computeAnalysisDiagnostics([], frames, makeHeuristics())
+
+    expect(Object.keys(diagnostics.keypoints)).toHaveLength(COMMON_KEYPOINT_NAMES.length)
+    expect(Object.keys(diagnostics.keypoints).sort()).toEqual([...COMMON_KEYPOINT_NAMES].sort())
+    expect(diagnostics.keypoints.nose).toEqual({ detected: 2, interpolated: 1, unrecoverable: 0 })
+    expect(diagnostics.keypoints.left_ear).toEqual({
+      detected: 2,
+      interpolated: 0,
+      unrecoverable: 1,
+    })
+    expect(diagnostics.keypoints.right_ear).toEqual({
+      detected: 2,
+      interpolated: 0,
+      unrecoverable: 1,
+    })
+  })
+
   it('surfaces view diagnostics verbatim, not recomputed', () => {
     const heuristics = makeHeuristics()
     const diagnostics = computeAnalysisDiagnostics([], [], heuristics)

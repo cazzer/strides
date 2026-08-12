@@ -1,13 +1,20 @@
+import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { HeuristicsConfig } from './types'
 import { resolveMidpoint } from './keypoints'
 import { fitSpectralSinusoid } from './spectralFit'
 import type { SpectralFitResult, SpectralSample } from './spectralFit'
 
+/** `['left_hip', 'right_hip']` — `analyzeBounceSignal`'s default pair, and the only pair
+ * `analyzeHipBounce` (cadence's call site) ever uses. */
+const HIP_PAIR: [KeypointName, KeypointName] = ['left_hip', 'right_hip']
+
 export interface HipBounceAnalysis {
-  /** One entry per input frame, timestamp-aligned 1:1 — `null` where the hip-mid wasn't
-   * resolvable that frame. Raw pixel y, not sign-flipped or normalized (a caller charting this
-   * does that transform itself). */
+  /** One entry per input frame, timestamp-aligned 1:1 — `null` where the configured pair's
+   * midpoint wasn't resolvable that frame. Raw pixel y, not sign-flipped or normalized (a caller
+   * charting this does that transform itself). Named `hipY` for historical/cadence-call-site
+   * reasons — when `analyzeBounceSignal` is called with a non-hip pair (vertical oscillation's
+   * `earMid` option), this is that pair's midpoint-y trace, not literally hip position. */
   hipY: Array<number | null>
   /** Frames whose hip-mid resolved, via `resolveMidpoint`'s tolerant (single-side-fallback)
    * policy. */
@@ -25,18 +32,24 @@ export interface HipBounceAnalysis {
 }
 
 /**
- * Shared hip-bounce SIGNAL extraction — not a metric in its own right. Owns the one piece of work
- * `verticalOscillation` and `cadence` both need done identically: resolve hip-mid position per
- * frame (`resolveMidpoint('left_hip', 'right_hip')`, the same tolerant midpoint policy every
+ * Shared bounce SIGNAL extraction — not a metric in its own right. Owns the one piece of work
+ * `verticalOscillation` and `cadence` both need done identically: resolve a bilateral-pair
+ * midpoint per frame (`resolveMidpoint(...pair)`, the same tolerant midpoint policy every
  * center-of-mass proxy in this package uses), track how much of that was interpolated, and fit the
  * shared spectral sinusoid primitive (`fitSpectralSinusoid`) to the resolvable subset over the
  * `spectralFitMinFrequencyHz`/`spectralFitMaxFrequencyHz`/`spectralFitFrequencyStepHz` grid.
+ *
+ * `pair` defaults to `['left_hip', 'right_hip']` — cadence (`analyzeHipBounce`, below) always
+ * gets that default and never varies it, since cadence stays hip-pinned regardless of vertical
+ * oscillation's `verticalOscillationSignal` setting (see that config key's doc). Vertical
+ * oscillation is the only caller that ever passes a non-default pair, via
+ * `SIGNAL_KEYPOINTS[config.verticalOscillationSignal]` in `verticalOscillation.ts`.
  *
  * Vertical oscillation reads the fit's AMPLITUDE (`peakToPeakAmplitude`, normalized by torso
  * length); cadence reads its FREQUENCY (`frequencyHz`, converted to steps/minute — see
  * `cadence.ts`'s module doc for why `× 60` needs no correction factor). Both are legitimate,
  * independent readings of the same underlying oscillation, which is why this module exists rather
- * than each metric re-deriving its own hip trace.
+ * than each metric re-deriving its own trace.
  *
  * POLICY — quality gates (what R² is good enough), caveat text, confidence computation, and
  * `sampleSize` reporting — is deliberately NOT this module's concern. It stays in each caller,
@@ -48,24 +61,27 @@ export interface HipBounceAnalysis {
  *
  * Each caller invokes this independently rather than sharing one computed result through
  * `computeFormHeuristics`'s orchestration — a deliberate, accepted redundancy. The fit is a pure
- * function over an immutable `RobustPoseFrame[]`, so both calls are bit-identical, and running the
- * whole 141-candidate grid search twice is still sub-millisecond against a pipeline that spends
- * tens of seconds in pose detection. Precedent: `detectFootstrikes` is already a shared extractor
- * that `overstriding`/`cadence`/`footStrikePattern` each call independently rather than threading a
- * shared result through the orchestrator.
+ * function over an immutable `RobustPoseFrame[]` and `pair`, so both of cadence's and vertical
+ * oscillation's calls are bit-identical WHEN they share a pair (the default-config case), and
+ * running the whole 141-candidate grid search twice is still sub-millisecond against a pipeline
+ * that spends tens of seconds in pose detection. Precedent: `detectFootstrikes` is already a
+ * shared extractor that `overstriding`/`cadence`/`footStrikePattern` each call independently
+ * rather than threading a shared result through the orchestrator.
  */
-export function analyzeHipBounce(
+export function analyzeBounceSignal(
   frames: RobustPoseFrame[],
   config: HeuristicsConfig,
+  pair: [KeypointName, KeypointName] = HIP_PAIR,
 ): HipBounceAnalysis {
+  const [leftName, rightName] = pair
   let interpolatedCount = 0
   let resolvedCount = 0
   const hipY: Array<number | null> = frames.map((frame) => {
-    const hipMid = resolveMidpoint(frame, 'left_hip', 'right_hip')
-    if (hipMid === null) return null
+    const mid = resolveMidpoint(frame, leftName, rightName)
+    if (mid === null) return null
     resolvedCount += 1
-    if (hipMid.interpolated) interpolatedCount += 1
-    return hipMid.y
+    if (mid.interpolated) interpolatedCount += 1
+    return mid.y
   })
 
   // Guarded rather than left to divide-by-zero: an empty `frames` or an all-unresolvable clip
@@ -86,4 +102,17 @@ export function analyzeHipBounce(
   })
 
   return { hipY, resolvedCount, interpolatedCount, frameCoverage, interpolatedFraction, fit }
+}
+
+/**
+ * `analyzeBounceSignal` pinned to the hip pair — cadence's only call site (`cadence.ts`), kept as
+ * a distinct, stable name so cadence's hip-pinning reads as structural (it calls a function that
+ * can only ever analyze the hip) rather than as a config value someone could accidentally thread
+ * a different pair into later. See `analyzeBounceSignal`'s doc for the shared mechanics.
+ */
+export function analyzeHipBounce(
+  frames: RobustPoseFrame[],
+  config: HeuristicsConfig,
+): HipBounceAnalysis {
+  return analyzeBounceSignal(frames, config, HIP_PAIR)
 }

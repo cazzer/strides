@@ -11,6 +11,9 @@ export const COMMON_KEYPOINT_NAMES = [
   'right_knee',
   'left_ankle',
   'right_ankle',
+  'nose',
+  'left_ear',
+  'right_ear',
 ] as const
 
 export type KeypointName = (typeof COMMON_KEYPOINT_NAMES)[number]
@@ -23,7 +26,9 @@ export interface Keypoint {
 }
 
 export interface PoseFrame {
-  /** Always length 12, one entry per COMMON_KEYPOINT_NAMES, in that fixed order. Never sparse. */
+  /** One entry per name in COMMON_KEYPOINT_NAMES, in that fixed order, never sparse —
+   * applyRobustness joins positionally, so a frame of any other length is a contract violation,
+   * not degraded input. */
   keypoints: Keypoint[]
   /**
    * video.currentTime (seconds) — NOT wall-clock time. This is what lets a PoseFrame mean

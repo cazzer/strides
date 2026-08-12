@@ -82,6 +82,35 @@ describe('createMoveNetDetector', () => {
     })
   })
 
+  it('reaches nose/left_ear/right_ear through to the frame from the raw MoveNet output', async () => {
+    estimatePoses.mockResolvedValue([
+      { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
+    ])
+    const video = { currentTime: 12.5 } as HTMLVideoElement
+
+    const detector = await createMoveNetDetector()
+    const frame = await detector.estimatePose(video)
+
+    expect(frame?.keypoints.find((k) => k.name === 'nose')).toEqual({
+      name: 'nose',
+      x: 320,
+      y: 100,
+      score: 0.98,
+    })
+    expect(frame?.keypoints.find((k) => k.name === 'left_ear')).toEqual({
+      name: 'left_ear',
+      x: 340,
+      y: 95,
+      score: 0.9,
+    })
+    expect(frame?.keypoints.find((k) => k.name === 'right_ear')).toEqual({
+      name: 'right_ear',
+      x: 300,
+      y: 95,
+      score: 0.89,
+    })
+  })
+
   it('returns null when estimatePoses finds no one in frame', async () => {
     estimatePoses.mockResolvedValue([])
     const video = { currentTime: 3 } as HTMLVideoElement

@@ -97,6 +97,33 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
     })
   })
 
+  it('maps landmark indices 0/7/8 to nose/left_ear/right_ear, denormalized like every other point', async () => {
+    detectForVideo.mockReturnValue({ landmarks: [makeLandmarks()], worldLandmarks: [] })
+    const video = { currentTime: 12.5, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement
+
+    const detector = await createMediaPipePoseLandmarkerDetector()
+    const frame = await detector.estimatePose(video)
+
+    expect(frame?.keypoints.find((k) => k.name === 'nose')).toEqual({
+      name: 'nose',
+      x: 0.1 * 0 * 640,
+      y: 0.2 * 0 * 480,
+      score: 0.8,
+    })
+    expect(frame?.keypoints.find((k) => k.name === 'left_ear')).toEqual({
+      name: 'left_ear',
+      x: 0.1 * 7 * 640,
+      y: 0.2 * 7 * 480,
+      score: 0.8,
+    })
+    expect(frame?.keypoints.find((k) => k.name === 'right_ear')).toEqual({
+      name: 'right_ear',
+      x: 0.1 * 8 * 640,
+      y: 0.2 * 8 * 480,
+      score: 0.8,
+    })
+  })
+
   it('returns null when no pose is detected', async () => {
     detectForVideo.mockReturnValue({ landmarks: [], worldLandmarks: [] })
     const video = { currentTime: 3, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement
