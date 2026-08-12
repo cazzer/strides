@@ -124,9 +124,9 @@
 
 ## 9. Verification
 
-- [ ] 9.1 `npx tsc -b && npx vitest run && npx eslint .` — all green.
-- [ ] 9.2 `openspec validate add-vertical-ratio-metric --strict` passes (this change only).
-- [ ] 9.3 Live verification (Playwright, real GPU, MoveNet default) — see proposal.md's harness
+- [x] 9.1 `npx tsc -b && npx vitest run && npx eslint .` — all green.
+- [x] 9.2 `openspec validate add-vertical-ratio-metric --strict` passes (this change only).
+- [x] 9.3 Live verification (Playwright, real GPU, MoveNet default) — see proposal.md's harness
       notes and epic #33's gotchas. ≥3 trials per demo clip (5 preferred). Track clip: median
       `verticalRatio.value` in `[0.04, 0.12]`; record `pairCount` per trial (D3's upgrade-trigger
       leading indicator) and derived stride px
@@ -138,5 +138,5 @@
 
 ## 10. Commit
 
-- [ ] 10.1 Commit with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` trailer. No push,
+- [x] 10.1 Commit with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` trailer. No push,
       no merge, no archive.
