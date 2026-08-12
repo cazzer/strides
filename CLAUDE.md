@@ -301,11 +301,31 @@ derives from `worldLandmarks` (pixel torso ÷ **3D** world torso, shoulder-mid�
 indices 11/12/23/24) and carries through `PoseFrame` → `RobustPoseFrame` verbatim, never
 interpolated.
 
-Fields: `verticalOscillationCm` (median half-cycle bounce, cm), `sampleSize` (half-cycles),
-`scaleDriftRatio`, `medianPixelsPerMeter`, `torsoMeters`, `scaleCoverage`, `integrationRuns`.
-Computed over the **presence-trimmed** window (unlike every other diagnostics field), so it lines
-up with the metrics beside it. `src/heuristics/verticalOscillationCm.ts`; the existing
-torso-length-ratio `verticalOscillation` metric is untouched.
+Fields: `verticalOscillationCm` (fitted PEAK-TO-PEAK bounce, cm), `sampleSize` (complete bounce
+cycles across contributing runs — one bounce per STEP; **it counted half-cycles before 2026-08-12**),
+`fit` (the winning run's spectral fit: `frequencyHz`, `peakToPeakAmplitudeCm`, `sinusoidR2`,
+`totalR2`, `secondPeakRatio`, `sampleCount`, `spanSeconds`, `observedCycles`), `fitFailureReason`
+(`'too-few-samples' | 'degenerate-signal' | 'insufficient-cycles' | 'below-quality-gate' |
+'no-usable-run'`), `scaleDriftRatio`, `medianPixelsPerMeter`, `torsoMeters`, `scaleCoverage`,
+`integrationRuns`. `fit` and `fitFailureReason` are exactly-one-non-null, so a measured-but-
+unfittable clip names its reason instead of reporting a bare null. Computed over the
+**presence-trimmed** window (unlike every other diagnostics field), so it lines up with the
+metrics beside it. `src/heuristics/verticalOscillationCm.ts`; the existing torso-length-ratio
+`verticalOscillation` metric is untouched.
+
+**Estimator (since 2026-08-12, #34)**: the amplitude comes from the shared spectral sinusoid fit
+(`spectralFit.ts` — same primitive `verticalOscillation` and `cadence` use), fitted **once per
+integration run** over that run's converted metric series, gated at `CM_MIN_FIT_R2 = 0.30` (a
+module constant, not a config key), and aggregated across contributing runs by a sample-count-
+weighted median that SELECTS one run's fit rather than blending several. It replaced per-run
+extrema pairing, whose prominence threshold was the module's only use of `torsoLengthPx` — so a
+clip with no resolvable body scale can now report centimetres with `torsoMeters: null`. The fit's
+`c + d·t + e·t²` trend terms are the point: they absorb approach translation instead of charging
+it to the bounce. `fit.frequencyHz × 60` is a free cross-check against `metrics.cadence.value` —
+same body, same rhythm, reached through a completely separate series; a large disagreement means
+one fit landed on a harmonic or a grid edge. Config is read for the frequency GRID only, never
+for signal selection (`verticalOscillationSignal` does not apply here — hip-pinned
+unconditionally).
 
 **The one correctness constraint**: the pixel→metre conversion integrates per-frame *deltas*
 (`Σ (y[k−1] − y[k]) / s̄[k]`, reset at every hip-tracking gap), never `y_px / s(t)`. Dividing
@@ -313,24 +333,46 @@ absolute positions by a drifting scale reports the drift itself as bounce — me
 artifact on the approach clip. There's a regression test for exactly that case
 (`verticalOscillationCm.test.ts`).
 
-Expected live values (real GPU, MediaPipe deterministic — trials should be near-identical;
->0.05 cm spread on the track clip is worth investigating rather than averaging away):
+Expected live values (real GPU, 3 trials/clip, measured 2026-08-12 on the same machine before and
+after the estimator swap):
 
-| clip | VO_cm | driftRatio | torsoMeters | medianPxPerM |
-|---|---|---|---|---|
-| track (`try a demo video`) | 6.07–6.09 | ~1.01 | ~0.50 | ~872 |
-| park (`another demo`) | 14.9–15.7 | 3.9–5.4 | ~0.47 | ~530 |
+| clip | VO_cm (extrema, before) | VO_cm (fit, after) | fit.sinusoidR2 | fit.frequencyHz ×60 vs cadence | sampleSize | driftRatio | torsoMeters | medianPxPerM |
+|---|---|---|---|---|---|---|---|---|
+| track (`try a demo video`) | 6.075–6.080 | **4.78–4.79** | 0.485–0.486 | 91.2 vs 91.2 (exact) | 3 | ~1.01 | ~0.505 | ~872 |
+| park (`another demo`) | 11.7 / 14.9 / 15.5 | **9.4 / 10.2 / 12.0** | 0.42–0.73 | 175.2–196.8 vs 176.4–195.6 (≤2 grid steps) | 3–4 | 3.9–5.4 | ~0.47 | ~530 |
+
+Track is the regression anchor and is stable to ±0.005 cm across trials — a >0.05 cm spread there
+is worth investigating rather than averaging away. **Park is not deterministic** despite MediaPipe
+being bit-reproducible elsewhere: its presence-trimmed window lands on 76/83/84 samples across
+trials, and that alone moves the number. One baseline park trial sampled a single frame and
+produced no `scaleCalibration` at all — the known cold-start flake, unrelated to any code change.
+
+**Why the track number dropped 21%, and why that is not a regression.** The pre-registered
+tolerance for this swap was −7% (from #28's measured sine-underfit bias on the pixel path); the
+measured drop was −21%, so it was investigated rather than accepted or tuned away. The finding:
+the new centimetre figure agrees with the *pixel* path's spectral fit on the identical clip to
+within 1.1% (4.786 cm vs. 42.24 px ÷ 871.9 px/m = 4.844 cm), at exactly the same winning frequency
+(1.52 Hz), the same 57 samples, the same 2.24 s span, and a `sinusoidR2` within 0.003 (0.4860 vs.
+0.4886) — the affine-equivalence identity, holding on real footage. Before the swap the pipeline
+reported two mutually inconsistent amplitudes for the same clip (4.84 cm-equivalent from the fit,
+6.07 cm from extrema pairing); that 25% gap is what closed. #28's −3…−7% band was measured on the
+raw pixel trace of better-fitting clips and does not transfer: at this clip's `sinusoidR2` ≈ 0.49
+a sine explains under half the residual variance, so it necessarily underfits the peak excursions
+by much more than 7%. `CM_MIN_FIT_R2` was NOT touched. Note also that the integration itself adds
+almost nothing to the noise — the cm path's `sinusoidR2` is within 0.6% of the pixel path's, which
+is direct evidence against scale noise accumulating materially as red noise on this clip.
 
 `driftRatio` is last measured scale ÷ first — a two-sample statistic, so one noisy endpoint
-frame swings it trial-to-trial (hence 3.9–5.4 on park) even on this otherwise-deterministic
-backend, while VO_cm itself stays stable. Treat it as a flag, not a measurement.
+frame swings it trial-to-trial (hence 3.9–5.4 on park). Treat it as a flag, not a measurement.
 
 `torsoMeters` ≈ 0.5 is the sanity check — a human torso really is about half a metre, so a
 wildly different number means the calibration is wrong and the centimetres shouldn't be believed.
-**The park number is drift-inflated and is not a target**: that clip's subject runs at the camera,
-`scaleDriftRatio` says so, and approach-drift correction is deliberately unimplemented (see the
-change's `design.md`). The watch's ~10% is a *ratio*, not centimetres — not comparable. The 6–13
-cm literature range is the plausibility check the track clip passes.
+**The park number is no longer drift-inflated the way it was**: the fit's trend terms absorb the
+approach translation, and the measured effect is a 30% drop (median 14.9 → 10.2 cm) with the
+alternating large/small half-cycle pattern gone by construction. It is still not a *target* —
+there is no ground truth in centimetres for that clip; the watch's ~10% is a *ratio*, not
+centimetres, and is not comparable. The 6–13 cm literature range is the plausibility check, which
+both clips now sit in or just under.
 
 ## Head-keypoint widening + vertical-oscillation signal A/B (2026-08-12)
 

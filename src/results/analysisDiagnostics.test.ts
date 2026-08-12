@@ -239,7 +239,18 @@ describe('computeAnalysisDiagnostics', () => {
   it('surfaces a supplied scaleCalibration verbatim', () => {
     const scaleCalibration = {
       verticalOscillationCm: 6.07,
-      sampleSize: 9,
+      sampleSize: 4,
+      fit: {
+        frequencyHz: 2.84,
+        peakToPeakAmplitudeCm: 6.07,
+        sinusoidR2: 0.71,
+        totalR2: 0.94,
+        secondPeakRatio: 0.18,
+        sampleCount: 57,
+        spanSeconds: 1.62,
+        observedCycles: 4.6,
+      },
+      fitFailureReason: null,
       scaleDriftRatio: 1.004,
       medianPixelsPerMeter: 872.3,
       torsoMeters: 0.503,
