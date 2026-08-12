@@ -1,7 +1,8 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { LowConfidenceBanner } from './LowConfidenceBanner'
-import type { FormHeuristicsResult, MetricResult } from '../heuristics/types'
+import { METRIC_LABELS } from './metricConfidence'
+import type { FormHeuristicsResult, MetricId, MetricResult } from '../heuristics/types'
 
 function makeMetric(overrides: Partial<MetricResult> = {}): MetricResult {
   return {
@@ -44,6 +45,7 @@ function makeHeuristics(
       series: [],
       fit: null,
     },
+    verticalRatio: makeMetric({ metric: 'verticalRatio', unit: 'percent', value: 0.08 }),
     trunkLean: makeMetric({ metric: 'trunkLean' }),
     overstriding: makeMetric({ metric: 'overstriding', unit: 'ratio' }),
     cadence: makeMetric({ metric: 'cadence', unit: 'stepsPerMinute', value: 170 }),
@@ -89,6 +91,25 @@ describe('LowConfidenceBanner', () => {
     const text = screen.getByRole('status').textContent ?? ''
     expect(text).toMatch(/trunk lean/i)
     expect(text).toMatch(/overstriding/i)
+  })
+
+  it('derives its metric-id enumeration from METRIC_LABELS, covering every metric (D9)', () => {
+    // Exercises design.md D9's exhaustiveness guarantee, not just its type: flag EVERY metric at
+    // once and confirm the banner names all of them, proving the derived list actually covers
+    // every METRIC_LABELS key rather than a hand-written list that could silently omit one.
+    const allFlagged: Partial<FormHeuristicsResult> = {}
+    for (const id of Object.keys(METRIC_LABELS) as MetricId[]) {
+      if (id === 'verticalOscillation') continue // has its own richer shape, left as the base fixture's
+      allFlagged[id] = makeMetric({ metric: id, value: null })
+    }
+
+    render(<LowConfidenceBanner heuristics={makeHeuristics(allFlagged)} />)
+
+    const text = screen.getByRole('status').textContent ?? ''
+    for (const id of Object.keys(METRIC_LABELS) as MetricId[]) {
+      if (id === 'verticalOscillation') continue // untouched (confidence 0.9, non-null) -- not flagged
+      expect(text).toMatch(new RegExp(METRIC_LABELS[id], 'i'))
+    }
   })
 
   it('flags a metric whose value is null even if confidence looks fine', () => {

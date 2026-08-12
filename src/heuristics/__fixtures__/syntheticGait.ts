@@ -28,6 +28,15 @@ export interface SyntheticGaitParams {
    * level A/B (see `openspec/changes/widen-keypoints-selectable-vo-signal/design.md`).
    */
   headBounceDamping?: number
+  /**
+   * Hip-x travel speed, in px/sec. Defaults to `TRAVEL_SPEED_PX_PER_SEC` (100) — additive,
+   * default-preserving, so no existing test's hand-computed expected values move. At `0`,
+   * produces a treadmill/in-place clip: footstrikes are still detectable (ankle sway/lift is
+   * built from stride phase, independent of hip-x travel), but hip-x never advances, so
+   * `estimateTravelDirection` returns `0` (indeterminate) — the fixture shape
+   * `strideLength.ts`'s/`verticalRatio.ts`'s travel-direction-gate tests need.
+   */
+  travelSpeedPxPerSec?: number
 }
 
 /**
@@ -39,6 +48,8 @@ export interface SyntheticGaitParams {
 const TORSO_LENGTH_PX = 150
 const HIP_BASE_X = 200
 const HIP_BASE_Y = 400
+/** Default hip-x travel speed — see `SyntheticGaitParams.travelSpeedPxPerSec`'s doc for the
+ * override. */
 const TRAVEL_SPEED_PX_PER_SEC = 100
 
 /** Left/right shoulder and hip nearly coincide in side view — a small fixed offset, not zero, so
@@ -125,6 +136,7 @@ export function generateSyntheticGait(params: SyntheticGaitParams): RobustPoseFr
     view,
     pixelsPerMeter,
     headBounceDamping = DEFAULT_HEAD_BOUNCE_DAMPING,
+    travelSpeedPxPerSec = TRAVEL_SPEED_PX_PER_SEC,
   } = params
 
   const scaleAt = (t: number, frameIndex: number): number | null => {
@@ -150,7 +162,7 @@ export function generateSyntheticGait(params: SyntheticGaitParams): RobustPoseFr
   for (let i = 0; i < frameCount; i += 1) {
     const t = i / fps
 
-    const hipMidX = HIP_BASE_X + TRAVEL_SPEED_PX_PER_SEC * t
+    const hipMidX = HIP_BASE_X + travelSpeedPxPerSec * t
     const hipMidY =
       HIP_BASE_Y + (verticalBouncePx / 2) * Math.sin(2 * Math.PI * (2 * strideFreqHz) * t)
 

@@ -58,6 +58,12 @@ function makeHighConfidenceResult(): FormHeuristicsResult {
       { timestamp: 0, value: 0.05 },
       { timestamp: 1, value: -0.05 },
     ]),
+    verticalRatio: makeMetric({
+      metric: 'verticalRatio',
+      value: 0.08,
+      unit: 'percent',
+      confidence: 0.9,
+    }),
     trunkLean: makeMetric({ metric: 'trunkLean', value: 6, confidence: 0.85 }),
     overstriding: makeMetric({
       metric: 'overstriding',
@@ -103,6 +109,15 @@ function makeLowConfidenceResult(): FormHeuristicsResult {
       { value: 0.1, confidence: 0.5, viewFit: 'tolerated' },
       [{ timestamp: 0, value: 0.05 }],
     ),
+    // Deliberately clean/unflagged, same reasoning as cadence/kneeFlexion/armSwingSymmetry below
+    // — this fixture's whole point is testing that the panel correctly discriminates
+    // trunkLean/overstriding as the ONLY flagged cards.
+    verticalRatio: makeMetric({
+      metric: 'verticalRatio',
+      value: 0.07,
+      unit: 'percent',
+      confidence: 0.7,
+    }),
     trunkLean: makeMetric({
       metric: 'trunkLean',
       value: null,
@@ -146,9 +161,10 @@ function makeLowConfidenceResult(): FormHeuristicsResult {
 }
 
 describe('MetricsPanel', () => {
-  it('renders all seven metrics with their plain-language labels', () => {
+  it('renders all eight metrics with their plain-language labels', () => {
     render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
     expect(screen.getByText('Vertical oscillation')).toBeInTheDocument()
+    expect(screen.getByText('Vertical ratio')).toBeInTheDocument()
     expect(screen.getByText('Trunk lean')).toBeInTheDocument()
     expect(screen.getByText('Overstriding')).toBeInTheDocument()
     expect(screen.getByText('Cadence')).toBeInTheDocument()
@@ -195,7 +211,8 @@ describe('MetricsPanel', () => {
     ).length
     // trunkLean and overstriding are unsuitable/null; every other metric (including
     // verticalOscillation, merely tolerated at confidence 0.5, above the low-confidence
-    // threshold) is unflagged, so 2 of 7 cards are flagged.
+    // threshold, and verticalRatio, deliberately clean here) is unflagged, so 2 of 8 cards are
+    // flagged.
     expect(flaggedCount).toBe(2)
   })
 })

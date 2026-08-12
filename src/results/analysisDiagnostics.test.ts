@@ -44,6 +44,7 @@ function makeHeuristics(overrides: Partial<FormHeuristicsResult> = {}): FormHeur
       series: [],
       fit: null,
     },
+    verticalRatio: makeMetric({ metric: 'verticalRatio', unit: 'percent', value: 0.08 }),
     trunkLean: makeMetric({ metric: 'trunkLean' }),
     overstriding: makeMetric({ metric: 'overstriding', unit: 'ratio' }),
     cadence: makeMetric({ metric: 'cadence', unit: 'stepsPerMinute', value: 170 }),
@@ -175,6 +176,7 @@ describe('computeAnalysisDiagnostics', () => {
         'overstriding',
         'trunkLean',
         'verticalOscillation',
+        'verticalRatio',
       ].sort(),
     )
     // 'view' is not a metric -- must not leak into the metrics map.

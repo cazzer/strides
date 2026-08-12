@@ -113,6 +113,17 @@ const FAKE_HEURISTICS: FormHeuristicsResult = {
     series: [],
     fit: null,
   },
+  verticalRatio: {
+    metric: 'verticalRatio',
+    value: 0.08,
+    unit: 'percent',
+    confidence: 1,
+    viewFit: 'primary',
+    interpolatedFraction: 0,
+    frameCoverage: 1,
+    sampleSize: 5,
+    caveat: null,
+  },
   trunkLean: {
     metric: 'trunkLean',
     value: 5,
