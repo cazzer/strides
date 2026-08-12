@@ -10,8 +10,9 @@ export interface ResolvedPoint {
 function findKeypoint(frame: RobustPoseFrame, name: KeypointName): RobustKeypoint {
   const kp = frame.keypoints.find((k) => k.name === name)
   if (!kp) {
-    // RobustPoseFrame.keypoints is documented as always length 12, one per
-    // COMMON_KEYPOINT_NAMES — this can only happen if that invariant was violated upstream.
+    // RobustPoseFrame.keypoints is documented as one entry per name in COMMON_KEYPOINT_NAMES, in
+    // that fixed order, never sparse — this can only happen if that invariant was violated
+    // upstream.
     throw new Error(`keypoint "${name}" missing from RobustPoseFrame`)
   }
   return kp

@@ -18,6 +18,14 @@ export const SKELETON_EDGES: [KeypointName, KeypointName][] = [
   ['left_knee', 'left_ankle'],
   ['right_hip', 'right_knee'],
   ['right_knee', 'right_ankle'],
+  // Head triangle (both ears to the nose) plus two neck anchors (each ear to its own shoulder) —
+  // three otherwise-floating head dots would read as a rendering artifact rather than a head, and
+  // the neck anchors are what visually ties the head to the rest of the skeleton. An unrecoverable
+  // ear already skips every edge that touches it, via the existing per-endpoint skip rule below.
+  ['left_ear', 'nose'],
+  ['right_ear', 'nose'],
+  ['left_ear', 'left_shoulder'],
+  ['right_ear', 'right_shoulder'],
 ]
 
 /** Full opacity for a directly-detected point/edge. */

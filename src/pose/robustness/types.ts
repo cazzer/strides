@@ -32,7 +32,9 @@ export type FrameSource = 'detected' | 'missing'
 
 export interface RobustPoseFrame {
   timestamp: number
-  /** Always length 12, COMMON_KEYPOINT_NAMES order. */
+  /** One entry per name in COMMON_KEYPOINT_NAMES, in that fixed order, never sparse —
+   * applyRobustness joins positionally, so a frame of any other length is a contract violation,
+   * not degraded input. */
   keypoints: RobustKeypoint[]
   /** 'missing' iff the detector returned null for this sample. */
   source: FrameSource

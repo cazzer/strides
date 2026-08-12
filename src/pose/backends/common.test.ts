@@ -4,10 +4,10 @@ import { MOVENET_RAW_KEYPOINTS } from './__fixtures__/movenet-keypoints.fixture'
 import { COMMON_KEYPOINT_NAMES } from '../types'
 
 describe('toPoseFrame', () => {
-  it('returns exactly 12 keypoints in COMMON_KEYPOINT_NAMES order', () => {
+  it('returns exactly 15 keypoints in COMMON_KEYPOINT_NAMES order', () => {
     const frame = toPoseFrame(MOVENET_RAW_KEYPOINTS, 1.5)
 
-    expect(frame.keypoints).toHaveLength(12)
+    expect(frame.keypoints).toHaveLength(15)
     expect(frame.keypoints.map((k) => k.name)).toEqual([
       ...COMMON_KEYPOINT_NAMES,
     ])
@@ -17,11 +17,8 @@ describe('toPoseFrame', () => {
     const frame = toPoseFrame(MOVENET_RAW_KEYPOINTS, 1.5)
 
     const names = frame.keypoints.map((k) => k.name)
-    expect(names).not.toContain('nose')
     expect(names).not.toContain('left_eye')
     expect(names).not.toContain('right_eye')
-    expect(names).not.toContain('left_ear')
-    expect(names).not.toContain('right_ear')
   })
 
   it('passes through x/y/score for keypoints in the common subset', () => {
@@ -35,6 +32,29 @@ describe('toPoseFrame', () => {
       x: 360,
       y: 160,
       score: 0.95,
+    })
+  })
+
+  it('passes through x/y/score for the newly widened head keypoints', () => {
+    const frame = toPoseFrame(MOVENET_RAW_KEYPOINTS, 1.5)
+
+    expect(frame.keypoints.find((k) => k.name === 'nose')).toEqual({
+      name: 'nose',
+      x: 320,
+      y: 100,
+      score: 0.98,
+    })
+    expect(frame.keypoints.find((k) => k.name === 'left_ear')).toEqual({
+      name: 'left_ear',
+      x: 340,
+      y: 95,
+      score: 0.9,
+    })
+    expect(frame.keypoints.find((k) => k.name === 'right_ear')).toEqual({
+      name: 'right_ear',
+      x: 300,
+      y: 95,
+      score: 0.89,
     })
   })
 
@@ -69,5 +89,15 @@ describe('toPoseFrame', () => {
 
     const leftAnkle = frame.keypoints.find((k) => k.name === 'left_ankle')
     expect(leftAnkle).toEqual({ name: 'left_ankle', x: 0, y: 0, score: 0 })
+  })
+
+  it('defaults a missing head keypoint to zero x/y/score, same as a missing limb keypoint', () => {
+    const frame = toPoseFrame(
+      MOVENET_RAW_KEYPOINTS.filter((k) => k.name !== 'nose'),
+      0,
+    )
+
+    const nose = frame.keypoints.find((k) => k.name === 'nose')
+    expect(nose).toEqual({ name: 'nose', x: 0, y: 0, score: 0 })
   })
 })

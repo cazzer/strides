@@ -1,10 +1,11 @@
 import type { RawKeypoint } from '../common'
 
 /**
- * A hand-built 17-entry raw keypoint set matching PoseNet's COCO output, including the 5 face
- * points (nose, eyes, ears) that fall outside the COMMON_KEYPOINT_NAMES subset and must be
- * dropped by toPoseFrame — same shape as MoveNet's fixture, PoseNet uses the same COCO keypoint
- * naming.
+ * A hand-built 17-entry raw keypoint set matching PoseNet's COCO output, including the 2 eye
+ * points that fall outside the COMMON_KEYPOINT_NAMES subset (nose and both ears are in it) and
+ * must be dropped by toPoseFrame — same shape as MoveNet's fixture, PoseNet uses the same COCO
+ * keypoint naming. PoseNet is registered but broken end to end (see CLAUDE.md's "Known issues")
+ * — this fixture only exercises compile-time name-mapping, never a live inference result.
  */
 export const POSENET_RAW_KEYPOINTS: RawKeypoint[] = [
   { name: 'nose', x: 320, y: 100, score: 0.98 },

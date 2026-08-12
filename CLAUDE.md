@@ -332,6 +332,37 @@ wildly different number means the calibration is wrong and the centimetres shoul
 change's `design.md`). The watch's ~10% is a *ratio*, not centimetres — not comparable. The 6–13
 cm literature range is the plausibility check the track clip passes.
 
+## Head-keypoint widening + vertical-oscillation signal A/B (2026-08-12)
+
+`COMMON_KEYPOINT_NAMES` widened from 12 to 15 (`nose`, `left_ear`, `right_ear` appended —
+`src/pose/types.ts`): both MoveNet and MediaPipe already emitted these names, they were just
+dropped at the `toPoseFrame` adapter boundary. Every downstream consumer
+(confidenceFilter/interpolate/analysisDiagnostics/skeleton overlay) was already name-driven off
+`COMMON_KEYPOINT_NAMES` rather than a hardcoded 12, so this widened for free except for
+`syntheticGait.ts`'s exhaustive keypoint-name switch, which needed a new head model (nose + ears
+as a rigid unit above the shoulders, phase-locked to the hip bounce with its own damped
+amplitude — see `openspec/changes/widen-keypoints-selectable-vo-signal/design.md`'s "D-fixture"
+section). Skeleton overlay now draws a head triangle (ear-ear-nose) plus two neck anchors
+(ear-to-same-side-shoulder).
+
+Vertical oscillation's input signal is now selectable via `HeuristicsConfig.verticalOscillationSignal:
+'hipMid' | 'earMid'` (`src/heuristics/types.ts`), backed by a generalized
+`analyzeBounceSignal(frames, config, pair)` in `hipBounce.ts` (cadence keeps calling the
+hip-pinned `analyzeHipBounce` wrapper unchanged — cadence stays hip-pinned regardless of this
+setting). **A prior offline investigation (test4-headbob.json) found ear-mid bounce roughly half
+hip-mid's run-to-run spread on both demo clips — a live, paired, 5-trial-per-clip A/B against the
+actual pipeline (real GPU, MoveNet) did NOT reproduce that advantage.** Measured this session:
+hip-mid spread 20.5% (track) / 3.2% (park), ear-mid spread 23.8% (track) / 3.5% (park) — ear-mid
+was not more stable, and on the track clip paid a real confidence cost from the single-ear
+interpolation tax (17-22% of frames only resolving one ear). The gap between the two
+investigations' findings is explained by timing: the offline investigation predates the
+spectral-fit VO estimator (#28), which already fixed most of hip-mid's original instability (its
+own measurement: park clip cross-trial spread 18.2% → 4.2%) — against that already-stabilized
+baseline, ear-mid's theoretical advantage had nothing left to add. **Default stays `hipMid`**;
+`earMid` ships as a documented, tested, available config option. Full numbers, the pre-registered
+decision rule, and the gate-by-gate evaluation are in
+`openspec/changes/widen-keypoints-selectable-vo-signal/design.md`. GitHub issue #30.
+
 ## Backlog (assessed, not yet built)
 
 One more iteration plane was scoped but deferred as of 2026-08-11 — same "bundle into one

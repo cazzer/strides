@@ -42,7 +42,7 @@ describe('applyRobustness', () => {
     expect(result).toHaveLength(3)
     result.forEach((frame, i) => {
       expect(frame.source).toBe('detected')
-      expect(frame.keypoints).toHaveLength(12)
+      expect(frame.keypoints).toHaveLength(COMMON_KEYPOINT_NAMES.length)
       frame.keypoints.forEach((kp) => {
         expect(kp.status).toBe('detected')
         expect(kp.x).toBe(i * 10)
@@ -194,6 +194,57 @@ describe('applyRobustness', () => {
     const otherName = COMMON_KEYPOINT_NAMES.find((n) => n !== LEFT_SHOULDER)!
     expect(findKeypoint(result[1], otherName).status).toBe('detected')
     expect(findKeypoint(result[1], otherName).x).toBe(999)
+  })
+
+  it('gap-fills a head channel (nose) independently of a limb channel, same as any other pair', () => {
+    const NOSE = 'nose'
+    const samples: PoseSample[] = [
+      {
+        timestamp: 0,
+        frame: {
+          timestamp: 0,
+          keypoints: COMMON_KEYPOINT_NAMES.map((name) => ({
+            name,
+            x: 0,
+            y: 0,
+            score: 0.9,
+          })),
+        },
+      },
+      {
+        timestamp: 0.1,
+        frame: {
+          timestamp: 0.1,
+          keypoints: COMMON_KEYPOINT_NAMES.map((name) => ({
+            name,
+            x: 999,
+            y: 999,
+            // only nose drops below threshold; every other keypoint (including the other two
+            // widened head names) stays present.
+            score: name === NOSE ? 0.1 : 0.9,
+          })),
+        },
+      },
+      {
+        timestamp: 0.2,
+        frame: {
+          timestamp: 0.2,
+          keypoints: COMMON_KEYPOINT_NAMES.map((name) => ({
+            name,
+            x: 10,
+            y: 10,
+            score: 0.9,
+          })),
+        },
+      },
+    ]
+
+    const result = applyRobustness(samples)
+
+    expect(findKeypoint(result[1], NOSE).status).toBe('interpolated')
+    expect(findKeypoint(result[1], NOSE).x).toBeCloseTo(5) // lerp(0, 10, 0.5)
+    expect(findKeypoint(result[1], LEFT_SHOULDER).status).toBe('detected')
+    expect(findKeypoint(result[1], LEFT_SHOULDER).x).toBe(999)
   })
 
   it('treats a zero-length gap between same-timestamp anchors as unrecoverable, not NaN', () => {

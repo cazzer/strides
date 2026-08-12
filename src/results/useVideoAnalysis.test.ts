@@ -66,10 +66,11 @@ function makeFakeDetector(): PoseDetector {
   return { estimatePose: vi.fn(), dispose: vi.fn() }
 }
 
-// A full, valid 12-keypoint frame (all resolvable) -- `trimToPresenceWindow` runs for real
-// against this (it's cheap/pure, not mocked like sampleClip/applyRobustness/
-// computeFormHeuristics are), so this fixture must satisfy RobustPoseFrame's documented "always
-// 12 keypoints" contract or `resolveMidpoint` throws on a missing keypoint.
+// A full, valid frame (every COMMON_KEYPOINT_NAMES entry resolvable) -- `trimToPresenceWindow`
+// runs for real against this (it's cheap/pure, not mocked like sampleClip/applyRobustness/
+// computeFormHeuristics are), so this fixture must satisfy RobustPoseFrame's documented
+// "one entry per COMMON_KEYPOINT_NAMES name, never sparse" contract or `resolveMidpoint` throws
+// on a missing keypoint.
 function makeFakeKeypoints(): RobustKeypoint[] {
   return COMMON_KEYPOINT_NAMES.map((name) => ({
     name,
