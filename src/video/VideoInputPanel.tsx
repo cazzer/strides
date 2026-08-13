@@ -82,12 +82,12 @@ export function VideoInputPanel({ videoSource, children }: VideoInputPanelProps)
 
       {showPicker && (
         <div className="flex flex-wrap gap-2">
-          <DemoVideoButton onLoaded={(blob) => load(blob)} disabled={isRecording} />
+          <DemoVideoButton onLoaded={(blob) => load(blob)} disabled={isRecording} label="Demo 1 (side view)" />
           <DemoVideoButton
             onLoaded={(blob) => load(blob)}
             disabled={isRecording}
             videoUrl={parkApproachDemoUrl}
-            label="Try another demo (park, front view)"
+            label="Demo 2 (front view)"
           />
         </div>
       )}
