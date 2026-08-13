@@ -97,6 +97,34 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
     })
   })
 
+  it('keeps detectForVideo timestamps strictly increasing when the video clock restarts', async () => {
+    // A cached landmarker replays the clip from 0 on every re-analysis (the scale pass path);
+    // MediaPipe rejects any non-increasing timestamp and the instance never recovers, so the
+    // backend must remap a backwards clock jump rather than pass it through (#40 M5).
+    detectForVideo.mockReturnValue({ landmarks: [makeLandmarks()], worldLandmarks: [] })
+    const video = { currentTime: 12.5, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement
+
+    const detector = await createMediaPipePoseLandmarkerDetector()
+    await detector.estimatePose(video)
+
+    // Clip replayed from the start on the same instance.
+    ;(video as { currentTime: number }).currentTime = 0
+    const restartFrame = await detector.estimatePose(video)
+    ;(video as { currentTime: number }).currentTime = 0.1
+    const nextFrame = await detector.estimatePose(video)
+
+    const emitted = detectForVideo.mock.calls.map((call) => call[1] as number)
+    expect(emitted[0]).toBe(12500)
+    // Strictly increasing across the restart, and the second run's intra-run spacing (100ms)
+    // survives the remap.
+    expect(emitted[1]).toBeGreaterThan(emitted[0])
+    expect(emitted[2] - emitted[1]).toBe(100)
+    // PoseFrame timestamps stay on the raw video clock — downstream sorting/robustness reasons
+    // about media time, not MediaPipe's internal timeline.
+    expect(restartFrame?.timestamp).toBe(0)
+    expect(nextFrame?.timestamp).toBe(0.1)
+  })
+
   it('maps landmark indices 0/7/8 to nose/left_ear/right_ear, denormalized like every other point', async () => {
     detectForVideo.mockReturnValue({ landmarks: [makeLandmarks()], worldLandmarks: [] })
     const video = { currentTime: 12.5, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement

@@ -130,6 +130,13 @@ function computePixelsPerMeter(
  * be confused with the older, deprecated `@mediapipe/pose` package this repo already stubs out
  * dead in `backends/__shims__/mediapipe-pose.ts` — that's a different, unrelated package.
  */
+/**
+ * How far past the last emitted timestamp a backwards-jumping video clock lands. Any positive
+ * gap satisfies MediaPipe's strictly-increasing requirement; one nominal frame keeps the
+ * remapped timeline at frame-like spacing across the seam.
+ */
+const TIMESTAMP_RESTART_GAP_MS = 33
+
 export async function createMediaPipePoseLandmarkerDetector(): Promise<PoseDetector> {
   const wasmFileset = await FilesetResolver.forVisionTasks(WASM_BASE_PATH)
   const landmarker = await PoseLandmarker.createFromOptions(wasmFileset, {
@@ -138,9 +145,26 @@ export async function createMediaPipePoseLandmarkerDetector(): Promise<PoseDetec
     numPoses: 1,
   })
 
+  // MediaPipe's VIDEO running mode requires strictly increasing timestamps for the lifetime of
+  // the landmarker instance, but this detector outlives a single playback: the scale pass's
+  // cached instance replays the clip from 0 on every re-analysis (a mediapipe-primary override
+  // run does the same). Feeding the restarted clock through verbatim permanently poisons the
+  // instance — every later call rejects with a packet-timestamp-mismatch error, which is how
+  // every post-first analysis on a page silently lost its VO-cm graft (issue #40's M5 probe).
+  // Remap instead: whenever the video clock fails to advance, shift everything after it so the
+  // emitted timeline keeps climbing. PoseFrame timestamps stay on the raw video clock.
+  let timestampOffsetMs = 0
+  let lastEmittedMs = -1
+
   return {
     async estimatePose(video: HTMLVideoElement): Promise<PoseFrame | null> {
-      const result = landmarker.detectForVideo(video, Math.round(video.currentTime * 1000))
+      const rawMs = Math.round(video.currentTime * 1000)
+      if (rawMs + timestampOffsetMs <= lastEmittedMs) {
+        timestampOffsetMs = lastEmittedMs + TIMESTAMP_RESTART_GAP_MS - rawMs
+      }
+      const timestampMs = rawMs + timestampOffsetMs
+      lastEmittedMs = timestampMs
+      const result = landmarker.detectForVideo(video, timestampMs)
       const landmarks = result.landmarks[0]
       if (!landmarks) return null
 
