@@ -30,6 +30,7 @@ vi.mock('./backends/mediapipePoseLandmarker', () => ({
 
 import { createDetector } from './detector'
 import type { PoseDetector } from './detector'
+import { DEFAULT_TRACKING_CROP_CONFIG } from './backends/trackingCropConfig'
 
 beforeEach(() => {
   createMoveNetDetectorMock.mockReset()
@@ -60,7 +61,7 @@ describe('createDetector', () => {
 
     await createDetector({ backend: 'movenet', movenetModelType: 'thunder' })
 
-    expect(createMoveNetDetectorMock).toHaveBeenCalledWith('thunder')
+    expect(createMoveNetDetectorMock).toHaveBeenCalledWith('thunder', undefined)
   })
 
   it('defaults to the movenet backend when no config is given', async () => {
@@ -122,5 +123,29 @@ describe('createDetector', () => {
     expect(createBlazePoseDetectorMock).not.toHaveBeenCalled()
     expect(createPoseNetDetectorMock).not.toHaveBeenCalled()
     expect(createMediaPipePoseLandmarkerDetectorMock).not.toHaveBeenCalled()
+  })
+
+  it('passes trackingCrop through to createMoveNetDetector', async () => {
+    createMoveNetDetectorMock.mockResolvedValue({
+      estimatePose: vi.fn(),
+      dispose: vi.fn(),
+    })
+    const trackingCrop = { ...DEFAULT_TRACKING_CROP_CONFIG, enabled: false }
+
+    await createDetector({ backend: 'movenet', trackingCrop })
+
+    expect(createMoveNetDetectorMock).toHaveBeenCalledWith(undefined, trackingCrop)
+  })
+
+  it('passes both movenetModelType and trackingCrop through to createMoveNetDetector', async () => {
+    createMoveNetDetectorMock.mockResolvedValue({
+      estimatePose: vi.fn(),
+      dispose: vi.fn(),
+    })
+    const trackingCrop = { ...DEFAULT_TRACKING_CROP_CONFIG, enabled: false }
+
+    await createDetector({ backend: 'movenet', movenetModelType: 'thunder', trackingCrop })
+
+    expect(createMoveNetDetectorMock).toHaveBeenCalledWith('thunder', trackingCrop)
   })
 })

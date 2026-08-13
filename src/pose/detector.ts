@@ -1,5 +1,6 @@
 import { createMoveNetDetector } from './backends/movenet'
 import type { MoveNetModelType } from './backends/movenet'
+import type { TrackingCropConfig } from './backends/trackingCropConfig'
 import { createBlazePoseDetector } from './backends/blazepose'
 import { createPoseNetDetector } from './backends/posenet'
 import { createMediaPipePoseLandmarkerDetector } from './backends/mediapipePoseLandmarker'
@@ -11,6 +12,8 @@ export interface PoseDetectorConfig {
   backend: PoseBackendId
   /** Only meaningful when backend: 'movenet'. Defaults to 'lightning'. */
   movenetModelType?: MoveNetModelType
+  /** Only meaningful when backend: 'movenet'. Defaults to DEFAULT_TRACKING_CROP_CONFIG. */
+  trackingCrop?: TrackingCropConfig
 }
 
 export interface PoseDetector {
@@ -19,7 +22,7 @@ export interface PoseDetector {
 }
 
 const backends: Record<PoseBackendId, (config: PoseDetectorConfig) => Promise<PoseDetector>> = {
-  movenet: (config) => createMoveNetDetector(config.movenetModelType),
+  movenet: (config) => createMoveNetDetector(config.movenetModelType, config.trackingCrop),
   blazepose: () => createBlazePoseDetector(),
   posenet: () => createPoseNetDetector(),
   mediapipePoseLandmarker: () => createMediaPipePoseLandmarkerDetector(),

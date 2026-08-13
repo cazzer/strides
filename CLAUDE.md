@@ -85,9 +85,14 @@ output.
   filtering, interpolation gap tolerance, detection error tolerance, per-frame timeout.
 - `window.__STRIDES_POSE_BACKEND_OVERRIDE__` — partial `PoseDetectorConfig`
   (`src/pose/poseBackendConfig.ts`): `{ backend: 'movenet' | 'blazepose' | 'posenet' |
-  'mediapipePoseLandmarker', movenetModelType?: 'lightning' | 'thunder' }`. `movenetModelType`
-  only matters when `backend: 'movenet'` (defaults to `'lightning'`); ignored otherwise. Read
-  once per detector creation in `usePoseDetector.ts`.
+  'mediapipePoseLandmarker', movenetModelType?: 'lightning' | 'thunder', trackingCrop?:
+  Partial<TrackingCropConfig> }`. `movenetModelType` and `trackingCrop`
+  (`src/pose/backends/trackingCropConfig.ts`: enable flag, keypoint-confidence gate, padding
+  multiplier, minimum crop size, reacquisition-loss debounce) only matter when `backend:
+  'movenet'` (default `'lightning'`, default tracking-crop config respectively); ignored
+  otherwise. `trackingCrop` merges shallowly, one level deep, over the default — set `{
+  trackingCrop: { enabled: false } }` to A/B against the pre-tracking-crop baseline. Read once
+  per detector creation in `usePoseDetector.ts`.
 - Math (`HeuristicsConfig`) selection doesn't have an override point yet — deferred, see
   "Backlog" below.
 - **Set overrides with `page.addInitScript()`, not `page.evaluate()`.** Auto-analyze can start
@@ -451,10 +456,30 @@ narrower follow-up if that granularity is ever needed. Status: `movenet` and
 GitHub issues #24 (MoveNet variant — done, results recorded), #25 (MediaPipe Tasks Vision — done,
 works), #26 (PoseNet — done, confirmed broken, not worth further investment).
 
-Also flagged, not yet scoped: input preprocessing (resize/crop before detection — the actual
-root cause of this session's low-confidence demo-clip investigation, a 4K frame with the subject
-too small/distant after downscaling to the model's fixed input size) doesn't have a pluggable
-stage at all yet; and the eval harness/comparison tooling itself (multi-trial, labeled,
+Input preprocessing now has a pluggable stage too: MoveNet's backend gained an external
+tracking-crop layer (`src/pose/backends/movenetCrop.ts`, `trackingCropConfig.ts`) — once a
+subject is detected, subsequent frames run against a padded, upscaled crop centered on the
+tracked bounding box instead of the full (possibly 4K, subject-too-small-after-downscale) frame,
+falling back to full-frame detection after sustained tracking loss. Config override: the same
+`window.__STRIDES_POSE_BACKEND_OVERRIDE__`'s `trackingCrop` field, see "Config overrides" above.
+It was the "input preprocessing has no pluggable stage" backlog item (built 2026-08-11, ported
+onto the 15-keypoint/9-metric main and re-verified 2026-08-13 — fresh A/B table below).
+
+**Live A/B (2026-08-13, both demo clips, 3 trials per arm, real GPU, `trackingCrop: { enabled:
+false }` vs. the `enabled: true` default):**
+
+<!-- REVIVAL-AB-TABLE -->
+
+Tracking only helps *after* a subject has already been confidently detected once; it doesn't
+help the cold-start moment (subject entering frame, already small/distant) that's likely a
+meaningful share of the missed detections — a genuinely different problem (upstream
+resize/preprocessing before *any* detection attempt) that this feature doesn't address. The
+original 2026-08-11 verification measured `kneeFlexion` confidence *lower* with cropping on
+(0.79-0.84 vs. 0.90-0.96 disabled) — a real, open trade-off, re-measured in the 2026-08-13 A/B
+above. No crashes or regressions across any trial, including the track clip's known
+off-screen-start/off-screen-end shape.
+
+Also flagged, not yet scoped: the eval harness/comparison tooling itself (multi-trial, labeled,
 diffable) that would actually drive variants through these config planes hasn't been built —
 this doc covers how to do it by hand, not a scripted harness.
 
