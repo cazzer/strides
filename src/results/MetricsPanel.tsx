@@ -174,9 +174,29 @@ export function MetricsPanel({ heuristics }: MetricsPanelProps) {
     heuristics.footStrikePattern,
   ]
   const excluded = metrics.filter((metric) => metricTier(metric) === 'excluded')
+  const caveatedCount = metrics.filter((metric) => metricTier(metric) === 'caveated').length
+  const normalCount = metrics.length - caveatedCount - excluded.length
+
+  // One quiet line so a user who never scrolls the (height-capped) results pane still learns
+  // that some metrics carry caveats or were excluded — the deleted LowConfidenceBanner's one
+  // real job. Rendered only when there's something to say; an all-normal run stays clean.
+  const summaryParts = [
+    `${normalCount} metric${normalCount === 1 ? '' : 's'} measured`,
+    ...(caveatedCount > 0
+      ? [`${caveatedCount} with caveat${caveatedCount === 1 ? '' : 's'}`]
+      : []),
+    ...(excluded.length > 0
+      ? [`${excluded.length} not measured for this clip (listed below)`]
+      : []),
+  ]
 
   return (
     <section className="metrics-panel space-y-6" aria-label="Form metrics">
+      {(caveatedCount > 0 || excluded.length > 0) && (
+        <p className="metrics-panel__tier-summary font-sans text-sm text-neutral-600 dark:text-neutral-400">
+          {summaryParts.join(' · ')}
+        </p>
+      )}
       <div className="@container grid gap-4 @lg:grid-cols-2 @3xl:grid-cols-3">
         {metrics.map((metric) =>
           metricTier(metric) !== 'excluded' ? (

@@ -87,6 +87,15 @@ section, each preserve `MetricId` declaration order — never re-sorted by confi
 - **WHEN** every metric in the result lands in tier 1 or tier 2
 - **THEN** no excluded section renders at all
 
+#### Scenario: A tier-count summary line surfaces caveated and excluded counts at the top of the panel
+
+- **WHEN** at least one metric lands in tier 2 or tier 3
+- **THEN** a single summary line renders above the card grid counting metrics measured, metrics
+  with caveats, and metrics not measured for this clip — so a user who never scrolls the
+  results pane still learns that some metrics carry caveats or were excluded
+- **WHEN** every metric lands in tier 1
+- **THEN** no summary line renders
+
 #### Scenario: Cards and excluded entries preserve declaration order within their own section
 
 - **WHEN** the panel renders the card grid and, separately, the excluded section

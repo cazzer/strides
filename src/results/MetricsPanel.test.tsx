@@ -276,6 +276,20 @@ describe('MetricsPanel', () => {
     ).toBeInTheDocument()
   })
 
+  it('renders a tier-count summary line when any metric is caveated or excluded', () => {
+    render(<MetricsPanel heuristics={makeMixedTierResult()} />)
+    expect(
+      screen.getByText(
+        '6 metrics measured · 1 with caveat · 2 not measured for this clip (listed below)',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('renders no summary line for an all-tier-1 result', () => {
+    const { container } = render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
+    expect(container.querySelector('.metrics-panel__tier-summary')).not.toBeInTheDocument()
+  })
+
   it('7 cards render in the grid and 2 metrics are excluded for the mixed-tier fixture', () => {
     const { container } = render(<MetricsPanel heuristics={makeMixedTierResult()} />)
     const cards = container.querySelectorAll('.metrics-panel__card')

@@ -193,8 +193,9 @@ describe('ResultsView', () => {
     })
     // #37 superseded the standalone LowConfidenceBanner with MetricsPanel's own excluded
     // section -- this asserts the excluded metric surfaces there, and that no separate
-    // "lower-confidence results" banner text exists anywhere in ResultsView anymore.
-    expect(screen.getByText(/not measured for this clip/i)).toBeInTheDocument()
+    // "lower-confidence results" banner text exists anywhere in ResultsView anymore. (Text
+    // queries for the phrase would now be ambiguous: the tier-summary line repeats it, by
+    // design — so both assertions scope by the section's accessible role.)
     expect(screen.getByRole('region', { name: /not measured for this clip/i })).toHaveTextContent(
       /trunk lean/i,
     )
