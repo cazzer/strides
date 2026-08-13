@@ -31,7 +31,8 @@ those three.
 ### Requirement: Scale-calibrated vertical oscillation appears only when measured
 The system SHALL include a `scaleCalibration` block in the diagnostics object when, and only
 when, the input `FormHeuristicsResult`'s `verticalOscillationCm.calibration` is non-null —
-reporting the centimetre amplitude, the number of complete bounce cycles observed, the statistics
+reporting the centimetre amplitude, the number of complete bounce cycles observed (both the
+fractional sum across contributing runs and its floored count), the statistics
 of the spectral fit the amplitude came from (or `null` when no fit produced one), the typed reason
 no amplitude was produced (or `null` when one was), the scale drift ratio, the median
 pixels-per-metre, the implied torso length in metres, the scale coverage, and the number of
