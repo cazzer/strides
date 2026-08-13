@@ -486,6 +486,29 @@ describe('MetricsPanel', () => {
     ).not.toBeInTheDocument()
   })
 
+  it("says a second pass tried but couldn't, for a null-value verticalOscillationCm after a failed pass", () => {
+    const heuristics = makeHighConfidenceResult()
+    heuristics.verticalOscillationCm = makeVerticalOscillationCm({
+      value: null,
+      confidence: 0,
+      caveat:
+        "No real-world scale was measured for this clip, so bounce can't be reported in centimetres.",
+    })
+
+    render(<MetricsPanel heuristics={heuristics} scalePassStatus="failed" />)
+
+    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    expect(
+      within(excludedSection).getByText(
+        "A second pass tried to measure real-world scale for this clip but couldn't.",
+      ),
+    ).toBeInTheDocument()
+    // The bare availability caveat would imply the capability was never exercised.
+    expect(
+      within(excludedSection).queryByText(/no real-world scale was measured/i),
+    ).not.toBeInTheDocument()
+  })
+
   it('shows the caveat, not the hint, when no scale pass is in progress', () => {
     const heuristics = makeHighConfidenceResult()
     heuristics.verticalOscillationCm = makeVerticalOscillationCm({
