@@ -63,9 +63,19 @@ under the same run-identity guard the primary run uses.
 
 #### Scenario: A superseded scale pass never writes state
 
-- **WHEN** `reset()` is called, or a new clip loads, while a scale pass is `'running'`
-- **THEN** the pass's sampling handle is stopped, and any late resolution of its promise writes
-  nothing — no graft, no status change on the new run's state
+- **WHEN** `reset()` is called, a new clip loads, or `start()` begins a new analysis run while
+  a scale pass is `'running'`
+- **THEN** the pass's sampling handle is stopped before the new run samples (a still-attached
+  scale sampler must never run inference concurrently with a primary pass), and any late
+  resolution of its promise writes nothing — no graft, no status change on the new run's state
+
+#### Scenario: A user pause mid-pass fails the pass fast
+
+- **WHEN** video playback pauses while the scale pass is `'running'` and the video has not
+  reached its natural end
+- **THEN** the pass is stopped and marked `'failed'` immediately (a paused replay produces no
+  frames; waiting for the watchdog would leave a false "measuring" state up for tens of
+  seconds), while a pause event fired by the clip's natural end is ignored
 
 ### Requirement: The centimetre card reflects scale-pass progress
 
@@ -75,8 +85,14 @@ real-world scale is being measured by a second detection pass, in place of its a
 caveat. When the pass concludes, the metric SHALL render through the existing confidence-tier
 rules with no scale-pass-specific card treatment: a grafted non-null value lands in whatever
 tier its own confidence puts it in (its caveat, including the provenance sentence, rendering
-per that tier's existing rules), and on a failed or skipped pass the excluded entry SHALL fall
-back to the metric's own caveat verbatim, exactly as it renders today.
+per that tier's existing rules). After a `'failed'` pass, a null-valued entry SHALL say that a
+second pass tried but couldn't measure (the availability caveat alone would imply the
+capability is absent when the app just ran it); after a `'skipped'` pass it SHALL fall back to
+the metric's own caveat verbatim, exactly as it renders today. The always-visible analysis
+status line (`role="status"`) SHALL narrate the pass — an in-progress sentence while
+`'pending'`/`'running'` and a one-sentence outcome on `'done'` or `'failed'` — since the
+excluded-list hint may sit below the fold and the status line is the panel's only
+screen-reader announcement path.
 
 #### Scenario: The excluded entry hints at the in-flight pass
 
@@ -92,12 +108,24 @@ back to the metric's own caveat verbatim, exactly as it renders today.
 - **THEN** the metric renders as a card in its confidence tier, its note carrying the grafted
   caveat with the provenance sentence — no new card state, styling, or tier is introduced
 
-#### Scenario: A failed or skipped pass falls back to the caveat
+#### Scenario: A failed pass says the attempt happened
 
-- **WHEN** the scale pass is `'failed'` or `'skipped'` and `verticalOscillationCm.value` is
-  `null`
-- **THEN** the excluded entry shows the metric's own caveat verbatim (the availability
-  statement, or the grafted fit-failure reason), with no in-progress hint
+- **WHEN** the scale pass is `'failed'` and `verticalOscillationCm.value` is `null`
+- **THEN** the excluded entry says a second pass tried to measure real-world scale for this
+  clip but couldn't — not the bare availability caveat, which would imply the capability was
+  never exercised
+
+#### Scenario: A skipped pass falls back to the caveat
+
+- **WHEN** the scale pass is `'skipped'` and `verticalOscillationCm.value` is `null`
+- **THEN** the excluded entry shows the metric's own caveat verbatim, with no in-progress hint
+
+#### Scenario: The status line narrates the pass
+
+- **WHEN** the analysis is `'ready'` and the scale pass is `'pending'`/`'running'`, then later
+  `'done'` or `'failed'`
+- **THEN** the `role="status"` completion line appends an in-progress sentence while the pass
+  runs and a one-sentence outcome when it concludes; a `'skipped'` pass appends nothing
 
 ## MODIFIED Requirements
 

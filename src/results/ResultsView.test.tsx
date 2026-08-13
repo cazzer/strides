@@ -150,6 +150,62 @@ describe('ResultsView', () => {
     expect(screen.getByRole('status').textContent).toMatch(/complete/i)
   })
 
+  it('narrates the scale pass through the status line: measuring, then measured', () => {
+    // The status line is the pass's only always-visible surface (the excluded-list hint sits
+    // below the fold) and its only screen-reader announcement path.
+    const { rerender } = render(
+      <ResultsView
+        analysis={makeAnalysis({
+          phase: 'ready',
+          heuristics: makeHeuristics(),
+          scalePass: { status: 'running', diagnostics: null },
+        })}
+        onTryAgain={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('status').textContent).toMatch(
+      /measuring one more metric with a second pass/i,
+    )
+
+    rerender(
+      <ResultsView
+        analysis={makeAnalysis({
+          phase: 'ready',
+          heuristics: makeHeuristics(),
+          scalePass: { status: 'done', diagnostics: null },
+        })}
+        onTryAgain={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('status').textContent).toMatch(
+      /one more metric was measured by a second pass/i,
+    )
+  })
+
+  it('says the second pass ran but failed, in the status line, when it fails', () => {
+    renderResultsView({
+      analysis: makeAnalysis({
+        phase: 'ready',
+        heuristics: makeHeuristics(),
+        scalePass: { status: 'failed', error: 'x', diagnostics: null },
+      }),
+    })
+    expect(screen.getByRole('status').textContent).toMatch(
+      /second measurement pass ran but couldn't add its metric/i,
+    )
+  })
+
+  it('keeps the status line to plain completion when the pass was skipped', () => {
+    renderResultsView({
+      analysis: makeAnalysis({
+        phase: 'ready',
+        heuristics: makeHeuristics(),
+        scalePass: { status: 'skipped', reason: 'primary-scale', diagnostics: null },
+      }),
+    })
+    expect(screen.getByRole('status').textContent).toBe('Analysis complete.')
+  })
+
   it('shows an error alert and calls onTryAgain (not analysis.reset directly) from its button', () => {
     const analysis = makeAnalysis({
       phase: 'error',

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import type { ScalePassStatus } from './types'
 import type { FormHeuristicsResult, MetricId, MetricResult } from '../heuristics/types'
 import { DEFAULT_HEURISTICS_CONFIG } from '../heuristics/types'
 import { classifyFootStrike } from '../heuristics/footStrikePattern'
@@ -13,11 +14,13 @@ import {
 
 export interface MetricsPanelProps {
   heuristics: FormHeuristicsResult
-  /** True while the background scale pass is 'pending'/'running' (add-background-scale-pass,
-   * D5). Its one effect: a null-valued `verticalOscillationCm`'s excluded entry shows a
-   * measuring-in-progress hint instead of its availability caveat. Optional so every call site
-   * without a scale pass in play is unchanged. */
-  scalePassInProgress?: boolean
+  /** The background scale pass's status (add-background-scale-pass, D5). Two effects, both on
+   * the null-valued `verticalOscillationCm` excluded entry only: 'pending'/'running' shows a
+   * measuring-in-progress hint instead of the availability caveat, and 'failed' shows a
+   * tried-but-couldn't line (the availability caveat alone would imply the capability is
+   * absent when the app just ran it). Optional so every call site without a scale pass in
+   * play is unchanged. */
+  scalePassStatus?: ScalePassStatus
 }
 
 const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
@@ -179,7 +182,8 @@ function ExcludedEntry({ metric, hint }: ExcludedEntryProps) {
  * `footStrikePattern`'s `caveat` is always non-null (even at its cleanest) since that metric is a
  * documented proxy end to end — it renders on its card whenever it lands in tier 1/2.
  */
-export function MetricsPanel({ heuristics, scalePassInProgress = false }: MetricsPanelProps) {
+export function MetricsPanel({ heuristics, scalePassStatus = 'idle' }: MetricsPanelProps) {
+  const scalePassInProgress = scalePassStatus === 'pending' || scalePassStatus === 'running'
   const metrics: MetricResult[] = [
     heuristics.verticalOscillation,
     heuristics.verticalRatio,
@@ -252,13 +256,17 @@ export function MetricsPanel({ heuristics, scalePassInProgress = false }: Metric
                 metric={metric}
                 // While the background scale pass is measuring, the centimetre metric's
                 // availability caveat ("no scale was measured") isn't the truth yet-to-come —
-                // hint at the in-flight measurement instead. Null-value only: a non-null value
-                // excluded on confidence alone keeps its own (accurate) caveat.
+                // hint at the in-flight measurement instead; after a failed pass, say the
+                // attempt happened (the availability caveat alone would imply the capability
+                // is absent when the app just ran it). Null-value only: the only non-null
+                // excluded shape is an unsuitable view, whose own caveat is the accurate one.
                 hint={
-                  scalePassInProgress &&
-                  metric.metric === 'verticalOscillationCm' &&
-                  metric.value === null
-                    ? 'Measuring real-world scale with a second detection pass…'
+                  metric.metric === 'verticalOscillationCm' && metric.value === null
+                    ? scalePassInProgress
+                      ? 'Measuring real-world scale with a second detection pass…'
+                      : scalePassStatus === 'failed'
+                        ? "A second pass tried to measure real-world scale for this clip but couldn't."
+                        : undefined
                     : undefined
                 }
               />

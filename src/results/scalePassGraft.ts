@@ -6,7 +6,7 @@ import type { FormHeuristicsResult } from '../heuristics/types'
  * tests and surfaced verbatim in the UI; do not reword without updating both.
  */
 export const SCALE_PASS_PROVENANCE_CAVEAT =
-  'Measured by a second, scale-aware detection pass (MediaPipe Pose Landmarker) over the same clip; all other metrics come from the primary pass.'
+  'Measured by a second, scale-aware analysis pass (MediaPipe) of the same clip; all other metrics come from the main analysis.'
 
 /**
  * Grafts a completed background scale pass's `verticalOscillationCm` onto the primary pass's

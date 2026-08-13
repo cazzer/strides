@@ -856,6 +856,89 @@ describe('useVideoAnalysis', () => {
       expect(computeFormHeuristicsMock).toHaveBeenCalledTimes(1)
     })
 
+    it('start() mid-pass stops the scale handle so it cannot sample concurrently with the new run', async () => {
+      const scaleHandle = makeFakeHandle()
+      let resolveScale!: (samples: unknown[]) => void
+      sampleClipMock
+        .mockImplementationOnce(() => ({
+          promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+          handle: makeFakeHandle(),
+        }))
+        .mockImplementationOnce(() => ({
+          promise: new Promise((resolve) => {
+            resolveScale = resolve
+          }),
+          handle: scaleHandle,
+        }))
+        // The re-analyze run's primary pass.
+        .mockImplementationOnce(() => ({
+          promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+          handle: makeFakeHandle(),
+        }))
+      computeFormHeuristicsMock.mockReturnValue(FAKE_HEURISTICS)
+
+      const videoSource = makeVideoSource()
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.scalePass.status).toBe('running'))
+
+      act(() => {
+        result.current.start()
+      })
+      // The old pass's sampler must be stopped BEFORE the new run samples -- a still-attached
+      // MediaPipe loop would run inference concurrently with the new primary pass, silently
+      // degrading its sampling density.
+      expect(scaleHandle.stop).toHaveBeenCalledTimes(1)
+
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      const heuristicsAfterRestart = result.current.heuristics
+
+      // The abandoned pass's late resolution writes nothing into the new run.
+      await act(async () => {
+        resolveScale([{ timestamp: 0, frame: null }])
+      })
+      expect(result.current.heuristics).toBe(heuristicsAfterRestart)
+    })
+
+    it('fails fast when the user pauses playback mid-pass, and ignores the natural ended pause', async () => {
+      const scaleHandle = makeFakeHandle()
+      sampleClipMock
+        .mockImplementationOnce(() => ({
+          promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+          handle: makeFakeHandle(),
+        }))
+        .mockImplementationOnce(() => ({
+          promise: new Promise(() => {}),
+          handle: scaleHandle,
+        }))
+      computeFormHeuristicsMock.mockReturnValue(FAKE_HEURISTICS)
+
+      const video = document.createElement('video')
+      const videoSource = makeVideoSource({ videoRef: { current: video } })
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.scalePass.status).toBe('running'))
+      const scaleCallOptions = sampleClipMock.mock.calls[1][3] as {
+        onPausedChange?: (paused: boolean) => void
+      }
+      expect(scaleCallOptions.onPausedChange).toBeTypeOf('function')
+
+      // A natural clip end also fires 'pause' -- with video.ended true it must NOT fail the pass.
+      Object.defineProperty(video, 'ended', { configurable: true, value: true })
+      act(() => scaleCallOptions.onPausedChange!(true))
+      expect(result.current.scalePass.status).toBe('running')
+
+      // A genuine user pause (video not ended) fails the pass immediately.
+      Object.defineProperty(video, 'ended', { configurable: true, value: false })
+      act(() => scaleCallOptions.onPausedChange!(true))
+      expect(result.current.scalePass.status).toBe('failed')
+      expect(result.current.scalePass.error).toMatch(/paused/i)
+      expect(scaleHandle.stop).toHaveBeenCalledTimes(1)
+      expect(result.current.heuristics).toBe(FAKE_HEURISTICS)
+    })
+
     it('keeps the video un-looped while the pass runs, and loops it after done', async () => {
       let resolveScale!: (samples: unknown[]) => void
       sampleClipMock

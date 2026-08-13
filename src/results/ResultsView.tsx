@@ -56,7 +56,21 @@ export function ResultsView({ analysis, onTryAgain }: ResultsViewProps) {
         </p>
       )}
 
-      {phase === 'ready' && <p role="status">Analysis complete.</p>}
+      {phase === 'ready' && (
+        <p role="status">
+          Analysis complete.
+          {/* The scale pass's only always-visible narrative (and the screen-reader
+              announcement path): the hint in the excluded list sits below the fold, and the
+              video visibly replays during the pass — this line explains both. */}
+          {(analysis.scalePass.status === 'pending' ||
+            analysis.scalePass.status === 'running') &&
+            ' Measuring one more metric with a second pass…'}
+          {analysis.scalePass.status === 'done' &&
+            ' One more metric was measured by a second pass.'}
+          {analysis.scalePass.status === 'failed' &&
+            " A second measurement pass ran but couldn't add its metric."}
+        </p>
+      )}
 
       {phase === 'error' && error && (
         <div className="border-2 border-black dark:border-white border-l-4 border-l-brand-600 dark:border-l-brand-400 p-4 space-y-2" role="alert">
@@ -73,13 +87,7 @@ export function ResultsView({ analysis, onTryAgain }: ResultsViewProps) {
 
       {phase === 'ready' && heuristics && (
         <div className="results-view__results space-y-4">
-          <MetricsPanel
-            heuristics={heuristics}
-            scalePassInProgress={
-              analysis.scalePass.status === 'pending' ||
-              analysis.scalePass.status === 'running'
-            }
-          />
+          <MetricsPanel heuristics={heuristics} scalePassStatus={analysis.scalePass.status} />
           {/*
             Save/export (e.g. Google Drive) is explicitly out of scope for this build — this is
             the seam a future ticket hooks into. No auth, no API calls, no stub button: just the

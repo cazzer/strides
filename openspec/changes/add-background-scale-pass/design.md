@@ -123,3 +123,33 @@ second effect, keyed on the `scalePass` object identity, emits
 only on `'done'`. Same `import.meta.env.DEV` gate. A harness therefore reads:
 first line = primary (its `'scaleCalibration' in …` test now discriminates the PRIMARY backend
 only); second line = the scale pass, including the full scale-pass diagnostics on success.
+
+## Review repair round (2026-08-13)
+
+Code + UX review findings applied in one round:
+
+1. **`start()` now stops a running scale pass** (🔴): the "Analyze again" button is enabled at
+   'ready' — exactly the pass's window — and a still-attached MediaPipe sampler would run
+   inference concurrently with the new primary run, degrading its sampling density. New test:
+   start-mid-pass stops the handle, late resolution writes nothing.
+2. **Watchdog covers detector creation**: `getScalePassDetector()` is awaited under a
+   `Promise.race` with the watchdog interval — a hung WASM/model fetch now fails the pass
+   instead of leaving it 'running' page-lifetime (the detector module caches the still-pending
+   promise, so without this every later pass would await the same hang).
+3. **User pause fails the pass fast** via `onPausedChange` (natural-end pauses are
+   distinguished by `video.ended`): a paused replay produces no frames, and waiting out the
+   watchdog left a false "measuring" hint up for tens of seconds.
+4. **Status-line narration**: the `role="status"` "Analysis complete." line appends an
+   in-progress sentence while the pass runs and a one-sentence outcome on done/failed — the
+   excluded-list hint sits below the fold, the video visibly replays unexplained without it,
+   and this is the panel's only screen-reader announcement path.
+5. **Failed-pass copy**: a null-valued centimetre entry after a 'failed' pass now says a second
+   pass tried but couldn't, instead of the availability caveat (which implied the capability
+   was never exercised). MetricsPanel's prop widened from `scalePassInProgress` to
+   `scalePassStatus` to carry this.
+6. **Provenance sentence simplified** ("second, scale-aware analysis pass (MediaPipe) of the
+   same clip; all other metrics come from the main analysis") per UX review — less jargon,
+   same transparency.
+
+Deferred as follow-ups (UX 🟢/polish): letting the loop run during a cold detector fetch,
+one-time highlight on the grafted card, summary-line "measured" attribution.

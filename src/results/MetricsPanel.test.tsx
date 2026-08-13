@@ -472,7 +472,7 @@ describe('MetricsPanel', () => {
         "No real-world scale was measured for this clip, so bounce can't be reported in centimetres.",
     })
 
-    render(<MetricsPanel heuristics={heuristics} scalePassInProgress />)
+    render(<MetricsPanel heuristics={heuristics} scalePassStatus="running" />)
 
     const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
     expect(
@@ -517,7 +517,7 @@ describe('MetricsPanel', () => {
       caveat: 'Scale coverage was low for this clip -- confidence reduced accordingly.',
     })
 
-    render(<MetricsPanel heuristics={heuristics} scalePassInProgress />)
+    render(<MetricsPanel heuristics={heuristics} scalePassStatus="running" />)
 
     const card = screen.getByLabelText('Vertical oscillation (cm)')
     expect(card.getAttribute('data-tier')).toBe('caveated')
@@ -543,11 +543,9 @@ describe('MetricsPanel', () => {
     expect(within(card).getByText('12.0 cm')).toBeInTheDocument()
     const note = within(card).getByRole('note')
     expect(note.textContent).toContain(
-      'Measured by a second, scale-aware detection pass (MediaPipe Pose Landmarker)',
+      'Measured by a second, scale-aware analysis pass (MediaPipe)',
     )
   })
-
-  
 
   it('counts a below-0.4-confidence card under "with caveats" in the summary line', () => {
     const heuristics = makeHighConfidenceResult()

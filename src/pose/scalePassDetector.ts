@@ -26,15 +26,17 @@ export async function getScalePassDetector(): Promise<PoseDetector | null> {
   if (!detectorPromise) {
     detectorPromise = createDetector({ backend: 'mediapipePoseLandmarker' })
   }
+  const attempted = detectorPromise
   try {
-    const created = await detectorPromise
+    const created = await attempted
     detectorInstance = created
     return created
   } catch {
     // Creation failed (e.g. the WASM asset fetch failed). Reset the pending promise so the next
     // analysis run retries instead of awaiting a cached rejection forever; return null so the
     // caller marks its pass 'failed' and moves on — the primary result never depends on this.
-    detectorPromise = null
+    // Only forget OUR attempt: a concurrent caller may already have installed a fresh one.
+    if (detectorPromise === attempted) detectorPromise = null
     return null
   }
 }

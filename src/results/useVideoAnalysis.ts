@@ -127,6 +127,12 @@ export function useVideoAnalysis(
     }
 
     handleRef.current?.stop()
+    // A still-running scale pass belongs to the run being replaced — without this stop, its
+    // sampler stays attached to the video and runs MediaPipe inference concurrently with the
+    // new primary run, silently degrading the new run's sampling density (review finding,
+    // add-background-scale-pass).
+    scaleHandleRef.current?.stop()
+    scaleHandleRef.current = null
     // Clear any loop left armed by a previous run's ready-state loop-restart (see the effect
     // below) — a looping video never fires `ended`, which sampleClip relies on to resolve.
     video.loop = false
@@ -321,13 +327,24 @@ export function useVideoAnalysis(
     setState((s) => ({ ...s, scalePass: { status: 'running', diagnostics: null } }))
 
     // Same resolution discipline as the primary run: the sampling/robustness plane is one
-    // object, resolved once per pass. No onProgress/onPausedChange — the pass is background
-    // work; nothing renders its progress.
+    // object, resolved once per pass. No onProgress — nothing renders the pass's progress;
+    // onPausedChange is wired below only to fail fast on a user pause.
     const samplingRobustnessConfig = resolveSamplingRobustnessConfig()
     const watchdogMs = Math.max(30_000, 3 * metadata.durationSec * 1000)
 
     void (async () => {
-      const scaleDetector = await getScalePassDetector()
+      // The watchdog must bound detector creation too: a stalled WASM/model fetch never
+      // settles, and getScalePassDetector caches the still-pending promise — without this
+      // race the pass would sit 'running' forever (frozen video, permanent hint) and every
+      // later run's pass would await the same hung promise.
+      let detectorDeadline: ReturnType<typeof setTimeout> | undefined
+      const scaleDetector = await Promise.race([
+        getScalePassDetector(),
+        new Promise<null>((resolve) => {
+          detectorDeadline = setTimeout(() => resolve(null), watchdogMs)
+        }),
+      ])
+      clearTimeout(detectorDeadline)
       if (runIdRef.current !== runId) return
       if (!scaleDetector) {
         failPass('The scale-pass detector could not be created.')
@@ -340,9 +357,19 @@ export function useVideoAnalysis(
       video.loop = false
       video.currentTime = 0
 
+      // Forward declaration: onPausedChange below needs abortPass, which needs the handle.
+      let abortPassRef: (error: string) => void = () => {}
       const { promise, handle } = sampleClip(video, scaleDetector, metadata.durationSec, {
         maxConsecutiveErrors: samplingRobustnessConfig.maxConsecutiveErrors,
         detectionTimeoutMs: samplingRobustnessConfig.detectionTimeoutMs,
+        // Fail fast on a user pause instead of letting the pass zombie-stall until the
+        // watchdog: the native controls are visible, and a paused replay produces no frames.
+        // A natural clip end also fires 'pause' — video.ended distinguishes it.
+        onPausedChange: (paused) => {
+          if (paused && !video.ended) {
+            abortPassRef('Video playback was paused before the scale pass finished.')
+          }
+        },
       })
       scaleHandleRef.current = handle
 
@@ -359,6 +386,7 @@ export function useVideoAnalysis(
         if (scaleHandleRef.current === handle) scaleHandleRef.current = null
         failPass(error)
       }
+      abortPassRef = abortPass
       // Wall-clock watchdog: the pass replays the clip in real time, so anything past a few
       // multiples of the clip's duration means it is stuck, not slow.
       const watchdog = setTimeout(() => {
