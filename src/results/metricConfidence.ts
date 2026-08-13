@@ -3,6 +3,7 @@ import type { MetricId, MetricResult } from '../heuristics/types'
 export const METRIC_LABELS: Record<MetricId, string> = {
   verticalOscillation: 'Vertical oscillation',
   verticalRatio: 'Vertical ratio',
+  verticalOscillationCm: 'Vertical oscillation (cm)',
   trunkLean: 'Trunk lean',
   overstriding: 'Overstriding',
   cadence: 'Cadence',

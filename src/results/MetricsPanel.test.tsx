@@ -1,10 +1,11 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { MetricsPanel } from './MetricsPanel'
 import type {
   FormHeuristicsResult,
   MetricResult,
   TimeseriesPoint,
+  VerticalOscillationCmResult,
   VerticalOscillationResult,
 } from '../heuristics/types'
 
@@ -43,6 +44,24 @@ function makeVerticalOscillation(
   }
 }
 
+function makeVerticalOscillationCm(
+  overrides: Partial<VerticalOscillationCmResult> = {},
+): VerticalOscillationCmResult {
+  return {
+    metric: 'verticalOscillationCm',
+    value: 4.79,
+    unit: 'centimeters',
+    confidence: 0.9,
+    viewFit: 'primary',
+    interpolatedFraction: 0,
+    frameCoverage: 1,
+    sampleSize: 3,
+    caveat: null,
+    calibration: null,
+    ...overrides,
+  }
+}
+
 function makeHighConfidenceResult(): FormHeuristicsResult {
   return {
     view: {
@@ -64,6 +83,9 @@ function makeHighConfidenceResult(): FormHeuristicsResult {
       unit: 'percent',
       confidence: 0.9,
     }),
+    // Deliberately clean here -- this fixture's job is testing the clean/high-confidence render
+    // path for every card, and a dedicated test below covers the unavailable-on-this-backend case.
+    verticalOscillationCm: makeVerticalOscillationCm(),
     trunkLean: makeMetric({ metric: 'trunkLean', value: 6, confidence: 0.85 }),
     overstriding: makeMetric({
       metric: 'overstriding',
@@ -118,6 +140,8 @@ function makeLowConfidenceResult(): FormHeuristicsResult {
       unit: 'percent',
       confidence: 0.7,
     }),
+    // Deliberately clean/unflagged, same reasoning as cadence/kneeFlexion/armSwingSymmetry below.
+    verticalOscillationCm: makeVerticalOscillationCm({ confidence: 0.7 }),
     trunkLean: makeMetric({
       metric: 'trunkLean',
       value: null,
@@ -161,10 +185,11 @@ function makeLowConfidenceResult(): FormHeuristicsResult {
 }
 
 describe('MetricsPanel', () => {
-  it('renders all eight metrics with their plain-language labels', () => {
+  it('renders all nine metrics with their plain-language labels', () => {
     render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
     expect(screen.getByText('Vertical oscillation')).toBeInTheDocument()
     expect(screen.getByText('Vertical ratio')).toBeInTheDocument()
+    expect(screen.getByText('Vertical oscillation (cm)')).toBeInTheDocument()
     expect(screen.getByText('Trunk lean')).toBeInTheDocument()
     expect(screen.getByText('Overstriding')).toBeInTheDocument()
     expect(screen.getByText('Cadence')).toBeInTheDocument()
@@ -176,6 +201,9 @@ describe('MetricsPanel', () => {
   it('renders formatted values and high-confidence labels for a clean result', () => {
     render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
     expect(screen.getByText('6.0°')).toBeInTheDocument()
+    // verticalOscillationCm's 'centimeters' unit formats with no "of torso length"/percent
+    // suffix at all -- an absolute quantity, unlike every other metric on the panel.
+    expect(screen.getByText('4.8 cm')).toBeInTheDocument()
     expect(screen.getAllByText(/high confidence/i).length).toBeGreaterThan(0)
     expect(screen.queryByText(/not reliable from this camera angle/i)).not.toBeInTheDocument()
     // footStrikePattern is the one deliberate exception: its caveat is always present, even in a
@@ -211,8 +239,32 @@ describe('MetricsPanel', () => {
     ).length
     // trunkLean and overstriding are unsuitable/null; every other metric (including
     // verticalOscillation, merely tolerated at confidence 0.5, above the low-confidence
-    // threshold, and verticalRatio, deliberately clean here) is unflagged, so 2 of 8 cards are
-    // flagged.
+    // threshold, and verticalRatio/verticalOscillationCm, deliberately clean here) is unflagged,
+    // so 2 of 9 cards are flagged.
     expect(flaggedCount).toBe(2)
+  })
+
+  it('renders verticalOscillationCm as an unavailable card with its availability caveat, not an error', () => {
+    const unavailable = makeHighConfidenceResult()
+    unavailable.verticalOscillationCm = {
+      metric: 'verticalOscillationCm',
+      value: null,
+      unit: 'centimeters',
+      confidence: 0,
+      viewFit: 'primary',
+      interpolatedFraction: 0,
+      frameCoverage: 0,
+      sampleSize: 0,
+      caveat:
+        "No real-world scale was measured for this clip, so bounce can't be reported in centimetres — that needs a pose-detection backend that measures real-world scale (today, MediaPipe Pose Landmarker). Vertical oscillation and vertical ratio measure the same bounce without it.",
+      calibration: null,
+    }
+
+    render(<MetricsPanel heuristics={unavailable} />)
+
+    const card = screen.getByLabelText('Vertical oscillation (cm)')
+    expect(card).toHaveTextContent('Not available')
+    const note = within(card).getByRole('note')
+    expect(note.textContent).toMatch(/no real-world scale was measured/i)
   })
 })

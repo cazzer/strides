@@ -124,6 +124,22 @@ const FAKE_HEURISTICS: FormHeuristicsResult = {
     sampleSize: 5,
     caveat: null,
   },
+  verticalOscillationCm: {
+    metric: 'verticalOscillationCm',
+    value: null,
+    unit: 'centimeters',
+    confidence: 0,
+    viewFit: 'primary',
+    interpolatedFraction: 0,
+    frameCoverage: 0,
+    sampleSize: 0,
+    caveat:
+      "No real-world scale was measured for this clip, so bounce can't be reported in centimetres.",
+    // null: this hook's fixture frames carry no pixelsPerMeter, mirroring a real MoveNet run --
+    // computeAnalysisDiagnostics (not mocked in this file) derives the absent scaleCalibration key
+    // from this field.
+    calibration: null,
+  },
   trunkLean: {
     metric: 'trunkLean',
     value: 5,

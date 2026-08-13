@@ -32,6 +32,13 @@ function makeHeuristics(): FormHeuristicsResult {
       fit: null,
     },
     verticalRatio: { ...base, metric: 'verticalRatio', value: 0.08, unit: 'percent' },
+    verticalOscillationCm: {
+      ...base,
+      metric: 'verticalOscillationCm',
+      value: 4.79,
+      unit: 'centimeters',
+      calibration: null,
+    },
     trunkLean: { ...base, metric: 'trunkLean', value: 5, unit: 'degrees' },
     overstriding: { ...base, metric: 'overstriding', value: 0.1 },
     cadence: { ...base, metric: 'cadence', value: 170, unit: 'stepsPerMinute' },

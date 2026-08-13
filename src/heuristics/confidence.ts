@@ -14,6 +14,14 @@ export interface MetricConfidenceParams {
    * mapped to [0, 1] by the producing metric, since what counts as a good fit is that metric's
    * policy, not this function's. Defaults to 1 (irrelevant) for metrics that don't fit anything. */
   fitQuality?: number
+  /** Only relevant for `verticalOscillationCm` (#36): the fraction of considered frames that
+   * carried a measured real-world scale (`ScaleCalibratedVerticalOscillation.scaleCoverage`) — a
+   * distinct concern from `frameCoverage` (whether the hip position itself resolved) and from
+   * `fitQuality` (whether the converted series fit a rhythm), since a frame can resolve a hip
+   * position and still carry no scale measurement that frame. Linear multiply, same shape as
+   * every other factor here. Defaults to 1 (irrelevant) for every metric that doesn't depend on a
+   * measured scale. */
+  scaleCoverage?: number
   interpolationConfidencePenalty: number
 }
 
@@ -32,6 +40,9 @@ export interface MetricConfidenceParams {
  *   - fitQuality: for a metric that fits a model to the signal, how well did the model actually
  *     describe it? (An estimator can have abundant, fully-detected, well-viewed input and still be
  *     describing something that isn't there — a separate concern from every factor above.)
+ *   - scaleCoverage: for a metric whose value depends on a measured real-world scale, how much of
+ *     the considered footage actually carried that measurement? (Distinct from frameCoverage,
+ *     which only asks whether the tracked BODY POSITION resolved.)
  * Multiplying independent penalties means several moderate concerns compound into a low overall
  * number faster than any single one would alone — a deliberate, conservative design choice.
  */
@@ -44,6 +55,7 @@ export function computeMetricConfidence(params: MetricConfidenceParams): number 
     minRequiredSampleSize,
     travelDirectionKnown = true,
     fitQuality = 1,
+    scaleCoverage = 1,
     interpolationConfidencePenalty,
   } = params
 
@@ -58,7 +70,8 @@ export function computeMetricConfidence(params: MetricConfidenceParams): number 
     (1 - interpolationConfidencePenalty * interpolatedFraction) *
     sampleSizeFactor *
     (travelDirectionKnown ? 1 : 0.5) *
-    fitQuality
+    fitQuality *
+    scaleCoverage
 
   return clamp01(confidence)
 }

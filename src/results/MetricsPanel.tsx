@@ -12,9 +12,11 @@ export interface MetricsPanelProps {
 
 const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
   verticalOscillation:
-    'How much your hips bounce up and down with each stride, relative to your torso length.',
+    'How much your hips bounce up and down with each step, as a percentage of your own torso length — the denominator is your body, so it compares across runners of different heights.',
   verticalRatio:
-    "How much you bounce up and down relative to how far you travel each stride. This is the same concept a running watch calls 'vertical ratio', though this figure has not been validated against a watch reading.",
+    "How much you bounce up and down for every unit of distance each stride carries you — the denominator is your stride length. Same concept a running watch calls 'vertical ratio', though this figure hasn't been validated against a watch reading.",
+  verticalOscillationCm:
+    "How much your hips bounce up and down with each step, in real centimetres — no denominator at all. This is the same raw quantity a running watch reports as 'vertical oscillation', though this figure hasn't been validated against a watch reading. It needs a pose-detection backend that measures real-world scale, so it isn't available on every backend.",
   trunkLean:
     'How far your torso leans forward or backward relative to your direction of travel.',
   overstriding:
@@ -48,6 +50,9 @@ function formatValue(metric: MetricResult): string {
   // 'percent' is a dimensionless 0..1 comparison (e.g. armSwingSymmetry's min/max ratio) — unlike
   // 'ratio', it is NOT a fraction of torso length, so it gets no "of torso length" suffix.
   if (metric.unit === 'percent') return `${(metric.value * 100).toFixed(1)}%`
+  // 'centimeters' (verticalOscillationCm only) is an absolute physical quantity with no
+  // denominator at all — unlike every other branch here, `value` is not multiplied by 100 first.
+  if (metric.unit === 'centimeters') return `${metric.value.toFixed(1)} cm`
   return `${(metric.value * 100).toFixed(1)}% of torso length`
 }
 
@@ -100,7 +105,7 @@ function MetricCard({ metric, chart }: MetricCardProps) {
 }
 
 /**
- * Numeric readouts for all eight form heuristics, each with a plain-language label and a
+ * Numeric readouts for all nine form heuristics, each with a plain-language label and a
  * confidence/applicability indicator. A flagged metric (`value: null`, low confidence, or
  * `viewFit: 'unsuitable'`) gets a visibly different treatment — never color alone: the
  * confidence label text itself changes ("Low confidence" / "Not measurable"), the camera-angle
@@ -120,6 +125,7 @@ export function MetricsPanel({ heuristics }: MetricsPanelProps) {
         chart={<VerticalOscillationChart series={heuristics.verticalOscillation.series} />}
       />
       <MetricCard metric={heuristics.verticalRatio} />
+      <MetricCard metric={heuristics.verticalOscillationCm} />
       <MetricCard metric={heuristics.trunkLean} />
       <MetricCard metric={heuristics.overstriding} />
       <MetricCard metric={heuristics.cadence} />

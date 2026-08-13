@@ -291,41 +291,62 @@ above). This pipeline's baseline hip-only reading on that clip: ~24-25% (stable 
 ground truth exists for the original side-view track demo clip — it's a stability/plausibility
 control only, never a target.
 
-## MediaPipe metric calibration — VO in real centimetres (2026-08-12)
+## MediaPipe metric calibration — VO in real centimetres (2026-08-12, promoted to a metric #36)
 
-`[analysis-diagnostics]` gains a `scaleCalibration` block **only** on the
+**Update (#36, same day): no longer diagnostics-only.** `verticalOscillationCm` is now the
+vertical-oscillation family's third real `MetricId` (`FormHeuristicsResult.verticalOscillationCm`,
+after `verticalOscillation`/`verticalRatio` — the panel now shows **nine** metrics, not seven/eight)
+— `computeVerticalOscillationCmMetric` (`verticalOscillationCm.ts`) wraps the calculation described
+below with a `value`/`confidence`/`viewFit`/`caveat`, view-tolerant on the identical terms
+`verticalOscillation` uses (side 1.0 / front 0.85 / ambiguous 0.6 — it has no denominator to be
+degraded by camera angle, unlike `verticalRatio`). On a backend that doesn't measure real-world
+scale (every backend but MediaPipe, still), the card renders as an availability statement — "Not
+available" plus a caveat naming what backend capability is needed — not an error. The rest of this
+section, describing the underlying `computeVerticalOscillationCm` calculation itself, is unchanged
+by the promotion: that calculation was not touched, and is still called exactly once per run.
+
+`[analysis-diagnostics]` still gains a `scaleCalibration` block **only** on the
 `mediapipePoseLandmarker` backend — MoveNet runs have no such key at all (test
 `'scaleCalibration' in diagnostics`, not `!= null`; a MoveNet run still serializes to exactly the
-JSON it did before). It comes from the per-frame `pixelsPerMeter` the MediaPipe backend now
-derives from `worldLandmarks` (pixel torso ÷ **3D** world torso, shoulder-mid→hip-mid, landmark
-indices 11/12/23/24) and carries through `PoseFrame` → `RobustPoseFrame` verbatim, never
-interpolated.
+JSON it did before). As of #36 this block is sourced from `verticalOscillationCm.calibration` BY
+REFERENCE (`diagnostics.scaleCalibration === heuristics.verticalOscillationCm.calibration`), not a
+second computation — the diagnostics helper no longer takes a 4th parameter at all. It comes from
+the per-frame `pixelsPerMeter` the MediaPipe backend derives from `worldLandmarks` (pixel torso ÷
+**3D** world torso, shoulder-mid→hip-mid, landmark indices 11/12/23/24) and carries through
+`PoseFrame` → `RobustPoseFrame` verbatim, never interpolated.
 
-Fields: `verticalOscillationCm` (fitted PEAK-TO-PEAK bounce, cm), `sampleSize` (complete bounce
-cycles across contributing runs — one bounce per STEP; **it counted half-cycles before 2026-08-12**),
-`fit` (the winning run's spectral fit: `frequencyHz`, `peakToPeakAmplitudeCm`, `sinusoidR2`,
-`totalR2`, `secondPeakRatio`, `sampleCount`, `spanSeconds`, `observedCycles`), `fitFailureReason`
+Fields: `verticalOscillationCm` (fitted PEAK-TO-PEAK bounce, cm — this is also the metric's
+`value`), `sampleSize` (complete bounce cycles across contributing runs — one bounce per STEP; it
+counted half-cycles before 2026-08-12), `observedCycles` (the same count, unfloored — added by #36
+so confidence can read the fractional value rather than the display-rounded one), `fit` (the
+winning run's spectral fit: `frequencyHz`, `peakToPeakAmplitudeCm`, `sinusoidR2`, `totalR2`,
+`secondPeakRatio`, `sampleCount`, `spanSeconds`, `observedCycles`), `fitFailureReason`
 (`'too-few-samples' | 'degenerate-signal' | 'insufficient-cycles' | 'below-quality-gate' |
 'no-usable-run'`), `scaleDriftRatio`, `medianPixelsPerMeter`, `torsoMeters`, `scaleCoverage`,
 `integrationRuns`. `fit` and `fitFailureReason` are exactly-one-non-null, so a measured-but-
 unfittable clip names its reason instead of reporting a bare null. Computed over the
-**presence-trimmed** window (unlike every other diagnostics field), so it lines up with the
-metrics beside it. `src/heuristics/verticalOscillationCm.ts`; the existing torso-length-ratio
-`verticalOscillation` metric is untouched.
+**presence-trimmed** window (unlike every other diagnostics field) — as of #36 this is true BY
+CONSTRUCTION rather than by a second `trimToPresenceWindow` call, since `computeFormHeuristics`
+now produces this block itself over the same trimmed frames it computes every other metric from.
+`src/heuristics/verticalOscillationCm.ts`; the existing torso-length-ratio `verticalOscillation`
+metric is untouched.
 
 **Estimator (since 2026-08-12, #34)**: the amplitude comes from the shared spectral sinusoid fit
 (`spectralFit.ts` — same primitive `verticalOscillation` and `cadence` use), fitted **once per
-integration run** over that run's converted metric series, gated at `CM_MIN_FIT_R2 = 0.30` (a
-module constant, not a config key), and aggregated across contributing runs by a sample-count-
-weighted median that SELECTS one run's fit rather than blending several. It replaced per-run
-extrema pairing, whose prominence threshold was the module's only use of `torsoLengthPx` — so a
-clip with no resolvable body scale can now report centimetres with `torsoMeters: null`. The fit's
-`c + d·t + e·t²` trend terms are the point: they absorb approach translation instead of charging
-it to the bounce. `fit.frequencyHz × 60` is a free cross-check against `metrics.cadence.value` —
-same body, same rhythm, reached through a completely separate series; a large disagreement means
-one fit landed on a harmonic or a grid edge. Config is read for the frequency GRID only, never
-for signal selection (`verticalOscillationSignal` does not apply here — hip-pinned
-unconditionally).
+integration run** over that run's converted metric series, gated at `config.verticalOscillationMinFitR2`
+(0.30 by default — **as of #36, the same `HeuristicsConfig` key `verticalOscillation`/`verticalRatio`
+gate on, not the private `CM_MIN_FIT_R2` module constant this section originally described**; two
+independently-tunable gates on the identical fitted amplitude would let the family disagree with
+itself about whether it's trustworthy, so the constant was deleted rather than kept alongside the
+config key), and aggregated across contributing runs by a sample-count-weighted median that SELECTS
+one run's fit rather than blending several. It replaced per-run extrema pairing, whose prominence
+threshold was the module's only use of `torsoLengthPx` — so a clip with no resolvable body scale can
+now report centimetres with `torsoMeters: null`. The fit's `c + d·t + e·t²` trend terms are the
+point: they absorb approach translation instead of charging it to the bounce. `fit.frequencyHz × 60`
+is a free cross-check against `metrics.cadence.value` — same body, same rhythm, reached through a
+completely separate series; a large disagreement means one fit landed on a harmonic or a grid edge.
+Config is read for the frequency GRID and (as of #36) the quality GATE, never for signal selection
+(`verticalOscillationSignal` does not apply here — hip-pinned unconditionally).
 
 **The one correctness constraint**: the pixel→metre conversion integrates per-frame *deltas*
 (`Σ (y[k−1] − y[k]) / s̄[k]`, reset at every hip-tracking gap), never `y_px / s(t)`. Dividing
