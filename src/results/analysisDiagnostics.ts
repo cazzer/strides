@@ -5,10 +5,10 @@ import type { RobustPoseFrame } from '../pose/robustness/types'
 import type {
   FormHeuristicsResult,
   MetricId,
+  ScaleCalibratedVerticalOscillation,
   VerticalOscillationFit,
   ViewFit,
 } from '../heuristics/types'
-import type { ScaleCalibratedVerticalOscillation } from '../heuristics/verticalOscillationCm'
 
 export interface KeypointResolutionStats {
   detected: number
@@ -38,7 +38,7 @@ export interface AnalysisDiagnostics {
   /** Vertical oscillation's spectral-fit internals — fitted frequency, fit quality, cycle count.
    * `null` whenever that metric reported no value, per its own `fit`/`value` invariant. Broken out
    * rather than folded into `metrics.verticalOscillation` because `MetricDiagnostics` is uniform
-   * across all eight metrics on purpose, and only this one has a fit behind it. */
+   * across all nine metrics on purpose, and only this one has a fit behind it. */
   verticalOscillationFit: VerticalOscillationFit | null
   /**
    * Present only when the detection backend measured a real-world scale (today: MediaPipe Pose
@@ -49,6 +49,12 @@ export interface AnalysisDiagnostics {
    * Unlike every other field here, this one reflects the presence-trimmed window (the same frames
    * `computeFormHeuristics` sees) rather than the full clip — it has to, for its figures to be
    * comparable with the metrics it sits alongside.
+   *
+   * As of #36 (D1b), this is `heuristics.verticalOscillationCm.calibration` BY REFERENCE — the
+   * exact same object `computeVerticalOscillationCmMetric` attached to the metric result, not a
+   * second computation. No-double-compute is therefore a reference-identity invariant, not just an
+   * absence of a second function call: `diagnostics.scaleCalibration ===
+   * heuristics.verticalOscillationCm.calibration` holds whenever the key is present.
    */
   scaleCalibration?: ScaleCalibratedVerticalOscillation
 }
@@ -65,12 +71,15 @@ function emptyKeypointStats(): Record<KeypointName, KeypointResolutionStats> {
  * Pure aggregation over data the analysis pipeline already produces — no new instrumentation of
  * sampling or robustness. Built for development-time diagnosis of why a given clip's confidence
  * came out low, not for end users (see `useVideoAnalysis.ts`'s dev-only auto-log of this).
+ *
+ * `scaleCalibration` (below) is derived from `heuristics.verticalOscillationCm.calibration`, not
+ * a separate parameter (#36, D1b) — `computeVerticalOscillationCmMetric` is this data's one
+ * producer now, so there is nothing left for a caller to pass in independently.
  */
 export function computeAnalysisDiagnostics(
   samples: PoseSample[],
   robustFrames: RobustPoseFrame[],
   heuristics: FormHeuristicsResult,
-  scaleCalibration?: ScaleCalibratedVerticalOscillation | null,
 ): AnalysisDiagnostics {
   const detectedFrames = samples.filter((s) => s.frame !== null).length
 
@@ -107,9 +116,12 @@ export function computeAnalysisDiagnostics(
     keypoints,
     metrics,
     verticalOscillationFit: heuristics.verticalOscillation.fit,
-    // Conditional spread, not `scaleCalibration: scaleCalibration ?? undefined`: an explicitly
+    // Conditional spread, not `scaleCalibration: calibration ?? undefined`: an explicitly
     // `undefined` property is still a present key to `toStrictEqual`/`in`, and "this backend
     // doesn't measure scale" has to be indistinguishable from the pre-existing output shape.
-    ...(scaleCalibration == null ? {} : { scaleCalibration }),
+    // Read by reference off the metric result (D1b) — never a second computation.
+    ...(heuristics.verticalOscillationCm.calibration == null
+      ? {}
+      : { scaleCalibration: heuristics.verticalOscillationCm.calibration }),
   }
 }

@@ -5,7 +5,6 @@ import { applyRobustness } from '../pose/robustness/interpolate'
 import type { PoseSample } from '../pose/robustness/types'
 import { computeFormHeuristics } from '../heuristics/index'
 import { trimToPresenceWindow } from '../heuristics/presenceWindow'
-import { computeVerticalOscillationCm } from '../heuristics/verticalOscillationCm'
 import { sampleClip } from './sampleClip'
 import type { SampleClipHandle } from './sampleClip'
 import { computeAnalysisDiagnostics } from './analysisDiagnostics'
@@ -208,20 +207,15 @@ export function useVideoAnalysis(
         // subject isn't in frame at all) so frameCoverage/confidence aren't diluted by dead time
         // — but `robustFrames` itself stays untrimmed below, for the skeleton overlay and
         // diagnostics, which should keep showing the full, honest picture of the whole clip.
-        // One trim, shared: the scale-calibrated centimetre figure has to be measured over exactly
-        // the frames the metrics were measured over, or the two aren't comparable. A second
-        // trimToPresenceWindow call would be a second chance for them to drift apart.
+        // One trim, shared: `computeFormHeuristics` now computes the scale-calibrated centimetre
+        // figure itself, as part of `verticalOscillationCm` (#36, D1), over these same
+        // `metricFrames` — there is no second `trimToPresenceWindow` call left to drift apart from
+        // this one, because there is no second computation left to feed it. `computeAnalysisDiagnostics`
+        // reads that figure back off `heuristics.verticalOscillationCm.calibration` by reference
+        // (D1b) rather than taking it as an input.
         const metricFrames = trimToPresenceWindow(robustFrames)
         const heuristics = computeFormHeuristics(metricFrames)
-        // null on every backend that doesn't measure real-world scale — the diagnostics helper
-        // omits its key entirely in that case.
-        const scaleCalibration = computeVerticalOscillationCm(metricFrames)
-        const diagnostics = computeAnalysisDiagnostics(
-          sorted,
-          robustFrames,
-          heuristics,
-          scaleCalibration,
-        )
+        const diagnostics = computeAnalysisDiagnostics(sorted, robustFrames, heuristics)
         if (runIdRef.current !== runId) return
         setState({
           phase: 'ready',

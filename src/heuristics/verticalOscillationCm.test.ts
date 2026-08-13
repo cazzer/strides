@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { RobustPoseFrame } from '../pose/robustness/types'
-import { computeVerticalOscillationCm } from './verticalOscillationCm'
+import {
+  computeVerticalOscillationCm,
+  computeVerticalOscillationCmMetric,
+} from './verticalOscillationCm'
 import { computeVerticalOscillation } from './verticalOscillation'
 import { estimateBodyScale } from './bodyScale'
+import { analyzeHipBounce } from './hipBounce'
+import { clamp01 } from './mathUtils'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildFrame } from './__fixtures__/testFrames'
@@ -367,5 +372,267 @@ describe('computeVerticalOscillationCm', () => {
       defaultConfigResult!.verticalOscillationCm!,
       9,
     )
+  })
+
+  it('reads the quality gate from config.verticalOscillationMinFitR2, not a module constant (D3)', () => {
+    // This hand-built fixture is a noise-free sinusoid landing exactly on a grid frequency, so it
+    // fits at sinusoidR2 === 1 (verified) -- clearing the DEFAULT gate comfortably. Configuring a
+    // minimum ABOVE 1 (an out-of-normal-range value, but not a validated one) is the only way to
+    // force a fit this clean to be rejected, and proves the gate is genuinely config-driven rather
+    // than the deleted CM_MIN_FIT_R2 module constant, which no config value could have moved.
+    const scale = 300
+    const frames = sinusoidFixture(scale)
+    const strictConfig = { ...DEFAULT_HEURISTICS_CONFIG, verticalOscillationMinFitR2: 1.01 }
+
+    const result = computeVerticalOscillationCm(frames, strictConfig)
+
+    expect(result?.verticalOscillationCm).toBeNull()
+    expect(result?.fit).toBeNull()
+    expect(result?.fitFailureReason).toBe('below-quality-gate')
+  })
+
+  it('a lowered config gate lets a marginal clip through that the default gate rejects', () => {
+    // Identical fixture to the "names the quality gate" test above (seeded jitter, no rhythm) --
+    // at the default 0.30 gate it reports 'below-quality-gate'; at 0.0 every well-posed fit
+    // clears it, since the sinusoid-plus-trend model nests the trend-only baseline (RSS can only
+    // improve), so its partial R² is never negative.
+    const scale = 300
+    const torsoPx = 150
+    const random = mulberry32(7)
+    const frames = Array.from({ length: 60 }, (_, i) =>
+      frame(i / FPS, HIP_BASE_Y + (random() - 0.5) * 20, torsoPx, scale),
+    )
+    const permissiveConfig = { ...DEFAULT_HEURISTICS_CONFIG, verticalOscillationMinFitR2: 0.0 }
+
+    const atDefaultGate = computeVerticalOscillationCm(frames)
+    const atPermissiveGate = computeVerticalOscillationCm(frames, permissiveConfig)
+
+    expect(atDefaultGate?.verticalOscillationCm).toBeNull()
+    expect(atDefaultGate?.fitFailureReason).toBe('below-quality-gate')
+    expect(atPermissiveGate?.verticalOscillationCm).not.toBeNull()
+    expect(atPermissiveGate?.fitFailureReason).toBeNull()
+    expect(atPermissiveGate?.fit).not.toBeNull()
+  })
+})
+
+/** Exact text asserted by the backend-gate tests below — kept as a literal, not imported, so a
+ * change to the production string is caught here rather than the test silently tracking it. */
+const NO_SCALE_CAVEAT =
+  "No real-world scale was measured for this clip, so bounce can't be reported in centimetres — that needs a pose-detection backend that measures real-world scale (today, MediaPipe Pose Landmarker). Vertical oscillation and vertical ratio measure the same bounce without it."
+
+describe('computeVerticalOscillationCmMetric', () => {
+  describe('backend gate', () => {
+    it('reports an availability caveat, not an error, when no frame carries a measured scale', () => {
+      const frames = sinusoidFixture() // no pixelsPerMeter arg -- every frame's scale is null
+      expect(() => computeVerticalOscillationCmMetric(frames, 'side')).not.toThrow()
+      const result = computeVerticalOscillationCmMetric(frames, 'side')
+
+      expect(result.value).toBeNull()
+      expect(result.confidence).toBe(0)
+      expect(result.calibration).toBeNull()
+      expect(result.unit).toBe('centimeters')
+      expect(result.sampleSize).toBe(0)
+      expect(result.caveat).toBe(NO_SCALE_CAVEAT)
+    })
+
+    it('behaves identically on an empty frame list', () => {
+      expect(() => computeVerticalOscillationCmMetric([], 'side')).not.toThrow()
+      const result = computeVerticalOscillationCmMetric([], 'side')
+
+      expect(result.value).toBeNull()
+      expect(result.confidence).toBe(0)
+      expect(result.calibration).toBeNull()
+      expect(result.unit).toBe('centimeters')
+      expect(result.sampleSize).toBe(0)
+      expect(result.caveat).toBe(NO_SCALE_CAVEAT)
+    })
+  })
+
+  describe('measured-but-unfittable reasons each map to a specific caveat (calibration stays non-null)', () => {
+    it('too-few-samples', () => {
+      const scale = 300
+      const torsoPx = 150
+      const frames = Array.from({ length: 8 }, (_, i) =>
+        frame(i / FPS, bouncingHipY(i, 15), torsoPx, scale),
+      )
+
+      const result = computeVerticalOscillationCmMetric(frames, 'side')
+
+      expect(result.value).toBeNull()
+      expect(result.calibration).not.toBeNull()
+      expect(result.calibration?.fitFailureReason).toBe('too-few-samples')
+      expect(result.caveat).toBe(
+        'Hip position was tracked in too few frames, in any continuous stretch, to fit a bounce rhythm.',
+      )
+    })
+
+    it('insufficient-cycles', () => {
+      const scale = 300
+      const torsoPx = 150
+      const lowHz = DEFAULT_HEURISTICS_CONFIG.spectralFitMinFrequencyHz // 1.2
+      const span = 0.4 // seconds -- 0.4 * 1.2 = 0.48 cycles, under one complete cycle
+      const frames = Array.from({ length: 12 }, (_, i) => {
+        const t = (span * i) / 11
+        const hipY = HIP_BASE_Y - 10 * Math.sin(2 * Math.PI * lowHz * t)
+        return frame(t, hipY, torsoPx, scale)
+      })
+
+      const result = computeVerticalOscillationCmMetric(frames, 'side')
+
+      expect(result.value).toBeNull()
+      expect(result.calibration).not.toBeNull()
+      expect(result.calibration?.fitFailureReason).toBe('insufficient-cycles')
+      expect(result.caveat).toBe(
+        'Hip position was tracked, but no continuous stretch was long enough to contain a complete bounce cycle.',
+      )
+    })
+
+    it('degenerate-signal', () => {
+      const scale = 300
+      const torsoPx = 150
+      // A hip that never moves converts to an all-zero metric series -- nothing for a sinusoid to
+      // explain, at any frequency.
+      const frames = Array.from({ length: 30 }, (_, i) =>
+        frame(i / FPS, HIP_BASE_Y, torsoPx, scale),
+      )
+
+      const result = computeVerticalOscillationCmMetric(frames, 'side')
+
+      expect(result.value).toBeNull()
+      expect(result.calibration).not.toBeNull()
+      expect(result.calibration?.fitFailureReason).toBe('degenerate-signal')
+      expect(result.caveat).toBe(
+        'Hip position was tracked, but the scale-converted trace showed no oscillating vertical motion to measure.',
+      )
+    })
+
+    it('below-quality-gate', () => {
+      const scale = 300
+      const torsoPx = 150
+      const random = mulberry32(7)
+      const frames = Array.from({ length: 60 }, (_, i) =>
+        frame(i / FPS, HIP_BASE_Y + (random() - 0.5) * 20, torsoPx, scale),
+      )
+
+      const result = computeVerticalOscillationCmMetric(frames, 'side')
+
+      expect(result.value).toBeNull()
+      expect(result.calibration).not.toBeNull()
+      expect(result.calibration?.fitFailureReason).toBe('below-quality-gate')
+      expect(result.caveat).toBe(
+        'Hip position and scale were both measured, but no continuous stretch produced a consistent bounce rhythm (fit quality below the 0.30 minimum).',
+      )
+    })
+
+    it('no-usable-run', () => {
+      const scale = 300
+      const torsoPx = 150
+      const build = (startIndex: number, pixelsPerMeter: number | null) =>
+        Array.from({ length: RUN_FRAMES }, (_, i) =>
+          frame((startIndex + i) / FPS, bouncingHipY(i, 15), torsoPx, pixelsPerMeter),
+        )
+      // The only integration run carries no scale anywhere; the lone frame that DOES carry a
+      // scale has no resolvable hip, so it never joins a run -- it only keeps the top-level
+      // backend gate from tripping, so this reaches the "measured but unfittable" path.
+      const frames = [...build(0, null), frame(RUN_FRAMES / FPS, null, torsoPx, scale)]
+
+      const result = computeVerticalOscillationCmMetric(frames, 'side')
+
+      expect(result.value).toBeNull()
+      expect(result.calibration).not.toBeNull()
+      expect(result.calibration?.fitFailureReason).toBe('no-usable-run')
+      expect(result.caveat).toBe(
+        'No continuous stretch of hip tracking carried a real-world scale, so bounce could not be converted to centimetres.',
+      )
+    })
+  })
+
+  it('is a single-compute passthrough of computeVerticalOscillationCm onto the metric shape', () => {
+    const scale = 300
+    const frames = sinusoidFixture(scale)
+
+    const result = computeVerticalOscillationCmMetric(frames, 'side')
+
+    expect(result.calibration).not.toBeNull()
+    expect(result.value).toBe(result.calibration?.verticalOscillationCm)
+    expect(result.sampleSize).toBe(result.calibration?.sampleSize)
+  })
+
+  it('computes confidence as the exact product of its component factors for one clean case', () => {
+    const scale = 300
+    const frames = sinusoidFixture(scale)
+
+    const result = computeVerticalOscillationCmMetric(frames, 'side')
+    expect(result.calibration).not.toBeNull()
+    const calibration = result.calibration!
+    expect(calibration.fit).not.toBeNull()
+
+    // Independently re-derived reference values -- COVERAGE ONLY, matching the module's own
+    // "second analyzeHipBounce call" comment; its own fit is not used here either.
+    const bounceSignal = analyzeHipBounce(frames, DEFAULT_HEURISTICS_CONFIG)
+    const minFitR2 = DEFAULT_HEURISTICS_CONFIG.verticalOscillationMinFitR2
+    const saturationR2 = 0.8
+    const fitQuality = clamp01(
+      (calibration.fit!.sinusoidR2 - minFitR2) / (saturationR2 - minFitR2),
+    )
+    const sampleSizeFactor = Math.min(
+      1,
+      calibration.observedCycles / DEFAULT_HEURISTICS_CONFIG.verticalOscillationMinCycles,
+    )
+    const expected =
+      1.0 * // side view multiplier
+      bounceSignal.frameCoverage *
+      (1 -
+        DEFAULT_HEURISTICS_CONFIG.interpolationConfidencePenalty * bounceSignal.interpolatedFraction) *
+      sampleSizeFactor *
+      fitQuality *
+      calibration.scaleCoverage
+
+    expect(result.confidence).toBeCloseTo(expected, 9)
+  })
+
+  it('scale coverage discounts confidence monotonically without moving the reported value', () => {
+    const driftingScale = (_t: number, i: number) => 300 + i
+    const fullyScaled = sinusoidFixture(driftingScale)
+    const partiallyScaled = sinusoidFixture((t, i) =>
+      i % 2 === 1 && i !== fullyScaled.length - 1 ? null : driftingScale(t, i),
+    )
+
+    const full = computeVerticalOscillationCmMetric(fullyScaled, 'side')
+    const partial = computeVerticalOscillationCmMetric(partiallyScaled, 'side')
+
+    expect(full.calibration?.scaleCoverage).toBe(1)
+    expect(partial.calibration?.scaleCoverage).toBeLessThan(1)
+    expect(full.value).toBeCloseTo(partial.value ?? 0, 6)
+    expect(partial.confidence).toBeLessThan(full.confidence)
+  })
+
+  describe('view cases', () => {
+    it('applies the viewFitTable.verticalOscillationCm multiplier per view, on the same terms as verticalOscillation', () => {
+      const scale = 300
+      const frames = sinusoidFixture(scale)
+
+      const side = computeVerticalOscillationCmMetric(frames, 'side')
+      const front = computeVerticalOscillationCmMetric(frames, 'front')
+      const ambiguous = computeVerticalOscillationCmMetric(frames, 'ambiguous')
+
+      expect(side.viewFit).toBe('primary')
+      expect(front.viewFit).toBe('tolerated')
+      expect(ambiguous.viewFit).toBe('tolerated')
+      expect(side.value).not.toBeNull()
+      expect(front.value).not.toBeNull()
+      expect(ambiguous.value).not.toBeNull()
+      expect(front.confidence).toBeCloseTo(side.confidence * 0.85, 9)
+      expect(ambiguous.confidence).toBeCloseTo(side.confidence * 0.6, 9)
+    })
+
+    it('still reports the view-fit label when no scale was measured at all', () => {
+      const frames = sinusoidFixture() // no scale
+      const front = computeVerticalOscillationCmMetric(frames, 'front')
+
+      expect(front.viewFit).toBe('tolerated')
+      expect(front.value).toBeNull()
+      expect(front.confidence).toBe(0)
+    })
   })
 })

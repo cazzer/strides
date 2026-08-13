@@ -24,6 +24,7 @@ describe('computeFormHeuristics', () => {
     expect(result.view.view).toBe('side')
     expect(result.verticalOscillation.metric).toBe('verticalOscillation')
     expect(result.verticalRatio.metric).toBe('verticalRatio')
+    expect(result.verticalOscillationCm.metric).toBe('verticalOscillationCm')
     expect(result.trunkLean.metric).toBe('trunkLean')
     expect(result.overstriding.metric).toBe('overstriding')
     expect(result.cadence.metric).toBe('cadence')
@@ -41,10 +42,18 @@ describe('computeFormHeuristics', () => {
     // for dedicated coverage of a clip that actually swings, including its own view-gating case.
     expect(result.armSwingSymmetry.value).toBeNull()
     expect(result.armSwingSymmetry.confidence).toBe(0)
+    // PARAMS carries no pixelsPerMeter -- an "unscaled" clip, like every non-MediaPipe backend --
+    // so verticalOscillationCm reports its availability caveat rather than a value. See the
+    // dedicated scaled-vs-unscaled suite below for the resolved case.
+    expect(result.verticalOscillationCm.value).toBeNull()
+    expect(result.verticalOscillationCm.confidence).toBe(0)
+    expect(result.verticalOscillationCm.calibration).toBeNull()
+    expect(result.verticalOscillationCm.caveat).toMatch(/no real-world scale was measured/i)
 
     // Every metric was gated using the same detected view, not recomputed independently.
     expect(result.verticalOscillation.viewFit).toBe('primary')
     expect(result.verticalRatio.viewFit).toBe('primary')
+    expect(result.verticalOscillationCm.viewFit).toBe('primary')
     expect(result.trunkLean.viewFit).toBe('primary')
     expect(result.overstriding.viewFit).toBe('primary')
     expect(result.cadence.viewFit).toBe('primary')
@@ -59,6 +68,25 @@ describe('computeFormHeuristics', () => {
 
     // #8's waveform chart needs the timeseries, timestamp-aligned 1:1 with the input frames.
     expect(result.verticalOscillation.series).toHaveLength(frames.length)
+  })
+
+  it('resolves verticalOscillationCm on a scaled clip and withholds it on an unscaled one, all else equal', () => {
+    // #36: same clip either way, only pixelsPerMeter differs -- proves the backend gate is
+    // genuinely about measured scale, not about anything else in the fixture.
+    const unscaled = computeFormHeuristics(generateSyntheticGait(PARAMS))
+    const scaled = computeFormHeuristics(
+      generateSyntheticGait({ ...PARAMS, pixelsPerMeter: 800 }),
+    )
+
+    expect(unscaled.verticalOscillationCm.value).toBeNull()
+    expect(unscaled.verticalOscillationCm.calibration).toBeNull()
+
+    expect(scaled.verticalOscillationCm.value).not.toBeNull()
+    expect(scaled.verticalOscillationCm.calibration).not.toBeNull()
+    expect(scaled.verticalOscillationCm.unit).toBe('centimeters')
+    expect(scaled.verticalOscillationCm.value).toBe(
+      scaled.verticalOscillationCm.calibration?.verticalOscillationCm,
+    )
   })
 
   it('cadence and vertical oscillation agree exactly, since both fit the identical shared hip-bounce signal', () => {
@@ -104,6 +132,43 @@ describe('computeFormHeuristics', () => {
     expect(result.verticalRatio.sampleSize).toBe(stride.pairCount)
   })
 
+  it('the vertical-oscillation family reports one bounce estimate through three denominators (D6)', () => {
+    // D6's headline coherence test: family coherence is FREQUENCY coherence, not object
+    // identity -- the cm path fits the metre series (which absorbs any scale drift), while
+    // verticalOscillation/verticalRatio fit the pixel series. Under a CONSTANT scale (this
+    // fixture's whole point), both series are an exact affine image of each other, so the fit
+    // converges on the identical winning frequency, an (up to float tolerance) identical R², the
+    // identical sample count, and an amplitude related by the constant scale -- never asserted via
+    // vi.spyOn call counts, which would pin an implementation detail (each family member re-derives
+    // its own fit independently -- see hipBounce.ts's module doc) that is correct to keep, not a
+    // bug to guard against.
+    const scale = 800
+    const frames = generateSyntheticGait({ ...PARAMS, pixelsPerMeter: scale })
+
+    const result = computeFormHeuristics(frames)
+
+    expect(result.verticalOscillation.fit).not.toBeNull()
+    expect(result.verticalOscillationCm.calibration).not.toBeNull()
+    const pixelFit = result.verticalOscillation.fit!
+    const cmCalibration = result.verticalOscillationCm.calibration!
+    expect(cmCalibration.fit).not.toBeNull()
+    const cmFit = cmCalibration.fit!
+
+    // Exact frequency equality -- both fits land on the same grid point, since an affine rescaling
+    // of the fitted series can only move the amplitude, never the argmin RSS frequency.
+    expect(cmFit.frequencyHz).toBe(pixelFit.frequencyHz)
+    // R² is a ratio of two quantities that both scale by the same constant factor under an affine
+    // rescaling, so it is unchanged up to floating-point tolerance.
+    expect(cmFit.sinusoidR2).toBeCloseTo(pixelFit.sinusoidR2, 6)
+    expect(cmFit.sampleCount).toBe(pixelFit.sampleCount)
+    // Amplitude: pixel peak-to-peak / scale (m/px) * 100 (cm/m) -- the same conversion
+    // `computeVerticalOscillationCm`'s own module doc derives.
+    expect(result.verticalOscillationCm.value).toBeCloseTo(
+      (pixelFit.peakToPeakAmplitudePx / scale) * 100,
+      6,
+    )
+  })
+
   it('produces the same view label and per-metric results as calling detectView + each metric directly', () => {
     const frames = generateSyntheticGait(PARAMS)
 
@@ -128,6 +193,9 @@ describe('computeFormHeuristics', () => {
     // viewFitTable.verticalRatio for why (a view-tolerant numerator paired with a
     // view-degenerate denominator is worse than either alone).
     expect(result.verticalRatio.viewFit).toBe('unsuitable')
+    // verticalOscillationCm is view-tolerant on the SAME terms as verticalOscillation (D2) --
+    // it has no denominator at all, so verticalRatio's foreshortening argument doesn't apply.
+    expect(result.verticalOscillationCm.viewFit).toBe('tolerated')
     expect(result.trunkLean.viewFit).toBe('unsuitable')
     expect(result.overstriding.viewFit).toBe('unsuitable')
     // Cadence is view-tolerant like verticalOscillation, not hard-gated like trunkLean/
@@ -144,6 +212,7 @@ describe('computeFormHeuristics', () => {
     expect(result.view.view).toBe('ambiguous')
     expect(result.verticalOscillation.value).toBeNull()
     expect(result.verticalRatio.value).toBeNull()
+    expect(result.verticalOscillationCm.value).toBeNull()
     expect(result.trunkLean.value).toBeNull()
     expect(result.overstriding.value).toBeNull()
     expect(result.cadence.value).toBeNull()
@@ -151,12 +220,15 @@ describe('computeFormHeuristics', () => {
     expect(result.footStrikePattern.value).toBeNull()
     expect(result.verticalOscillation.confidence).toBe(0)
     expect(result.verticalRatio.confidence).toBe(0)
+    expect(result.verticalOscillationCm.confidence).toBe(0)
     expect(result.trunkLean.confidence).toBe(0)
     expect(result.overstriding.confidence).toBe(0)
     expect(result.cadence.confidence).toBe(0)
     expect(result.armSwingSymmetry.confidence).toBe(0)
     expect(result.footStrikePattern.confidence).toBe(0)
     expect(result.footStrikePattern.caveat).not.toBeNull()
+    expect(result.verticalOscillationCm.calibration).toBeNull()
+    expect(result.verticalOscillationCm.caveat).not.toBeNull()
     expect(result.verticalOscillation.series).toEqual([])
   })
 })

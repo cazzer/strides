@@ -45,6 +45,18 @@ function makeHeuristics(overrides: Partial<FormHeuristicsResult> = {}): FormHeur
       fit: null,
     },
     verticalRatio: makeMetric({ metric: 'verticalRatio', unit: 'percent', value: 0.08 }),
+    verticalOscillationCm: {
+      metric: 'verticalOscillationCm',
+      value: null,
+      unit: 'centimeters',
+      confidence: 0,
+      viewFit: 'primary',
+      interpolatedFraction: 0,
+      frameCoverage: 0,
+      sampleSize: 0,
+      caveat: "No real-world scale was measured for this clip, so bounce can't be reported in centimetres — that needs a pose-detection backend that measures real-world scale (today, MediaPipe Pose Landmarker). Vertical oscillation and vertical ratio measure the same bounce without it.",
+      calibration: null,
+    },
     trunkLean: makeMetric({ metric: 'trunkLean' }),
     overstriding: makeMetric({ metric: 'overstriding', unit: 'ratio' }),
     cadence: makeMetric({ metric: 'cadence', unit: 'stepsPerMinute', value: 170 }),
@@ -176,6 +188,7 @@ describe('computeAnalysisDiagnostics', () => {
         'overstriding',
         'trunkLean',
         'verticalOscillation',
+        'verticalOscillationCm',
         'verticalRatio',
       ].sort(),
     )
@@ -227,21 +240,23 @@ describe('computeAnalysisDiagnostics', () => {
     })
   })
 
-  it('omits scaleCalibration entirely when none was computed', () => {
-    const omitted = computeAnalysisDiagnostics([], [], makeHeuristics())
-    const explicitlyNull = computeAnalysisDiagnostics([], [], makeHeuristics(), null)
+  // #36 (D1b): scaleCalibration is derived from heuristics.verticalOscillationCm.calibration,
+  // not a separate 4th parameter -- computeVerticalOscillationCmMetric is this data's one
+  // producer now, so these two tests assert the derivation directly off that field rather than
+  // passing a calibration object in independently.
+  it('omits scaleCalibration entirely when the metric carries no calibration', () => {
+    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics())
 
     // `in`, not a null/undefined comparison: a MoveNet run has to serialize to exactly the JSON it
     // did before this key existed, so "absent" and "present but empty" are different outcomes.
-    expect('scaleCalibration' in omitted).toBe(false)
-    expect('scaleCalibration' in explicitlyNull).toBe(false)
-    expect(JSON.stringify(omitted)).toBe(JSON.stringify(explicitlyNull))
+    expect('scaleCalibration' in diagnostics).toBe(false)
   })
 
-  it('surfaces a supplied scaleCalibration verbatim', () => {
-    const scaleCalibration = {
+  it("surfaces the metric's calibration by REFERENCE, not a recomputation", () => {
+    const calibration = {
       verticalOscillationCm: 6.07,
       sampleSize: 4,
+      observedCycles: 4.6,
       fit: {
         frequencyHz: 2.84,
         peakToPeakAmplitudeCm: 6.07,
@@ -259,14 +274,25 @@ describe('computeAnalysisDiagnostics', () => {
       scaleCoverage: 0.98,
       integrationRuns: 2,
     }
+    const heuristics = makeHeuristics({
+      verticalOscillationCm: {
+        metric: 'verticalOscillationCm',
+        value: 6.07,
+        unit: 'centimeters',
+        confidence: 0.8,
+        viewFit: 'primary',
+        interpolatedFraction: 0,
+        frameCoverage: 1,
+        sampleSize: 4,
+        caveat: null,
+        calibration,
+      },
+    })
 
-    const diagnostics = computeAnalysisDiagnostics(
-      [],
-      [],
-      makeHeuristics(),
-      scaleCalibration,
-    )
+    const diagnostics = computeAnalysisDiagnostics([], [], heuristics)
 
-    expect(diagnostics.scaleCalibration).toEqual(scaleCalibration)
+    // Reference identity, not merely deep equality -- the whole point of D1b is that no second
+    // computation ever produces a structurally-equal-but-distinct object.
+    expect(diagnostics.scaleCalibration).toBe(heuristics.verticalOscillationCm.calibration)
   })
 })

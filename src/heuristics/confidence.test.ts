@@ -100,6 +100,23 @@ describe('computeMetricConfidence', () => {
     expect(result).toBeCloseTo(0.576)
   })
 
+  it('defaults scaleCoverage to 1 when omitted', () => {
+    // BASE deliberately omits it — every metric that doesn't depend on a measured real-world
+    // scale must be unaffected by this factor existing.
+    expect(computeMetricConfidence(BASE)).toBeCloseTo(1)
+  })
+
+  it('multiplies in scale coverage directly', () => {
+    expect(computeMetricConfidence({ ...BASE, scaleCoverage: 0.6 })).toBeCloseTo(0.6)
+  })
+
+  it('compounds scale coverage with the other factors rather than overriding them', () => {
+    // 0.85 * 1 * 1 * 1 * 1 * 1 * 0.75 = 0.6375
+    expect(
+      computeMetricConfidence({ ...BASE, viewFitMultiplier: 0.85, scaleCoverage: 0.75 }),
+    ).toBeCloseTo(0.6375)
+  })
+
   it('always returns a value clamped to [0, 1]', () => {
     const result = computeMetricConfidence({
       ...BASE,

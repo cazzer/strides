@@ -2,132 +2,29 @@ import type { RobustPoseFrame } from '../pose/robustness/types'
 import { estimateBodyScale } from './bodyScale'
 import { resolveMidpoint } from './keypoints'
 import { fitSpectralSinusoid } from './spectralFit'
-import type {
-  SpectralFitFailureReason,
-  SpectralFitSuccess,
-  SpectralSample,
-} from './spectralFit'
+import type { SpectralFitSuccess, SpectralSample } from './spectralFit'
+import { analyzeHipBounce } from './hipBounce'
+import { computeMetricConfidence } from './confidence'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
-import type { HeuristicsConfig } from './types'
-import { median } from './mathUtils'
+import type {
+  HeuristicsConfig,
+  MetricResult,
+  ScaleCalibratedFit,
+  ScaleCalibratedFitFailureReason,
+  ScaleCalibratedVerticalOscillation,
+  VerticalOscillationCmResult,
+  View,
+} from './types'
+import { clamp01, median } from './mathUtils'
 
-/**
- * Sinusoid PARTIAL R² (against a trend-only baseline, never total R²) an integration run's fit
- * must reach to contribute an amplitude. Below it the run contributes nothing, and if no run
- * clears it the calculation reports `fitFailureReason: 'below-quality-gate'` rather than a number
- * describing noise.
- *
- * A module constant rather than a `HeuristicsConfig` key, following this module's established
- * private-policy precedent (the `CM_MIN_PROMINENCE_TORSO_RATIO` it replaces, and
- * `MIN_CADENCE_SAMPLE_SIZE` and friends elsewhere): this calculation is not a `MetricId`, renders
- * no card, and is read only by dev diagnostics — a config key is the vocabulary for "a deployment
- * might want to tune this", and nothing consumes this number in a way that would make tuning
- * meaningful yet. Recorded upgrade path: GitHub #36 promotes it to a config key if a rendered
- * card's availability comes to depend on it.
- *
- * **0.30 is the same number, from the same calibration, as `verticalOscillationMinFitR2` and
- * `cadenceMinFitR2`**, and the transfer is sound for the same reason cadence's reuse is: the same
- * hip samples at the same n. Live MediaPipe runs give n = 57 (track clip) and n = 84 (park clip),
- * inside the n ≈ 50+ band that value was calibrated for — measured pure-noise partial R² p95 ≈
- * 0.22 and p99 ≈ 0.28 at n = 50, against a worst observed real trial of 0.40.
- *
- * **The n-regime caveat bites harder here than at any other call site.** The pure-noise floor
- * climbs steeply as n falls (measured p95: 0.34 at n = 30, 0.44 at n = 20, 0.64 at n = 12), and
- * because this module fits PER RUN rather than once per clip, a fragmented clip can reach
- * `fitSpectralSinusoid`'s 12-sample floor — a regime where this gate is NOT protective, since
- * noise clears it more often than not. That is exposed rather than hidden: the winning run's
- * `fit.sampleCount` says which regime the reported number came from. The n-invariant replacement
- * (an F-test on the fit's 2 sinusoid degrees of freedom against its residual degrees of freedom)
- * is deferred, and when it lands it replaces all three gates together, not just this one.
- */
-const CM_MIN_FIT_R2 = 0.3
-
-/**
- * Why this calculation reported no amplitude. The three `SpectralFitFailureReason` values come
- * straight from the shared primitive's well-posedness rules; the two added here are this
- * calculation's own policy (`'below-quality-gate'`) and its "there was nothing to fit in the first
- * place" case (`'no-usable-run'` — no integration run, or every run carried no scale at all).
- */
-export type ScaleCalibratedFitFailureReason =
-  | SpectralFitFailureReason
-  | 'below-quality-gate'
-  | 'no-usable-run'
-
-/**
- * The spectral fit behind `verticalOscillationCm`. Mirrors `VerticalOscillationFit` (`types.ts`)
- * field for field, with the amplitude named for the unit it is actually in — so the pixel-path and
- * centimetre-path diagnostics read the same way side by side.
- *
- * Every field describes ONE contributing run's fit, never a blend across runs (see
- * `selectWeightedMedianFit`): an averaged amplitude paired with an averaged fit quality would
- * describe a fit that never happened.
- */
-export interface ScaleCalibratedFit {
-  /** Winning candidate frequency from the shared grid, Hz. This is BOUNCE frequency — one bounce
-   * per STEP — so `frequencyHz × 60` is directly comparable to the `cadence` metric's steps/min.
-   * A free cross-check, and a strong one: it reaches the same rhythm through an entirely separate
-   * series (this module's integrated metric series, not the raw pixel trace), so a large
-   * disagreement means one of the two fits landed on a harmonic or a grid edge. */
-  frequencyHz: number
-  /** Fitted peak-to-peak bounce, centimetres. This is `verticalOscillationCm`. */
-  peakToPeakAmplitudeCm: number
-  /** Partial R² of the sinusoid terms over a trend-only baseline — the number `CM_MIN_FIT_R2`
-   * gates on. */
-  sinusoidR2: number
-  /** R² against the raw metric series, trend included. Diagnostic only: on a drifting clip the
-   * trend terms alone can push this near 1 while the oscillation explains almost nothing, so it is
-   * never gated on and is not comparable across clips. */
-  totalR2: number
-  /** How well the best frequency outside a resolution-aware band around `frequencyHz` fits,
-   * relative to `frequencyHz` itself, in [0, 1]. Reported for diagnosis only. */
-  secondPeakRatio: number
-  /** Frames in the winning run that the fit was computed over. Read this alongside the amplitude:
-   * near `fitSpectralSinusoid`'s 12-sample floor the quality gate is not protective — see
-   * `CM_MIN_FIT_R2`. */
-  sampleCount: number
-  /** Time from the winning run's first to its last sample. */
-  spanSeconds: number
-  /** `spanSeconds × frequencyHz`, fractional, for the winning run alone. `sampleSize` is the
-   * floor of the SUM of this across all contributing runs (floor once, after summing — two runs
-   * at 1.6 cycles each report 3, not 2). */
-  observedCycles: number
-}
-
-export interface ScaleCalibratedVerticalOscillation {
-  /** Fitted PEAK-TO-PEAK bounce amplitude in centimetres; null when no integration run produced a
-   * fit that cleared the quality gate. Never zero-as-a-stand-in for "nothing measured" — a null
-   * here always comes with a `fitFailureReason`. */
-  verticalOscillationCm: number | null
-  /** Complete bounce cycles observed across every contributing run — one bounce per STEP, i.e.
-   * HALF a full gait cycle. Same unit `MetricResult.sampleSize` reports for the pixel-space
-   * vertical oscillation and cadence metrics; NOT the paired half-cycle count an older
-   * extrema-pairing estimator reported here. */
-  sampleSize: number
-  /** The fit the reported amplitude came from. Non-null exactly when `verticalOscillationCm` is. */
-  fit: ScaleCalibratedFit | null
-  /** Why no amplitude was reported. Non-null exactly when `verticalOscillationCm` is null — a
-   * measured-but-unfittable clip names its reason rather than reporting an unexplained null. */
-  fitFailureReason: ScaleCalibratedFitFailureReason | null
-  /** Last measured scale / first measured scale. ~1.0 = fixed camera distance; far from 1.0 means
-   * the subject approached or receded. Unlike under the previous extrema-pairing estimator, that
-   * translation is absorbed by the fit's trend terms rather than charged to the amplitude — so
-   * this is now a note about the footage, not a warning that the figure above is inflated. */
-  scaleDriftRatio: number
-  medianPixelsPerMeter: number
-  /** torsoLengthPx / medianPixelsPerMeter — a sanity check on the whole calibration: a human
-   * torso (shoulder-mid to hip-mid) is roughly 0.5 m, so a wildly different number here means the
-   * scale is wrong and the centimetre figure should not be believed. Null when no body-scale
-   * reference resolves, which no longer suppresses the measurement: it was only ever a check, and
-   * since the amplitude estimator stopped needing a prominence threshold, `torsoLengthPx` is not
-   * an input to the centimetre figure at all. */
-  torsoMeters: number | null
-  /** Frames carrying a measured scale / frames considered. Frames in a run that was dropped for
-   * carrying no scale at all still count in the denominator — a dropped run is visible here as
-   * lost coverage rather than silently vanishing. */
-  scaleCoverage: number
-  /** Independent integration runs that contributed a fit. Each gap in hip tracking resets
-   * integration, so a fragmented clip yields several small runs rather than one. */
-  integrationRuns: number
+// Re-exported for callers that imported the calibration shape from this module before #36 moved
+// the type declarations to `types.ts` (D7) — the mechanics that PRODUCE a
+// `ScaleCalibratedVerticalOscillation` stay here (D8); only the shape moved, since every consumer
+// of `FormHeuristicsResult`, not just this module, now needs to reference it.
+export type {
+  ScaleCalibratedFit,
+  ScaleCalibratedFitFailureReason,
+  ScaleCalibratedVerticalOscillation,
 }
 
 /**
@@ -367,13 +264,17 @@ function arbitrateFailureReason(
  *
  * ## Config
  *
- * `config` is read for the shared spectral frequency GRID ONLY
+ * `config` is read for the shared spectral frequency GRID
  * (`spectralFitMinFrequencyHz`/`spectralFitMaxFrequencyHz`/`spectralFitFrequencyStepHz`), so that
  * retuning that grid moves this calculation with it instead of letting a hardcoded copy silently
- * diverge from cadence and break the cross-check above. It is NEVER read for signal selection:
- * `verticalOscillationSignal` does not apply here, and this calculation stays anchored to the
- * hip/shoulder torso segment unconditionally — the whole scale calibration is derived from that
- * segment, and `torsoMeters`' ~0.5 m sanity check only means anything against it.
+ * diverge from cadence and break the cross-check above, AND — as of #36 (D3) — for the quality
+ * GATE below (`config.verticalOscillationMinFitR2`, replacing a former private `CM_MIN_FIT_R2`
+ * module constant; see that key's doc in `types.ts` for why reusing it rather than adding a
+ * separate configurable threshold is the coherent choice once this calculation backs a rendered
+ * metric). It is NEVER read for signal selection: `verticalOscillationSignal` does not apply here,
+ * and this calculation stays anchored to the hip/shoulder torso segment unconditionally — the
+ * whole scale calibration is derived from that segment, and `torsoMeters`' ~0.5 m sanity check
+ * only means anything against it.
  *
  * ## Return
  *
@@ -417,7 +318,12 @@ export function computeVerticalOscillationCm(
       refusals.push({ frameCount: run.hipY.length, reason: fit.reason })
       continue
     }
-    if (fit.sinusoidR2 < CM_MIN_FIT_R2) {
+    // Gate reuses `verticalOscillationMinFitR2` verbatim (D3) rather than a dedicated constant —
+    // see that key's doc (`types.ts`) for the n-regime caveat this gate inherits: because this
+    // module fits PER RUN, a fragmented clip can reach `fitSpectralSinusoid`'s 12-sample floor,
+    // a regime where the gate is not protective (noise clears 0.30 more often than not at low n).
+    // `winner.sampleCount` in the reported fit says which regime a passing run came from.
+    if (fit.sinusoidR2 < config.verticalOscillationMinFitR2) {
       refusals.push({ frameCount: run.hipY.length, reason: 'below-quality-gate' })
       continue
     }
@@ -434,6 +340,7 @@ export function computeVerticalOscillationCm(
     verticalOscillationCm:
       winner === null ? null : winner.peakToPeakAmplitude * 100,
     sampleSize: Math.floor(observedCycles),
+    observedCycles,
     fit:
       winner === null
         ? null
@@ -453,5 +360,234 @@ export function computeVerticalOscillationCm(
     torsoMeters: torsoLengthPx === null ? null : torsoLengthPx / medianPixelsPerMeter,
     scaleCoverage: scales.length / frames.length,
     integrationRuns: contributing.length,
+  }
+}
+
+// ============================================================================================
+// Policy layer (#36, D1/D2/D8): `computeVerticalOscillationCm` above is the pure calibration
+// calculation, unaware of `MetricId`/view-fit/confidence — everything below turns its result into
+// a `VerticalOscillationCmResult`, the third member of the vertical-oscillation family alongside
+// `verticalOscillation` and `verticalRatio`. Kept in this file, section-commented, rather than
+// split into a separate module: this metric is `computeVerticalOscillationCm`'s only consumer, so
+// there is nothing yet for a second file to decouple. If a second consumer of the raw calibration
+// ever appears, the extractor (everything above this comment) is what moves out, not this layer.
+// ============================================================================================
+
+/** Sinusoid partial R² at or above which the winning run's fit is treated as fully trustworthy —
+ * identical constant, identical reasoning, as `verticalOscillation.ts`'s and `verticalRatio.ts`'s
+ * own `FIT_QUALITY_SATURATION_R2`: this metric's numerator is a fit of the same shape, gated by
+ * the same `verticalOscillationMinFitR2` minimum (D3), so the same ramp shape applies. */
+const FIT_QUALITY_SATURATION_R2 = 0.8
+
+/**
+ * Shown when no frame in the clip carried a measured real-world scale — the common case today
+ * (every backend but MediaPipe Pose Landmarker), and indistinguishable, from inside this
+ * calculation, from a MediaPipe clip whose per-frame scale measurement happened to fail
+ * everywhere: both look like "no scale anywhere" to `computeVerticalOscillationCm`, so both get
+ * this one availability statement rather than two caveats guessing at a cause neither case can
+ * actually tell apart. Text is asserted verbatim by a unit test — do not reword without updating
+ * it. Layout-independent by design, so #37 (rendering this metric's unavailability well) can reuse
+ * it without this module needing to know anything about presentation.
+ */
+const NO_SCALE_CAVEAT =
+  "No real-world scale was measured for this clip, so bounce can't be reported in centimetres — that needs a pose-detection backend that measures real-world scale (today, MediaPipe Pose Landmarker). Vertical oscillation and vertical ratio measure the same bounce without it."
+
+/**
+ * Caveat text for a clip that DID carry a measured scale but yielded no fittable amplitude —
+ * measured-but-unfittable is a different fact from not-measured (`NO_SCALE_CAVEAT` above), so each
+ * `ScaleCalibratedFitFailureReason` gets its own sentence naming specifically what happened. No
+ * `default` case: an exhaustive switch over every reason, so a future addition to the union fails
+ * to compile here until this function is taught to describe it.
+ */
+function caveatForFitFailure(reason: ScaleCalibratedFitFailureReason): string {
+  switch (reason) {
+    case 'too-few-samples':
+      return 'Hip position was tracked in too few frames, in any continuous stretch, to fit a bounce rhythm.'
+    case 'insufficient-cycles':
+      return 'Hip position was tracked, but no continuous stretch was long enough to contain a complete bounce cycle.'
+    case 'degenerate-signal':
+      return 'Hip position was tracked, but the scale-converted trace showed no oscillating vertical motion to measure.'
+    case 'below-quality-gate':
+      return 'Hip position and scale were both measured, but no continuous stretch produced a consistent bounce rhythm (fit quality below the 0.30 minimum).'
+    case 'no-usable-run':
+      return 'No continuous stretch of hip tracking carried a real-world scale, so bounce could not be converted to centimetres.'
+  }
+}
+
+/**
+ * Both null-value branches (no scale measured at all; scale measured but unfittable) share this
+ * shape — zeroed frame-coverage/interpolation/sample-size fields, same convention
+ * `verticalOscillation.ts`'s and `verticalRatio.ts`'s own `nullResult` helpers use for every
+ * no-value path regardless of how far into the computation the failure occurred. `calibration` is
+ * the one field that differs by caller: `null` when nothing was measured, the measured-but-
+ * unfittable result when something was.
+ */
+function nullResult(
+  viewFit: MetricResult['viewFit'],
+  caveat: string,
+  calibration: ScaleCalibratedVerticalOscillation | null,
+): VerticalOscillationCmResult {
+  return {
+    metric: 'verticalOscillationCm',
+    value: null,
+    unit: 'centimeters',
+    confidence: 0,
+    viewFit,
+    interpolatedFraction: 0,
+    frameCoverage: 0,
+    sampleSize: 0,
+    caveat,
+    calibration,
+  }
+}
+
+/**
+ * Vertical oscillation in real centimetres, as a `MetricId` (#36) — the third member of the
+ * vertical-oscillation family, promoted from the diagnostics-only `computeVerticalOscillationCm`
+ * above. Calls that calculation EXACTLY ONCE (D1): the returned `calibration` is carried forward
+ * verbatim onto the result, so `AnalysisDiagnostics.scaleCalibration` (D1b, `analysisDiagnostics.ts`)
+ * can read it back BY REFERENCE from `FormHeuristicsResult.verticalOscillationCm.calibration`
+ * instead of the diagnostics layer computing its own second copy — no-double-compute is a
+ * reference-identity invariant now, not just a "don't call the expensive function twice" habit.
+ *
+ * ## Backend gate
+ *
+ * `computeVerticalOscillationCm` returns `null` when no frame in the clip carries a measured
+ * real-world scale (every backend but MediaPipe Pose Landmarker, and any MediaPipe clip whose
+ * per-frame measurement happened to fail everywhere). That is reported here as an AVAILABILITY
+ * statement, not an error: `value: null`, `confidence: 0`, `calibration: null`, and
+ * `NO_SCALE_CAVEAT` naming what would be needed. This is deliberately the same caveat for both
+ * "wrong backend" and "right backend, this clip measured nothing" — the calculation itself cannot
+ * tell those apart (see `NO_SCALE_CAVEAT`'s own doc), so this layer does not pretend to either.
+ *
+ * ## View tolerance
+ *
+ * View-tolerant on the SAME terms as `verticalOscillation` — see
+ * `viewFitTable.verticalOscillationCm`'s doc comment in `types.ts` (D2) for the full argument:
+ * the numerator (hip bounce) is view-tolerant for the identical reason `verticalOscillation`'s is,
+ * and unlike `verticalRatio` this metric has no view-degenerate denominator to be dragged down by
+ * — it has no denominator at all. Applied even to the calibration-failed and no-scale null
+ * results, matching every sibling metric's convention of reporting `viewFit` regardless of whether
+ * a value was produced.
+ *
+ * ## Confidence
+ *
+ * Only computed when `calibration.verticalOscillationCm` is non-null (a null value always forces
+ * confidence to 0, per the shared `MetricResult` contract). Built from:
+ *   - `viewFitMultiplier`: `viewFitTable.verticalOscillationCm[view].multiplier`.
+ *   - `frameCoverage`/`interpolatedFraction`: from `analyzeHipBounce(frames, config)` — COVERAGE
+ *     ONLY. This is a SEPARATE call from the one `computeVerticalOscillationCm` makes internally
+ *     (via `buildRuns`/`resolveMidpoint`, not `analyzeHipBounce`) — it exists purely to reuse the
+ *     already-established hip-mid coverage/interpolation bookkeeping `verticalRatio.ts` already
+ *     relies on for the identical purpose, and its own spectral `fit` field is DELIBERATELY UNUSED
+ *     here. This is NOT a second bounce estimate: the amplitude and fit-quality this metric reports
+ *     come exclusively from `calibration`, computed once, above. Calling `analyzeHipBounce` a
+ *     second time costs a second sub-millisecond 141-candidate grid search over the identical
+ *     pixel series cadence/verticalOscillation/verticalRatio already each pay independently (see
+ *     `hipBounce.ts`'s module doc) — an accepted, precedented redundancy, not a new one.
+ *   - `sampleSize`: `calibration.observedCycles`, the FRACTIONAL summed cycle count — never
+ *     `calibration.sampleSize` (the floored field used for the reported `MetricResult.sampleSize`
+ *     and for caveat text), for the identical reason `verticalOscillation.ts` uses its own fit's
+ *     unfloored `observedCycles` for confidence: flooring first would turn a difference smaller
+ *     than the fit's own frequency resolution into a confidence cliff.
+ *   - `minRequiredSampleSize`: `config.verticalOscillationMinCycles` (3) — the same minimum every
+ *     other bounce-cycle-counting family member uses.
+ *   - `fitQuality`: a clamp01 ramp from `verticalOscillationMinFitR2` (0, just cleared the gate) to
+ *     `FIT_QUALITY_SATURATION_R2` (1, as good as a clean clip gets) — identical shape to
+ *     `verticalOscillation.ts`'s and `verticalRatio.ts`'s own ramps, over `calibration.fit`'s
+ *     `sinusoidR2` (the winning run's fit — the only fit behind the reported amplitude).
+ *   - `scaleCoverage`: `calibration.scaleCoverage`, via `computeMetricConfidence`'s new optional
+ *     `scaleCoverage` parameter (`confidence.ts`) — a concern specific to this metric among the
+ *     family (whether a resolved hip position also carried a scale measurement that frame), so it
+ *     defaults to 1 (irrelevant) for every metric that doesn't depend on measured scale.
+ *
+ * ## Caveats
+ *
+ * Null-calibration and fit-failure caveats are each exactly one sentence naming the cause (see
+ * `NO_SCALE_CAVEAT` and `caveatForFitFailure`). A non-null value can still carry a joined,
+ * space-separated caveat describing what reduced confidence: fewer than
+ * `verticalOscillationMinCycles` complete cycles observed; fit quality below
+ * `FIT_QUALITY_SATURATION_R2`; more than one integration run contributing (naming that the
+ * reported figure comes from the most representative stretch, not a blend); or scale coverage
+ * below 0.995 (a formatting-driven cutoff — `(coverage * 100).toFixed(0)` — chosen so this caveat
+ * never fires for a clip that would display as a full "100%" anyway). Deliberately NOT added: a
+ * `torsoMeters` plausibility caveat (e.g. flagging a wildly non-human ~0.5 m estimate) — recorded
+ * as an upgrade trigger in the change's design.md rather than implemented speculatively, pending a
+ * live clip that actually lands outside a roughly 0.35–0.70 m range.
+ */
+export function computeVerticalOscillationCmMetric(
+  frames: RobustPoseFrame[],
+  view: View,
+  config: HeuristicsConfig = DEFAULT_HEURISTICS_CONFIG,
+): VerticalOscillationCmResult {
+  const viewFitEntry = config.viewFitTable.verticalOscillationCm[view]
+
+  const calibration = computeVerticalOscillationCm(frames, config)
+  if (calibration === null) {
+    return nullResult(viewFitEntry.fit, NO_SCALE_CAVEAT, null)
+  }
+
+  if (calibration.verticalOscillationCm === null || calibration.fit === null) {
+    const reason = calibration.fitFailureReason ?? 'no-usable-run'
+    return nullResult(viewFitEntry.fit, caveatForFitFailure(reason), calibration)
+  }
+
+  // COVERAGE ONLY — see the module doc's "Confidence" section for why this second
+  // `analyzeHipBounce` call is deliberate and why its own `fit` is never read below.
+  const bounceSignal = analyzeHipBounce(frames, config)
+
+  const minFitR2 = config.verticalOscillationMinFitR2
+  const fitQuality =
+    FIT_QUALITY_SATURATION_R2 > minFitR2
+      ? clamp01(
+          (calibration.fit.sinusoidR2 - minFitR2) / (FIT_QUALITY_SATURATION_R2 - minFitR2),
+        )
+      : 1
+
+  const confidence = computeMetricConfidence({
+    viewFitMultiplier: viewFitEntry.multiplier,
+    frameCoverage: bounceSignal.frameCoverage,
+    interpolatedFraction: bounceSignal.interpolatedFraction,
+    // Fractional, not `calibration.sampleSize` — see the module doc's "Confidence" section.
+    sampleSize: calibration.observedCycles,
+    minRequiredSampleSize: config.verticalOscillationMinCycles,
+    fitQuality,
+    scaleCoverage: calibration.scaleCoverage,
+    interpolationConfidencePenalty: config.interpolationConfidencePenalty,
+  })
+
+  const caveats: string[] = []
+  if (calibration.sampleSize < config.verticalOscillationMinCycles) {
+    caveats.push(
+      `Only ${calibration.sampleSize} complete bounce cycle(s) observed (recommend at least ${config.verticalOscillationMinCycles}) — confidence reduced accordingly.`,
+    )
+  }
+  if (calibration.fit.sinusoidR2 < FIT_QUALITY_SATURATION_R2) {
+    caveats.push(
+      `Bounce rhythm fit quality is ${calibration.fit.sinusoidR2.toFixed(2)} (a clean rhythm scores ${FIT_QUALITY_SATURATION_R2.toFixed(2)} or above) — confidence reduced accordingly.`,
+    )
+  }
+  if (calibration.integrationRuns > 1) {
+    caveats.push(
+      `Bounce was measured across ${calibration.integrationRuns} separate tracked stretches; the reported figure comes from the most representative one.`,
+    )
+  }
+  if (calibration.scaleCoverage < 0.995) {
+    caveats.push(
+      `Real-world scale was measured in only ${(calibration.scaleCoverage * 100).toFixed(0)}% of considered frames — confidence reduced accordingly.`,
+    )
+  }
+
+  return {
+    metric: 'verticalOscillationCm',
+    value: calibration.verticalOscillationCm,
+    unit: 'centimeters',
+    confidence,
+    viewFit: viewFitEntry.fit,
+    interpolatedFraction: bounceSignal.interpolatedFraction,
+    frameCoverage: bounceSignal.frameCoverage,
+    sampleSize: calibration.sampleSize,
+    caveat: caveats.length > 0 ? caveats.join(' ') : null,
+    calibration,
   }
 }
