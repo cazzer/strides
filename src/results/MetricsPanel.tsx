@@ -61,6 +61,9 @@ function formatValue(metric: MetricResult): string {
   return `${(metric.value * 100).toFixed(1)}% of torso length`
 }
 
+// The 'Low confidence' branch is live on cards since exclude-only-unmeasurable-metrics: a
+// measured, view-workable metric below LOW_CONFIDENCE_THRESHOLD renders as a caveated card with
+// this label, where #37's tier rule used to exclude it from the grid entirely.
 function confidenceLabel(metric: MetricResult): string {
   if (metric.value === null) return 'Not measurable'
   if (metric.confidence >= HIGH_CONFIDENCE_THRESHOLD) return 'High confidence'
@@ -76,13 +79,15 @@ interface MetricCardProps {
 /**
  * Renders a `'normal'` or `'caveated'` tier metric as a card — never called for an `'excluded'`
  * metric, which the panel routes to the excluded section below instead (see `MetricsPanel`).
- * Tier 2 ('caveated') gets a structurally distinct treatment, not a color-only one: the same
- * left-accent-stripe border idiom this app's alert/banner components already use
- * (`border-l-4 border-l-brand-600`), plus its caveat note (when present) rendered in its own
- * bordered box rather than the muted footnote styling a tier-1 card's caveat gets — on top of the
- * `confidenceLabel` text itself already reading "Medium confidence", which alone satisfies
- * WCAG's "not color alone" bar even on the (verified possible, see metricConfidence.ts) case
- * where a tier-2 metric's `caveat` is null.
+ * Tier 2 ('caveated') now spans ALL sub-0.7 confidence for a measured, view-workable metric
+ * (exclude-only-unmeasurable-metrics dropped the tier's old 0.4 floor), and gets a structurally
+ * distinct treatment, not a color-only one: the same left-accent-stripe border idiom this app's
+ * alert/banner components already use (`border-l-4 border-l-brand-600`), plus its caveat note
+ * (when present) rendered in its own bordered box rather than the muted footnote styling a
+ * tier-1 card's caveat gets — on top of the `confidenceLabel` text itself already reading
+ * "Medium confidence" or "Low confidence", which alone satisfies WCAG's "not color alone" bar
+ * even on the (verified possible, see metricConfidence.ts) case where a tier-2 metric's
+ * `caveat` is null.
  */
 function MetricCard({ metric, chart }: MetricCardProps) {
   const tier = metricTier(metric)
@@ -132,32 +137,36 @@ interface ExcludedEntryProps {
 /**
  * A tier-3 ('excluded') metric's entire on-screen presence: its name and the reason it was
  * excluded, and nothing else — no formatted value, no confidence label, no "Not available"
- * placeholder (design.md D4). `metric.caveat` is the reason text; every null-value path in the
- * heuristics layer is contractually required to set one (see each metric module's `nullResult`
- * helper), but the fallback below covers the narrower case metricConfidence.ts documents: a
- * non-null value whose confidence alone dropped it below `LOW_CONFIDENCE_THRESHOLD` without any
- * heuristics-layer caveat message being pushed for that specific shortfall.
+ * placeholder (#37 design.md D4). `metric.caveat` is the reason text; every null-value path in
+ * the heuristics layer is contractually required to set one (see each metric module's
+ * `nullResult` helper), and every `'unsuitable'`-view path's caveat names the camera-angle
+ * issue. The fallback below is a confidence-neutral defensive string for type-legal shapes with
+ * no caveat — since exclude-only-unmeasurable-metrics, exclusion only ever means "structurally
+ * unmeasurable" (null value or unsuitable view), never low confidence, so the fallback must not
+ * assert a confidence-based reason.
  */
 function ExcludedEntry({ metric }: ExcludedEntryProps) {
   return (
     <li className="metrics-panel__excluded-entry">
       <p className="font-display font-bold">{METRIC_LABELS[metric.metric]}</p>
       <p className="font-sans text-sm text-neutral-700 dark:text-neutral-300">
-        {metric.caveat ?? 'Confidence was too low to report for this clip.'}
+        {metric.caveat ?? 'Not measurable for this clip.'}
       </p>
     </li>
   )
 }
 
 /**
- * Numeric readouts for all nine form heuristics, partitioned into confidence tiers (#37,
- * design.md) rather than one uniform grid: tier 1 ('normal', confidence >= 0.7) and tier 2
- * ('caveated', 0.4 <= confidence < 0.7) render as cards in the grid above, distinguished from
- * each other by `MetricCard`'s border/caveat treatment; tier 3 ('excluded', confidence < 0.4 or
- * `value === null`) is listed by name and reason only in the labeled section below the grid — no
+ * Numeric readouts for all nine form heuristics, partitioned into tiers (#37; exclusion rule
+ * reversed by exclude-only-unmeasurable-metrics) rather than one uniform grid: tier 1
+ * ('normal', measured, view-workable, confidence >= 0.7) and tier 2 ('caveated', measured,
+ * view-workable, confidence < 0.7 with no lower bound) render as cards in the grid above,
+ * distinguished from each other by `MetricCard`'s border/caveat treatment; tier 3 ('excluded',
+ * `value === null` or `viewFit === 'unsuitable'` — structurally unmeasurable, never merely
+ * low-confidence) is listed by name and reason only in the labeled section below the grid — no
  * value ever renders for an excluded metric. Both sections preserve `MetricId` declaration order
- * within themselves (no re-sorting by confidence — see design.md D5 on why a metric crossing a
- * threshold between runs still only reorders its own section, not the whole panel).
+ * within themselves (no re-sorting by confidence — see #37 design.md D5 on why a metric crossing
+ * a threshold between runs still only reorders its own section, not the whole panel).
  * `footStrikePattern`'s `caveat` is always non-null (even at its cleanest) since that metric is a
  * documented proxy end to end — it renders on its card whenever it lands in tier 1/2.
  */
@@ -180,6 +189,8 @@ export function MetricsPanel({ heuristics }: MetricsPanelProps) {
   // One quiet line so a user who never scrolls the (height-capped) results pane still learns
   // that some metrics carry caveats or were excluded — the deleted LowConfidenceBanner's one
   // real job. Rendered only when there's something to say; an all-normal run stays clean.
+  // "With caveats" now spans the whole sub-0.7 confidence range, since the caveated tier lost
+  // its 0.4 floor (exclude-only-unmeasurable-metrics).
   const summaryParts = [
     `${normalCount} metric${normalCount === 1 ? '' : 's'} measured`,
     ...(caveatedCount > 0
