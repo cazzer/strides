@@ -70,14 +70,28 @@ npm run dev -- --port 5173 --strictPort &
 
 **Reading results — `analysisDiagnostics`, not screen-scraped card text:**
 
-In development builds only, `useVideoAnalysis` auto-logs a single console line
-`[analysis-diagnostics] {...}` the moment a run reaches `phase: 'ready'` — a JSON object with
-per-keypoint detected/interpolated/unrecoverable counts, raw view-detection diagnostics,
-sampling detected/missing counts, and every metric's `value`/`confidence`/`viewFit`/
-`frameCoverage`/`caveat` in one place (`src/results/analysisDiagnostics.ts`). Capture it via
-`page.on('console', ...)`, find the line by its prefix, `JSON.parse()` the rest. This never logs
-in a production build (`import.meta.env.DEV`-gated) — don't try to read it from a `vite build`
-output.
+In development builds only, `useVideoAnalysis` auto-logs TWO console lines per run
+(add-background-scale-pass):
+
+1. `[analysis-diagnostics] {...}` the moment a run reaches `phase: 'ready'` — a JSON object with
+   per-keypoint detected/interpolated/unrecoverable counts, raw view-detection diagnostics,
+   sampling detected/missing counts, and every metric's `value`/`confidence`/`viewFit`/
+   `frameCoverage`/`caveat` in one place (`src/results/analysisDiagnostics.ts`). This line is
+   byte-identical to what it was before the background scale pass existed: PRIMARY pass only,
+   and `'scaleCalibration' in <payload>` discriminates the PRIMARY backend only (a
+   MoveNet-primary run never has the key here, even after a successful scale pass).
+2. `[analysis-diagnostics:scale-pass] {...}` when the background MediaPipe scale pass reaches a
+   terminal status — `{ status: 'done'|'failed'|'skipped', reason?: 'disabled'|'primary-scale',
+   error?: string, diagnostics?: AnalysisDiagnostics }`. `diagnostics` (the scale pass's own
+   full object, `scaleCalibration` included) rides along only on `'done'`. On the default
+   MoveNet primary this line arrives roughly one clip-replay after "Analysis complete" (the pass
+   replays the clip in real time); wait for it separately.
+
+Capture both via `page.on('console', ...)`. **Match the first line's prefix exclusively** —
+`text.startsWith('[analysis-diagnostics]') && !text.startsWith('[analysis-diagnostics:')` — or
+the scale-pass line will collide with it; the second is `startsWith('[analysis-diagnostics:scale-pass]')`.
+`JSON.parse()` the rest of each. Neither line logs in a production build
+(`import.meta.env.DEV`-gated) — don't try to read them from a `vite build` output.
 
 **Config overrides for comparing pipeline variants**, dev-only, read once per run:
 - `window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__` — partial
@@ -92,7 +106,14 @@ output.
   'movenet'` (default `'lightning'`, default tracking-crop config respectively); ignored
   otherwise. `trackingCrop` merges shallowly, one level deep, over the default — set `{
   trackingCrop: { enabled: false } }` to A/B against the pre-tracking-crop baseline. Read once
-  per detector creation in `usePoseDetector.ts`.
+  per detector creation in `usePoseDetector.ts`. Selects the PRIMARY detector only — the
+  background scale pass's detector (`src/pose/scalePassDetector.ts`) is hardcoded to
+  `mediapipePoseLandmarker` and never reads this.
+- `window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__` — partial `ScalePassConfig`
+  (`src/results/scalePassConfig.ts`): `{ enabled: boolean }`, the background MediaPipe scale
+  pass's kill switch (default on). Read once per analysis run, at the moment the primary pass
+  reaches 'ready'. `{ enabled: false }` makes the run behave exactly as it did before the scale
+  pass existed (scale-pass line reports `'skipped'`/`'disabled'`).
 - Math (`HeuristicsConfig`) selection doesn't have an override point yet — deferred, see
   "Backlog" below.
 - **Set overrides with `page.addInitScript()`, not `page.evaluate()`.** Auto-analyze can start
@@ -310,10 +331,13 @@ available" plus a caveat naming what backend capability is needed — not an err
 section, describing the underlying `computeVerticalOscillationCm` calculation itself, is unchanged
 by the promotion: that calculation was not touched, and is still called exactly once per run.
 
-`[analysis-diagnostics]` still gains a `scaleCalibration` block **only** on the
-`mediapipePoseLandmarker` backend — MoveNet runs have no such key at all (test
-`'scaleCalibration' in diagnostics`, not `!= null`; a MoveNet run still serializes to exactly the
-JSON it did before). As of #36 this block is sourced from `verticalOscillationCm.calibration` BY
+`[analysis-diagnostics]` still gains a `scaleCalibration` block **only** when the PRIMARY pass's
+backend is `mediapipePoseLandmarker` — MoveNet-primary runs have no such key on that line at all
+(test `'scaleCalibration' in diagnostics`, not `!= null`; a MoveNet run's first line still
+serializes to exactly the JSON it did before). Since add-background-scale-pass, that test
+discriminates the PRIMARY backend only: on a default MoveNet run the background scale pass's
+measured calibration appears on the separate `[analysis-diagnostics:scale-pass]` line (see
+"Reading results" above), never on the first line. As of #36 this block is sourced from `verticalOscillationCm.calibration` BY
 REFERENCE (`diagnostics.scaleCalibration === heuristics.verticalOscillationCm.calibration`), not a
 second computation — the diagnostics helper no longer takes a 4th parameter at all. It comes from
 the per-frame `pixelsPerMeter` the MediaPipe backend derives from `worldLandmarks` (pixel torso ÷
