@@ -10,9 +10,19 @@ import { toPoseFrame } from './common'
  */
 const WASM_BASE_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm'
 
-/** 'full' to match the (currently broken) tfjs BlazePose backend's variant — see GitHub #25. */
-const MODEL_ASSET_PATH =
-  'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task'
+/**
+ * 'full' to match the (currently broken) tfjs BlazePose backend's variant — see GitHub #25.
+ *
+ * Self-hosted (public/models/) rather than fetched from
+ * `storage.googleapis.com/mediapipe-models/.../latest/` for two reasons: the bucket's `latest`
+ * tag floats (its bytes already differ from the only published numbered version, `/1/`), so a
+ * remote fetch could silently change the model — and with it every VO-cm number — under a
+ * pinned npm dependency; and the bucket serves `cache-control: max-age=3600`, while same-origin
+ * hosting rides our own deploy's caching. The checked-in file is byte-identical (MD5
+ * 5a9ad88919b2231d02b1fdf4a54090ec) to the `latest` bytes every 2026-08-13 verification ran
+ * against. `BASE_URL` prefix because the app deploys under a subpath (vite.config.ts `base`).
+ */
+const MODEL_ASSET_PATH = `${import.meta.env.BASE_URL}models/pose_landmarker_full.task`
 
 /**
  * `PoseLandmarkerResult#landmarks` is a plain `NormalizedLandmark[]` with no `.name` field —
