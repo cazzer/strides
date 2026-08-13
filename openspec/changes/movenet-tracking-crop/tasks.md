@@ -142,3 +142,16 @@ Decisions and Risks/Trade-offs for the reasoning. All self-contained to `movenet
 - [x] 9.2 `npx vitest run` passes
 - [x] 9.3 `npx eslint .` passes
 - [x] 9.4 `openspec validate movenet-tracking-crop --strict` passes
+
+## 10. Revival (2026-08-13, port onto 15-keypoint / 9-metric main)
+
+- [x] 10.1 Cherry-pick rescue commit 473e9b4 onto main; resolve CLAUDE.md conflict (hand-port
+      crop docs into current doc, not wholesale)
+- [x] 10.2 Exclude head keypoints from bbox derivation (BBOX_EXCLUDED_KEYPOINT_NAMES) after
+      round-1 A/B measured the 15-point box strictly worse; unit tests for exclusion added
+- [x] 10.3 Update movenet.test.ts crop expectations + stale 12-keypoint doc references
+- [x] 10.4 Live A/B round 1 (15-pt bbox): track+park × on/off × 3 — regression found
+- [x] 10.5 Live A/B round 2 (12-pt bbox): track+park on-arms × 3 vs round-1 off baselines
+- [x] 10.6 Apply pre-registered default rule → DEFAULT_TRACKING_CROP_CONFIG.enabled = false;
+      default-off unit test added
+- [x] 10.7 Re-run gates: vitest, tsc build, eslint, openspec validate --strict

@@ -58,6 +58,35 @@ describe('deriveBoundingBox', () => {
 
     expect(box).toEqual({ minX: 100, minY: 100, maxX: 200, maxY: 300 })
   })
+
+  it('excludes head keypoints from the box even when they are confident', () => {
+    const keypoints: Keypoint[] = [
+      kp('left_shoulder', 100, 100, 0.9),
+      kp('right_shoulder', 200, 100, 0.9),
+      kp('left_hip', 150, 300, 0.9),
+      kp('right_hip', 160, 300, 0.9),
+      // Confident head points above the shoulders -- excluded by name, must not
+      // raise the top edge (measured worse live; see BBOX_EXCLUDED_KEYPOINT_NAMES).
+      kp('nose', 150, 20, 0.98),
+      kp('left_ear', 170, 15, 0.95),
+      kp('right_ear', 130, 15, 0.95),
+    ]
+
+    const box = deriveBoundingBox(keypoints, 0.3, 4)
+
+    expect(box).toEqual({ minX: 100, minY: 100, maxX: 200, maxY: 300 })
+  })
+
+  it('does not count excluded head keypoints toward minConfidentKeypoints', () => {
+    const keypoints: Keypoint[] = [
+      kp('left_shoulder', 100, 100, 0.9),
+      kp('right_shoulder', 200, 100, 0.9),
+      kp('left_hip', 150, 300, 0.9),
+      kp('nose', 150, 20, 0.98),
+    ]
+
+    expect(deriveBoundingBox(keypoints, 0.3, 4)).toBeNull()
+  })
 })
 
 describe('computeCropRect', () => {

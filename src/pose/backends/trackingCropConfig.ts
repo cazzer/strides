@@ -10,7 +10,8 @@ export interface TrackingCropConfig {
   /** Total kill-switch: `false` bypasses all tracking state, always calling the full-frame path. */
   enabled: boolean
   /**
-   * Per-keypoint score gate (over the 12 `COMMON_KEYPOINT_NAMES`) a keypoint must meet to count
+   * Per-keypoint score gate (over the bbox-eligible `COMMON_KEYPOINT_NAMES` — head points are
+   * excluded from bbox derivation, see `movenetCrop.ts`) a keypoint must meet to count
    * toward a "usable" detection. Deliberately a standalone constant here, not imported from
    * `robustness/types.ts`'s `DEFAULT_MIN_KEYPOINT_CONFIDENCE` — same default value for
    * consistency, but an independently tunable knob for this different purpose (bounding-box
@@ -27,8 +28,17 @@ export interface TrackingCropConfig {
   reacquisitionLossThreshold: number
 }
 
+/**
+ * `enabled: false` by default — decided by the pre-registered rule in the revival A/B
+ * (2026-08-13, openspec/changes/movenet-tracking-crop/design.md "Revival note"): cropping
+ * helped the side-view track clip (detectedFrames 77-79 vs 75) but consistently halved
+ * cadence/vertical-oscillation confidence on the front-approach park clip (median tier T2→T3),
+ * where the subject's on-screen scale changes ~3x and the lagging tracked box mismatches it.
+ * The feature stays fully available via `window.__STRIDES_POSE_BACKEND_OVERRIDE__ =
+ * { trackingCrop: { enabled: true } }`.
+ */
 export const DEFAULT_TRACKING_CROP_CONFIG: TrackingCropConfig = {
-  enabled: true,
+  enabled: false,
   minKeypointConfidence: 0.3,
   minConfidentKeypoints: 4,
   paddingMultiplier: 1.75,

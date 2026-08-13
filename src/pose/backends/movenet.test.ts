@@ -37,6 +37,12 @@ import type { TrackingCropConfig } from './trackingCropConfig'
 import { stubCanvas2DContext } from '../../test/canvasTestUtils'
 import type { FakeCanvasRenderingContext2D } from '../../test/canvasTestUtils'
 
+/**
+ * Crop-mode tests opt in explicitly: the shipped default is `enabled: false` (see
+ * DEFAULT_TRACKING_CROP_CONFIG's doc comment for the A/B evidence behind that).
+ */
+const CROP_ON: TrackingCropConfig = { ...DEFAULT_TRACKING_CROP_CONFIG, enabled: true }
+
 /** A confident, canvas-space (0..192) 12-point detection -- keeps crop-mode tracking engaged. */
 const CROP_SPACE_CONFIDENT_KEYPOINTS = [
   { name: 'left_shoulder', x: 80, y: 40, score: 0.9 },
@@ -168,9 +174,23 @@ describe('createMoveNetDetector', () => {
   })
 
   describe('tracking-crop preprocessing', () => {
+    it('is disabled by default: repeated usable detections never leave the full-frame path', async () => {
+      const detector = await createMoveNetDetector()
+
+      estimatePoses.mockResolvedValue([
+        { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(makeVideo(0))
+      await detector.estimatePose(makeVideo(1))
+
+      expect(estimatePoses.mock.calls[0]).toHaveLength(1)
+      expect(estimatePoses.mock.calls[1]).toHaveLength(1)
+      expect(fakeCtx.drawImage).not.toHaveBeenCalled()
+    })
+
     it('cold start: calls estimatePoses with the video directly, not a canvas', async () => {
       estimatePoses.mockResolvedValue([])
-      const detector = await createMoveNetDetector()
+      const detector = await createMoveNetDetector(undefined, CROP_ON)
 
       await detector.estimatePose(makeVideo(0))
 
@@ -179,7 +199,7 @@ describe('createMoveNetDetector', () => {
     })
 
     it('engages crop mode on the call after a usable detection, cropping/upscaling the tracked bbox', async () => {
-      const detector = await createMoveNetDetector()
+      const detector = await createMoveNetDetector(undefined, CROP_ON)
 
       // Call 1: cold start, full-frame, engages tracking off a high-confidence detection.
       estimatePoses.mockResolvedValueOnce([
@@ -190,9 +210,10 @@ describe('createMoveNetDetector', () => {
 
       expect(estimatePoses.mock.calls[0]).toEqual([video1])
 
-      // Call 2: crop mode. Bbox from the 12 common keypoints in the fixture is
-      // {minX:250, minY:160, maxX:390, maxY:480}; padded (x1.75), floored (256), clamped to the
-      // 1280x720 frame: side 560, position (40, 40).
+      // Call 2: crop mode. The fixture carries 15 common keypoints, but nose/ears are excluded
+      // from bbox derivation (BBOX_EXCLUDED_KEYPOINT_NAMES), so the box comes from the 12
+      // limb/torso points: {minX:250, minY:160, maxX:390, maxY:480}; padded (x1.75), floored
+      // (256), clamped to the 1280x720 frame: side 560, position (40, 40).
       estimatePoses.mockResolvedValueOnce([
         { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
       ])
@@ -218,7 +239,7 @@ describe('createMoveNetDetector', () => {
     })
 
     it('sizes the crop canvas to 256 (not 192) when modelType: "thunder"', async () => {
-      const detector = await createMoveNetDetector('thunder')
+      const detector = await createMoveNetDetector('thunder', CROP_ON)
 
       estimatePoses.mockResolvedValueOnce([
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
@@ -238,7 +259,7 @@ describe('createMoveNetDetector', () => {
     })
 
     it('coordinate round-trip: remaps a canvas-space keypoint back to video-pixel space', async () => {
-      const detector = await createMoveNetDetector()
+      const detector = await createMoveNetDetector(undefined, CROP_ON)
 
       // Call 1: engages off a simple, hand-computable bbox {100,100,300,300} on an 800x600 frame.
       estimatePoses.mockResolvedValueOnce([
@@ -280,7 +301,7 @@ describe('createMoveNetDetector', () => {
     })
 
     it('reacquisition: keeps crop mode through reacquisitionLossThreshold - 1 not-usable frames, drops it on the next', async () => {
-      const detector = await createMoveNetDetector()
+      const detector = await createMoveNetDetector(undefined, CROP_ON)
 
       estimatePoses.mockResolvedValueOnce([
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
@@ -329,7 +350,7 @@ describe('createMoveNetDetector', () => {
 
     it('reset() call-timing: only on mode-transition calls, never mid-steady-tracking or during a full-frame-only run', async () => {
       const config: TrackingCropConfig = {
-        ...DEFAULT_TRACKING_CROP_CONFIG,
+        ...CROP_ON,
         reacquisitionLossThreshold: 1,
       }
       const detector = await createMoveNetDetector(undefined, config)
@@ -383,7 +404,7 @@ describe('createMoveNetDetector', () => {
     })
 
     it('resets tracking state when a new analysis run starts (video.currentTime drops back near 0)', async () => {
-      const detector = await createMoveNetDetector()
+      const detector = await createMoveNetDetector(undefined, CROP_ON)
 
       // Run 1: engage tracking near the end of a clip.
       estimatePoses.mockResolvedValueOnce([
@@ -409,7 +430,7 @@ describe('createMoveNetDetector', () => {
     })
 
     it('does not treat ordinary small backward jitter within a run as a new run', async () => {
-      const detector = await createMoveNetDetector()
+      const detector = await createMoveNetDetector(undefined, CROP_ON)
 
       estimatePoses.mockResolvedValueOnce([
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
@@ -428,7 +449,7 @@ describe('createMoveNetDetector', () => {
 
     it("reentrancy guard: a stale, late-resolving call does not clobber a newer call's tracking state", async () => {
       const config: TrackingCropConfig = {
-        ...DEFAULT_TRACKING_CROP_CONFIG,
+        ...CROP_ON,
         reacquisitionLossThreshold: 1,
       }
       const detector = await createMoveNetDetector(undefined, config)
@@ -473,7 +494,7 @@ describe('createMoveNetDetector', () => {
     })
 
     it('off-screen start/end sequence: cold start -> engage -> steady track -> reacquisition loss -> stays full-frame, no oscillation', async () => {
-      const detector = await createMoveNetDetector()
+      const detector = await createMoveNetDetector(undefined, CROP_ON)
 
       // 1. Absent at start: two calls with nobody detected.
       estimatePoses.mockResolvedValueOnce([])

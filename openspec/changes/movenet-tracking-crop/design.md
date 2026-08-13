@@ -26,8 +26,8 @@ See proposal.md for motivation. Relevant current state, confirmed by reading the
 - `MOVENET_SINGLEPOSE_LIGHTNING_RESOLUTION = 192`, `MOVENET_SINGLEPOSE_THUNDER_RESOLUTION = 256`
   (`movenet/constants.js` — not part of the public `.d.ts`).
 - This app's `toPoseFrame` (`src/pose/backends/common.ts`) already restricts any backend's raw
-  keypoints to `COMMON_KEYPOINT_NAMES` (12 points: shoulders, elbows, wrists, hips, knees,
-  ankles) — no face points, unlike MoveNet's internal torso-only (`left_hip`/`right_hip`/
+  keypoints to `COMMON_KEYPOINT_NAMES` (15 points: nose, ears, shoulders, elbows, wrists, hips, knees,
+  ankles) — unlike MoveNet's internal torso-only (`left_hip`/`right_hip`/
   `left_shoulder`/`right_shoulder`) crop-visibility criterion.
 
 ## Goals / Non-Goals
@@ -56,12 +56,12 @@ See proposal.md for motivation. Relevant current state, confirmed by reading the
 
 ## Decisions
 
-**Bounding box and reacquisition gate use this app's 12 `COMMON_KEYPOINT_NAMES`, not MoveNet's
+**Bounding box and reacquisition gate use this app's 15 `COMMON_KEYPOINT_NAMES`, not MoveNet's
 17-point COCO output or its own torso-only visibility check.** This app's metrics (knee flexion,
 foot-strike pattern, arm-swing symmetry) depend on limb extremities that swing well outside a
 torso box during a running gait. A torso-only crop — MoveNet's own internal criterion — risks
 clipping ankles/wrists during the most extended part of a stride. Operating on the
-already-`toPoseFrame`-mapped 12-point output keeps this logic decoupled from MoveNet's raw COCO
+already-`toPoseFrame`-mapped name-driven output (15 points since the head-keypoint widening) keeps this logic decoupled from MoveNet's raw COCO
 shape, consistent with the rest of this codebase's backend-agnostic layering.
 
 **`rawDetector.reset()` is called only on the mode-transition boundary — full-frame→crop or
@@ -175,7 +175,7 @@ override precedent already established in this codebase.
   dedicated unit test simulating a stale call resolving after a newer one has already engaged
   tracking, asserting the stale result doesn't disturb it.
 - [A crop that's too tight could clip a limb mid-stride, actively hurting accuracy versus the
-  full-frame baseline] → Mitigated by deriving the box from all 12 app-relevant keypoints (not
+  full-frame baseline] → Mitigated by deriving the box from all 15 app-relevant keypoints (not
   MoveNet's torso-only criterion) and a generous default `paddingMultiplier` (1.75) with a
   `minCropSidePx` floor (256px in source-video pixels) so a compact detection (e.g. distant
   subject) doesn't produce a degenerately tiny crop.
@@ -184,3 +184,41 @@ override precedent already established in this codebase.
   verification (separate phase, per CLAUDE.md's harness) should compare medians/ranges across a
   few trials per variant, not single runs, same as any other pipeline-variant comparison in this
   repo.
+
+## Revival note (2026-08-13)
+
+This change was implemented and live-verified on 2026-08-11 but never committed; it was
+rescue-committed and ported onto the current main (15 `COMMON_KEYPOINT_NAMES` after the
+head-keypoint widening; 9 metrics; tiered results UI) on 2026-08-13. Two findings from the
+port's re-verification changed the shipped shape:
+
+**1. Head keypoints are excluded from bbox derivation (`BBOX_EXCLUDED_KEYPOINT_NAMES`).**
+The original design derived the box from the then-12 limb/torso keypoints. After the widening,
+a naive name-driven box picked up nose/ears — and a live A/B (round 1) measured that 15-point
+box strictly worse than both the original result and the crop-disabled baseline: head points
+inflate the padded box side (~560 → ~674 px on the reference test fixture, less zoom benefit)
+and jitter the box frame-to-frame. Track detectedFrames fell to 69/70/72 vs 75/75/75 disabled
+(the original 12-point result was 77/77/77 vs 74/75/75); park cadence/VO confidence roughly
+halved. Excluding nose/left_ear/right_ear (round 2) restored the track benefit: 77/78/79.
+
+**2. `DEFAULT_TRACKING_CROP_CONFIG.enabled` flipped to `false`.** Pre-registered rule for the
+revival: ship enabled unless any metric's median confidence tier degrades on either demo clip
+with crop on. Round-2 results (3 trials/arm, real GPU, medians):
+
+| clip | arm | detectedFrames | viewConf | kneeFlexion | cadence/VO conf |
+|---|---|---|---|---|---|
+| track | off | 75/75/75 | 0.755–0.774 | 0.94/0.96/0.98 | 0.15–0.74 (one bad-fit trial) |
+| track | on (12-pt bbox) | 77/78/79 | 0.779–0.782 | 0.83/0.85/0.84 | 0.60–0.72 |
+| park | off | 75/75/76 | 0.073–0.136 | ~0.06 (front-gated) | 0.63/0.68/0.69 |
+| park | on (12-pt bbox) | 62/75/76 | 0.099–0.175 | ~0.07 (front-gated) | 0.77/0.18/0.32 |
+
+Track passes (kneeFlexion cost reproduces, 0.83–0.85 vs 0.94–0.98, but stays tier-1; cadence
+medians 0.67-on vs 0.71-off are inside the documented spectral-fit flapping band). Park fails:
+cadence/VO fall from a tight 0.63–0.69 (tier 2) to a scattered median 0.32 (tier 3) — not
+fit-flapping (the off arm is tight), but the tracked box lagging the subject's ~3× on-screen
+scale change on an approach clip. Rule fired → default off. The crop remains available for
+side-view/stable-scale experiments via `window.__STRIDES_POSE_BACKEND_OVERRIDE__ =
+{ trackingCrop: { enabled: true } }`.
+
+Round-1 (15-point bbox) full numbers, for the record: track on 69/70/72 detectedFrames,
+kneeFlexion 0.74–0.83; park on cadence/VO 0.32–0.38 vs off 0.63–0.69.

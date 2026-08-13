@@ -3,7 +3,7 @@
 ### Requirement: MoveNet tracking-crop preprocessing
 
 The system SHALL, when tracking-crop is enabled and a prior call produced a usable detection
-(at least `minConfidentKeypoints` of the 12 `COMMON_KEYPOINT_NAMES` scoring at or above
+(at least `minConfidentKeypoints` of the 15 `COMMON_KEYPOINT_NAMES` scoring at or above
 `minKeypointConfidence`), run the next call's MoveNet inference against a padded, square crop of
 the source video centered on the prior detection's bounding box — drawn into a reusable
 off-screen canvas sized to the active model variant's own input resolution — remapping the

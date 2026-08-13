@@ -14,18 +14,32 @@ export interface CropRectPx {
 }
 
 /**
- * Bounding box over the keypoints scoring at or above `minKeypointConfidence`, or `null` if fewer
- * than `minConfidentKeypoints` qualify ("not usable" — the caller should not engage/continue
- * crop-mode tracking off this frame). Operates on this app's already-`toPoseFrame`-mapped 12
- * `COMMON_KEYPOINT_NAMES`, not a backend's raw output — deliberate, since this app's metrics
- * depend on limb extremities (wrists, ankles) that a torso-only box would clip during a stride.
+ * Head keypoints are deliberately EXCLUDED from bbox derivation. The crop was designed and
+ * verified (2026-08-11) against the pre-head-widening 12 limb/torso COMMON_KEYPOINT_NAMES; a
+ * 2026-08-13 live A/B of the 15-point box (nose/ears included) measured it strictly worse than
+ * both the 12-point box's original result and the crop-disabled baseline — head points inflate
+ * the padded box side (~560px → ~674px on the reference fixture, less zoom benefit) and their
+ * jitter destabilizes the box frame-to-frame (track detectedFrames 69-72 vs 75 disabled; park
+ * cadence/VO confidence roughly halved). Limb extremities stay in on purpose: this app's metrics
+ * depend on wrists/ankles a torso-only box would clip mid-stride.
+ */
+const BBOX_EXCLUDED_KEYPOINT_NAMES = new Set(['nose', 'left_ear', 'right_ear'])
+
+/**
+ * Bounding box over the non-head keypoints scoring at or above `minKeypointConfidence`, or
+ * `null` if fewer than `minConfidentKeypoints` qualify ("not usable" — the caller should not
+ * engage/continue crop-mode tracking off this frame). Operates on this app's
+ * already-`toPoseFrame`-mapped `COMMON_KEYPOINT_NAMES` minus `BBOX_EXCLUDED_KEYPOINT_NAMES`
+ * (see above), not a backend's raw output.
  */
 export function deriveBoundingBox(
   keypoints: Keypoint[],
   minKeypointConfidence: number,
   minConfidentKeypoints: number,
 ): BoundingBoxPx | null {
-  const confident = keypoints.filter((k) => k.score >= minKeypointConfidence)
+  const confident = keypoints.filter(
+    (k) => k.score >= minKeypointConfidence && !BBOX_EXCLUDED_KEYPOINT_NAMES.has(k.name),
+  )
   if (confident.length < minConfidentKeypoints) return null
 
   let minX = Infinity

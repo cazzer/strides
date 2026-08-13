@@ -10,7 +10,7 @@ frame*, which can miss a subject entering from the side on a wide/4K source; and
 single sub-threshold frame with no debounce, discarding useful tracking on ordinary motion blur.
 It also tracks torso visibility only (hip/shoulder confidence), not the limb extremities
 (wrists, ankles) this app's running-form metrics actually depend on. This change adds our own
-explicit, external tracking-crop layer around MoveNet, built on this app's 12
+explicit, external tracking-crop layer around MoveNet, built on this app's 15
 `COMMON_KEYPOINT_NAMES`, so a tracked subject gets a tighter, higher-resolution model input on
 subsequent frames — while keeping the untouched full-frame call path as the fallback, so a
 never-tracked or lost-tracking segment is provably behavior-identical to today.
@@ -20,9 +20,14 @@ never-tracked or lost-tracking segment is provably behavior-identical to today.
 - Add `src/pose/backends/trackingCropConfig.ts`: a `TrackingCropConfig` type (enable flag,
   keypoint-confidence gate, padding multiplier, minimum crop size, reacquisition-loss debounce)
   with a `DEFAULT_TRACKING_CROP_CONFIG`. Just the type + default — no override machinery of its
-  own; see the config-plumbing bullet below for why.
+  own; see the config-plumbing bullet below for why. **Ships `enabled: false` by default**: the
+  2026-08-13 revival A/B measured the crop helping the side-view track clip but consistently
+  degrading cadence/vertical-oscillation confidence a full tier on the front-approach park clip
+  (subject scale changes ~3×; the lagging tracked box mismatches it), firing the pre-registered
+  default-off rule — see design.md's "Revival note". The feature stays available via the
+  existing backend override's `trackingCrop` field.
 - Add `src/pose/backends/movenetCrop.ts`: pure, dependency-free functions —
-  `deriveBoundingBox` (12-keypoint bounding box from confident points, or `null` if too few
+  `deriveBoundingBox` (bounding box over the confident `COMMON_KEYPOINT_NAMES` from confident points, or `null` if too few
   qualify) and `computeCropRect` (padded, square, frame-clamped crop rectangle in source-video
   pixels).
 - Rewrite `src/pose/backends/movenet.ts`'s `estimatePose` as a small state machine: on a usable
