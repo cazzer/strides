@@ -379,9 +379,10 @@ consecutive trackable frames confirms it, so a single spurious detection cannot 
 window on its own. This trim applies only to the frames handed to `computeFormHeuristics` — the
 canonical `RobustPoseFrame[]` used for the skeleton overlay, and the development-only analysis
 diagnostics, both continue to reflect the full, untrimmed clip, with one carve-out: the
-diagnostics' scale-calibration block is computed over the same trimmed window
-`computeFormHeuristics` receives, so that its figures are directly comparable to the metrics
-alongside which they are reported rather than being measured over a different span.
+diagnostics' scale-calibration block is sourced from `verticalOscillationCm.calibration`, a field
+`computeFormHeuristics` itself produces as part of the trimmed-window computation — so it reflects
+the trimmed window BY CONSTRUCTION, with no separate trimming step of its own left to drift out of
+sync with the metrics alongside which it is reported.
 
 #### Scenario: A clip with the subject absent at the start and end trims to the presence window
 
@@ -409,7 +410,9 @@ alongside which they are reported rather than being measured over a different sp
 - **THEN** `VideoAnalysisState.robustFrames` (used by the skeleton overlay) and `diagnostics`
   (the development-only analysis diagnostics) both still reflect every sampled frame, not just
   the presence window used internally by `computeFormHeuristics` — except the diagnostics'
-  scale-calibration block, which is computed over the presence window by design
+  scale-calibration block, which reflects the presence window by construction, since it is sourced
+  from `computeFormHeuristics`'s own `verticalOscillationCm` metric output rather than computed
+  separately
 
 #### Scenario: No trackable frames anywhere leaves metrics computation unaffected
 
@@ -518,15 +521,20 @@ integration run's converted metric series independently — PER RUN, never acros
 run's cumulative series restarts at its own arbitrary baseline. The reported amplitude SHALL be a
 fitted PEAK-TO-PEAK amplitude in centimetres. A run SHALL contribute only when the primitive
 reports a well-posed fit AND that fit's sinusoid PARTIAL coefficient of determination (against a
-trend-only baseline, never the total coefficient of determination) is at or above the
-calculation's documented minimum. When more than one run contributes, the reported amplitude and
-every reported fit statistic SHALL come from a single contributing run's fit, selected by a
-sample-count-weighted median over the contributing runs' amplitudes, so that no reported
-combination of amplitude, frequency and fit quality describes a fit that never happened. The
-reported sample size SHALL be the number of complete bounce cycles observed across all
-contributing runs. When no run contributes, the calculation SHALL report no amplitude, no fit,
-and a typed reason naming why — never a zero amplitude and never an unexplained `null`. The
-calculation SHALL NOT require a resolvable body-scale reference in order to report an amplitude.
+trend-only baseline, never the total coefficient of determination) is at or above
+`verticalOscillationMinFitR2` — the same documented minimum `verticalOscillation` and
+`verticalRatio` gate on, reused rather than a dedicated threshold, so that the family cannot
+disagree about whether one shared fitted amplitude is trustworthy. When more than one run
+contributes, the reported amplitude and every reported fit statistic SHALL come from a single
+contributing run's fit, selected by a sample-count-weighted median over the contributing runs'
+amplitudes, so that no reported combination of amplitude, frequency and fit quality describes a
+fit that never happened. The reported sample size SHALL be the number of complete bounce cycles
+observed across all contributing runs. When no run contributes, the calculation SHALL report no
+amplitude, no fit, and a typed reason naming why — never a zero amplitude and never an unexplained
+`null`. The calculation SHALL NOT require a resolvable body-scale reference in order to report an
+amplitude. `computeFormHeuristics` SHALL invoke this calculation exactly once per run, as part of
+computing the `verticalOscillationCm` metric, and SHALL carry its result on that metric's
+`calibration` field.
 
 #### Scenario: Constant scale matches the pixel-path amplitude exactly
 - **WHEN** the calculation runs over a gapless hip series whose `pixelsPerMeter` is the same
@@ -902,6 +910,133 @@ empty array.
 
 - **WHEN** vertical ratio is computed against any combination of empty frames, a clip with zero
   bounce amplitude, a clip with indeterminate travel direction, or a clip with an unsuitable view
+- **THEN** `value` is either a finite number or `null`, never `NaN` or `Infinity`, and `confidence`
+  is `0` whenever `value` is `null`
+
+### Requirement: Vertical oscillation in centimetres is a metric gated on measured real-world scale
+
+The system SHALL expose vertical oscillation in centimetres as a `MetricId` (`verticalOscillationCm`),
+positioned immediately after `verticalRatio` in `MetricId` and every enumeration of it. Its `value`
+SHALL be the scale-calibrated calculation's reported centimetre amplitude when a real-world scale
+was measured for the clip and a fit cleared the calculation's quality gate, and `null` otherwise.
+When no frame in the clip carries a measured real-world scale, the system SHALL report `value:
+null`, `confidence: 0`, `calibration: null`, and a caveat stating this is an availability limitation
+of the current detection backend, not an error — the same caveat regardless of whether the backend
+in use has never measured scale or a scale-measuring backend's per-frame measurement failed
+everywhere on this particular clip, since the calculation cannot distinguish the two cases. When a
+real-world scale WAS measured but no integration run's fit cleared the quality gate, the system
+SHALL report `value: null`, `confidence: 0`, a non-null `calibration`, and a caveat naming the
+specific typed reason (mirroring the calculation's own `ScaleCalibratedFitFailureReason`), distinct
+from the not-measured-at-all caveat.
+
+#### Scenario: A backend that doesn't measure scale reports an availability caveat
+
+- **WHEN** `verticalOscillationCm` is computed against a clip where no frame's `pixelsPerMeter` is
+  measured
+- **THEN** `value` is `null`, `confidence` is `0`, `calibration` is `null`, `unit` is
+  `'centimeters'`, and `caveat` states that no real-world scale was measured and names what backend
+  capability would be needed, without throwing
+
+#### Scenario: An empty frame list is indistinguishable from a scale-less backend
+
+- **WHEN** `verticalOscillationCm` is computed against an empty frame list
+- **THEN** the result is identical in shape to the scale-less-backend case: `value: null`,
+  `confidence: 0`, `calibration: null`, without throwing
+
+#### Scenario: A measured scale that never fits reports its specific failure reason
+
+- **WHEN** `verticalOscillationCm` is computed against a clip where every frame carries a measured
+  scale, but no integration run's fit clears the calculation's quality gate
+- **THEN** `value` is `null`, `confidence` is `0`, `calibration` is non-null and carries the typed
+  failure reason, and `caveat` names that specific reason — distinct from the not-measured-at-all
+  caveat
+
+#### Scenario: A measured, well-fitted clip reports a value equal to the calibration's amplitude
+
+- **WHEN** `verticalOscillationCm` is computed against a clip where a real-world scale is measured
+  and at least one integration run's fit clears the quality gate
+- **THEN** `value` equals `calibration.verticalOscillationCm` exactly, `unit` is `'centimeters'`,
+  and `sampleSize` equals `calibration.sampleSize` exactly — the metric result is a passthrough of
+  the calibration onto the shared `MetricResult` shape, not an independent recomputation
+
+### Requirement: Vertical oscillation in centimetres is view-tolerant, on the same terms as vertical oscillation
+
+The system SHALL compute vertical oscillation in centimetres for every detected view (`'side'`,
+`'front'`, `'ambiguous'`), applying a per-view confidence multiplier from
+`viewFitTable.verticalOscillationCm` (`side: 1.0`, `front: 0.85`, `ambiguous: 0.6`) —
+identical to `viewFitTable.verticalOscillation`'s multipliers, not merely similarly shaped —
+rather than withholding the value outside side view or applying `verticalRatio`'s hard-gated
+multipliers. This metric has no denominator that foreshortens under camera angle the way
+`verticalRatio`'s stride-length denominator does, so `verticalRatio`'s hard-gating argument does
+not transfer to it.
+
+#### Scenario: Front-view clip still produces a value
+
+- **WHEN** vertical oscillation in centimetres is computed against a `'front'`-classified clip
+  with a measured scale and a fittable bounce
+- **THEN** a non-null `value` is returned with `viewFit: 'tolerated'` and confidence discounted by
+  the `0.85` multiplier relative to an otherwise-identical side-view computation
+
+#### Scenario: The view-fit label is reported even when no scale was measured
+
+- **WHEN** vertical oscillation in centimetres is computed against a `'front'`-classified clip
+  where no frame carries a measured scale
+- **THEN** `viewFit` is `'tolerated'` (reflecting the detected view, per the same convention every
+  other metric in this package follows) even though `value` is `null`
+
+### Requirement: The vertical-oscillation family reports one bounce estimate through three denominators
+
+The system SHALL ensure that, under a constant `pixelsPerMeter` scale across a clip,
+`verticalOscillationCm`'s underlying spectral fit and `verticalOscillation`'s underlying spectral
+fit agree on the winning frequency exactly, agree on the sinusoid partial coefficient of
+determination to within floating-point tolerance, agree on the sample count exactly, and relate in
+amplitude by exactly the documented pixel-to-centimetre conversion (`peakToPeakAmplitudePx / s ×
+100`) — evidence that the family's three metrics report the same underlying bounce through three
+different denominators (torso length, stride length, none), not three independently-measured
+quantities that merely happen to correlate. This agreement SHALL be understood as a property of
+the two series being fit (an affine image of each other under constant scale), not of the two
+fits being computed by a single shared code path — each family member remains free to derive its
+own fit independently.
+
+#### Scenario: A constant-scale clip's cm and pixel fits agree in frequency, quality, and sample count
+
+- **WHEN** `computeFormHeuristics` is run against a clip whose `pixelsPerMeter` is the same
+  constant on every frame, with both a fittable pixel-path bounce and a fittable centimetre-path
+  bounce
+- **THEN** `verticalOscillationCm.calibration.fit.frequencyHz` equals
+  `verticalOscillation.fit.frequencyHz` exactly, their `sinusoidR2` values agree closely, their
+  sample counts are equal, and `verticalOscillationCm.value` equals
+  `verticalOscillation.fit.peakToPeakAmplitudePx / pixelsPerMeter × 100` closely
+
+### Requirement: Vertical oscillation in centimetres participates in the shared orchestration and output contract
+
+The system SHALL include vertical oscillation in centimetres in `computeFormHeuristics`'s result
+(`FormHeuristicsResult.verticalOscillationCm`), positioned immediately after `verticalRatio` —
+appended after it rather than inserted between `verticalOscillation` and `verticalRatio`, so that
+`verticalRatio`'s own orchestration requirement (that it sits immediately after
+`verticalOscillation`) remains true without modification — computed under the same once-per-clip
+detected view as every other metric, and SHALL follow the same output contract every other metric
+follows: `value` a finite number or `null` (never `NaN` or `Infinity`), `confidence` in `[0, 1]`
+forced to `0` when `value` is `null`, and no exception for any well-typed `RobustPoseFrame[]` input
+including an empty array.
+
+#### Scenario: computeFormHeuristics includes vertical oscillation in centimetres gated by the shared detected view
+
+- **WHEN** `computeFormHeuristics` is called on a single frame sequence
+- **THEN** the returned `verticalOscillationCm.viewFit` reflects the same `view.view` label
+  present in the same result as every other metric
+
+#### Scenario: Empty frame list produces a well-formed result
+
+- **WHEN** `computeFormHeuristics` is called with an empty `RobustPoseFrame[]`
+- **THEN** `verticalOscillationCm.value` is `null` and `verticalOscillationCm.confidence` is `0`,
+  without throwing
+
+#### Scenario: Never NaN or Infinity across degenerate inputs
+
+- **WHEN** vertical oscillation in centimetres is computed against any combination of empty
+  frames, a clip with no measured scale, a clip with a measured scale but no fittable rhythm, or a
+  clip with an unsuitable view
 - **THEN** `value` is either a finite number or `null`, never `NaN` or `Infinity`, and `confidence`
   is `0` whenever `value` is `null`
 
