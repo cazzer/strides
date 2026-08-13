@@ -472,8 +472,9 @@ observed.
 #### Scenario: A fit below the quality threshold reports no value
 
 - **WHEN** the best-fitting frequency's sinusoid partial R² is below `verticalOscillationMinFitR2`
-- **THEN** `value` is `null`, `confidence` is `0`, and `caveat` names both the measured fit quality
-  and the configured minimum
+- **THEN** `value` is `null`, `confidence` is `0`, and `caveat` says in plain language that the
+  bounce rhythm was too irregular to measure — without quoting the measured fit statistic or the
+  configured threshold
 
 #### Scenario: A clip spanning under one complete cycle reports no value
 
@@ -625,8 +626,10 @@ the UNROUNDED cycle count to compute confidence's sample-size factor.
 - **WHEN** the hip-mid trace's best-fitting frequency has a sinusoid partial R² below
   `cadenceMinFitR2`, or the fit otherwise fails (too few samples, a degenerate/non-oscillating
   signal)
-- **THEN** `value` is `null`, `confidence` is `0`, and `caveat` names the measured fit quality (or
-  failure reason) and the `cadenceMinFitR2` threshold where applicable
+- **THEN** `value` is `null`, `confidence` is `0`, and `caveat` says in plain language that the
+  step rhythm was too irregular to measure — or names the specific failure reason (too few
+  resolvable frames; no oscillating motion) — without quoting the measured fit statistic or the
+  configured threshold
 
 #### Scenario: Under one complete step reports no value
 
@@ -660,8 +663,9 @@ the UNROUNDED cycle count to compute confidence's sample-size factor.
 
 - **WHEN** the fitted frequency lands within one grid step (`spectralFitFrequencyStepHz`) of
   either `spectralFitMinFrequencyHz` or `spectralFitMaxFrequencyHz`
-- **THEN** the returned `caveat` names the searched frequency range, alongside any other caveat
-  that applies
+- **THEN** the returned `caveat` states that the detected cadence sits at the edge of the range
+  the analysis can measure and the true cadence may fall outside it — without quoting the
+  numeric frequency band — alongside any other caveat that applies
 
 #### Scenario: Fit quality and step count both feed confidence
 
@@ -849,8 +853,9 @@ watch's calibrated centimetre-based algorithm.
 
 - **WHEN** the hip-bounce fit's sinusoid partial R² falls below `verticalOscillationMinFitR2`, or
   the fit otherwise fails
-- **THEN** `value` is `null`, `confidence` is `0`, and `caveat` names the measured fit quality (or
-  failure reason)
+- **THEN** `value` is `null`, `confidence` is `0`, and `caveat` says in plain language that the
+  bounce rhythm was too irregular to measure — or names the specific failure reason — without
+  quoting the measured fit statistic or the configured threshold
 
 #### Scenario: Degenerate zero bounce reports no value ahead of the stride-length check
 
@@ -920,22 +925,24 @@ positioned immediately after `verticalRatio` in `MetricId` and every enumeration
 SHALL be the scale-calibrated calculation's reported centimetre amplitude when a real-world scale
 was measured for the clip and a fit cleared the calculation's quality gate, and `null` otherwise.
 When no frame in the clip carries a measured real-world scale, the system SHALL report `value:
-null`, `confidence: 0`, `calibration: null`, and a caveat stating this is an availability limitation
-of the current detection backend, not an error — the same caveat regardless of whether the backend
-in use has never measured scale or a scale-measuring backend's per-frame measurement failed
-everywhere on this particular clip, since the calculation cannot distinguish the two cases. When a
-real-world scale WAS measured but no integration run's fit cleared the quality gate, the system
-SHALL report `value: null`, `confidence: 0`, a non-null `calibration`, and a caveat naming the
-specific typed reason (mirroring the calculation's own `ScaleCalibratedFitFailureReason`), distinct
-from the not-measured-at-all caveat.
+null`, `confidence: 0`, `calibration: null`, and a caveat stating in plain language that no
+real-world scale could be measured for this clip — an availability statement, not an error, naming
+no backend or model — the same caveat regardless of whether the backend in use has never measured
+scale or a scale-measuring backend's per-frame measurement failed everywhere on this particular
+clip, since the calculation cannot distinguish the two cases. When a real-world scale WAS measured
+but no integration run's fit cleared the quality gate, the system SHALL report `value: null`,
+`confidence: 0`, a non-null `calibration`, and a caveat naming the specific typed reason (mirroring
+the calculation's own `ScaleCalibratedFitFailureReason`) in plain language, distinct from the
+not-measured-at-all caveat.
 
 #### Scenario: A backend that doesn't measure scale reports an availability caveat
 
 - **WHEN** `verticalOscillationCm` is computed against a clip where no frame's `pixelsPerMeter` is
   measured
 - **THEN** `value` is `null`, `confidence` is `0`, `calibration` is `null`, `unit` is
-  `'centimeters'`, and `caveat` states that no real-world scale was measured and names what backend
-  capability would be needed, without throwing
+  `'centimeters'`, and `caveat` states that no real-world scale could be measured for this clip
+  and points the reader to the sibling bounce metrics that do not need one — naming no backend or
+  model — without throwing
 
 #### Scenario: An empty frame list is indistinguishable from a scale-less backend
 
