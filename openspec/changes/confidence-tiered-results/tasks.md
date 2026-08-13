@@ -62,7 +62,7 @@
 - [x] 6.1 Playwright, real GPU (`--headless=new --enable-gpu --ignore-gpu-blocklist`), MoveNet
       (default backend), both demo clips: captured `[analysis-diagnostics]` console output +
       screenshots. Cross-checked each metric's tier against `metricTier` applied to the
-      diagnostics JSON's own confidence/value fields — 0 mismatches across three re-runs.
+      diagnostics JSON's own confidence/value fields — 0 mismatches across the three verification scenarios (MoveNet track, MoveNet park, MediaPipe track — one run each, cross-checking DOM data-tier against metricTier on the diagnostics JSON).
 - [x] 6.2 MediaPipe Pose Landmarker backend override, track clip: confirmed
       `verticalOscillationCm` resolving a numeric value (4.79 cm) at confidence ~0.37 (< 0.4)
       renders in the excluded section (value withheld, reason shown), not as a low-confidence

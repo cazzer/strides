@@ -178,15 +178,19 @@ export function MetricsPanel({ heuristics }: MetricsPanelProps) {
   return (
     <section className="metrics-panel space-y-6" aria-label="Form metrics">
       <div className="@container grid gap-4 @lg:grid-cols-2 @3xl:grid-cols-3">
-        {metricTier(heuristics.verticalOscillation) !== 'excluded' && (
-          <MetricCard
-            metric={heuristics.verticalOscillation}
-            chart={<VerticalOscillationChart series={heuristics.verticalOscillation.series} />}
-          />
-        )}
-        {metrics.slice(1).map((metric) =>
+        {metrics.map((metric) =>
           metricTier(metric) !== 'excluded' ? (
-            <MetricCard key={metric.metric} metric={metric} />
+            <MetricCard
+              key={metric.metric}
+              metric={metric}
+              // The chart rides on the metric it charts, by identity — not by array position, so
+              // reordering `metrics` for display reasons can never strand it on the wrong card.
+              chart={
+                metric.metric === 'verticalOscillation' ? (
+                  <VerticalOscillationChart series={heuristics.verticalOscillation.series} />
+                ) : undefined
+              }
+            />
           ) : null,
         )}
       </div>
