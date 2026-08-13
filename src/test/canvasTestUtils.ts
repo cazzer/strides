@@ -17,6 +17,7 @@ export interface FakeCanvasRenderingContext2D {
   fill: ReturnType<typeof vi.fn>
   save: ReturnType<typeof vi.fn>
   restore: ReturnType<typeof vi.fn>
+  drawImage: ReturnType<typeof vi.fn>
   globalAlpha: number
   strokeStyle: string
   fillStyle: string
@@ -36,6 +37,7 @@ export function stubCanvas2DContext(): FakeCanvasRenderingContext2D {
     fill: vi.fn(),
     save: vi.fn(),
     restore: vi.fn(),
+    drawImage: vi.fn(),
     globalAlpha: 1,
     strokeStyle: '',
     fillStyle: '',

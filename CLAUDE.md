@@ -85,9 +85,14 @@ output.
   filtering, interpolation gap tolerance, detection error tolerance, per-frame timeout.
 - `window.__STRIDES_POSE_BACKEND_OVERRIDE__` — partial `PoseDetectorConfig`
   (`src/pose/poseBackendConfig.ts`): `{ backend: 'movenet' | 'blazepose' | 'posenet' |
-  'mediapipePoseLandmarker', movenetModelType?: 'lightning' | 'thunder' }`. `movenetModelType`
-  only matters when `backend: 'movenet'` (defaults to `'lightning'`); ignored otherwise. Read
-  once per detector creation in `usePoseDetector.ts`.
+  'mediapipePoseLandmarker', movenetModelType?: 'lightning' | 'thunder', trackingCrop?:
+  Partial<TrackingCropConfig> }`. `movenetModelType` and `trackingCrop`
+  (`src/pose/backends/trackingCropConfig.ts`: enable flag, keypoint-confidence gate, padding
+  multiplier, minimum crop size, reacquisition-loss debounce) only matter when `backend:
+  'movenet'` (default `'lightning'`, default tracking-crop config respectively); ignored
+  otherwise. `trackingCrop` merges shallowly, one level deep, over the default — set `{
+  trackingCrop: { enabled: false } }` to A/B against the pre-tracking-crop baseline. Read once
+  per detector creation in `usePoseDetector.ts`.
 - Math (`HeuristicsConfig`) selection doesn't have an override point yet — deferred, see
   "Backlog" below.
 - **Set overrides with `page.addInitScript()`, not `page.evaluate()`.** Auto-analyze can start
@@ -451,10 +456,41 @@ narrower follow-up if that granularity is ever needed. Status: `movenet` and
 GitHub issues #24 (MoveNet variant — done, results recorded), #25 (MediaPipe Tasks Vision — done,
 works), #26 (PoseNet — done, confirmed broken, not worth further investment).
 
-Also flagged, not yet scoped: input preprocessing (resize/crop before detection — the actual
-root cause of this session's low-confidence demo-clip investigation, a 4K frame with the subject
-too small/distant after downscaling to the model's fixed input size) doesn't have a pluggable
-stage at all yet; and the eval harness/comparison tooling itself (multi-trial, labeled,
+Input preprocessing now has a pluggable stage too: MoveNet's backend gained an external
+tracking-crop layer (`src/pose/backends/movenetCrop.ts`, `trackingCropConfig.ts`) — once a
+subject is detected, subsequent frames run against a padded, upscaled crop centered on the
+tracked bounding box instead of the full (possibly 4K, subject-too-small-after-downscale) frame,
+falling back to full-frame detection after sustained tracking loss. Config override: the same
+`window.__STRIDES_POSE_BACKEND_OVERRIDE__`'s `trackingCrop` field, see "Config overrides" above.
+It was the "input preprocessing has no pluggable stage" backlog item (built 2026-08-11, ported
+onto the 15-keypoint/9-metric main and re-verified 2026-08-13 — fresh A/B table below).
+
+**Ships `enabled: false` by default** — decided by a pre-registered rule in the 2026-08-13
+revival A/B (both demo clips, 3 trials per arm, real GPU, crop-on vs `{ enabled: false }`):
+
+| | track, crop off | track, crop on | park, crop off | park, crop on |
+|---|---|---|---|---|
+| detectedFrames | 75/75/75 | **77/78/79** | 75/75/76 | 62/75/76 |
+| view confidence | 0.755–0.774 | 0.779–0.782 | 0.073–0.136 | 0.099–0.175 |
+| kneeFlexion conf | 0.94–0.98 | **0.83–0.85** | ~0.06 (front-gated) | ~0.07 (front-gated) |
+| cadence/VO conf | 0.71–0.74 median (one bad-fit 0.15) | 0.60–0.72 | **0.63–0.69, tight** | **0.18–0.77, median 0.32** |
+
+On the side-view track clip cropping helps (more detected frames, slightly higher view
+confidence — same direction as the original 2026-08-11 verification), and the known kneeFlexion
+confidence cost reproduces (0.83–0.85 vs 0.94–0.98, still tier-1). But on the front-approach
+park clip — where the subject's on-screen scale changes ~3× — the lagging tracked box mismatches
+the subject and consistently halves cadence/vertical-oscillation confidence (median tier T2→T3),
+which fired the pre-registered "any median tier degrades → default off" rule. Two implementation
+notes from the revival: the bbox deliberately EXCLUDES the head keypoints (nose/ears) — a
+15-point box was measured strictly worse than the original 12-point one (it inflates the padded
+crop side ~560→674px on the reference fixture and jitters frame-to-frame; detectedFrames dropped
+to 69–72 vs 75 baseline) — and tracking only helps *after* a first confident detection, so it
+never addresses the cold-start moment (subject entering frame small/distant), a genuinely
+different problem (upstream resize before *any* detection) that remains unbuilt. Full two-round
+tables: `openspec/changes/archive/*movenet-tracking-crop/design.md` "Revival note". Enable for
+experiments via `{ trackingCrop: { enabled: true } }` in the backend override.
+
+Also flagged, not yet scoped: the eval harness/comparison tooling itself (multi-trial, labeled,
 diffable) that would actually drive variants through these config planes hasn't been built —
 this doc covers how to do it by hand, not a scripted harness.
 
