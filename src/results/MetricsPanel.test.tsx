@@ -362,10 +362,11 @@ describe('MetricsPanel', () => {
     expect(within(excludedSection).queryByText('Not available')).not.toBeInTheDocument()
   })
 
-  it('excludes a low-confidence but non-null verticalOscillationCm value, hiding the number itself', () => {
-    // Documents a deliberate consequence of the tier-3 rule (confidence < 0.4 OR value === null):
-    // a measured-but-untrustworthy number is withheld entirely, not shown with a low-confidence
-    // label -- matches the epic's "don't show a metric, show why it was effectively excluded".
+  it('renders a low-confidence but non-null verticalOscillationCm value as a caveated card, value shown', () => {
+    // The reversal exclude-only-unmeasurable-metrics ships: a measured value at a workable
+    // camera angle is never withheld for low confidence. Under #37's rule this exact shape
+    // (conf 0.37 < 0.4, value present, viewFit primary) was excluded from the grid; now it
+    // renders as a tier-2 card carrying its value and a "Low confidence" indicator.
     const heuristics = makeHighConfidenceResult()
     heuristics.verticalOscillationCm = makeVerticalOscillationCm({
       value: 12.4,
@@ -375,24 +376,117 @@ describe('MetricsPanel', () => {
 
     render(<MetricsPanel heuristics={heuristics} />)
 
-    expect(screen.queryByLabelText('Vertical oscillation (cm)')).not.toBeInTheDocument()
-    expect(screen.queryByText('12.4 cm')).not.toBeInTheDocument()
-    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
-    expect(within(excludedSection).getByText('Vertical oscillation (cm)')).toBeInTheDocument()
-    expect(within(excludedSection).getByText(/scale coverage was low/i)).toBeInTheDocument()
+    const card = screen.getByLabelText('Vertical oscillation (cm)')
+    expect(card.getAttribute('data-tier')).toBe('caveated')
+    expect(within(card).getByText('12.4 cm')).toBeInTheDocument()
+    expect(within(card).getByText(/low confidence/i)).toBeInTheDocument()
+    expect(within(card).getByRole('note').textContent).toMatch(/scale coverage was low/i)
+    // Nothing else is excluded in this fixture, so no excluded section renders at all.
+    expect(screen.queryByText(/not measured for this clip/i)).not.toBeInTheDocument()
   })
 
-  it('falls back to a generic reason for an excluded metric with no caveat text', () => {
-    // A theoretical-but-possible gap in the heuristics layer's caveat emission (see
-    // metricConfidence.ts's doc on metricTier): confidence can drop below the exclusion threshold
-    // via frameCoverage alone, with no per-metric caveat message pushed for that shortfall. The
-    // excluded section must still show SOME reason text, never a blank entry.
+  it('renders every metric of the track-demo bad-fit shape as a card -- low confidence never excludes', () => {
+    // The RCA shape: on ~25% of track-demo runs the shared hip-bounce fit's sinusoidR2 lands in
+    // its low mode and verticalOscillation/verticalRatio/cadence confidence collapses to
+    // 0.02-0.21 -- all three still measured, all three viewFit 'primary'. They must render as
+    // cards with values on every run; only the structurally unmeasurable two (null-valued cm on
+    // MoveNet, unsuitable-view arm swing on a side clip) belong in the excluded section.
+    const heuristics = makeHighConfidenceResult()
+    heuristics.verticalOscillation = makeVerticalOscillation({ value: 0.18, confidence: 0.02 }, [
+      { timestamp: 0, value: 0.05 },
+    ])
+    heuristics.verticalRatio = makeMetric({
+      metric: 'verticalRatio',
+      value: 0.09,
+      unit: 'percent',
+      confidence: 0.21,
+    })
+    heuristics.cadence = makeMetric({
+      metric: 'cadence',
+      value: 91,
+      unit: 'stepsPerMinute',
+      confidence: 0.1,
+    })
+    heuristics.verticalOscillationCm = makeVerticalOscillationCm({
+      value: null,
+      confidence: 0,
+      caveat: 'No real-world scale was measured for this clip.',
+    })
+    heuristics.armSwingSymmetry = makeMetric({
+      metric: 'armSwingSymmetry',
+      value: 0.5,
+      unit: 'percent',
+      confidence: 0.06,
+      viewFit: 'unsuitable',
+      caveat: 'Arm swing symmetry needs a front-facing view.',
+    })
+
+    render(<MetricsPanel heuristics={heuristics} />)
+
+    for (const label of ['Vertical oscillation', 'Vertical ratio', 'Cadence']) {
+      const card = screen.getByLabelText(label)
+      expect(card.getAttribute('data-tier')).toBe('caveated')
+      expect(within(card).getByText(/low confidence/i)).toBeInTheDocument()
+    }
+    expect(screen.getByText('18.0% of torso length')).toBeInTheDocument()
+    expect(screen.getByText('9.0%')).toBeInTheDocument()
+    expect(screen.getByText('91 steps/min')).toBeInTheDocument()
+
+    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    expect(within(excludedSection).getByText('Vertical oscillation (cm)')).toBeInTheDocument()
+    expect(within(excludedSection).getByText('Arm swing symmetry')).toBeInTheDocument()
+    expect(within(excludedSection).queryByText('Vertical oscillation')).not.toBeInTheDocument()
+    expect(within(excludedSection).queryByText('Vertical ratio')).not.toBeInTheDocument()
+    expect(within(excludedSection).queryByText('Cadence')).not.toBeInTheDocument()
+  })
+
+  it('excludes an unsuitable-view metric with a measured value, surfacing its caveat and never its number', () => {
+    const heuristics = makeHighConfidenceResult()
+    heuristics.armSwingSymmetry = makeMetric({
+      metric: 'armSwingSymmetry',
+      value: 0.88,
+      unit: 'percent',
+      confidence: 0.06,
+      viewFit: 'unsuitable',
+      caveat: 'Arm swing symmetry needs a front-facing view and is not reliable from a side view.',
+    })
+
+    render(<MetricsPanel heuristics={heuristics} />)
+
+    expect(screen.queryByLabelText('Arm swing symmetry')).not.toBeInTheDocument()
+    expect(screen.queryByText('88.0%')).not.toBeInTheDocument()
+    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    expect(within(excludedSection).getByText('Arm swing symmetry')).toBeInTheDocument()
+    expect(
+      within(excludedSection).getByText(/not reliable from a side view/i),
+    ).toBeInTheDocument()
+  })
+
+  it('counts a below-0.4-confidence card under "with caveats" in the summary line', () => {
     const heuristics = makeHighConfidenceResult()
     heuristics.cadence = makeMetric({
       metric: 'cadence',
       value: 150,
       unit: 'stepsPerMinute',
       confidence: 0.2,
+    })
+
+    render(<MetricsPanel heuristics={heuristics} />)
+
+    expect(screen.getByText('8 metrics measured · 1 with caveat')).toBeInTheDocument()
+  })
+
+  it('falls back to a generic reason for an excluded metric with no caveat text', () => {
+    // Every live null-value path in the heuristics layer sets a caveat (each nullResult helper
+    // requires one), but the shape is type-legal without it -- the excluded section must still
+    // show SOME reason text, never a blank entry, and since exclusion can only mean
+    // "structurally unmeasurable" the fallback copy is confidence-neutral.
+    const heuristics = makeHighConfidenceResult()
+    heuristics.cadence = makeMetric({
+      metric: 'cadence',
+      value: null,
+      unit: 'stepsPerMinute',
+      confidence: 0,
       caveat: null,
     })
 
@@ -400,6 +494,8 @@ describe('MetricsPanel', () => {
 
     const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
     expect(within(excludedSection).getByText('Cadence')).toBeInTheDocument()
-    expect(within(excludedSection).getByText(/too low to report/i)).toBeInTheDocument()
+    expect(
+      within(excludedSection).getByText('Not measurable for this clip.'),
+    ).toBeInTheDocument()
   })
 })

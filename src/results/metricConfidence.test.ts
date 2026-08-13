@@ -30,7 +30,7 @@ describe('metricTier', () => {
     expect(metricTier(makeMetric({ confidence: 0.95 }))).toBe('normal')
   })
 
-  it('is "caveated" exactly at the low-confidence boundary (0.4)', () => {
+  it('is "caveated" at 0.4 — a confidence-label boundary only, with no layout effect', () => {
     expect(metricTier(makeMetric({ confidence: LOW_CONFIDENCE_THRESHOLD }))).toBe('caveated')
   })
 
@@ -38,8 +38,30 @@ describe('metricTier', () => {
     expect(metricTier(makeMetric({ confidence: 0.69 }))).toBe('caveated')
   })
 
-  it('is "excluded" just below the low-confidence boundary', () => {
-    expect(metricTier(makeMetric({ confidence: 0.39 }))).toBe('excluded')
+  it('is "caveated" just below 0.4 — the caveated tier has no confidence floor', () => {
+    expect(metricTier(makeMetric({ confidence: 0.39 }))).toBe('caveated')
+  })
+
+  it('is "caveated" for confidence 0 with a non-null value — measured data is never excluded for confidence', () => {
+    // The RCA case behind exclude-only-unmeasurable-metrics: the shared hip-bounce fit's
+    // sinusoidR2 is bimodal run-to-run on the track demo clip, collapsing measured, view-primary
+    // metrics' confidence toward 0 on ~25% of runs. Those values must render (as low-confidence
+    // cards), not vanish from the grid.
+    expect(metricTier(makeMetric({ value: 5, confidence: 0 }))).toBe('caveated')
+  })
+
+  it('is "caveated" for a measured view-primary metric at confidence 0.02', () => {
+    expect(metricTier(makeMetric({ confidence: 0.02 }))).toBe('caveated')
+  })
+
+  it('is "caveated" for a measured view-primary metric at confidence 0.21', () => {
+    expect(metricTier(makeMetric({ confidence: 0.21 }))).toBe('caveated')
+  })
+
+  it('is "caveated" for a measured view-tolerated metric at confidence 0.1', () => {
+    // 'tolerated' is a workable camera geometry — only 'unsuitable' excludes. A front-view
+    // verticalOscillation reading with a collapsed confidence stays on a card.
+    expect(metricTier(makeMetric({ viewFit: 'tolerated', confidence: 0.1 }))).toBe('caveated')
   })
 
   it('is "excluded" for a null value even at high confidence', () => {
@@ -52,21 +74,35 @@ describe('metricTier', () => {
     expect(metricTier(makeMetric({ value: null, confidence: 0 }))).toBe('excluded')
   })
 
-  it('is "excluded" for confidence 0 with a non-null value', () => {
-    expect(metricTier(makeMetric({ value: 5, confidence: 0 }))).toBe('excluded')
-  })
-
   it('is "excluded" for confidence 1 exactly at the null-value boundary', () => {
     // A pathological but type-legal combination (a "perfectly confident" null) — null still wins.
     expect(metricTier(makeMetric({ value: null, confidence: 1 }))).toBe('excluded')
   })
 
-  it('is "excluded" for any viewFit: unsuitable metric, via the confidence clause alone', () => {
-    // DEFAULT_VIEW_FIT_TABLE caps every 'unsuitable' multiplier at 0.2 -- confidence, a product of
-    // factors each <= 1, can never clear LOW_CONFIDENCE_THRESHOLD (0.4) from there. metricTier
-    // deliberately doesn't inspect viewFit at all; this documents why that's still correct.
+  it('is "excluded" for a viewFit: unsuitable metric via the explicit viewFit clause', () => {
+    // The live shape: armSwingSymmetry on a side-view clip measures a value, but the camera
+    // geometry is classified unsuitable (the far arm is occluded/superimposed) — structurally
+    // unmeasurable, so excluded regardless of what the confidence arithmetic produced.
     expect(
-      metricTier(makeMetric({ viewFit: 'unsuitable', confidence: 0.2, value: 3 })),
+      metricTier(
+        makeMetric({
+          metric: 'armSwingSymmetry',
+          value: 0.5,
+          unit: 'percent',
+          confidence: 0.06,
+          viewFit: 'unsuitable',
+        }),
+      ),
+    ).toBe('excluded')
+  })
+
+  it('is "excluded" for viewFit: unsuitable even at high confidence with a non-null value', () => {
+    // Pathological but type-legal: no heuristics path today emits high confidence on an
+    // unsuitable view (every 'unsuitable' multiplier is <= 0.2), but the tier rule must not
+    // depend on that arithmetic — 'unsuitable' is the structural statement, and it wins on its
+    // own terms (the inverse of #37's arithmetic-derived exclusion).
+    expect(
+      metricTier(makeMetric({ viewFit: 'unsuitable', confidence: 0.95, value: 3 })),
     ).toBe('excluded')
   })
 })
