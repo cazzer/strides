@@ -73,14 +73,22 @@ function makeAnalysis(
 
 function renderResultsView(
   props: Partial<
-    Pick<Parameters<typeof ResultsView>[0], 'analysis' | 'onTryAgain'>
+    Pick<
+      Parameters<typeof ResultsView>[0],
+      'analysis' | 'onTryAgain' | 'onChooseDifferentVideo'
+    >
   > = {},
 ) {
   const onTryAgain = props.onTryAgain ?? vi.fn()
+  const onChooseDifferentVideo = props.onChooseDifferentVideo ?? vi.fn()
   render(
-    <ResultsView analysis={props.analysis ?? makeAnalysis()} onTryAgain={onTryAgain} />,
+    <ResultsView
+      analysis={props.analysis ?? makeAnalysis()}
+      onTryAgain={onTryAgain}
+      onChooseDifferentVideo={onChooseDifferentVideo}
+    />,
   )
-  return { onTryAgain }
+  return { onTryAgain, onChooseDifferentVideo }
 }
 
 describe('ResultsView', () => {
@@ -94,11 +102,26 @@ describe('ResultsView', () => {
     expect(screen.getByRole('button', { name: /analyze/i })).toBeDisabled()
   })
 
-  it('re-enables Analyze once a run completes, so the same clip can be re-analyzed', () => {
+  it('drops the Analyze button once a run completes -- analysis is deterministic, re-running has nothing to add', () => {
     renderResultsView({
       analysis: makeAnalysis({ phase: 'ready', heuristics: makeHeuristics() }),
     })
-    expect(screen.getByRole('button', { name: /analyze again/i })).toBeEnabled()
+    expect(
+      screen.queryByRole('button', { name: /analyze/i }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /choose a different video/i }),
+    ).toBeEnabled()
+  })
+
+  it('calls onChooseDifferentVideo (not videoSource.reset directly) from its button', () => {
+    const { onChooseDifferentVideo } = renderResultsView({
+      analysis: makeAnalysis({ phase: 'ready', heuristics: makeHeuristics() }),
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: /choose a different video/i }),
+    )
+    expect(onChooseDifferentVideo).toHaveBeenCalledTimes(1)
   })
 
   it('re-enables Analyze after an error, so the user can retry via the primary button too', () => {
@@ -161,6 +184,7 @@ describe('ResultsView', () => {
           scalePass: { status: 'running', diagnostics: null },
         })}
         onTryAgain={vi.fn()}
+        onChooseDifferentVideo={vi.fn()}
       />,
     )
     expect(screen.getByRole('status').textContent).toMatch(
@@ -175,6 +199,7 @@ describe('ResultsView', () => {
           scalePass: { status: 'done', diagnostics: null },
         })}
         onTryAgain={vi.fn()}
+        onChooseDifferentVideo={vi.fn()}
       />,
     )
     expect(screen.getByRole('status').textContent).toMatch(

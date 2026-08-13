@@ -8,6 +8,11 @@ export interface ResultsViewProps {
    * the chance to move focus somewhere stable first, the same fix already applied there and in
    * `WebcamCapture`. */
   onTryAgain: () => void
+  /** Called instead of `videoSource.reset` directly for "Choose a different video" — clicking
+   * it unmounts this whole component (the video source leaves `'ready'`), taking the focused
+   * button with it, so the composer (`App.tsx`) must move focus somewhere stable first. Same
+   * contract as `onTryAgain`. */
+  onChooseDifferentVideo: () => void
 }
 
 function progressLabel(
@@ -26,11 +31,17 @@ function progressLabel(
  * itself. Renders the "Analyze" button, a progress readout while sampling/processing, and once
  * `phase === 'ready'`, the metrics panel (which itself renders the vertical-oscillation chart).
  */
-export function ResultsView({ analysis, onTryAgain }: ResultsViewProps) {
+export function ResultsView({
+  analysis,
+  onTryAgain,
+  onChooseDifferentVideo,
+}: ResultsViewProps) {
   const { phase, progress, isPausedMidAnalysis, heuristics, error, start } =
     analysis
-  // 'ready'/'error' don't disable the button -- Analyze must stay re-runnable after a
-  // completed or failed run, not get stuck permanently disabled with no way forward.
+  // 'error' doesn't disable the button -- Analyze must stay re-runnable after a failed run,
+  // not get stuck permanently disabled with no way forward. After a *completed* run the
+  // button doesn't render at all: analysis is deterministic, so re-running the same clip has
+  // nothing new to say -- the forward action is choosing a different video.
   const analyzeDisabled = phase === 'sampling' || phase === 'processing'
   const analyzeDisabledReason = analyzeDisabled
     ? 'Analysis already in progress'
@@ -38,15 +49,26 @@ export function ResultsView({ analysis, onTryAgain }: ResultsViewProps) {
 
   return (
     <section className="space-y-6" aria-label="Analysis results">
-      <button
-        type="button"
-        onClick={start}
-        disabled={analyzeDisabled}
-        title={analyzeDisabledReason}
-        className="inline-flex items-center justify-center border-2 border-brand-700 bg-brand-700 px-5 py-2.5 font-sans text-sm font-semibold uppercase tracking-wide text-white transition-colors hover:bg-brand-800 hover:border-brand-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-brand-700"
-      >
-        {phase === 'ready' || phase === 'error' ? 'Analyze again' : 'Analyze'}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        {phase !== 'ready' && (
+          <button
+            type="button"
+            onClick={start}
+            disabled={analyzeDisabled}
+            title={analyzeDisabledReason}
+            className="inline-flex items-center justify-center border-2 border-brand-700 bg-brand-700 px-5 py-2.5 font-sans text-sm font-semibold uppercase tracking-wide text-white transition-colors hover:bg-brand-800 hover:border-brand-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-brand-700"
+          >
+            {phase === 'error' ? 'Analyze again' : 'Analyze'}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onChooseDifferentVideo}
+          className="inline-flex items-center justify-center border-2 border-black dark:border-white px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black dark:text-white transition-colors hover:bg-black hover:text-white dark:hover:bg-white dark:hover:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+        >
+          Choose a different video
+        </button>
+      </div>
 
       {(phase === 'sampling' || phase === 'processing') && (
         <p role="status">

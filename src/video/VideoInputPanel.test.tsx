@@ -93,18 +93,16 @@ describe('VideoInputPanel', () => {
     expect(videoSource.reset).toHaveBeenCalledTimes(1)
   })
 
-  it('shows a review affordance and reset button when ready', () => {
+  it('renders no reset button when ready -- "Choose a different video" moved to the results column', () => {
     const videoSource = makeVideoSource({
       status: 'ready',
       metadata: { durationSec: 10, width: 640, height: 480, frameRate: null },
     })
     render(<VideoInputPanel videoSource={videoSource} />)
 
-    const resetButton = screen.getByRole('button', {
-      name: /choose a different video/i,
-    })
-    fireEvent.click(resetButton)
-    expect(videoSource.reset).toHaveBeenCalledTimes(1)
+    expect(
+      screen.queryByRole('button', { name: /choose a different video/i }),
+    ).not.toBeInTheDocument()
   })
 
   it('always renders the canonical video element with the given ref', () => {

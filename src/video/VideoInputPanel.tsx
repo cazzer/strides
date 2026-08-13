@@ -117,25 +117,23 @@ export function VideoInputPanel({ videoSource, children }: VideoInputPanelProps)
         a `position: relative` stage to be positioned against as a sibling of `<video>`.
       */}
       <div className="relative w-fit max-w-full border-2 border-black dark:border-white bg-neutral-100 dark:bg-neutral-900">
+        {/*
+          `max-h` keeps the whole frame (portrait clips especially) inside the viewport —
+          150px clears the sticky header (86px) plus the main column's top padding — and a
+          replaced element with auto width/height under max constraints shrinks
+          aspect-preserving, so the element box always equals the frame box and the
+          `SkeletonOverlay` stretched over it stays aligned at any scale.
+        */}
         <video
           ref={videoRef}
           controls
           playsInline
           hidden={status === 'empty'}
-          className="block max-w-full h-auto bg-black"
+          className="block w-auto h-auto max-w-full max-h-[calc(100vh-150px)] bg-black"
         />
         {status !== 'empty' && children}
       </div>
 
-      {status === 'ready' && (
-        <button
-          type="button"
-          onClick={reset}
-          className="inline-flex items-center justify-center border-2 border-black dark:border-white px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black dark:text-white transition-colors hover:bg-black hover:text-white dark:hover:bg-white dark:hover:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-        >
-          Choose a different video
-        </button>
-      )}
     </section>
   )
 }

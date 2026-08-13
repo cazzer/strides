@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { usePoseDetector } from './pose/usePoseDetector'
 import { useVideoSource } from './video/useVideoSource'
 import { VideoInputPanel } from './video/VideoInputPanel'
@@ -19,10 +20,25 @@ export function App() {
     videoSource.videoRef.current?.focus()
   }
 
+  // Same bug class as handleTryAgain, different stable target: resetting the source unmounts
+  // the whole results column (and hides the video element), so the clicked button's focus has
+  // to land on something that survives the transition back to the picker — the page heading.
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const handleChooseDifferentVideo = () => {
+    videoSource.reset()
+    headingRef.current?.focus()
+  }
+
   return (
     <>
       <header className="sticky top-0 z-10 border-b-2 border-black dark:border-white bg-white dark:bg-black px-4 sm:px-6 py-4">
-        <h1 className="font-display text-2xl font-bold tracking-tight">Strides</h1>
+        <h1
+          ref={headingRef}
+          tabIndex={-1}
+          className="font-display text-2xl font-bold tracking-tight focus:outline-none"
+        >
+          Strides
+        </h1>
         <p className="font-sans text-sm text-neutral-600 dark:text-neutral-400">
           Browser-based running form analysis.
         </p>
@@ -56,7 +72,11 @@ export function App() {
         */}
         <div className="lg:max-h-[calc(100vh-86px)] lg:overflow-y-auto">
           {videoSource.status === 'ready' && (
-            <ResultsView analysis={analysis} onTryAgain={handleTryAgain} />
+            <ResultsView
+              analysis={analysis}
+              onTryAgain={handleTryAgain}
+              onChooseDifferentVideo={handleChooseDifferentVideo}
+            />
           )}
         </div>
       </main>
