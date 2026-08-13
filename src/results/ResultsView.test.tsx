@@ -174,16 +174,16 @@ describe('ResultsView', () => {
     ).toBeInTheDocument()
   })
 
-  it('does not show the low-confidence banner when every metric is high confidence', () => {
+  it('does not render an excluded section when every metric clears tier 1/2', () => {
     renderResultsView({
       analysis: makeAnalysis({ phase: 'ready', heuristics: makeHeuristics() }),
     })
     expect(
-      screen.queryByText(/lower-confidence results/i),
+      screen.queryByText(/not measured for this clip/i),
     ).not.toBeInTheDocument()
   })
 
-  it('shows the low-confidence banner when a metric is flagged', () => {
+  it('renders a flagged metric in the metrics panel excluded section, not a banner', () => {
     const heuristics = makeHeuristics()
     renderResultsView({
       analysis: makeAnalysis({
@@ -191,9 +191,14 @@ describe('ResultsView', () => {
         heuristics: { ...heuristics, trunkLean: { ...heuristics.trunkLean, value: null } },
       }),
     })
-    expect(screen.getByText(/lower-confidence results/i)).toHaveTextContent(
+    // #37 superseded the standalone LowConfidenceBanner with MetricsPanel's own excluded
+    // section -- this asserts the excluded metric surfaces there, and that no separate
+    // "lower-confidence results" banner text exists anywhere in ResultsView anymore.
+    expect(screen.getByText(/not measured for this clip/i)).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: /not measured for this clip/i })).toHaveTextContent(
       /trunk lean/i,
     )
+    expect(screen.queryByText(/lower-confidence results/i)).not.toBeInTheDocument()
   })
 
   it('does not render results or status content while idle', () => {
