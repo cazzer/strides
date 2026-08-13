@@ -116,7 +116,13 @@ function makeHighConfidenceResult(): FormHeuristicsResult {
   }
 }
 
-function makeLowConfidenceResult(): FormHeuristicsResult {
+/**
+ * Mixed-tier fixture: verticalOscillation lands in tier 2 (caveated, confidence 0.5, no caveat
+ * text -- exercises the documented "tier-2 card with a null caveat" case); trunkLean/overstriding
+ * land in tier 3 (excluded, unsuitable view, null value, non-null caveat); every other metric is
+ * tier 1 (normal), including footStrikePattern, whose caveat is always present regardless of tier.
+ */
+function makeMixedTierResult(): FormHeuristicsResult {
   return {
     view: {
       view: 'front',
@@ -131,16 +137,12 @@ function makeLowConfidenceResult(): FormHeuristicsResult {
       { value: 0.1, confidence: 0.5, viewFit: 'tolerated' },
       [{ timestamp: 0, value: 0.05 }],
     ),
-    // Deliberately clean/unflagged, same reasoning as cadence/kneeFlexion/armSwingSymmetry below
-    // — this fixture's whole point is testing that the panel correctly discriminates
-    // trunkLean/overstriding as the ONLY flagged cards.
     verticalRatio: makeMetric({
       metric: 'verticalRatio',
       value: 0.07,
       unit: 'percent',
       confidence: 0.7,
     }),
-    // Deliberately clean/unflagged, same reasoning as cadence/kneeFlexion/armSwingSymmetry below.
     verticalOscillationCm: makeVerticalOscillationCm({ confidence: 0.7 }),
     trunkLean: makeMetric({
       metric: 'trunkLean',
@@ -157,10 +159,6 @@ function makeLowConfidenceResult(): FormHeuristicsResult {
       viewFit: 'unsuitable',
       caveat: 'No resolvable body-scale reference (shoulders/hips) in this clip.',
     }),
-    // Deliberately clean/unflagged, even though a real front-view clip would gate some of these
-    // differently — this fixture's whole point is testing that the panel correctly discriminates
-    // trunkLean/overstriding as the ONLY flagged cards, not that every metric matches real
-    // view-fit physics.
     cadence: makeMetric({
       metric: 'cadence',
       value: 168,
@@ -198,53 +196,146 @@ describe('MetricsPanel', () => {
     expect(screen.getByText('Foot strike pattern')).toBeInTheDocument()
   })
 
-  it('renders formatted values and high-confidence labels for a clean result', () => {
+  it('renders formatted values and high-confidence labels for a clean (all tier-1) result', () => {
     render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
     expect(screen.getByText('6.0°')).toBeInTheDocument()
     // verticalOscillationCm's 'centimeters' unit formats with no "of torso length"/percent
     // suffix at all -- an absolute quantity, unlike every other metric on the panel.
     expect(screen.getByText('4.8 cm')).toBeInTheDocument()
-    expect(screen.getAllByText(/high confidence/i).length).toBeGreaterThan(0)
-    expect(screen.queryByText(/not reliable from this camera angle/i)).not.toBeInTheDocument()
+    expect(screen.getAllByText(/high confidence/i).length).toBe(9)
+    // No metric is excluded, so the excluded section doesn't render at all.
+    expect(screen.queryByText(/not measured for this clip/i)).not.toBeInTheDocument()
     // footStrikePattern is the one deliberate exception: its caveat is always present, even in a
-    // clean/high-confidence result, since it's a documented proxy end to end (see
+    // clean/high-confidence (tier-1) result, since it's a documented proxy end to end (see
     // footStrikePattern.ts) — so exactly one note renders here, not zero.
     expect(screen.getAllByRole('note').length).toBe(1)
   })
 
-  it('renders the vertical oscillation chart inside its card', () => {
+  it('renders the vertical oscillation chart inside its card when it lands in tier 1/2', () => {
     render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
     expect(screen.getByRole('img', { name: /vertical oscillation/i })).toBeInTheDocument()
   })
 
-  it('visibly flags a low-confidence/unsuitable-view metric with distinct text, not color alone', () => {
-    render(<MetricsPanel heuristics={makeLowConfidenceResult()} />)
-
-    expect(screen.getAllByText('Not available').length).toBe(2)
-    expect(screen.getAllByText(/not reliable from this camera angle/i).length).toBe(2)
-    expect(screen.getAllByText('Not measurable').length).toBe(2)
-
-    // trunkLean and overstriding's caveats from being flagged, plus footStrikePattern's
-    // always-present proxy caveat (present regardless of flagged state — see footStrikePattern.ts).
-    const notes = screen.getAllByRole('note')
-    expect(notes.length).toBe(3)
-    expect(notes[0].textContent).toMatch(/sagittal-plane measurement/i)
-  })
-
-  it('marks flagged cards with data-flagged for styling, unflagged cards without it', () => {
-    const { container } = render(<MetricsPanel heuristics={makeLowConfidenceResult()} />)
+  it('renders a tier-1 card with the plain border and no data-tier="caveated"/"excluded"', () => {
+    const { container } = render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
     const cards = container.querySelectorAll('.metrics-panel__card')
-    const flaggedCount = Array.from(cards).filter(
-      (card) => card.getAttribute('data-flagged') === 'true',
-    ).length
-    // trunkLean and overstriding are unsuitable/null; every other metric (including
-    // verticalOscillation, merely tolerated at confidence 0.5, above the low-confidence
-    // threshold, and verticalRatio/verticalOscillationCm, deliberately clean here) is unflagged,
-    // so 2 of 9 cards are flagged.
-    expect(flaggedCount).toBe(2)
+    expect(cards.length).toBe(9)
+    for (const card of Array.from(cards)) {
+      expect(card.getAttribute('data-tier')).toBe('normal')
+    }
   })
 
-  it('renders verticalOscillationCm as an unavailable card with its availability caveat, not an error', () => {
+  it('renders a tier-2 (caveated) card with a distinct data-tier and its confidence label, even with no caveat text', () => {
+    render(<MetricsPanel heuristics={makeMixedTierResult()} />)
+    const card = screen.getByLabelText('Vertical oscillation')
+    expect(card.getAttribute('data-tier')).toBe('caveated')
+    expect(within(card).getByText(/medium confidence/i)).toBeInTheDocument()
+    // This fixture's tier-2 metric has caveat: null (a documented, real case -- see
+    // metricConfidence.ts) -- no role="note" renders for it, but the confidence label text alone
+    // still visibly distinguishes it from a tier-1 card without relying on the border/color.
+    expect(within(card).queryByRole('note')).not.toBeInTheDocument()
+  })
+
+  it('renders a tier-2 card caveat visibly, in its own bordered note, when present', () => {
+    const heuristics = makeMixedTierResult()
+    heuristics.verticalOscillation = makeVerticalOscillation({
+      value: 0.1,
+      confidence: 0.5,
+      viewFit: 'tolerated',
+      caveat: 'Only 2 step(s) observed -- confidence reduced accordingly.',
+    })
+    render(<MetricsPanel heuristics={heuristics} />)
+    const card = screen.getByLabelText('Vertical oscillation')
+    const note = within(card).getByRole('note')
+    expect(note.textContent).toMatch(/only 2 step\(s\) observed/i)
+  })
+
+  it('excludes tier-3 metrics from the card grid entirely -- no value, no confidence label', () => {
+    render(<MetricsPanel heuristics={makeMixedTierResult()} />)
+    // trunkLean and overstriding are excluded (tier 3) -- neither renders as a card at all.
+    expect(screen.queryByLabelText('Trunk lean')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Overstriding')).not.toBeInTheDocument()
+    // Nothing in this fixture has a null value or 0 confidence except the two excluded metrics,
+    // so these pseudo-values existing anywhere would mean one of them leaked into a card.
+    expect(screen.queryByText('Not available')).not.toBeInTheDocument()
+    expect(screen.queryByText('Not measurable')).not.toBeInTheDocument()
+    // Scoped to the excluded section specifically: no confidence label of any kind renders there,
+    // only the name + reason text already asserted by the next test.
+    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    expect(within(excludedSection).queryByText(/confidence/i)).not.toBeInTheDocument()
+  })
+
+  it('lists excluded metrics by name and reason only, in a labeled section', () => {
+    render(<MetricsPanel heuristics={makeMixedTierResult()} />)
+    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    expect(within(excludedSection).getByText('Trunk lean')).toBeInTheDocument()
+    expect(within(excludedSection).getByText(/sagittal-plane measurement/i)).toBeInTheDocument()
+    expect(within(excludedSection).getByText('Overstriding')).toBeInTheDocument()
+    expect(
+      within(excludedSection).getByText(/no resolvable body-scale reference/i),
+    ).toBeInTheDocument()
+  })
+
+  it('renders a tier-count summary line when any metric is caveated or excluded', () => {
+    render(<MetricsPanel heuristics={makeMixedTierResult()} />)
+    expect(
+      screen.getByText(
+        '6 metrics measured · 1 with caveat · 2 not measured for this clip (listed below)',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('renders no summary line for an all-tier-1 result', () => {
+    const { container } = render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
+    expect(container.querySelector('.metrics-panel__tier-summary')).not.toBeInTheDocument()
+  })
+
+  it('7 cards render in the grid and 2 metrics are excluded for the mixed-tier fixture', () => {
+    const { container } = render(<MetricsPanel heuristics={makeMixedTierResult()} />)
+    const cards = container.querySelectorAll('.metrics-panel__card')
+    // trunkLean and overstriding are excluded; the other 7 (1 caveated, 6 normal) render as cards.
+    expect(cards.length).toBe(7)
+    const caveatedCount = Array.from(cards).filter(
+      (card) => card.getAttribute('data-tier') === 'caveated',
+    ).length
+    expect(caveatedCount).toBe(1)
+    const excludedEntries = container.querySelectorAll('.metrics-panel__excluded-entry')
+    expect(excludedEntries.length).toBe(2)
+  })
+
+  it('preserves MetricId declaration order within the grid, skipping excluded metrics in place', () => {
+    const { container } = render(<MetricsPanel heuristics={makeMixedTierResult()} />)
+    const cardLabels = Array.from(container.querySelectorAll('.metrics-panel__card')).map(
+      (card) => card.getAttribute('aria-label'),
+    )
+    // Declaration order is verticalOscillation, verticalRatio, verticalOscillationCm, trunkLean,
+    // overstriding, cadence, kneeFlexion, armSwingSymmetry, footStrikePattern -- trunkLean and
+    // overstriding (excluded) are omitted, but every other label keeps its relative position.
+    expect(cardLabels).toEqual([
+      'Vertical oscillation',
+      'Vertical ratio',
+      'Vertical oscillation (cm)',
+      'Cadence',
+      'Knee flexion',
+      'Arm swing symmetry',
+      'Foot strike pattern',
+    ])
+  })
+
+  it('preserves MetricId declaration order within the excluded section', () => {
+    render(<MetricsPanel heuristics={makeMixedTierResult()} />)
+    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    const names = within(excludedSection)
+      .getAllByRole('listitem')
+      .map((item) => item.querySelector('p')?.textContent)
+    // trunkLean precedes overstriding in MetricId, and that order is preserved here.
+    expect(names).toEqual(['Trunk lean', 'Overstriding'])
+  })
+
+  it('renders verticalOscillationCm in the excluded section (not a low-confidence card) when unavailable on this backend', () => {
+    // The #36-deferred wart #37 fixes: on a backend that doesn't measure real-world scale
+    // (MoveNet), this metric's null value should read as "not applicable", not "low confidence".
+    // Tier 3 achieves that structurally -- it's no longer a confidence-labeled card at all.
     const unavailable = makeHighConfidenceResult()
     unavailable.verticalOscillationCm = {
       metric: 'verticalOscillationCm',
@@ -262,9 +353,53 @@ describe('MetricsPanel', () => {
 
     render(<MetricsPanel heuristics={unavailable} />)
 
-    const card = screen.getByLabelText('Vertical oscillation (cm)')
-    expect(card).toHaveTextContent('Not available')
-    const note = within(card).getByRole('note')
-    expect(note.textContent).toMatch(/no real-world scale was measured/i)
+    expect(screen.queryByLabelText('Vertical oscillation (cm)')).not.toBeInTheDocument()
+    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    expect(within(excludedSection).getByText('Vertical oscillation (cm)')).toBeInTheDocument()
+    expect(
+      within(excludedSection).getByText(/no real-world scale was measured/i),
+    ).toBeInTheDocument()
+    expect(within(excludedSection).queryByText('Not available')).not.toBeInTheDocument()
+  })
+
+  it('excludes a low-confidence but non-null verticalOscillationCm value, hiding the number itself', () => {
+    // Documents a deliberate consequence of the tier-3 rule (confidence < 0.4 OR value === null):
+    // a measured-but-untrustworthy number is withheld entirely, not shown with a low-confidence
+    // label -- matches the epic's "don't show a metric, show why it was effectively excluded".
+    const heuristics = makeHighConfidenceResult()
+    heuristics.verticalOscillationCm = makeVerticalOscillationCm({
+      value: 12.4,
+      confidence: 0.37,
+      caveat: 'Scale coverage was low for this clip -- confidence reduced accordingly.',
+    })
+
+    render(<MetricsPanel heuristics={heuristics} />)
+
+    expect(screen.queryByLabelText('Vertical oscillation (cm)')).not.toBeInTheDocument()
+    expect(screen.queryByText('12.4 cm')).not.toBeInTheDocument()
+    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    expect(within(excludedSection).getByText('Vertical oscillation (cm)')).toBeInTheDocument()
+    expect(within(excludedSection).getByText(/scale coverage was low/i)).toBeInTheDocument()
+  })
+
+  it('falls back to a generic reason for an excluded metric with no caveat text', () => {
+    // A theoretical-but-possible gap in the heuristics layer's caveat emission (see
+    // metricConfidence.ts's doc on metricTier): confidence can drop below the exclusion threshold
+    // via frameCoverage alone, with no per-metric caveat message pushed for that shortfall. The
+    // excluded section must still show SOME reason text, never a blank entry.
+    const heuristics = makeHighConfidenceResult()
+    heuristics.cadence = makeMetric({
+      metric: 'cadence',
+      value: 150,
+      unit: 'stepsPerMinute',
+      confidence: 0.2,
+      caveat: null,
+    })
+
+    render(<MetricsPanel heuristics={heuristics} />)
+
+    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    expect(within(excludedSection).getByText('Cadence')).toBeInTheDocument()
+    expect(within(excludedSection).getByText(/too low to report/i)).toBeInTheDocument()
   })
 })

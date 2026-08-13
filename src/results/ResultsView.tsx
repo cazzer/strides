@@ -1,5 +1,4 @@
 import type { VideoAnalysisState } from './types'
-import { LowConfidenceBanner } from './LowConfidenceBanner'
 import { MetricsPanel } from './MetricsPanel'
 
 export interface ResultsViewProps {
@@ -74,7 +73,6 @@ export function ResultsView({ analysis, onTryAgain }: ResultsViewProps) {
 
       {phase === 'ready' && heuristics && (
         <div className="results-view__results space-y-4">
-          <LowConfidenceBanner heuristics={heuristics} />
           <MetricsPanel heuristics={heuristics} />
           {/*
             Save/export (e.g. Google Drive) is explicitly out of scope for this build — this is

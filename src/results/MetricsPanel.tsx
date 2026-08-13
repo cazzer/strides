@@ -4,7 +4,12 @@ import { DEFAULT_HEURISTICS_CONFIG } from '../heuristics/types'
 import { classifyFootStrike } from '../heuristics/footStrikePattern'
 import type { FootStrikeClass } from '../heuristics/footStrikePattern'
 import { VerticalOscillationChart } from './VerticalOscillationChart'
-import { LOW_CONFIDENCE_THRESHOLD, METRIC_LABELS, isMetricFlagged } from './metricConfidence'
+import {
+  HIGH_CONFIDENCE_THRESHOLD,
+  LOW_CONFIDENCE_THRESHOLD,
+  METRIC_LABELS,
+  metricTier,
+} from './metricConfidence'
 
 export interface MetricsPanelProps {
   heuristics: FormHeuristicsResult
@@ -58,7 +63,7 @@ function formatValue(metric: MetricResult): string {
 
 function confidenceLabel(metric: MetricResult): string {
   if (metric.value === null) return 'Not measurable'
-  if (metric.confidence >= 0.7) return 'High confidence'
+  if (metric.confidence >= HIGH_CONFIDENCE_THRESHOLD) return 'High confidence'
   if (metric.confidence >= LOW_CONFIDENCE_THRESHOLD) return 'Medium confidence'
   return 'Low confidence'
 }
@@ -68,17 +73,27 @@ interface MetricCardProps {
   chart?: ReactNode
 }
 
+/**
+ * Renders a `'normal'` or `'caveated'` tier metric as a card — never called for an `'excluded'`
+ * metric, which the panel routes to the excluded section below instead (see `MetricsPanel`).
+ * Tier 2 ('caveated') gets a structurally distinct treatment, not a color-only one: the same
+ * left-accent-stripe border idiom this app's alert/banner components already use
+ * (`border-l-4 border-l-brand-600`), plus its caveat note (when present) rendered in its own
+ * bordered box rather than the muted footnote styling a tier-1 card's caveat gets — on top of the
+ * `confidenceLabel` text itself already reading "Medium confidence", which alone satisfies
+ * WCAG's "not color alone" bar even on the (verified possible, see metricConfidence.ts) case
+ * where a tier-2 metric's `caveat` is null.
+ */
 function MetricCard({ metric, chart }: MetricCardProps) {
-  const isFlagged = isMetricFlagged(metric)
+  const tier = metricTier(metric)
+  const isCaveated = tier === 'caveated'
 
   return (
     <article
-      className={`metrics-panel__card border-2 p-5 space-y-2 ${
-        isFlagged
-          ? 'opacity-85 border-brand-600 dark:border-brand-400'
-          : 'border-black dark:border-white'
+      className={`metrics-panel__card border-2 border-black dark:border-white p-5 space-y-2 ${
+        isCaveated ? 'border-l-4 border-l-brand-600 dark:border-l-brand-400' : ''
       }`}
-      data-flagged={isFlagged}
+      data-tier={tier}
       aria-label={METRIC_LABELS[metric.metric]}
     >
       <h3 className="font-display text-lg font-bold tracking-tight">
@@ -92,10 +107,16 @@ function MetricCard({ metric, chart }: MetricCardProps) {
       </p>
       <p className="metrics-panel__confidence font-sans text-sm">
         <strong>{confidenceLabel(metric)}</strong>
-        {metric.viewFit === 'unsuitable' && ' — not reliable from this camera angle'}
       </p>
       {metric.caveat && (
-        <p role="note" className="metrics-panel__caveat font-sans text-xs text-neutral-500 dark:text-neutral-400">
+        <p
+          role="note"
+          className={
+            isCaveated
+              ? 'metrics-panel__caveat font-sans text-sm border border-brand-600 dark:border-brand-400 p-2 text-neutral-800 dark:text-neutral-200'
+              : 'metrics-panel__caveat font-sans text-xs text-neutral-500 dark:text-neutral-400'
+          }
+        >
           {metric.caveat}
         </p>
       )}
@@ -104,34 +125,113 @@ function MetricCard({ metric, chart }: MetricCardProps) {
   )
 }
 
+interface ExcludedEntryProps {
+  metric: MetricResult
+}
+
 /**
- * Numeric readouts for all nine form heuristics, each with a plain-language label and a
- * confidence/applicability indicator. A flagged metric (`value: null`, low confidence, or
- * `viewFit: 'unsuitable'`) gets a visibly different treatment — never color alone: the
- * confidence label text itself changes ("Low confidence" / "Not measurable"), the camera-angle
- * caveat is spelled out, and any `caveat` text from the heuristics engine is surfaced verbatim —
- * with a supplementary, non-load-bearing opacity/border cue for sighted users scanning quickly.
+ * A tier-3 ('excluded') metric's entire on-screen presence: its name and the reason it was
+ * excluded, and nothing else — no formatted value, no confidence label, no "Not available"
+ * placeholder (design.md D4). `metric.caveat` is the reason text; every null-value path in the
+ * heuristics layer is contractually required to set one (see each metric module's `nullResult`
+ * helper), but the fallback below covers the narrower case metricConfidence.ts documents: a
+ * non-null value whose confidence alone dropped it below `LOW_CONFIDENCE_THRESHOLD` without any
+ * heuristics-layer caveat message being pushed for that specific shortfall.
+ */
+function ExcludedEntry({ metric }: ExcludedEntryProps) {
+  return (
+    <li className="metrics-panel__excluded-entry">
+      <p className="font-display font-bold">{METRIC_LABELS[metric.metric]}</p>
+      <p className="font-sans text-sm text-neutral-700 dark:text-neutral-300">
+        {metric.caveat ?? 'Confidence was too low to report for this clip.'}
+      </p>
+    </li>
+  )
+}
+
+/**
+ * Numeric readouts for all nine form heuristics, partitioned into confidence tiers (#37,
+ * design.md) rather than one uniform grid: tier 1 ('normal', confidence >= 0.7) and tier 2
+ * ('caveated', 0.4 <= confidence < 0.7) render as cards in the grid above, distinguished from
+ * each other by `MetricCard`'s border/caveat treatment; tier 3 ('excluded', confidence < 0.4 or
+ * `value === null`) is listed by name and reason only in the labeled section below the grid — no
+ * value ever renders for an excluded metric. Both sections preserve `MetricId` declaration order
+ * within themselves (no re-sorting by confidence — see design.md D5 on why a metric crossing a
+ * threshold between runs still only reorders its own section, not the whole panel).
  * `footStrikePattern`'s `caveat` is always non-null (even at its cleanest) since that metric is a
- * documented proxy end to end — it always renders here, not just in a flagged/degraded state.
+ * documented proxy end to end — it renders on its card whenever it lands in tier 1/2.
  */
 export function MetricsPanel({ heuristics }: MetricsPanelProps) {
+  const metrics: MetricResult[] = [
+    heuristics.verticalOscillation,
+    heuristics.verticalRatio,
+    heuristics.verticalOscillationCm,
+    heuristics.trunkLean,
+    heuristics.overstriding,
+    heuristics.cadence,
+    heuristics.kneeFlexion,
+    heuristics.armSwingSymmetry,
+    heuristics.footStrikePattern,
+  ]
+  const excluded = metrics.filter((metric) => metricTier(metric) === 'excluded')
+  const caveatedCount = metrics.filter((metric) => metricTier(metric) === 'caveated').length
+  const normalCount = metrics.length - caveatedCount - excluded.length
+
+  // One quiet line so a user who never scrolls the (height-capped) results pane still learns
+  // that some metrics carry caveats or were excluded — the deleted LowConfidenceBanner's one
+  // real job. Rendered only when there's something to say; an all-normal run stays clean.
+  const summaryParts = [
+    `${normalCount} metric${normalCount === 1 ? '' : 's'} measured`,
+    ...(caveatedCount > 0
+      ? [`${caveatedCount} with caveat${caveatedCount === 1 ? '' : 's'}`]
+      : []),
+    ...(excluded.length > 0
+      ? [`${excluded.length} not measured for this clip (listed below)`]
+      : []),
+  ]
+
   return (
-    <section
-      className="metrics-panel @container grid gap-4 @lg:grid-cols-2 @3xl:grid-cols-3"
-      aria-label="Form metrics"
-    >
-      <MetricCard
-        metric={heuristics.verticalOscillation}
-        chart={<VerticalOscillationChart series={heuristics.verticalOscillation.series} />}
-      />
-      <MetricCard metric={heuristics.verticalRatio} />
-      <MetricCard metric={heuristics.verticalOscillationCm} />
-      <MetricCard metric={heuristics.trunkLean} />
-      <MetricCard metric={heuristics.overstriding} />
-      <MetricCard metric={heuristics.cadence} />
-      <MetricCard metric={heuristics.kneeFlexion} />
-      <MetricCard metric={heuristics.armSwingSymmetry} />
-      <MetricCard metric={heuristics.footStrikePattern} />
+    <section className="metrics-panel space-y-6" aria-label="Form metrics">
+      {(caveatedCount > 0 || excluded.length > 0) && (
+        <p className="metrics-panel__tier-summary font-sans text-sm text-neutral-600 dark:text-neutral-400">
+          {summaryParts.join(' · ')}
+        </p>
+      )}
+      <div className="@container grid gap-4 @lg:grid-cols-2 @3xl:grid-cols-3">
+        {metrics.map((metric) =>
+          metricTier(metric) !== 'excluded' ? (
+            <MetricCard
+              key={metric.metric}
+              metric={metric}
+              // The chart rides on the metric it charts, by identity — not by array position, so
+              // reordering `metrics` for display reasons can never strand it on the wrong card.
+              chart={
+                metric.metric === 'verticalOscillation' ? (
+                  <VerticalOscillationChart series={heuristics.verticalOscillation.series} />
+                ) : undefined
+              }
+            />
+          ) : null,
+        )}
+      </div>
+      {excluded.length > 0 && (
+        <section
+          aria-labelledby="metrics-panel-excluded-heading"
+          className="metrics-panel__excluded border-2 border-black dark:border-white p-5 space-y-3"
+        >
+          <h3
+            id="metrics-panel-excluded-heading"
+            className="font-display text-lg font-bold tracking-tight"
+          >
+            Not measured for this clip
+          </h3>
+          <ul className="space-y-3">
+            {excluded.map((metric) => (
+              <ExcludedEntry key={metric.metric} metric={metric} />
+            ))}
+          </ul>
+        </section>
+      )}
     </section>
   )
 }
