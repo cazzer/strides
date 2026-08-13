@@ -42,8 +42,8 @@ MediaPipe Pose Landmarker detector, compute form heuristics over that pass's fra
 identical sort → robustness → presence-trim → heuristics pipeline the primary pass uses, and —
 when the scale pass's `verticalOscillationCm.calibration` is non-null — replace ONLY the
 displayed result's `verticalOscillationCm` with the scale pass's, carrying its `calibration` by
-reference and appending a provenance sentence (stating in plain language that the number was
-measured in a second pass of the same clip, naming no backend or model) to its caveat. Every
+reference and appending a provenance sentence (stating in plain language that the number came
+from a second look at the same clip, naming no backend or model) to its caveat. Every
 other metric and the `view` result SHALL remain reference-identical to the primary pass's, and
 the primary run's `diagnostics` SHALL remain the primary pass's own. The pass SHALL be tracked
 as a status machine (`'idle' | 'pending' | 'running' | 'done' | 'failed' | 'skipped'`) on the
@@ -128,7 +128,9 @@ renders today. The always-visible analysis status line (`role="status"`) SHALL n
 — an in-progress sentence while `'pending'`/`'running'` and a one-sentence outcome on `'done'`
 or `'failed'`, each in plain language naming no backend, model, or detection machinery — since
 the excluded-list hint may sit below the fold and the status line is the panel's only
-screen-reader announcement path.
+screen-reader announcement path. The `'done'` outcome SHALL match whether the metric actually
+gained a value: a completed pass whose grafted metric still has a `null` value (the
+measured-but-unfittable graft) reads as couldn't-add, never as a metric having been added.
 
 #### Scenario: The excluded entry hints at the in-flight pass
 
@@ -160,4 +162,5 @@ screen-reader announcement path.
 - **WHEN** the analysis is `'ready'` and the scale pass is `'pending'`/`'running'`, then later
   `'done'` or `'failed'`
 - **THEN** the `role="status"` completion line appends an in-progress sentence while the pass
-  runs and a one-sentence outcome when it concludes; a `'skipped'` pass appends nothing
+  runs and a one-sentence outcome when it concludes — the `'done'` outcome matching whether the
+  grafted metric actually gained a value; a `'skipped'` pass appends nothing

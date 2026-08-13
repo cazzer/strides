@@ -223,9 +223,7 @@ describe('computeVerticalOscillation', () => {
     // confidence is the fit-quality ramp on its own.
     expect(result.confidence).toBeCloseTo((sinusoidR2 - 0.3) / (0.8 - 0.3), 5)
     expect(result.confidence).toBeLessThan(1)
-    expect(result.caveat).toMatch(
-      /bounce rhythm in this clip was too irregular to read confidently/i,
-    )
+    expect(result.caveat).toMatch(/bounce rhythm in this clip wasn't perfectly steady/i)
   })
 
   it('a clip covering only two cycles reports sampleSize 2 and the corresponding confidence penalty', () => {

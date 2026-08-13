@@ -502,7 +502,7 @@ describe('computeVerticalOscillationCmMetric', () => {
       expect(result.calibration).not.toBeNull()
       expect(result.calibration?.fitFailureReason).toBe('degenerate-signal')
       expect(result.caveat).toBe(
-        'Hip position was tracked, but showed no oscillating vertical motion to measure.',
+        'Hip position was tracked, but no oscillating vertical motion could be measured.',
       )
     })
 
@@ -520,7 +520,7 @@ describe('computeVerticalOscillationCmMetric', () => {
       expect(result.calibration).not.toBeNull()
       expect(result.calibration?.fitFailureReason).toBe('below-quality-gate')
       expect(result.caveat).toBe(
-        'Hip position and scale were both measured, but the bounce rhythm was too irregular to measure in any continuous stretch of the clip.',
+        'Hip position and real-world scale were both tracked, but the bounce rhythm was too irregular to measure in any continuous stretch of the clip.',
       )
     })
 

@@ -179,12 +179,12 @@ export function computeCadence(
   }
   if (fit.sinusoidR2 < FIT_QUALITY_SATURATION_R2) {
     caveats.push(
-      'The step rhythm in this clip was too irregular to read confidently — confidence reduced accordingly.',
+      "The step rhythm in this clip wasn't perfectly steady — confidence reduced accordingly.",
     )
   }
   if (isNearGridEdge(fit.frequencyHz, config)) {
     caveats.push(
-      'The detected cadence sits at the edge of what this analysis can measure — the true value may fall outside it.',
+      'The detected cadence sits at the edge of the range this analysis can measure — your true cadence may fall outside it.',
     )
   }
 

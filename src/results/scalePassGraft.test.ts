@@ -190,7 +190,7 @@ describe('graftScalePassResult', () => {
   it('grafts a measured-but-unfittable result, replacing the availability caveat with the fit-failure reason', () => {
     const primary = makePrimary()
     const fitFailureCaveat =
-      'Hip position and scale were both measured, but the bounce rhythm was too irregular to measure in any continuous stretch of the clip.'
+      'Hip position and real-world scale were both tracked, but the bounce rhythm was too irregular to measure in any continuous stretch of the clip.'
     const scale = makeResult(
       makeVerticalOscillationCm({
         value: null,

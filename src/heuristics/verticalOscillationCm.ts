@@ -406,9 +406,9 @@ function caveatForFitFailure(reason: ScaleCalibratedFitFailureReason): string {
     case 'insufficient-cycles':
       return 'Hip position was tracked, but no continuous stretch was long enough to contain a complete bounce cycle.'
     case 'degenerate-signal':
-      return 'Hip position was tracked, but showed no oscillating vertical motion to measure.'
+      return 'Hip position was tracked, but no oscillating vertical motion could be measured.'
     case 'below-quality-gate':
-      return 'Hip position and scale were both measured, but the bounce rhythm was too irregular to measure in any continuous stretch of the clip.'
+      return 'Hip position and real-world scale were both tracked, but the bounce rhythm was too irregular to measure in any continuous stretch of the clip.'
     case 'no-usable-run':
       return 'No continuous stretch of hip tracking carried a real-world scale, so bounce could not be converted to centimetres.'
   }
@@ -564,7 +564,7 @@ export function computeVerticalOscillationCmMetric(
   }
   if (calibration.fit.sinusoidR2 < FIT_QUALITY_SATURATION_R2) {
     caveats.push(
-      'The bounce rhythm in this clip was too irregular to read confidently — confidence reduced accordingly.',
+      "The bounce rhythm in this clip wasn't perfectly steady — confidence reduced accordingly.",
     )
   }
   if (calibration.integrationRuns > 1) {

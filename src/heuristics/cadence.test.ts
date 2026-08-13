@@ -165,7 +165,7 @@ describe('computeCadence', () => {
     // confidence is the fit-quality ramp on its own.
     expect(result.confidence).toBeCloseTo((sinusoidR2 - 0.3) / (0.8 - 0.3), 5)
     expect(result.confidence).toBeLessThan(1)
-    expect(result.caveat).toMatch(/step rhythm in this clip was too irregular to read confidently/i)
+    expect(result.caveat).toMatch(/step rhythm in this clip wasn't perfectly steady/i)
   })
 
   it('9. a clip covering only 2.25 steps reports sampleSize 2 and confidence from the unrounded count', () => {
@@ -207,12 +207,12 @@ describe('computeCadence', () => {
 
     expect(high.value).not.toBeNull()
     expect(high.value).toBeCloseTo(240, 0)
-    expect(high.caveat).toMatch(/edge of what this analysis can measure/i)
-    expect(high.caveat).toMatch(/true value may fall outside it/i)
+    expect(high.caveat).toMatch(/edge of the range this analysis can measure/i)
+    expect(high.caveat).toMatch(/true cadence may fall outside it/i)
 
     expect(low.value).not.toBeNull()
     expect(low.value).toBeCloseTo(72, 0)
-    expect(low.caveat).toMatch(/edge of what this analysis can measure/i)
+    expect(low.caveat).toMatch(/edge of the range this analysis can measure/i)
   })
 
   it('11. view tolerance: front reproduces the side value exactly; multipliers are 0.85/0.6', () => {

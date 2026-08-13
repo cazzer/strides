@@ -154,9 +154,9 @@ the UNROUNDED cycle count to compute confidence's sample-size factor.
 
 - **WHEN** the fitted frequency lands within one grid step (`spectralFitFrequencyStepHz`) of
   either `spectralFitMinFrequencyHz` or `spectralFitMaxFrequencyHz`
-- **THEN** the returned `caveat` states that the detected cadence sits at the edge of what the
-  analysis can measure and the true value may fall outside it — without quoting the numeric
-  frequency band — alongside any other caveat that applies
+- **THEN** the returned `caveat` states that the detected cadence sits at the edge of the range
+  the analysis can measure and the true cadence may fall outside it — without quoting the
+  numeric frequency band — alongside any other caveat that applies
 
 #### Scenario: Fit quality and step count both feed confidence
 

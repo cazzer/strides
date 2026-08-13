@@ -29,9 +29,13 @@ same meaning doesn't need a spec change. Requirement and scenario titles are reu
 (archive matches by title), even where a title mentions "backend": titles are internal spec
 language, not user copy.
 
-## D3: What "second pass" copy keeps
+## D3: What "second look" copy keeps
 
 The scale pass visibly replays the clip after "Analysis complete", so the narrative can't drop
-the concept — it plainly names a second pass/look at the same clip, without "detection",
-"scale-aware", or backend names. The provenance caveat stays (the one scale-pass-sourced card
-still names where its number came from) as "Measured in a second pass of the same clip."
+the concept — every surface plainly calls it a second look at the same clip (one name for one
+event), without "detection", "scale-aware", or backend names. The provenance caveat stays (the
+one scale-pass-sourced card still names where its number came from) as "From a second look at
+the same clip." — worded to read correctly appended after a fit-failure explanation as well as
+after a value's own caveats. The `'done'` status line branches on whether the grafted metric
+actually gained a value: the measured-but-unfittable graft completes the pass with a still-null
+value, and claiming a metric "was added" there would be false.

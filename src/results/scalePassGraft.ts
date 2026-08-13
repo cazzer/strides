@@ -2,11 +2,14 @@ import type { FormHeuristicsResult } from '../heuristics/types'
 
 /**
  * Appended to the grafted metric's caveat so the one scale-pass-sourced number on the panel
- * names where it came from — every other card is the primary pass's. Asserted verbatim by unit
- * tests and surfaced verbatim in the UI; do not reword without updating both.
+ * names where it came from — every other card is the primary pass's. Worded to read correctly
+ * after both a value's own caveats and a fit-failure explanation ("…too irregular to measure.
+ * From a second look…"), and to match the "second look" phrasing every other scale-pass surface
+ * uses. Asserted verbatim by unit tests and surfaced verbatim in the UI; do not reword without
+ * updating both.
  */
 export const SCALE_PASS_PROVENANCE_CAVEAT =
-  'Measured in a second pass of the same clip.'
+  'From a second look at the same clip.'
 
 /**
  * Grafts a completed background scale pass's `verticalOscillationCm` onto the primary pass's

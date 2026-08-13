@@ -565,7 +565,7 @@ describe('MetricsPanel', () => {
     expect(card.getAttribute('data-tier')).toBe('caveated')
     expect(within(card).getByText('12.0 cm')).toBeInTheDocument()
     const note = within(card).getByRole('note')
-    expect(note.textContent).toContain('Measured in a second pass of the same clip.')
+    expect(note.textContent).toContain('From a second look at the same clip.')
   })
 
   it('counts a below-0.4-confidence card under "with caveats" in the summary line', () => {

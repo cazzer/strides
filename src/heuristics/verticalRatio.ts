@@ -206,12 +206,12 @@ export function computeVerticalRatio(
   }
   if (fit.sinusoidR2 < FIT_QUALITY_SATURATION_R2) {
     caveats.push(
-      'The bounce rhythm in this clip was too irregular to read confidently — confidence reduced accordingly.',
+      "The bounce rhythm in this clip wasn't perfectly steady — confidence reduced accordingly.",
     )
   }
   if (stride.pairCount < stride.candidatePairCount) {
     caveats.push(
-      `${stride.candidatePairCount - stride.pairCount} stride pair(s) couldn't be read cleanly and were left out of the measurement.`,
+      `${stride.candidatePairCount - stride.pairCount} stride pair(s) couldn't be read cleanly and didn't count toward the measurement.`,
     )
   }
   if (viewFitEntry.fit === 'unsuitable') {

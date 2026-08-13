@@ -277,7 +277,7 @@ export function computeVerticalOscillation(
   }
   if (fit.sinusoidR2 < FIT_QUALITY_SATURATION_R2) {
     caveats.push(
-      'The bounce rhythm in this clip was too irregular to read confidently — confidence reduced accordingly.',
+      "The bounce rhythm in this clip wasn't perfectly steady — confidence reduced accordingly.",
     )
   }
 

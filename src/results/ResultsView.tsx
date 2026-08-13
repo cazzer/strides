@@ -38,6 +38,12 @@ export function ResultsView({
 }: ResultsViewProps) {
   const { phase, progress, isPausedMidAnalysis, heuristics, error, start } =
     analysis
+  // A 'done' scale pass includes the measured-but-unfittable graft, where the centimetre
+  // metric's value is still null and the panel lists it as not measured — saying a metric "was
+  // added" there would be false. Shared with the 'failed' branch: for the reader both outcomes
+  // are the same fact (the second look produced no extra metric).
+  const scalePassCouldntAdd =
+    " A second look at the clip couldn't add the extra metric."
   // 'error' doesn't disable the button -- Analyze must stay re-runnable after a failed run,
   // not get stuck permanently disabled with no way forward. After a *completed* run the
   // button doesn't render at all: analysis is deterministic, so re-running the same clip has
@@ -88,9 +94,10 @@ export function ResultsView({
             analysis.scalePass.status === 'running') &&
             ' Measuring one more metric with a second look at the clip…'}
           {analysis.scalePass.status === 'done' &&
-            ' One more metric was added by a second look at the clip.'}
-          {analysis.scalePass.status === 'failed' &&
-            " A second look at the clip couldn't add its metric."}
+            (heuristics && heuristics.verticalOscillationCm.value !== null
+              ? ' A second look at the clip added one more metric.'
+              : scalePassCouldntAdd)}
+          {analysis.scalePass.status === 'failed' && scalePassCouldntAdd}
         </p>
       )}
 

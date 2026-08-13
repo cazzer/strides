@@ -203,11 +203,34 @@ describe('ResultsView', () => {
       />,
     )
     expect(screen.getByRole('status').textContent).toMatch(
-      /one more metric was added by a second look at the clip/i,
+      /a second look at the clip added one more metric/i,
     )
   })
 
-  it("says the second look couldn't add its metric, in the status line, when it fails", () => {
+  it("says the second look couldn't add the extra metric when it completes without a grafted value", () => {
+    // A 'done' pass includes the measured-but-unfittable graft: calibration is non-null but the
+    // centimetre value stays null and the panel still lists the metric as not measured — the
+    // status line must not claim a metric was added.
+    const heuristics = makeHeuristics()
+    heuristics.verticalOscillationCm = {
+      ...heuristics.verticalOscillationCm,
+      value: null,
+      confidence: 0,
+    }
+    renderResultsView({
+      analysis: makeAnalysis({
+        phase: 'ready',
+        heuristics,
+        scalePass: { status: 'done', diagnostics: null },
+      }),
+    })
+    expect(screen.getByRole('status').textContent).toMatch(
+      /second look at the clip couldn't add the extra metric/i,
+    )
+    expect(screen.getByRole('status').textContent).not.toMatch(/added one more metric/i)
+  })
+
+  it("says the second look couldn't add the extra metric, in the status line, when it fails", () => {
     renderResultsView({
       analysis: makeAnalysis({
         phase: 'ready',
@@ -216,7 +239,7 @@ describe('ResultsView', () => {
       }),
     })
     expect(screen.getByRole('status').textContent).toMatch(
-      /second look at the clip couldn't add its metric/i,
+      /second look at the clip couldn't add the extra metric/i,
     )
   })
 
