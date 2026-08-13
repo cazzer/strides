@@ -9,7 +9,10 @@ import { sampleClip } from './sampleClip'
 import type { SampleClipHandle } from './sampleClip'
 import { computeAnalysisDiagnostics } from './analysisDiagnostics'
 import { resolveSamplingRobustnessConfig } from './samplingRobustnessConfig'
-import type { VideoAnalysisState } from './types'
+import { resolveScalePassConfig } from './scalePassConfig'
+import { graftScalePassResult } from './scalePassGraft'
+import { getScalePassDetector } from '../pose/scalePassDetector'
+import type { ScalePassState, VideoAnalysisState } from './types'
 
 function idleState(): Omit<VideoAnalysisState, 'start' | 'reset'> {
   return {
@@ -19,6 +22,7 @@ function idleState(): Omit<VideoAnalysisState, 'start' | 'reset'> {
     robustFrames: null,
     heuristics: null,
     diagnostics: null,
+    scalePass: { status: 'idle', diagnostics: null },
     error: null,
   }
 }
@@ -47,15 +51,25 @@ export function useVideoAnalysis(
 
   const runIdRef = useRef(0)
   const handleRef = useRef<SampleClipHandle | null>(null)
+  // The background scale pass's own sampling handle — separate from `handleRef` because the two
+  // passes can never share one: a new primary run's `handleRef.current?.stop()` in `start()`
+  // must not be able to miss a still-running scale pass, and vice versa.
+  const scaleHandleRef = useRef<SampleClipHandle | null>(null)
   // Tracks which clip's `metadata` auto-start has already fired for, so it fires at most once
   // per freshly loaded clip — not every time `phase` happens to return to 'idle' (e.g. an
   // explicit `reset()`, or a stale run being abandoned). A new clip's `metadata` is always a new
   // object identity, so this needs no separate reset step of its own.
   const autoStartedForRef = useRef<VideoMetadata | null>(null)
+  // Mirrors `autoStartedForRef` for the scale pass: which primary run's `runId` the pass has
+  // already started for, so a re-render between the 'pending' commit and the 'running' commit
+  // (or a strict-mode double-fire) can't start the pass twice for one run.
+  const scalePassStartedForRunRef = useRef<number | null>(null)
 
   const abandonActiveRun = () => {
     handleRef.current?.stop()
     handleRef.current = null
+    scaleHandleRef.current?.stop()
+    scaleHandleRef.current = null
     runIdRef.current += 1
   }
 
@@ -217,6 +231,18 @@ export function useVideoAnalysis(
         const heuristics = computeFormHeuristics(metricFrames)
         const diagnostics = computeAnalysisDiagnostics(sorted, robustFrames, heuristics)
         if (runIdRef.current !== runId) return
+        // Decide the background scale pass's fate at the moment the primary result exists
+        // (add-background-scale-pass, D1): nothing to add when the primary backend already
+        // measured a real-world scale (only possible via the dev-only mediapipe-primary backend
+        // override today), and nothing to do when the kill switch is off. Config resolved once
+        // per run, here — the same once-per-run discipline `resolveSamplingRobustnessConfig`
+        // gets above.
+        const scalePass: ScalePassState =
+          heuristics.verticalOscillationCm.calibration !== null
+            ? { status: 'skipped', reason: 'primary-scale', diagnostics: null }
+            : !resolveScalePassConfig().enabled
+              ? { status: 'skipped', reason: 'disabled', diagnostics: null }
+              : { status: 'pending', diagnostics: null }
         setState({
           phase: 'ready',
           progress: 1,
@@ -224,6 +250,7 @@ export function useVideoAnalysis(
           robustFrames,
           heuristics,
           diagnostics,
+          scalePass,
           error: null,
         })
       } catch (err) {
@@ -247,8 +274,15 @@ export function useVideoAnalysis(
   // sampleClip's docstring) — restart it with looping enabled so the skeleton overlay keeps
   // replaying instead of sitting on the last frame. Muted because this play() call happens well
   // outside the "Analyze" click's synchronous call stack, where autoplay policy is unreliable.
+  //
+  // The background scale pass replays the same video for its own sampling, so this effect also
+  // waits for it: while the pass is 'pending'/'running' the loop stays un-armed (a looping video
+  // never fires 'ended', which the pass's sampleClip relies on), and this one declarative
+  // condition owns re-arming — it fires immediately when the pass was skipped, and again the
+  // moment the pass reaches 'done'/'failed'. No scale-pass code re-arms the loop imperatively.
   useEffect(() => {
     if (state.phase !== 'ready') return
+    if (state.scalePass.status === 'pending' || state.scalePass.status === 'running') return
     const video = videoRef.current
     if (!video) return
     video.muted = true
@@ -257,7 +291,135 @@ export function useVideoAnalysis(
     video.play().catch(() => {
       // Autoplay still blocked: loop stays armed for whenever playback next starts.
     })
-  }, [state.phase, videoRef])
+  }, [state.phase, state.scalePass.status, videoRef])
+
+  // Drives the background scale pass (add-background-scale-pass, D1): once the primary run is
+  // 'ready' with the pass 'pending', replay the same clip through a dedicated MediaPipe detector
+  // and run the identical sort → robustness → presence-trim → heuristics pipeline over the
+  // result, then graft ONLY `verticalOscillationCm` into the displayed heuristics. Every state
+  // write is guarded by the primary run's `runId` (a reset()/new clip invalidates the pass
+  // exactly like a primary run), and every failure path lands on scalePass 'failed' with the
+  // primary result untouched — the pass can only ever improve the displayed result.
+  useEffect(() => {
+    if (state.phase !== 'ready' || state.scalePass.status !== 'pending') return
+    if (scalePassStartedForRunRef.current === runIdRef.current) return
+    scalePassStartedForRunRef.current = runIdRef.current
+    const runId = runIdRef.current
+
+    const failPass = (error: string) => {
+      if (runIdRef.current !== runId) return
+      setState((s) => ({ ...s, scalePass: { status: 'failed', error, diagnostics: null } }))
+    }
+
+    const video = videoRef.current
+    const primaryHeuristics = state.heuristics
+    if (!video || !metadata || !primaryHeuristics) {
+      failPass('No video was available for the scale pass.')
+      return
+    }
+
+    setState((s) => ({ ...s, scalePass: { status: 'running', diagnostics: null } }))
+
+    // Same resolution discipline as the primary run: the sampling/robustness plane is one
+    // object, resolved once per pass. No onProgress/onPausedChange — the pass is background
+    // work; nothing renders its progress.
+    const samplingRobustnessConfig = resolveSamplingRobustnessConfig()
+    const watchdogMs = Math.max(30_000, 3 * metadata.durationSec * 1000)
+
+    void (async () => {
+      const scaleDetector = await getScalePassDetector()
+      if (runIdRef.current !== runId) return
+      if (!scaleDetector) {
+        failPass('The scale-pass detector could not be created.')
+        return
+      }
+
+      // Replay from the top, muted (this play() is far outside any user click's synchronous
+      // call stack) and un-looped (sampleClip needs the natural 'ended' event to resolve).
+      video.muted = true
+      video.loop = false
+      video.currentTime = 0
+
+      const { promise, handle } = sampleClip(video, scaleDetector, metadata.durationSec, {
+        maxConsecutiveErrors: samplingRobustnessConfig.maxConsecutiveErrors,
+        detectionTimeoutMs: samplingRobustnessConfig.detectionTimeoutMs,
+      })
+      scaleHandleRef.current = handle
+
+      // `handle.stop()` RESOLVES the promise with whatever partial samples were collected
+      // rather than rejecting (see SampleClipHandle's doc), so aborting locally must also mark
+      // the resolution as discardable — `abortedLocally` is what keeps a watchdog-stopped
+      // pass's partial samples from being processed as if the pass had finished.
+      let abortedLocally = false
+      const abortPass = (error: string) => {
+        if (abortedLocally) return
+        abortedLocally = true
+        clearTimeout(watchdog)
+        handle.stop()
+        if (scaleHandleRef.current === handle) scaleHandleRef.current = null
+        failPass(error)
+      }
+      // Wall-clock watchdog: the pass replays the clip in real time, so anything past a few
+      // multiples of the clip's duration means it is stuck, not slow.
+      const watchdog = setTimeout(() => {
+        abortPass(`The scale pass exceeded its ${watchdogMs}ms watchdog and was stopped.`)
+      }, watchdogMs)
+
+      video.play().catch((err: unknown) => {
+        abortPass(
+          err instanceof Error
+            ? `Could not start video playback for the scale pass: ${err.message}`
+            : 'Could not start video playback for the scale pass.',
+        )
+      })
+
+      let samples: PoseSample[]
+      try {
+        samples = await promise
+      } catch (err) {
+        clearTimeout(watchdog)
+        if (scaleHandleRef.current === handle) scaleHandleRef.current = null
+        failPass(
+          err instanceof Error ? err.message : 'Scale-pass detection stalled unexpectedly.',
+        )
+        return
+      }
+      clearTimeout(watchdog)
+      if (abortedLocally || runIdRef.current !== runId) return
+      if (scaleHandleRef.current === handle) scaleHandleRef.current = null
+
+      try {
+        // The byte-identical pipeline the primary run uses (sort → robustness → presence-trim →
+        // heuristics), over the scale pass's own samples.
+        const sorted = [...samples].sort((a, b) => a.timestamp - b.timestamp)
+        const scaleRobustFrames = applyRobustness(sorted, samplingRobustnessConfig.robustness)
+        const scaleMetricFrames = trimToPresenceWindow(scaleRobustFrames)
+        const scaleHeuristics = computeFormHeuristics(scaleMetricFrames)
+        // Graft rule: a pass that measured no real-world scale has nothing to graft — that is a
+        // failed pass (named as such), never a silent no-op replacement of the primary metric.
+        if (scaleHeuristics.verticalOscillationCm.calibration === null) {
+          failPass('The scale pass completed but measured no real-world scale.')
+          return
+        }
+        const grafted = graftScalePassResult(primaryHeuristics, scaleHeuristics)
+        const scaleDiagnostics = computeAnalysisDiagnostics(
+          sorted,
+          scaleRobustFrames,
+          scaleHeuristics,
+        )
+        if (runIdRef.current !== runId) return
+        setState((s) => ({
+          ...s,
+          // The one write the scale pass makes outside its own status object. `diagnostics`
+          // stays the primary's — the scale pass's live on scalePass.diagnostics instead.
+          heuristics: grafted,
+          scalePass: { status: 'done', diagnostics: scaleDiagnostics },
+        }))
+      } catch (err) {
+        failPass(err instanceof Error ? err.message : 'Scale pass failed unexpectedly.')
+      }
+    })()
+  }, [state.phase, state.scalePass.status, state.heuristics, videoRef, metadata])
 
   // Auto-starts analysis the moment a freshly loaded clip is ready and a detector exists — no
   // explicit click required. Doesn't fire while `detector` is `null` (still loading, or it never
@@ -287,6 +449,26 @@ export function useVideoAnalysis(
     if (state.phase !== 'ready' || !state.diagnostics) return
     console.log('[analysis-diagnostics]', JSON.stringify(state.diagnostics))
   }, [state.phase, state.diagnostics])
+
+  // Development-only, second line: the scale pass's outcome under its own distinct prefix, once
+  // per terminal transition (each transition replaces the `scalePass` object wholesale, so
+  // keying on its identity fires exactly once each). The primary line above stays byte-identical
+  // — same trigger, same payload, primary pass only. `diagnostics` rides along only on 'done';
+  // 'skipped'/'failed' carry their reason/error instead.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const { status, reason, error, diagnostics } = state.scalePass
+    if (status !== 'done' && status !== 'failed' && status !== 'skipped') return
+    console.log(
+      '[analysis-diagnostics:scale-pass]',
+      JSON.stringify({
+        status,
+        ...(reason !== undefined ? { reason } : {}),
+        ...(error !== undefined ? { error } : {}),
+        ...(status === 'done' && diagnostics !== null ? { diagnostics } : {}),
+      }),
+    )
+  }, [state.scalePass])
 
   return { ...state, start, reset }
 }

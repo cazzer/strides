@@ -73,7 +73,13 @@ export function ResultsView({ analysis, onTryAgain }: ResultsViewProps) {
 
       {phase === 'ready' && heuristics && (
         <div className="results-view__results space-y-4">
-          <MetricsPanel heuristics={heuristics} />
+          <MetricsPanel
+            heuristics={heuristics}
+            scalePassInProgress={
+              analysis.scalePass.status === 'pending' ||
+              analysis.scalePass.status === 'running'
+            }
+          />
           {/*
             Save/export (e.g. Google Drive) is explicitly out of scope for this build — this is
             the seam a future ticket hooks into. No auth, no API calls, no stub button: just the

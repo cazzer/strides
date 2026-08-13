@@ -3,18 +3,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PoseDetector } from '../pose/detector'
 import type { VideoMetadata, VideoSource } from '../video/types'
 import type { RobustKeypoint, RobustPoseFrame } from '../pose/robustness/types'
-import type { FormHeuristicsResult } from '../heuristics/types'
+import type {
+  FormHeuristicsResult,
+  ScaleCalibratedVerticalOscillation,
+} from '../heuristics/types'
 import type { SampleClipHandle } from './sampleClip'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 import { DEFAULT_SAMPLING_ROBUSTNESS_CONFIG } from './samplingRobustnessConfig'
+import { SCALE_PASS_PROVENANCE_CAVEAT } from './scalePassGraft'
 
-const { sampleClipMock, applyRobustnessMock, computeFormHeuristicsMock } = vi.hoisted(
-  () => ({
-    sampleClipMock: vi.fn(),
-    applyRobustnessMock: vi.fn(),
-    computeFormHeuristicsMock: vi.fn(),
-  }),
-)
+const {
+  sampleClipMock,
+  applyRobustnessMock,
+  computeFormHeuristicsMock,
+  getScalePassDetectorMock,
+} = vi.hoisted(() => ({
+  sampleClipMock: vi.fn(),
+  applyRobustnessMock: vi.fn(),
+  computeFormHeuristicsMock: vi.fn(),
+  getScalePassDetectorMock: vi.fn(),
+}))
 
 vi.mock('./sampleClip', () => ({
   sampleClip: sampleClipMock,
@@ -31,6 +39,10 @@ vi.mock('../pose/robustness/interpolate', () => ({
 
 vi.mock('../heuristics/index', () => ({
   computeFormHeuristics: computeFormHeuristicsMock,
+}))
+
+vi.mock('../pose/scalePassDetector', () => ({
+  getScalePassDetector: getScalePassDetectorMock,
 }))
 
 import { useVideoAnalysis } from './useVideoAnalysis'
@@ -212,14 +224,64 @@ function makeFakeHandle(): SampleClipHandle {
   return { stop: vi.fn() }
 }
 
+// A calibration as the scale pass would measure it — non-null is what makes a scale pass's
+// result graftable (see useVideoAnalysis's graft rule).
+const FAKE_SCALE_CALIBRATION: ScaleCalibratedVerticalOscillation = {
+  verticalOscillationCm: 4.79,
+  sampleSize: 3,
+  observedCycles: 3.4,
+  fit: {
+    frequencyHz: 1.52,
+    peakToPeakAmplitudeCm: 4.79,
+    sinusoidR2: 0.49,
+    totalR2: 0.9,
+    secondPeakRatio: 0.5,
+    sampleCount: 57,
+    spanSeconds: 2.24,
+    observedCycles: 3.4,
+  },
+  fitFailureReason: null,
+  scaleDriftRatio: 1.01,
+  medianPixelsPerMeter: 872,
+  torsoMeters: 0.505,
+  scaleCoverage: 0.9,
+  integrationRuns: 1,
+}
+
+// What the scale pass's own computeFormHeuristics call returns: a measured centimetre metric,
+// plus a deliberately DIFFERENT trunkLean value (99 vs. the primary's 5) so a test can prove the
+// graft discarded everything except verticalOscillationCm.
+const FAKE_SCALE_HEURISTICS: FormHeuristicsResult = {
+  ...FAKE_HEURISTICS,
+  trunkLean: { ...FAKE_HEURISTICS.trunkLean, value: 99 },
+  verticalOscillationCm: {
+    metric: 'verticalOscillationCm',
+    value: 4.79,
+    unit: 'centimeters',
+    confidence: 0.5,
+    viewFit: 'primary',
+    interpolatedFraction: 0,
+    frameCoverage: 1,
+    sampleSize: 3,
+    caveat: null,
+    calibration: FAKE_SCALE_CALIBRATION,
+  },
+}
+
 beforeEach(() => {
   sampleClipMock.mockReset()
   applyRobustnessMock.mockReset()
   computeFormHeuristicsMock.mockReset()
+  getScalePassDetectorMock.mockReset()
   applyRobustnessMock.mockReturnValue(FAKE_ROBUST_FRAMES)
   computeFormHeuristicsMock.mockReturnValue(FAKE_HEURISTICS)
+  getScalePassDetectorMock.mockResolvedValue(makeFakeDetector())
   // Default: never resolves, so tests that don't care about sampling's outcome don't need to
   // supply their own implementation just to satisfy the auto-start effect firing on mount.
+  // NOTE: since the background scale pass shipped, a run that reaches 'ready' calls sampleClip a
+  // SECOND time (the scale pass) with this same implementation — with these default fixtures
+  // (calibration: null) a resolving implementation concludes that pass 'failed' ("measured no
+  // real-world scale"), leaving the primary result untouched.
   sampleClipMock.mockImplementation(() => ({
     promise: new Promise(() => {}),
     handle: makeFakeHandle(),
@@ -229,6 +291,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs()
   delete window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__
+  delete window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__
 })
 
 describe('useVideoAnalysis', () => {
@@ -392,7 +455,7 @@ describe('useVideoAnalysis', () => {
     expect(result.current.phase).toBe('sampling')
   })
 
-  it('loops the video, muted, once analysis reaches ready', async () => {
+  it('loops the video, muted, once analysis reaches ready and the scale pass concludes', async () => {
     sampleClipMock.mockImplementation(() => ({
       promise: Promise.resolve([{ timestamp: 0, frame: null }]),
       handle: makeFakeHandle(),
@@ -404,8 +467,9 @@ describe('useVideoAnalysis', () => {
     const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
 
     await waitFor(() => expect(result.current.phase).toBe('ready'))
-
-    expect(video.loop).toBe(true)
+    // With the default fixtures the scale pass runs and concludes 'failed' (no scale measured)
+    // -- the loop arms the moment the pass reaches a terminal status, not at 'ready' itself.
+    await waitFor(() => expect(video.loop).toBe(true))
     expect(video.muted).toBe(true)
   })
 
@@ -416,13 +480,9 @@ describe('useVideoAnalysis', () => {
     }))
 
     const video = document.createElement('video')
-    let mutedAtLoopRestart: boolean | undefined
-    let playCallCount = 0
+    const mutedAtPlay: boolean[] = []
     vi.spyOn(video, 'play').mockImplementation(() => {
-      playCallCount += 1
-      // The first play() call is sampling's own (the auto-start effect firing on mount); the
-      // loop-restart is the second.
-      if (playCallCount === 2) mutedAtLoopRestart = video.muted
+      mutedAtPlay.push(video.muted)
       return Promise.resolve()
     })
 
@@ -431,9 +491,13 @@ describe('useVideoAnalysis', () => {
     const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
 
     await waitFor(() => expect(result.current.phase).toBe('ready'))
+    // Three play() calls per run now: primary sampling's own (auto-start on mount), the scale
+    // pass's replay, and -- once the pass concludes ('failed' with these default fixtures) --
+    // the loop-restart. The loop-restart is the one whose muting this test is about.
+    await waitFor(() => expect(video.loop).toBe(true))
 
-    expect(playCallCount).toBe(2)
-    expect(mutedAtLoopRestart).toBe(true)
+    expect(mutedAtPlay.length).toBe(3)
+    expect(mutedAtPlay[2]).toBe(true)
   })
 
   it('clears the loop before a new run starts, so sampling can detect ended', async () => {
@@ -448,7 +512,8 @@ describe('useVideoAnalysis', () => {
     const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
 
     await waitFor(() => expect(result.current.phase).toBe('ready'))
-    expect(video.loop).toBe(true)
+    // The loop arms once the scale pass concludes ('failed' with these default fixtures).
+    await waitFor(() => expect(video.loop).toBe(true))
 
     act(() => {
       result.current.start()
@@ -566,5 +631,301 @@ describe('useVideoAnalysis', () => {
 
     unmount()
     expect(handle.stop).toHaveBeenCalledTimes(1)
+  })
+
+  describe('background scale pass', () => {
+    // Both passes resolve immediately with one sample each -- the shape most scale-pass tests
+    // want. Tests needing to hold the scale pass open override the second call instead.
+    function mockBothPassesResolving() {
+      sampleClipMock.mockImplementation(() => ({
+        promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+        handle: makeFakeHandle(),
+      }))
+    }
+
+    it('runs after ready and grafts only verticalOscillationCm into the displayed heuristics', async () => {
+      mockBothPassesResolving()
+      computeFormHeuristicsMock
+        .mockReturnValueOnce(FAKE_HEURISTICS)
+        .mockReturnValueOnce(FAKE_SCALE_HEURISTICS)
+      const scaleDetector = makeFakeDetector()
+      getScalePassDetectorMock.mockResolvedValue(scaleDetector)
+
+      const videoSource = makeVideoSource()
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      await waitFor(() => expect(result.current.scalePass.status).toBe('done'))
+
+      // Two sampling passes: the primary with the primary detector, the scale pass with the
+      // dedicated one.
+      expect(sampleClipMock).toHaveBeenCalledTimes(2)
+      expect(sampleClipMock.mock.calls[0][1]).toBe(detector)
+      expect(sampleClipMock.mock.calls[1][1]).toBe(scaleDetector)
+
+      // Grafted: the centimetre metric is the scale pass's, provenance appended, calibration by
+      // reference...
+      const grafted = result.current.heuristics
+      expect(grafted?.verticalOscillationCm.value).toBe(4.79)
+      expect(grafted?.verticalOscillationCm.caveat).toBe(SCALE_PASS_PROVENANCE_CAVEAT)
+      expect(grafted?.verticalOscillationCm.calibration).toBe(FAKE_SCALE_CALIBRATION)
+      // ...and nothing else is: the scale pass's trunkLean (99) is discarded, the primary's (5)
+      // survives by reference.
+      expect(grafted?.trunkLean).toBe(FAKE_HEURISTICS.trunkLean)
+      expect(grafted?.view).toBe(FAKE_HEURISTICS.view)
+
+      // The run's diagnostics stay the PRIMARY pass's (whose backend measured no scale), while
+      // the scale pass's own diagnostics carry the measured calibration by reference.
+      expect(result.current.diagnostics).not.toBeNull()
+      expect('scaleCalibration' in result.current.diagnostics!).toBe(false)
+      expect(result.current.scalePass.diagnostics?.scaleCalibration).toBe(
+        FAKE_SCALE_CALIBRATION,
+      )
+    })
+
+    it('marks the pass failed and leaves the primary result untouched when scale sampling rejects', async () => {
+      sampleClipMock
+        .mockImplementationOnce(() => ({
+          promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+          handle: makeFakeHandle(),
+        }))
+        .mockImplementationOnce(() => ({
+          promise: Promise.reject(new Error('scale sampling broke')),
+          handle: makeFakeHandle(),
+        }))
+
+      const videoSource = makeVideoSource()
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.scalePass.status).toBe('failed'))
+      expect(result.current.scalePass.error).toMatch(/scale sampling broke/)
+      expect(result.current.phase).toBe('ready')
+      expect(result.current.heuristics).toBe(FAKE_HEURISTICS)
+      // Only the primary pass computed heuristics -- the failed scale pass never got there.
+      expect(computeFormHeuristicsMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('marks the pass failed when it completes without measuring any scale', async () => {
+      mockBothPassesResolving()
+      // Default fixtures: both passes yield FAKE_HEURISTICS, whose calibration is null -- the
+      // graft rule refuses a scale pass that measured nothing.
+
+      const videoSource = makeVideoSource()
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.scalePass.status).toBe('failed'))
+      expect(result.current.scalePass.error).toMatch(/measured no real-world scale/)
+      expect(result.current.heuristics).toBe(FAKE_HEURISTICS)
+    })
+
+    it('marks the pass failed when the scale-pass detector cannot be created', async () => {
+      mockBothPassesResolving()
+      getScalePassDetectorMock.mockResolvedValue(null)
+
+      const videoSource = makeVideoSource()
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.scalePass.status).toBe('failed'))
+      expect(result.current.scalePass.error).toMatch(/detector/i)
+      // Sampling never started for the pass -- only the primary call happened.
+      expect(sampleClipMock).toHaveBeenCalledTimes(1)
+      expect(result.current.heuristics).toBe(FAKE_HEURISTICS)
+    })
+
+    it('fails the pass via the wall-clock watchdog when scale sampling never settles', async () => {
+      // Only setTimeout/clearTimeout are faked: waitFor can't be used under fake timers (its
+      // own polling uses them), so this test flushes microtasks with bounded act() loops
+      // instead.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const scaleHandle = makeFakeHandle()
+        sampleClipMock
+          .mockImplementationOnce(() => ({
+            promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+            handle: makeFakeHandle(),
+          }))
+          .mockImplementationOnce(() => ({
+            promise: new Promise(() => {}),
+            handle: scaleHandle,
+          }))
+
+        const videoSource = makeVideoSource()
+        const detector = makeFakeDetector()
+        const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+        for (let i = 0; i < 10 && result.current.scalePass.status !== 'running'; i += 1) {
+          await act(async () => {})
+        }
+        expect(result.current.scalePass.status).toBe('running')
+
+        // durationSec is 10 (makeMetadata), so the watchdog is max(30s, 3 x 10s) = 30s.
+        await act(async () => {
+          vi.advanceTimersByTime(30_000)
+        })
+
+        expect(result.current.scalePass.status).toBe('failed')
+        expect(result.current.scalePass.error).toMatch(/watchdog/)
+        expect(scaleHandle.stop).toHaveBeenCalledTimes(1)
+        expect(result.current.heuristics).toBe(FAKE_HEURISTICS)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('skips the pass when the primary result already carries a measured scale', async () => {
+      mockBothPassesResolving()
+      computeFormHeuristicsMock.mockReturnValue(FAKE_SCALE_HEURISTICS)
+
+      const video = document.createElement('video')
+      const videoSource = makeVideoSource({ videoRef: { current: video } })
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+
+      expect(result.current.scalePass.status).toBe('skipped')
+      expect(result.current.scalePass.reason).toBe('primary-scale')
+      expect(sampleClipMock).toHaveBeenCalledTimes(1)
+      expect(getScalePassDetectorMock).not.toHaveBeenCalled()
+      expect(result.current.heuristics).toBe(FAKE_SCALE_HEURISTICS)
+      // A skipped pass never blocks the loop -- it arms straight from the ready commit.
+      expect(video.loop).toBe(true)
+    })
+
+    it('skips the pass when the kill switch is off', async () => {
+      window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__ = { enabled: false }
+      mockBothPassesResolving()
+
+      const video = document.createElement('video')
+      const videoSource = makeVideoSource({ videoRef: { current: video } })
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+
+      expect(result.current.scalePass.status).toBe('skipped')
+      expect(result.current.scalePass.reason).toBe('disabled')
+      expect(sampleClipMock).toHaveBeenCalledTimes(1)
+      expect(getScalePassDetectorMock).not.toHaveBeenCalled()
+      expect(video.loop).toBe(true)
+    })
+
+    it('reset() stops a running scale pass, and its late resolution writes nothing', async () => {
+      const scaleHandle = makeFakeHandle()
+      let resolveScale!: (samples: unknown[]) => void
+      sampleClipMock
+        .mockImplementationOnce(() => ({
+          promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+          handle: makeFakeHandle(),
+        }))
+        .mockImplementationOnce(() => ({
+          promise: new Promise((resolve) => {
+            resolveScale = resolve
+          }),
+          handle: scaleHandle,
+        }))
+      computeFormHeuristicsMock
+        .mockReturnValueOnce(FAKE_HEURISTICS)
+        .mockReturnValueOnce(FAKE_SCALE_HEURISTICS)
+
+      const videoSource = makeVideoSource()
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.scalePass.status).toBe('running'))
+
+      act(() => {
+        result.current.reset()
+      })
+      expect(scaleHandle.stop).toHaveBeenCalledTimes(1)
+      expect(result.current.phase).toBe('idle')
+      expect(result.current.scalePass.status).toBe('idle')
+
+      // A late resolution of the abandoned pass's promise must not write anything -- no graft,
+      // no status change, no second heuristics computation.
+      await act(async () => {
+        resolveScale([{ timestamp: 0, frame: null }])
+      })
+      expect(result.current.phase).toBe('idle')
+      expect(result.current.heuristics).toBeNull()
+      expect(result.current.scalePass.status).toBe('idle')
+      expect(computeFormHeuristicsMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps the video un-looped while the pass runs, and loops it after done', async () => {
+      let resolveScale!: (samples: unknown[]) => void
+      sampleClipMock
+        .mockImplementationOnce(() => ({
+          promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+          handle: makeFakeHandle(),
+        }))
+        .mockImplementationOnce(() => ({
+          promise: new Promise((resolve) => {
+            resolveScale = resolve
+          }),
+          handle: makeFakeHandle(),
+        }))
+      computeFormHeuristicsMock
+        .mockReturnValueOnce(FAKE_HEURISTICS)
+        .mockReturnValueOnce(FAKE_SCALE_HEURISTICS)
+
+      const video = document.createElement('video')
+      const videoSource = makeVideoSource({ videoRef: { current: video } })
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.scalePass.status).toBe('running'))
+      // The pass replays the clip for sampling: muted, and NOT looping (sampleClip needs the
+      // natural 'ended' event to resolve).
+      expect(video.loop).toBe(false)
+      expect(video.muted).toBe(true)
+
+      await act(async () => {
+        resolveScale([{ timestamp: 0, frame: null }])
+      })
+      await waitFor(() => expect(result.current.scalePass.status).toBe('done'))
+      expect(video.loop).toBe(true)
+    })
+
+    it('logs exactly one primary diagnostics line and one scale-pass line per run, in a dev build', async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      mockBothPassesResolving()
+      computeFormHeuristicsMock
+        .mockReturnValueOnce(FAKE_HEURISTICS)
+        .mockReturnValueOnce(FAKE_SCALE_HEURISTICS)
+
+      const videoSource = makeVideoSource()
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.scalePass.status).toBe('done'))
+
+      const primaryLines = logSpy.mock.calls.filter(
+        (args) => args[0] === '[analysis-diagnostics]',
+      )
+      const scaleLines = logSpy.mock.calls.filter(
+        (args) => args[0] === '[analysis-diagnostics:scale-pass]',
+      )
+      expect(primaryLines.length).toBe(1)
+      expect(scaleLines.length).toBe(1)
+
+      // The primary line's payload is byte-identical to what it was before the scale pass
+      // existed: primary metrics, no scaleCalibration key (its backend measured none).
+      const primaryPayload = JSON.parse(primaryLines[0][1] as string)
+      expect('scaleCalibration' in primaryPayload).toBe(false)
+      expect(primaryPayload.metrics.trunkLean.value).toBe(5)
+
+      const scalePayload = JSON.parse(scaleLines[0][1] as string)
+      expect(scalePayload.status).toBe('done')
+      expect(scalePayload.reason).toBeUndefined()
+      expect(scalePayload.error).toBeUndefined()
+      expect(scalePayload.diagnostics.scaleCalibration.verticalOscillationCm).toBe(4.79)
+
+      logSpy.mockRestore()
+    })
   })
 })

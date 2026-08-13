@@ -1,6 +1,7 @@
 import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { MetricsPanel } from './MetricsPanel'
+import { SCALE_PASS_PROVENANCE_CAVEAT } from './scalePassGraft'
 import type {
   FormHeuristicsResult,
   MetricResult,
@@ -461,6 +462,92 @@ describe('MetricsPanel', () => {
       within(excludedSection).getByText(/not reliable from a side view/i),
     ).toBeInTheDocument()
   })
+
+  it('shows the measuring-scale hint for a null-value verticalOscillationCm while the scale pass runs', () => {
+    const heuristics = makeHighConfidenceResult()
+    heuristics.verticalOscillationCm = makeVerticalOscillationCm({
+      value: null,
+      confidence: 0,
+      caveat:
+        "No real-world scale was measured for this clip, so bounce can't be reported in centimetres.",
+    })
+
+    render(<MetricsPanel heuristics={heuristics} scalePassInProgress />)
+
+    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    expect(
+      within(excludedSection).getByText(
+        'Measuring real-world scale with a second detection pass…',
+      ),
+    ).toBeInTheDocument()
+    // The hint REPLACES the availability caveat -- both at once would misstate the situation.
+    expect(
+      within(excludedSection).queryByText(/no real-world scale was measured/i),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows the caveat, not the hint, when no scale pass is in progress', () => {
+    const heuristics = makeHighConfidenceResult()
+    heuristics.verticalOscillationCm = makeVerticalOscillationCm({
+      value: null,
+      confidence: 0,
+      caveat:
+        "No real-world scale was measured for this clip, so bounce can't be reported in centimetres.",
+    })
+
+    render(<MetricsPanel heuristics={heuristics} />)
+
+    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    expect(
+      within(excludedSection).getByText(/no real-world scale was measured/i),
+    ).toBeInTheDocument()
+    expect(
+      within(excludedSection).queryByText(/measuring real-world scale/i),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders a non-null verticalOscillationCm as a card even mid-pass -- the hint is only for nothing-measured-yet', () => {
+    // Under exclude-only-unmeasurable-metrics, a measured (non-null) centimetre value is never
+    // excluded for low confidence -- it renders as a caveated card, so the in-progress hint
+    // (which lives in the excluded section) simply does not apply to it.
+    const heuristics = makeHighConfidenceResult()
+    heuristics.verticalOscillationCm = makeVerticalOscillationCm({
+      value: 12.4,
+      confidence: 0.37,
+      caveat: 'Scale coverage was low for this clip -- confidence reduced accordingly.',
+    })
+
+    render(<MetricsPanel heuristics={heuristics} scalePassInProgress />)
+
+    const card = screen.getByLabelText('Vertical oscillation (cm)')
+    expect(card.getAttribute('data-tier')).toBe('caveated')
+    expect(within(card).getByText('12.4 cm')).toBeInTheDocument()
+    expect(screen.queryByText(/measuring real-world scale/i)).not.toBeInTheDocument()
+  })
+
+  it('renders a grafted scale-pass result as a caveated card whose note carries the provenance sentence', () => {
+    // What the panel sees after the background scale pass grafts its measurement: a non-null
+    // centimetre value whose own confidence (0.41, per the assessed live evidence) lands it in
+    // tier 2 -- an ordinary caveated card, no scale-pass-specific treatment.
+    const heuristics = makeHighConfidenceResult()
+    heuristics.verticalOscillationCm = makeVerticalOscillationCm({
+      value: 12.0,
+      confidence: 0.41,
+      caveat: SCALE_PASS_PROVENANCE_CAVEAT,
+    })
+
+    render(<MetricsPanel heuristics={heuristics} />)
+
+    const card = screen.getByLabelText('Vertical oscillation (cm)')
+    expect(card.getAttribute('data-tier')).toBe('caveated')
+    expect(within(card).getByText('12.0 cm')).toBeInTheDocument()
+    const note = within(card).getByRole('note')
+    expect(note.textContent).toContain(
+      'Measured by a second, scale-aware detection pass (MediaPipe Pose Landmarker)',
+    )
+  })
+
+  
 
   it('counts a below-0.4-confidence card under "with caveats" in the summary line', () => {
     const heuristics = makeHighConfidenceResult()

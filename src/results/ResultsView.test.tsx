@@ -63,6 +63,7 @@ function makeAnalysis(
     robustFrames: null,
     heuristics: null,
     diagnostics: null,
+    scalePass: { status: 'idle', diagnostics: null },
     error: null,
     start: vi.fn(),
     reset: vi.fn(),
