@@ -48,7 +48,7 @@ describe('computeFormHeuristics', () => {
     expect(result.verticalOscillationCm.value).toBeNull()
     expect(result.verticalOscillationCm.confidence).toBe(0)
     expect(result.verticalOscillationCm.calibration).toBeNull()
-    expect(result.verticalOscillationCm.caveat).toMatch(/no real-world scale was measured/i)
+    expect(result.verticalOscillationCm.caveat).toMatch(/no real-world scale could be measured/i)
 
     // Every metric was gated using the same detected view, not recomputed independently.
     expect(result.verticalOscillation.viewFit).toBe('primary')

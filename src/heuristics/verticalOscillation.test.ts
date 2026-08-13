@@ -184,7 +184,7 @@ describe('computeVerticalOscillation', () => {
     expect(result.series).toHaveLength(shortFrames.length)
   })
 
-  it('reports no value, naming both the measured fit quality and the threshold, for a noise-only trace', () => {
+  it('reports no value, saying the bounce rhythm was too irregular to measure, for a noise-only trace', () => {
     const noise = seededNormals(3, 90)
     const frames = framesFromHipTrace(
       noise.map((n, i) => ({ t: i / 30, y: 400 + 12 * n })),
@@ -195,10 +195,9 @@ describe('computeVerticalOscillation', () => {
     expect(result.value).toBeNull()
     expect(result.confidence).toBe(0)
     expect(result.fit).toBeNull()
-    expect(result.caveat).toMatch(/no consistent bounce rhythm could be fit/i)
-    // Both numbers, so a reader can see how far short the fit fell rather than just that it did.
-    expect(result.caveat).toMatch(/fit quality 0\.\d\d/)
-    expect(result.caveat).toMatch(/below the 0\.30 minimum/)
+    expect(result.caveat).toBe(
+      'Hip position was tracked, but the bounce rhythm was too irregular to measure.',
+    )
     expect(result.series).toHaveLength(frames.length)
   })
 
@@ -224,7 +223,9 @@ describe('computeVerticalOscillation', () => {
     // confidence is the fit-quality ramp on its own.
     expect(result.confidence).toBeCloseTo((sinusoidR2 - 0.3) / (0.8 - 0.3), 5)
     expect(result.confidence).toBeLessThan(1)
-    expect(result.caveat).toMatch(/fit quality is 0\.\d\d/i)
+    expect(result.caveat).toMatch(
+      /bounce rhythm in this clip was too irregular to read confidently/i,
+    )
   })
 
   it('a clip covering only two cycles reports sampleSize 2 and the corresponding confidence penalty', () => {

@@ -348,7 +348,7 @@ describe('MetricsPanel', () => {
       frameCoverage: 0,
       sampleSize: 0,
       caveat:
-        "No real-world scale was measured for this clip, so bounce can't be reported in centimetres — that needs a pose-detection backend that measures real-world scale (today, MediaPipe Pose Landmarker). Vertical oscillation and vertical ratio measure the same bounce without it.",
+        "No real-world scale could be measured for this clip, so bounce can't be reported in centimetres. Vertical oscillation and vertical ratio measure the same bounce without it.",
       calibration: null,
     }
 
@@ -358,7 +358,7 @@ describe('MetricsPanel', () => {
     const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
     expect(within(excludedSection).getByText('Vertical oscillation (cm)')).toBeInTheDocument()
     expect(
-      within(excludedSection).getByText(/no real-world scale was measured/i),
+      within(excludedSection).getByText(/no real-world scale could be measured/i),
     ).toBeInTheDocument()
     expect(within(excludedSection).queryByText('Not available')).not.toBeInTheDocument()
   })
@@ -411,7 +411,7 @@ describe('MetricsPanel', () => {
     heuristics.verticalOscillationCm = makeVerticalOscillationCm({
       value: null,
       confidence: 0,
-      caveat: 'No real-world scale was measured for this clip.',
+      caveat: 'No real-world scale could be measured for this clip.',
     })
     heuristics.armSwingSymmetry = makeMetric({
       metric: 'armSwingSymmetry',
@@ -469,7 +469,7 @@ describe('MetricsPanel', () => {
       value: null,
       confidence: 0,
       caveat:
-        "No real-world scale was measured for this clip, so bounce can't be reported in centimetres.",
+        "No real-world scale could be measured for this clip, so bounce can't be reported in centimetres.",
     })
 
     render(<MetricsPanel heuristics={heuristics} scalePassStatus="running" />)
@@ -477,22 +477,22 @@ describe('MetricsPanel', () => {
     const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
     expect(
       within(excludedSection).getByText(
-        'Measuring real-world scale with a second detection pass…',
+        'Measuring real-world scale with a second look at the clip…',
       ),
     ).toBeInTheDocument()
     // The hint REPLACES the availability caveat -- both at once would misstate the situation.
     expect(
-      within(excludedSection).queryByText(/no real-world scale was measured/i),
+      within(excludedSection).queryByText(/no real-world scale could be measured/i),
     ).not.toBeInTheDocument()
   })
 
-  it("says a second pass tried but couldn't, for a null-value verticalOscillationCm after a failed pass", () => {
+  it("says a second look couldn't measure scale, for a null-value verticalOscillationCm after a failed pass", () => {
     const heuristics = makeHighConfidenceResult()
     heuristics.verticalOscillationCm = makeVerticalOscillationCm({
       value: null,
       confidence: 0,
       caveat:
-        "No real-world scale was measured for this clip, so bounce can't be reported in centimetres.",
+        "No real-world scale could be measured for this clip, so bounce can't be reported in centimetres.",
     })
 
     render(<MetricsPanel heuristics={heuristics} scalePassStatus="failed" />)
@@ -500,12 +500,12 @@ describe('MetricsPanel', () => {
     const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
     expect(
       within(excludedSection).getByText(
-        "A second pass tried to measure real-world scale for this clip but couldn't.",
+        "A second look at the clip couldn't measure real-world scale.",
       ),
     ).toBeInTheDocument()
     // The bare availability caveat would imply the capability was never exercised.
     expect(
-      within(excludedSection).queryByText(/no real-world scale was measured/i),
+      within(excludedSection).queryByText(/no real-world scale could be measured/i),
     ).not.toBeInTheDocument()
   })
 
@@ -515,14 +515,14 @@ describe('MetricsPanel', () => {
       value: null,
       confidence: 0,
       caveat:
-        "No real-world scale was measured for this clip, so bounce can't be reported in centimetres.",
+        "No real-world scale could be measured for this clip, so bounce can't be reported in centimetres.",
     })
 
     render(<MetricsPanel heuristics={heuristics} />)
 
     const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
     expect(
-      within(excludedSection).getByText(/no real-world scale was measured/i),
+      within(excludedSection).getByText(/no real-world scale could be measured/i),
     ).toBeInTheDocument()
     expect(
       within(excludedSection).queryByText(/measuring real-world scale/i),
@@ -565,9 +565,7 @@ describe('MetricsPanel', () => {
     expect(card.getAttribute('data-tier')).toBe('caveated')
     expect(within(card).getByText('12.0 cm')).toBeInTheDocument()
     const note = within(card).getByRole('note')
-    expect(note.textContent).toContain(
-      'Measured by a second, scale-aware analysis pass (MediaPipe)',
-    )
+    expect(note.textContent).toContain('Measured in a second pass of the same clip.')
   })
 
   it('counts a below-0.4-confidence card under "with caveats" in the summary line', () => {

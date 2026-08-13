@@ -188,7 +188,7 @@ describe('ResultsView', () => {
       />,
     )
     expect(screen.getByRole('status').textContent).toMatch(
-      /measuring one more metric with a second pass/i,
+      /measuring one more metric with a second look at the clip/i,
     )
 
     rerender(
@@ -203,11 +203,11 @@ describe('ResultsView', () => {
       />,
     )
     expect(screen.getByRole('status').textContent).toMatch(
-      /one more metric was measured by a second pass/i,
+      /one more metric was added by a second look at the clip/i,
     )
   })
 
-  it('says the second pass ran but failed, in the status line, when it fails', () => {
+  it("says the second look couldn't add its metric, in the status line, when it fails", () => {
     renderResultsView({
       analysis: makeAnalysis({
         phase: 'ready',
@@ -216,7 +216,7 @@ describe('ResultsView', () => {
       }),
     })
     expect(screen.getByRole('status').textContent).toMatch(
-      /second measurement pass ran but couldn't add its metric/i,
+      /second look at the clip couldn't add its metric/i,
     )
   })
 

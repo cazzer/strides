@@ -54,7 +54,7 @@ function makeHeuristics(overrides: Partial<FormHeuristicsResult> = {}): FormHeur
       interpolatedFraction: 0,
       frameCoverage: 0,
       sampleSize: 0,
-      caveat: "No real-world scale was measured for this clip, so bounce can't be reported in centimetres — that needs a pose-detection backend that measures real-world scale (today, MediaPipe Pose Landmarker). Vertical oscillation and vertical ratio measure the same bounce without it.",
+      caveat: "No real-world scale could be measured for this clip, so bounce can't be reported in centimetres. Vertical oscillation and vertical ratio measure the same bounce without it.",
       calibration: null,
     },
     trunkLean: makeMetric({ metric: 'trunkLean' }),

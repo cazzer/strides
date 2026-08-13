@@ -418,7 +418,7 @@ describe('computeVerticalOscillationCm', () => {
 /** Exact text asserted by the backend-gate tests below — kept as a literal, not imported, so a
  * change to the production string is caught here rather than the test silently tracking it. */
 const NO_SCALE_CAVEAT =
-  "No real-world scale was measured for this clip, so bounce can't be reported in centimetres — that needs a pose-detection backend that measures real-world scale (today, MediaPipe Pose Landmarker). Vertical oscillation and vertical ratio measure the same bounce without it."
+  "No real-world scale could be measured for this clip, so bounce can't be reported in centimetres. Vertical oscillation and vertical ratio measure the same bounce without it."
 
 describe('computeVerticalOscillationCmMetric', () => {
   describe('backend gate', () => {
@@ -502,7 +502,7 @@ describe('computeVerticalOscillationCmMetric', () => {
       expect(result.calibration).not.toBeNull()
       expect(result.calibration?.fitFailureReason).toBe('degenerate-signal')
       expect(result.caveat).toBe(
-        'Hip position was tracked, but the scale-converted trace showed no oscillating vertical motion to measure.',
+        'Hip position was tracked, but showed no oscillating vertical motion to measure.',
       )
     })
 
@@ -520,7 +520,7 @@ describe('computeVerticalOscillationCmMetric', () => {
       expect(result.calibration).not.toBeNull()
       expect(result.calibration?.fitFailureReason).toBe('below-quality-gate')
       expect(result.caveat).toBe(
-        'Hip position and scale were both measured, but no continuous stretch produced a consistent bounce rhythm (fit quality below the 0.30 minimum).',
+        'Hip position and scale were both measured, but the bounce rhythm was too irregular to measure in any continuous stretch of the clip.',
       )
     })
 

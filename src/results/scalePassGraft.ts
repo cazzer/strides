@@ -6,7 +6,7 @@ import type { FormHeuristicsResult } from '../heuristics/types'
  * tests and surfaced verbatim in the UI; do not reword without updating both.
  */
 export const SCALE_PASS_PROVENANCE_CAVEAT =
-  'Measured by a second, scale-aware analysis pass (MediaPipe) of the same clip; all other metrics come from the main analysis.'
+  'Measured in a second pass of the same clip.'
 
 /**
  * Grafts a completed background scale pass's `verticalOscillationCm` onto the primary pass's
@@ -22,8 +22,8 @@ export const SCALE_PASS_PROVENANCE_CAVEAT =
  * - The provenance sentence is appended after the scale result's own caveat when one exists
  *   (space-joined, the same composition idiom the heuristics layer's multi-caveat paths use).
  *   A measured-but-unfittable scale result grafts too — its named fit-failure caveat plus
- *   provenance replaces the primary's "no scale was measured" availability caveat, which after
- *   a completed MediaPipe pass would be false.
+ *   provenance replaces the primary's "no scale could be measured" availability caveat, which
+ *   after a completed MediaPipe pass would be false.
  *
  * The caller (`useVideoAnalysis.ts`) only invokes this when the scale result's `calibration` is
  * non-null — a pass that measured no scale at all is a failed pass, not a graft. Neither input

@@ -390,7 +390,7 @@ const FIT_QUALITY_SATURATION_R2 = 0.8
  * it without this module needing to know anything about presentation.
  */
 const NO_SCALE_CAVEAT =
-  "No real-world scale was measured for this clip, so bounce can't be reported in centimetres — that needs a pose-detection backend that measures real-world scale (today, MediaPipe Pose Landmarker). Vertical oscillation and vertical ratio measure the same bounce without it."
+  "No real-world scale could be measured for this clip, so bounce can't be reported in centimetres. Vertical oscillation and vertical ratio measure the same bounce without it."
 
 /**
  * Caveat text for a clip that DID carry a measured scale but yielded no fittable amplitude —
@@ -406,9 +406,9 @@ function caveatForFitFailure(reason: ScaleCalibratedFitFailureReason): string {
     case 'insufficient-cycles':
       return 'Hip position was tracked, but no continuous stretch was long enough to contain a complete bounce cycle.'
     case 'degenerate-signal':
-      return 'Hip position was tracked, but the scale-converted trace showed no oscillating vertical motion to measure.'
+      return 'Hip position was tracked, but showed no oscillating vertical motion to measure.'
     case 'below-quality-gate':
-      return 'Hip position and scale were both measured, but no continuous stretch produced a consistent bounce rhythm (fit quality below the 0.30 minimum).'
+      return 'Hip position and scale were both measured, but the bounce rhythm was too irregular to measure in any continuous stretch of the clip.'
     case 'no-usable-run':
       return 'No continuous stretch of hip tracking carried a real-world scale, so bounce could not be converted to centimetres.'
   }
@@ -564,17 +564,17 @@ export function computeVerticalOscillationCmMetric(
   }
   if (calibration.fit.sinusoidR2 < FIT_QUALITY_SATURATION_R2) {
     caveats.push(
-      `Bounce rhythm fit quality is ${calibration.fit.sinusoidR2.toFixed(2)} (a clean rhythm scores ${FIT_QUALITY_SATURATION_R2.toFixed(2)} or above) — confidence reduced accordingly.`,
+      'The bounce rhythm in this clip was too irregular to read confidently — confidence reduced accordingly.',
     )
   }
   if (calibration.integrationRuns > 1) {
     caveats.push(
-      `Bounce was measured across ${calibration.integrationRuns} separate tracked stretches; the reported figure comes from the most representative one.`,
+      `Bounce was measured across ${calibration.integrationRuns} separate stretches of the clip; the reported figure comes from the most representative one.`,
     )
   }
   if (calibration.scaleCoverage < 0.995) {
     caveats.push(
-      `Real-world scale was measured in only ${(calibration.scaleCoverage * 100).toFixed(0)}% of considered frames — confidence reduced accordingly.`,
+      `Real-world scale was measured in only ${(calibration.scaleCoverage * 100).toFixed(0)}% of the analyzed frames — confidence reduced accordingly.`,
     )
   }
 

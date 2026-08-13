@@ -168,7 +168,7 @@ export function computeVerticalRatio(
   if (fit.sinusoidR2 < minFitR2) {
     return nullResult(
       viewFitEntry.fit,
-      `Hip position was tracked, but no consistent bounce rhythm could be fit (fit quality ${fit.sinusoidR2.toFixed(2)}, below the ${minFitR2.toFixed(2)} minimum).`,
+      'Hip position was tracked, but the bounce rhythm was too irregular to measure.',
     )
   }
 
@@ -206,12 +206,12 @@ export function computeVerticalRatio(
   }
   if (fit.sinusoidR2 < FIT_QUALITY_SATURATION_R2) {
     caveats.push(
-      `Bounce rhythm fit quality is ${fit.sinusoidR2.toFixed(2)} (a clean rhythm scores ${FIT_QUALITY_SATURATION_R2.toFixed(2)} or above) — confidence reduced accordingly.`,
+      'The bounce rhythm in this clip was too irregular to read confidently — confidence reduced accordingly.',
     )
   }
   if (stride.pairCount < stride.candidatePairCount) {
     caveats.push(
-      `${stride.candidatePairCount - stride.pairCount} candidate stride pair(s) were dropped (unresolvable hip position or non-advancing displacement).`,
+      `${stride.candidatePairCount - stride.pairCount} stride pair(s) couldn't be read cleanly and were left out of the measurement.`,
     )
   }
   if (viewFitEntry.fit === 'unsuitable') {

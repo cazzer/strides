@@ -129,7 +129,7 @@ describe('computeCadence', () => {
     expect(result.caveat).toMatch(/too short to contain a complete step/i)
   })
 
-  it('7. a noise-only trace reports no value, naming both the measured fit quality and the threshold', () => {
+  it('7. a noise-only trace reports no value, saying the step rhythm was too irregular to measure', () => {
     const noise = seededNormals(3, 90)
     const frames = framesFromHipTrace(noise.map((n, i) => ({ t: i / 30, y: 400 + 12 * n })))
 
@@ -137,9 +137,9 @@ describe('computeCadence', () => {
 
     expect(result.value).toBeNull()
     expect(result.confidence).toBe(0)
-    expect(result.caveat).toMatch(/no consistent step rhythm could be fit/i)
-    expect(result.caveat).toMatch(/fit quality 0\.\d\d/)
-    expect(result.caveat).toMatch(/below the 0\.30 minimum/)
+    expect(result.caveat).toBe(
+      'Hip position was tracked, but the step rhythm was too irregular to measure.',
+    )
   })
 
   it('8. a marginal-but-usable fit reports a value whose confidence is exactly the fit-quality ramp', () => {
@@ -165,7 +165,7 @@ describe('computeCadence', () => {
     // confidence is the fit-quality ramp on its own.
     expect(result.confidence).toBeCloseTo((sinusoidR2 - 0.3) / (0.8 - 0.3), 5)
     expect(result.confidence).toBeLessThan(1)
-    expect(result.caveat).toMatch(/fit quality is 0\.\d\d/i)
+    expect(result.caveat).toMatch(/step rhythm in this clip was too irregular to read confidently/i)
   })
 
   it('9. a clip covering only 2.25 steps reports sampleSize 2 and confidence from the unrounded count', () => {
@@ -188,7 +188,7 @@ describe('computeCadence', () => {
     expect(result.caveat).toMatch(/recommend at least 4/i)
   })
 
-  it('10. a clip fitting at either edge of the searched frequency band is caveated by name', () => {
+  it('10. a clip fitting at either edge of the searched frequency band is caveated', () => {
     const highFrames = framesFromHipTrace(
       Array.from({ length: 60 }, (_, i) => {
         const t = i / 30
@@ -207,12 +207,12 @@ describe('computeCadence', () => {
 
     expect(high.value).not.toBeNull()
     expect(high.value).toBeCloseTo(240, 0)
-    expect(high.caveat).toMatch(/edge of the searched/i)
-    expect(high.caveat).toMatch(/1\.2.{1,3}4\.0/)
+    expect(high.caveat).toMatch(/edge of what this analysis can measure/i)
+    expect(high.caveat).toMatch(/true value may fall outside it/i)
 
     expect(low.value).not.toBeNull()
     expect(low.value).toBeCloseTo(72, 0)
-    expect(low.caveat).toMatch(/edge of the searched/i)
+    expect(low.caveat).toMatch(/edge of what this analysis can measure/i)
   })
 
   it('11. view tolerance: front reproduces the side value exactly; multipliers are 0.85/0.6', () => {

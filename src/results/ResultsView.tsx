@@ -86,11 +86,11 @@ export function ResultsView({
               video visibly replays during the pass — this line explains both. */}
           {(analysis.scalePass.status === 'pending' ||
             analysis.scalePass.status === 'running') &&
-            ' Measuring one more metric with a second pass…'}
+            ' Measuring one more metric with a second look at the clip…'}
           {analysis.scalePass.status === 'done' &&
-            ' One more metric was measured by a second pass.'}
+            ' One more metric was added by a second look at the clip.'}
           {analysis.scalePass.status === 'failed' &&
-            " A second measurement pass ran but couldn't add its metric."}
+            " A second look at the clip couldn't add its metric."}
         </p>
       )}
 

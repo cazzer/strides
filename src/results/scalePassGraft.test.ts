@@ -114,7 +114,7 @@ function makePrimary(): FormHeuristicsResult {
       confidence: 0,
       frameCoverage: 0,
       sampleSize: 0,
-      caveat: "No real-world scale was measured for this clip, so bounce can't be reported in centimetres.",
+      caveat: "No real-world scale could be measured for this clip, so bounce can't be reported in centimetres.",
       calibration: null,
     }),
   )
@@ -190,7 +190,7 @@ describe('graftScalePassResult', () => {
   it('grafts a measured-but-unfittable result, replacing the availability caveat with the fit-failure reason', () => {
     const primary = makePrimary()
     const fitFailureCaveat =
-      'Hip position and scale were both measured, but no continuous stretch produced a consistent bounce rhythm (fit quality below the 0.30 minimum).'
+      'Hip position and scale were both measured, but the bounce rhythm was too irregular to measure in any continuous stretch of the clip.'
     const scale = makeResult(
       makeVerticalOscillationCm({
         value: null,
@@ -212,9 +212,11 @@ describe('graftScalePassResult', () => {
     expect(grafted.verticalOscillationCm.caveat).toBe(
       `${fitFailureCaveat} ${SCALE_PASS_PROVENANCE_CAVEAT}`,
     )
-    // The primary's "no scale was measured" statement is gone — after a completed MediaPipe
+    // The primary's "no scale could be measured" statement is gone — after a completed MediaPipe
     // pass it would be false.
-    expect(grafted.verticalOscillationCm.caveat).not.toMatch(/no real-world scale was measured/i)
+    expect(grafted.verticalOscillationCm.caveat).not.toMatch(
+      /no real-world scale could be measured/i,
+    )
     expect(grafted.verticalOscillationCm.calibration).toBe(
       scale.verticalOscillationCm.calibration,
     )

@@ -108,7 +108,7 @@ function isNearGridEdge(frequencyHz: number, config: HeuristicsConfig): boolean 
  * see that key's doc in `types.ts` for why the reuse is sound (cadence fits the IDENTICAL hip-mid
  * series at the IDENTICAL sample count) and for the explicit warning that this does NOT license
  * reuse at other sample counts (the pure-noise R² floor is steeply n-dependent). Below the gate,
- * `value` is `null` with a caveat naming the measured quality and the threshold — never a
+ * `value` is `null` with a caveat saying the step rhythm was too irregular to measure — never a
  * low-confidence number, since below the gate the fitted frequency describes noise.
  *
  * View tolerance is identical to vertical oscillation's (`viewFitTable.cadence` == side 1.0,
@@ -140,7 +140,7 @@ export function computeCadence(
     // showing.
     return nullResult(
       viewFitEntry.fit,
-      `Hip position was tracked, but no consistent step rhythm could be fit (fit quality ${fit.sinusoidR2.toFixed(2)}, below the ${minFitR2.toFixed(2)} minimum).`,
+      'Hip position was tracked, but the step rhythm was too irregular to measure.',
     )
   }
 
@@ -179,12 +179,12 @@ export function computeCadence(
   }
   if (fit.sinusoidR2 < FIT_QUALITY_SATURATION_R2) {
     caveats.push(
-      `Step rhythm fit quality is ${fit.sinusoidR2.toFixed(2)} (a clean rhythm scores ${FIT_QUALITY_SATURATION_R2.toFixed(2)} or above) — confidence reduced accordingly.`,
+      'The step rhythm in this clip was too irregular to read confidently — confidence reduced accordingly.',
     )
   }
   if (isNearGridEdge(fit.frequencyHz, config)) {
     caveats.push(
-      `The fitted step frequency sits at the edge of the searched ${config.spectralFitMinFrequencyHz.toFixed(1)}–${config.spectralFitMaxFrequencyHz.toFixed(1)} Hz range — the true cadence may fall outside it.`,
+      'The detected cadence sits at the edge of what this analysis can measure — the true value may fall outside it.',
     )
   }
 

@@ -146,7 +146,7 @@ const FAKE_HEURISTICS: FormHeuristicsResult = {
     frameCoverage: 0,
     sampleSize: 0,
     caveat:
-      "No real-world scale was measured for this clip, so bounce can't be reported in centimetres.",
+      "No real-world scale could be measured for this clip, so bounce can't be reported in centimetres.",
     // null: this hook's fixture frames carry no pixelsPerMeter, mirroring a real MoveNet run --
     // computeAnalysisDiagnostics (not mocked in this file) derives the absent scaleCalibration key
     // from this field.

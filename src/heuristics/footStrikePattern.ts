@@ -42,7 +42,7 @@ export type FootStrikeClass = 'heel' | 'midfoot' | 'forefoot'
  * thresholds and the reasoning behind them.
  */
 const PROXY_CAVEAT =
-  'Foot strike pattern is an approximation based on ankle position relative to the knee at footstrike, not a direct measurement of foot-ground angle — this pipeline has no toe/foot keypoint or ground-plane calibration. Treat the heel/midfoot/forefoot label as a rough indicator, not a clinical classification.'
+  'Foot strike pattern is an approximation based on ankle position relative to the knee at footstrike, not a direct measurement of foot-ground angle. Treat the heel/midfoot/forefoot label as a rough indicator, not a clinical classification.'
 
 /**
  * Maps a signed ankle-relative-to-knee offset ratio (positive = ankle ahead of the knee in the

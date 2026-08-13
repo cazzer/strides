@@ -29,7 +29,7 @@ const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
   verticalRatio:
     "How much you bounce up and down for every unit of distance each stride carries you — the denominator is your stride length. Same concept a running watch calls 'vertical ratio', though this figure hasn't been validated against a watch reading.",
   verticalOscillationCm:
-    "How much your hips bounce up and down with each step, in real centimetres — no denominator at all. This is the same raw quantity a running watch reports as 'vertical oscillation', though this figure hasn't been validated against a watch reading. It needs a pose-detection backend that measures real-world scale, so it isn't available on every backend.",
+    "How much your hips bounce up and down with each step, in real centimetres — no denominator at all. This is the same raw quantity a running watch reports as 'vertical oscillation', though this figure hasn't been validated against a watch reading. It needs a real-world scale measurement from the clip, so it isn't always available.",
   trunkLean:
     'How far your torso leans forward or backward relative to your direction of travel.',
   overstriding:
@@ -141,7 +141,7 @@ function MetricCard({ metric, chart }: MetricCardProps) {
 interface ExcludedEntryProps {
   metric: MetricResult
   /** When set, renders in place of the metric's caveat as this entry's reason text — used for
-   * the scale pass's measuring-in-progress hint, where the caveat ("no scale was measured")
+   * the scale pass's measuring-in-progress hint, where the caveat ("no scale could be measured")
    * would misstate a measurement that is actively underway. */
   hint?: string
 }
@@ -255,7 +255,7 @@ export function MetricsPanel({ heuristics, scalePassStatus = 'idle' }: MetricsPa
                 key={metric.metric}
                 metric={metric}
                 // While the background scale pass is measuring, the centimetre metric's
-                // availability caveat ("no scale was measured") isn't the truth yet-to-come —
+                // availability caveat ("no scale could be measured") isn't the truth yet-to-come —
                 // hint at the in-flight measurement instead; after a failed pass, say the
                 // attempt happened (the availability caveat alone would imply the capability
                 // is absent when the app just ran it). Null-value only: the only non-null
@@ -263,9 +263,9 @@ export function MetricsPanel({ heuristics, scalePassStatus = 'idle' }: MetricsPa
                 hint={
                   metric.metric === 'verticalOscillationCm' && metric.value === null
                     ? scalePassInProgress
-                      ? 'Measuring real-world scale with a second detection pass…'
+                      ? 'Measuring real-world scale with a second look at the clip…'
                       : scalePassStatus === 'failed'
-                        ? "A second pass tried to measure real-world scale for this clip but couldn't."
+                        ? "A second look at the clip couldn't measure real-world scale."
                         : undefined
                     : undefined
                 }
