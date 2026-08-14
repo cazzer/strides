@@ -221,4 +221,98 @@ describe('toDrawOps', () => {
     expect(ops.filter((op) => op.kind === 'point')).toHaveLength(4)
     expect(ops.filter((op) => op.kind === 'edge')).toHaveLength(4)
   })
+
+  it('draws points for the foot keypoints (heel/foot_index) exactly like any other resolvable keypoint', () => {
+    const frame = buildFrame({
+      left_ankle: { x: 0, y: 480 },
+      left_heel: { x: -15, y: 480 },
+      left_foot_index: { x: 22, y: 480 },
+    })
+
+    const ops = toDrawOps(frame)
+    const points = ops.filter((op) => op.kind === 'point')
+
+    expect(points).toContainEqual({
+      kind: 'point',
+      name: 'left_heel',
+      x: -15,
+      y: 480,
+      opacity: DETECTED_OPACITY,
+    })
+    expect(points).toContainEqual({
+      kind: 'point',
+      name: 'left_foot_index',
+      x: 22,
+      y: 480,
+      opacity: DETECTED_OPACITY,
+    })
+  })
+
+  it('draws all 6 foot edges when both ankles, heels, and foot indices all resolve', () => {
+    const frame = buildFrame({
+      left_ankle: { x: 0, y: 480 },
+      left_heel: { x: -15, y: 480 },
+      left_foot_index: { x: 22, y: 480 },
+      right_ankle: { x: 100, y: 480 },
+      right_heel: { x: 85, y: 480 },
+      right_foot_index: { x: 122, y: 480 },
+    })
+
+    const ops = toDrawOps(frame)
+    const edgeKeys = ops
+      .filter((op) => op.kind === 'edge')
+      .map((op) => `${op.from}->${op.to}`)
+
+    expect(edgeKeys).toContain('left_ankle->left_heel')
+    expect(edgeKeys).toContain('left_heel->left_foot_index')
+    expect(edgeKeys).toContain('left_ankle->left_foot_index')
+    expect(edgeKeys).toContain('right_ankle->right_heel')
+    expect(edgeKeys).toContain('right_heel->right_foot_index')
+    expect(edgeKeys).toContain('right_ankle->right_foot_index')
+  })
+
+  it('skips every foot edge touching an unrecoverable heel/foot_index', () => {
+    const frame = buildFrame({
+      left_ankle: { x: 0, y: 480 },
+      left_heel: { x: -15, y: 480, status: 'unrecoverable' },
+      left_foot_index: { x: 22, y: 480, status: 'unrecoverable' },
+    })
+
+    const ops = toDrawOps(frame)
+    const edgeKeys = ops
+      .filter((op) => op.kind === 'edge')
+      .map((op) => `${op.from}->${op.to}`)
+
+    expect(edgeKeys).not.toContain('left_ankle->left_heel')
+    expect(edgeKeys).not.toContain('left_heel->left_foot_index')
+    expect(edgeKeys).not.toContain('left_ankle->left_foot_index')
+  })
+
+  it('a foot-less frame (heel/foot_index unrecoverable) produces exactly the same ops as before feet were added', () => {
+    const frame = buildFrame({
+      left_ankle: { x: 0, y: 480 },
+      right_ankle: { x: 100, y: 480 },
+    })
+
+    const ops = toDrawOps(frame)
+
+    expect(ops.some((op) => op.kind === 'point' && op.name === 'left_heel')).toBe(false)
+    expect(ops.some((op) => op.kind === 'point' && op.name === 'left_foot_index')).toBe(false)
+    expect(ops.some((op) => op.kind === 'point' && op.name === 'right_heel')).toBe(false)
+    expect(ops.some((op) => op.kind === 'point' && op.name === 'right_foot_index')).toBe(false)
+    expect(
+      ops.every(
+        (op) =>
+          op.kind !== 'edge' ||
+          (op.from !== 'left_heel' &&
+            op.from !== 'left_foot_index' &&
+            op.from !== 'right_heel' &&
+            op.from !== 'right_foot_index'),
+      ),
+    ).toBe(true)
+    // Just the 2 ankle points and no edges (an edge needs both endpoints resolvable, and
+    // ankle-to-ankle isn't a defined edge).
+    expect(ops.filter((op) => op.kind === 'point')).toHaveLength(2)
+    expect(ops.filter((op) => op.kind === 'edge')).toHaveLength(0)
+  })
 })

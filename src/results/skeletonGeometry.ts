@@ -26,6 +26,15 @@ export const SKELETON_EDGES: [KeypointName, KeypointName][] = [
   ['right_ear', 'nose'],
   ['left_ear', 'left_shoulder'],
   ['right_ear', 'right_shoulder'],
+  // Foot triangle off each ankle (heel, foot_index, and heel-to-foot_index) — same rationale as
+  // the head triangle above: without these edges the two new points per foot would render as
+  // floating dots instead of a recognizable foot shape.
+  ['left_ankle', 'left_heel'],
+  ['left_heel', 'left_foot_index'],
+  ['left_ankle', 'left_foot_index'],
+  ['right_ankle', 'right_heel'],
+  ['right_heel', 'right_foot_index'],
+  ['right_ankle', 'right_foot_index'],
 ]
 
 /** Full opacity for a directly-detected point/edge. */

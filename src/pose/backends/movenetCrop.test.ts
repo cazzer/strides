@@ -77,6 +77,36 @@ describe('deriveBoundingBox', () => {
     expect(box).toEqual({ minX: 100, minY: 100, maxX: 200, maxY: 300 })
   })
 
+  it('excludes foot keypoints from the box even when they are confident', () => {
+    const keypoints: Keypoint[] = [
+      kp('left_shoulder', 100, 100, 0.9),
+      kp('right_shoulder', 200, 100, 0.9),
+      kp('left_hip', 150, 300, 0.9),
+      kp('right_hip', 160, 300, 0.9),
+      // Confident foot points below the hips -- excluded by name, must not raise the bottom
+      // edge (COCO-17 topology reasoning, not A/B evidence; see BBOX_EXCLUDED_KEYPOINT_NAMES).
+      kp('left_heel', 140, 550, 0.9),
+      kp('right_heel', 170, 550, 0.9),
+      kp('left_foot_index', 145, 560, 0.9),
+      kp('right_foot_index', 175, 560, 0.9),
+    ]
+
+    const box = deriveBoundingBox(keypoints, 0.3, 4)
+
+    expect(box).toEqual({ minX: 100, minY: 100, maxX: 200, maxY: 300 })
+  })
+
+  it('does not count excluded foot keypoints toward minConfidentKeypoints', () => {
+    const keypoints: Keypoint[] = [
+      kp('left_shoulder', 100, 100, 0.9),
+      kp('right_shoulder', 200, 100, 0.9),
+      kp('left_hip', 150, 300, 0.9),
+      kp('left_heel', 140, 550, 0.9),
+    ]
+
+    expect(deriveBoundingBox(keypoints, 0.3, 4)).toBeNull()
+  })
+
   it('does not count excluded head keypoints toward minConfidentKeypoints', () => {
     const keypoints: Keypoint[] = [
       kp('left_shoulder', 100, 100, 0.9),

@@ -157,6 +157,41 @@ describe('createMoveNetDetector', () => {
     })
   })
 
+  it('resolves heel/foot_index to a zero-score default: MoveNet is COCO-17 and never produces them', async () => {
+    estimatePoses.mockResolvedValue([
+      { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
+    ])
+    const video = { currentTime: 12.5 } as HTMLVideoElement
+
+    const detector = await createMoveNetDetector()
+    const frame = await detector.estimatePose(video)
+
+    expect(frame?.keypoints.find((k) => k.name === 'left_heel')).toEqual({
+      name: 'left_heel',
+      x: 0,
+      y: 0,
+      score: 0,
+    })
+    expect(frame?.keypoints.find((k) => k.name === 'right_heel')).toEqual({
+      name: 'right_heel',
+      x: 0,
+      y: 0,
+      score: 0,
+    })
+    expect(frame?.keypoints.find((k) => k.name === 'left_foot_index')).toEqual({
+      name: 'left_foot_index',
+      x: 0,
+      y: 0,
+      score: 0,
+    })
+    expect(frame?.keypoints.find((k) => k.name === 'right_foot_index')).toEqual({
+      name: 'right_foot_index',
+      x: 0,
+      y: 0,
+      score: 0,
+    })
+  })
+
   it('returns null when estimatePoses finds no one in frame', async () => {
     estimatePoses.mockResolvedValue([])
     const video = { currentTime: 3 } as HTMLVideoElement

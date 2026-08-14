@@ -247,6 +247,57 @@ describe('applyRobustness', () => {
     expect(findKeypoint(result[1], LEFT_SHOULDER).x).toBe(999)
   })
 
+  it('gap-fills a foot channel (left_heel) independently of a limb channel, same as any other pair', () => {
+    const LEFT_HEEL = 'left_heel'
+    const samples: PoseSample[] = [
+      {
+        timestamp: 0,
+        frame: {
+          timestamp: 0,
+          keypoints: COMMON_KEYPOINT_NAMES.map((name) => ({
+            name,
+            x: 0,
+            y: 0,
+            score: 0.9,
+          })),
+        },
+      },
+      {
+        timestamp: 0.1,
+        frame: {
+          timestamp: 0.1,
+          keypoints: COMMON_KEYPOINT_NAMES.map((name) => ({
+            name,
+            x: 999,
+            y: 999,
+            // only left_heel drops below threshold; every other keypoint (including the other
+            // three widened foot names) stays present.
+            score: name === LEFT_HEEL ? 0.1 : 0.9,
+          })),
+        },
+      },
+      {
+        timestamp: 0.2,
+        frame: {
+          timestamp: 0.2,
+          keypoints: COMMON_KEYPOINT_NAMES.map((name) => ({
+            name,
+            x: 10,
+            y: 10,
+            score: 0.9,
+          })),
+        },
+      },
+    ]
+
+    const result = applyRobustness(samples)
+
+    expect(findKeypoint(result[1], LEFT_HEEL).status).toBe('interpolated')
+    expect(findKeypoint(result[1], LEFT_HEEL).x).toBeCloseTo(5) // lerp(0, 10, 0.5)
+    expect(findKeypoint(result[1], LEFT_SHOULDER).status).toBe('detected')
+    expect(findKeypoint(result[1], LEFT_SHOULDER).x).toBe(999)
+  })
+
   it('treats a zero-length gap between same-timestamp anchors as unrecoverable, not NaN', () => {
     const samples: PoseSample[] = [
       {

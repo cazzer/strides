@@ -14,6 +14,10 @@ export const COMMON_KEYPOINT_NAMES = [
   'nose',
   'left_ear',
   'right_ear',
+  'left_heel',
+  'right_heel',
+  'left_foot_index',
+  'right_foot_index',
 ] as const
 
 export type KeypointName = (typeof COMMON_KEYPOINT_NAMES)[number]
