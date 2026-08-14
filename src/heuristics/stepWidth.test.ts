@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { computeStepWidth } from './stepWidth'
+import { detectFootstrikes } from './footstrikes'
+import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildFrame } from './__fixtures__/testFrames'
 import type { RobustPoseFrame } from '../pose/robustness/types'
+import type { KeypointName } from '../pose/types'
 
 const HIP_MID_X = 200
 const HIP_MID_Y = 400
@@ -74,6 +77,30 @@ function buildStepWidthFrames(params: {
     )
   }
   return frames
+}
+
+/**
+ * Returns a copy of `frames` with the single named keypoint at `frameIndex` forced to
+ * `'unrecoverable'` (null x/y), every other keypoint on that frame and every other frame left
+ * untouched. Used to simulate "this frame's other-side hip briefly dropped out" without having to
+ * re-derive a fixture's own position formulas.
+ */
+function withKeypointUnrecoverable(
+  frames: RobustPoseFrame[],
+  frameIndex: number,
+  keypointName: KeypointName,
+): RobustPoseFrame[] {
+  return frames.map((frame, i) => {
+    if (i !== frameIndex) return frame
+    return {
+      ...frame,
+      keypoints: frame.keypoints.map((kp) =>
+        kp.name === keypointName
+          ? { ...kp, x: null, y: null, score: 0, status: 'unrecoverable' as const }
+          : kp,
+      ),
+    }
+  })
 }
 
 const BASE_PARAMS = {
@@ -165,6 +192,38 @@ describe('computeStepWidth', () => {
     expect(result.confidence).toBe(0)
     expect(result.sampleSize).toBe(0)
     expect(result.caveat).toContain('No footstrikes')
+  })
+
+  it('a footstrike frame where only the candidate\'s own-side hip resolves: candidate excluded, not corrupted into a false crossover reading', () => {
+    // Clean, all-own-side clip (same fixture/params as the first test) as the baseline: every
+    // footstrike's hip pair resolves, so every candidate is usable.
+    const cleanFrames = buildStepWidthFrames({ ...BASE_PARAMS, crossAmplitudePx: 20 })
+    const cleanResult = computeStepWidth(cleanFrames, 'front')
+    expect(cleanResult.frameCoverage).toBe(1) // sanity check: baseline has no discards yet
+
+    const candidates = detectFootstrikes(cleanFrames, DEFAULT_HEURISTICS_CONFIG)
+    expect(candidates.length).toBeGreaterThan(0)
+
+    // Knock out the OTHER hip (not the candidate's own side) at exactly one footstrike frame --
+    // the candidate's own-side hip, ankle, and shoulders are all still fully resolvable there.
+    const target = candidates[0]
+    const otherHip: KeypointName = target.side === 'left' ? 'right_hip' : 'left_hip'
+    const corruptedFrames = withKeypointUnrecoverable(cleanFrames, target.frameIndex, otherHip)
+
+    const result = computeStepWidth(corruptedFrames, 'front')
+
+    // The corrupted candidate must be DISCARDED, not folded in as a false reading: exactly one
+    // fewer usable strike than the clean baseline, and frameCoverage drops below 1 to reflect it.
+    expect(result.sampleSize).toBe(cleanResult.sampleSize - 1)
+    expect(result.frameCoverage).toBeLessThan(1)
+    expect(result.frameCoverage).toBeCloseTo((cleanResult.sampleSize - 1) / candidates.length, 5)
+
+    // The remaining, uncorrupted footstrikes should still read as own-side and close to the clean
+    // median -- not dragged toward zero or flipped negative the way the pre-fix tolerant hip-mid
+    // resolution (`resolveMidpoint`) corrupted this exact scenario into a false crossover data
+    // point (see the module doc comment's numeric proof: true +0.483 computed as -0.017).
+    expect(result.value as number).toBeGreaterThan(0)
+    expect(result.value).toBeCloseTo(cleanResult.value as number, 1)
   })
 
   it('returns a null value and 0 confidence when there is no resolvable hip-width reference at all', () => {

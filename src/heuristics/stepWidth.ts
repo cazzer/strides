@@ -3,7 +3,7 @@ import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { HeuristicsConfig, MetricResult, View } from './types'
 import { estimateHipWidth } from './bodyScale'
-import { resolveMidpoint, resolvePoint } from './keypoints'
+import { resolveBilateralPair, resolvePoint } from './keypoints'
 import { detectFootstrikes } from './footstrikes'
 import type { FootstrikeCandidate } from './footstrikes'
 import { computeMetricConfidence } from './confidence'
@@ -19,11 +19,6 @@ const MIN_STEP_WIDTH_SAMPLE_SIZE = 4
 const ANKLE_NAME: Record<'left' | 'right', KeypointName> = {
   left: 'left_ankle',
   right: 'right_ankle',
-}
-
-const HIP_NAME: Record<'left' | 'right', KeypointName> = {
-  left: 'left_hip',
-  right: 'right_hip',
 }
 
 function nullResult(
@@ -52,6 +47,16 @@ function nullResult(
  * constant (that solves a different, fore-aft problem) — because a raw, unflipped ankle.x -
  * hipMid.x combined across both legs cancels toward ~0 for any symmetric gait, destroying the
  * crossover signal this metric exists to report.
+ *
+ * Per-candidate hip-mid uses the STRICT bilateral primitive (`resolveBilateralPair`), not the
+ * tolerant `resolveMidpoint` other heuristics use for center-of-mass proxies — same reasoning as
+ * `estimateHipWidth` (see `bodyScale.ts`): an actual left/right separation IS the measured signal
+ * here, so a frame where only one hip resolves is discarded rather than falling back to a
+ * single-side stand-in. The tolerant fallback would silently collapse hipMid onto whichever hip
+ * happened to resolve; when that's the candidate's OWN-side hip, `dx = ankle.x - hipMid.x`
+ * degenerates to "ankle relative to its own hip" instead of "ankle relative to the body midline",
+ * and the `outwardSign` guard below can't catch it because `sideHip` and `hipMid` become the same
+ * point (see stepWidth.test.ts's regression case for the numeric proof).
  */
 export function computeStepWidth(
   frames: RobustPoseFrame[],
@@ -78,12 +83,34 @@ export function computeStepWidth(
   for (const candidate of candidates) {
     const frame = frames[candidate.frameIndex]
     const ankle = resolvePoint(frame, ANKLE_NAME[candidate.side])
-    const hipMid = resolveMidpoint(frame, 'left_hip', 'right_hip')
-    const sideHip = resolvePoint(frame, HIP_NAME[candidate.side])
-    if (ankle === null || hipMid === null || sideHip === null) continue
+    const hips = resolveBilateralPair(frame, 'left_hip', 'right_hip')
+    if (ankle === null || hips === null) continue
+
+    // resolveBilateralPair's return shape carries x/y only, no interpolated flag — it exists
+    // purely as the strict both-sides-must-resolve gate above. Recover each side's interpolated
+    // status directly; both calls are guaranteed non-null here since `hips` already resolved.
+    const leftHip = resolvePoint(frame, 'left_hip')
+    const rightHip = resolvePoint(frame, 'right_hip')
+    if (leftHip === null || rightHip === null) continue // unreachable given `hips !== null`
+    const hipMid = {
+      x: (hips.left.x + hips.right.x) / 2,
+      interpolated: leftHip.interpolated || rightHip.interpolated,
+    }
+    const sideHip = candidate.side === 'left' ? leftHip : rightHip
 
     const dx = ankle.x - hipMid.x
-    const outwardSign = Math.sign(sideHip.x - hipMid.x) || 1 // guarded: never multiply by 0
+    // Guarded against a zero-sign product. Pre-fix, this defaulted to +1 on every frame where only
+    // one hip resolved (hipMid collapsed onto sideHip, making `sideHip.x - hipMid.x` identically
+    // 0) — the actual source of the sign-flip bug this file was fixed for, not a rare edge case.
+    // Post-fix, that whole scenario is discarded above instead (`hips === null` when only one side
+    // resolves), so this can only land on exactly 0 when BOTH hips independently resolve and
+    // happen to share the same x. That's a narrow edge case, not a load-bearing branch: even this
+    // codebase's own near-pure-side-view fixture keeps hip x's a few pixels apart rather than
+    // literally equal (`SIDE_VIEW_BILATERAL_OFFSET_PX = 6` in syntheticGait.ts, chosen specifically
+    // so bilateral resolution always has two distinct points), and any real clip whose true hip
+    // spread is that small already has its confidence heavily discounted by this metric's
+    // `unsuitable` view-fit tier regardless of which way this guard breaks the tie.
+    const outwardSign = Math.sign(sideHip.x - hipMid.x) || 1
     offsetRatios.push((dx * outwardSign) / hipWidthPx)
     if (ankle.interpolated || hipMid.interpolated || sideHip.interpolated) {
       interpolatedCount += 1
