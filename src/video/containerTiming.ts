@@ -93,18 +93,34 @@ export type ContainerTimingParseStatus = 'ok' | 'unsupported-container' | 'parse
 
 export interface ContainerTimingProbe {
   parseStatus: ContainerTimingParseStatus
-  /** Present only on 'parse-error' -- a developer-facing detail for logs/diagnostics, never
-   * shown to end users directly. */
+  /** A developer-facing detail for logs/diagnostics, never shown to end users directly. Present
+   * on 'parse-error' (always), and on 'unsupported-container' WHENEVER the underlying failure
+   * threw a catchable exception (e.g. a broken box the walker can't recover from -- see
+   * `probeContainerTiming`'s module doc for exactly which real-world cases land where). Absent on
+   * 'unsupported-container' only for the "nothing happened at all" case -- neither `onReady` nor
+   * `onError` ever fired and nothing threw (a truncated buffer, or one with no recognizable box
+   * structure at all) -- where there is no exception message to surface. */
   error?: string
   /** Empty on any non-'ok' status, or on an 'ok'-parsed file that simply has no video track
    * (e.g. audio-only input). */
   videoTracks: ContainerVideoTrackTiming[]
 }
 
-/** Combines an ISO/IEC 14496-12 edit-list entry's split rate fields into a single number, per
- * spec: `media_rate_integer + media_rate_fraction / 65536`. */
+/**
+ * Combines an ISO/IEC 14496-12 edit-list entry's split rate fields into a single number.
+ * `media_rate_integer`/`media_rate_fraction` are together ONE signed 32-bit 16.16 fixed-point
+ * value, but mp4box parses each half separately via `readInt16()` (signed). That means a
+ * fraction of 0x8000 or above -- e.g. exactly `0.5`, encoded as fraction bits `0x8000` -- reads
+ * back as a NEGATIVE `mediaRateFraction` (`-32768`), because the sign bit belongs to the combined
+ * 32-bit value, not to the fraction half in isolation. Naively adding the two halves
+ * (`integer + fraction / 65536`) therefore SUBTRACTS for any rate whose fractional part is >= 0.5
+ * -- e.g. a real 0.5x it silently reads as `-0.5`, and a real 1.5x reads as `1.0 - 0.5 = 0.5`
+ * (indistinguishable from an actual 0.5x, i.e. exactly backwards). Reinterpreting the fraction as
+ * unsigned before combining fixes this -- correct for the common case AND for genuinely negative/
+ * reverse-play rates, since the two 16-bit halves are one two's-complement value either way.
+ */
 function elstEntryRate(entry: ContainerElstEntry): number {
-  return entry.mediaRateInteger + entry.mediaRateFraction / 65536
+  return entry.mediaRateInteger + (entry.mediaRateFraction & 0xffff) / 65536
 }
 
 /**
@@ -147,21 +163,27 @@ function computeStretchFactor(
   if (elst.length === 0 || movieTimescaleHz <= 0 || mediaTimescaleHz <= 0) return NO_STRETCH_FACTOR
 
   // Path 1: an explicit, non-dwell, non-unity rate is authoritative -- no inference needed.
-  const directRateEntry = elst.find((entry) => {
+  for (const entry of elst) {
     const rate = elstEntryRate(entry)
-    return rate > 0 && Math.abs(rate - 1) > 1e-6
-  })
-  if (directRateEntry) {
-    const rate = elstEntryRate(directRateEntry)
-    return rate > 0 ? { stretchFactor: 1 / rate, stretchFactorSource: 'direct-rate' } : NO_STRETCH_FACTOR
+    if (rate > 0 && Math.abs(rate - 1) > 1e-6) {
+      return { stretchFactor: 1 / rate, stretchFactorSource: 'direct-rate' }
+    }
   }
 
   // Path 2: compare total presentation duration (from the edit list, movie timescale) to the
   // native stts-implied duration (media timescale). Sound for the common single-edit-covers-the-
   // whole-track case this predicate targets; not a general multi-edit timeline reconstruction.
+  // Excludes empty edits (`mediaTime === -1`, a presentation gap backed by no media at all) and
+  // dwell edits (rate `0`, a freeze-frame held for `segmentDuration` -- these always reach here,
+  // since Path 1 above only returns early for a NON-zero, non-unity rate) from the sum: neither
+  // corresponds to media actually being played back at some rate, so including their
+  // `segmentDuration` would inflate the presentation-duration side of the ratio in the
+  // false-positive direction without a matching native-duration contribution to balance it.
   if (nativeDurationMediaTicks <= 0) return NO_STRETCH_FACTOR
   const presentationDurationSec =
-    elst.reduce((sum, entry) => sum + entry.segmentDuration, 0) / movieTimescaleHz
+    elst
+      .filter((entry) => entry.mediaTime >= 0 && elstEntryRate(entry) > 0)
+      .reduce((sum, entry) => sum + entry.segmentDuration, 0) / movieTimescaleHz
   const nativeDurationSec = nativeDurationMediaTicks / mediaTimescaleHz
   if (presentationDurationSec <= 0 || nativeDurationSec <= 0) return NO_STRETCH_FACTOR
   return {
@@ -242,6 +264,39 @@ function buildVideoTrackTiming(
  * `parseStatus !== 'ok'` rather than throwing or hanging -- callers should always be able to
  * `await` this safely regardless of what the user picked as their input file.
  *
+ * **The exact `parseStatus` mapping is less intuitive than it sounds, and was verified against
+ * `mp4box` directly rather than assumed** (an earlier draft of this doc had WebM and corrupt-MP4
+ * swapped relative to actual behavior):
+ * - **WebM / any EBML input** (the single most likely real non-MP4 case this ever sees, e.g. a
+ *   webcam recording depending on browser/codec choice): `mp4box`'s box reader interprets the
+ *   EBML header's leading bytes as a plausible-looking box, decides the data is malformed, and
+ *   calls its OWN `onError` callback (e.g. `"Invalid data found while parsing box of type
+ *   '...'"`) -- this lands on **`'parse-error'`**, WITH an `error` message. Verified against a
+ *   real ffmpeg-generated WebM file; fixture: `__fixtures__/webmBytes.ts`.
+ * - **A structurally-plausible but internally-broken `moov`** (e.g. a box `mp4box` doesn't
+ *   recognize sitting where a required child like `mdhd` should be): the box walk itself
+ *   completes without throwing, but `mp4box`'s own `getInfo()` (invoked internally while
+ *   preparing the `Movie` object for `onReady`, before this function's `onReady` handler below
+ *   ever runs) unconditionally dereferences fields like `trak.mdia.mdhd.timescale` and throws a
+ *   `TypeError` reading a property off `undefined`. That exception propagates out of the
+ *   `appendBuffer`/`flush` call below and is caught by ITS `try`/`catch` -- landing on
+ *   **`'unsupported-container'`**, WITH an `error` message (the `TypeError`'s). Verified by
+ *   deliberately corrupting a valid fixture's `mdhd` fourcc; fixture:
+ *   `__fixtures__/corruptedMp4.ts`'s `buildCorruptedMoovMp4`.
+ * - **Truncated input, garbage bytes with no recognizable box structure at all, or an empty
+ *   buffer**: nothing ever throws and neither `onReady` nor `onError` fires -- `mp4box` is simply
+ *   left waiting for bytes that (per `last: true`) are never coming. Falls through to the final
+ *   `settle` below: **`'unsupported-container'`**, with NO `error` message (there is no exception
+ *   to report). Fixtures: `__fixtures__/corruptedMp4.ts`'s `buildTruncatedMp4`,
+ *   `__fixtures__/nonMp4Bytes.ts`.
+ *
+ * So `'parse-error'` is, counter-intuitively, the status for a container `mp4box` recognizes
+ * clearly enough to actively object to (including the ISO-BMFF-adjacent-looking parts of a WebM
+ * header) -- `'unsupported-container'` covers both "recognized structure, but broken in a way
+ * that crashes internal bookkeeping" and "nothing recognizable here at all." Both still fail
+ * closed either way (`detectSlowMotion` treats every non-`'ok'` status identically), but code
+ * that branches on the specific status string should read this list, not guess from the names.
+ *
  * mp4box's own parsing is synchronous for a single, fully-buffered `ArrayBuffer` passed with
  * `last: true` (no streaming/chunked input here -- video files are read whole into memory
  * upstream of this call already) -- `onReady`/`onError` fire within the `appendBuffer`/`flush`
@@ -305,10 +360,10 @@ export function probeContainerTiming(buffer: ArrayBuffer): Promise<ContainerTimi
     }
 
     // A single fully-buffered append is synchronous end-to-end in mp4box (see module doc above)
-    // -- if neither onReady nor onError fired by now, no `moov` box was ever recognized at all
-    // (e.g. a non-ISO-BMFF container like WebM, or a truncated/empty buffer). That is a real,
-    // distinct outcome from a recognized-but-broken MP4 (which reaches `onError` instead), so it
-    // gets its own status rather than being folded into 'parse-error'.
+    // -- if neither onReady nor onError fired by now, nothing about this buffer was recognizable
+    // enough to even object to (a truncated buffer, an empty one, or bytes with no plausible box
+    // structure at all -- NOT a WebM/EBML file, which mp4box actively misparses and rejects via
+    // its own `onError` above instead; see the module doc's verified status-mapping table).
     settle({ parseStatus: 'unsupported-container', videoTracks: [] })
   })
 }

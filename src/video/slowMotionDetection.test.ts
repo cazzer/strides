@@ -6,9 +6,12 @@ import { buildNormalFpsFixture } from './__fixtures__/normalFps'
 import { buildHighFpsNoElstFixture } from './__fixtures__/highFpsNoElst'
 import { buildHighFpsUnityRateElstNoStretchFixture } from './__fixtures__/highFpsUnityRateElstNoStretch'
 import { buildHighFpsStretchingElstDirectRateFixture } from './__fixtures__/highFpsStretchingElstDirectRate'
+import { buildHighFpsFastPlaybackDirectRateFixture } from './__fixtures__/highFpsFastPlaybackDirectRate'
 import { buildHighFpsStretchingElstDurationRatioFixture } from './__fixtures__/highFpsStretchingElstDurationRatio'
 import { buildHighFpsStretchingElstFfmpegShapeFixture } from './__fixtures__/highFpsStretchingElstFfmpegShape'
 import { buildEmptyBuffer, buildGarbageBytes } from './__fixtures__/nonMp4Bytes'
+import { buildWebmBytes } from './__fixtures__/webmBytes'
+import { buildCorruptedMoovMp4, buildTruncatedMp4 } from './__fixtures__/corruptedMp4'
 
 describe('detectSlowMotion -- against real parsed fixtures', () => {
   it('does not detect a normal 30fps clip', async () => {
@@ -44,7 +47,23 @@ describe('detectSlowMotion -- against real parsed fixtures', () => {
     expect(result.detected).toBe(true)
     expect(result.confidence).toBe('high')
     expect(result.stretchFactorSource).toBe('direct-rate')
-    expect(result.stretchFactor).toBeCloseTo(4.0, 5)
+    expect(result.stretchFactor).toBeCloseTo(2.0, 5) // 1 / 0.5
+  })
+
+  it('does NOT detect a real 1.5x FAST-playback direct rate as slow-motion -- regression for the elstEntryRate sign bug', async () => {
+    const probe = await probeContainerTiming(buildHighFpsFastPlaybackDirectRateFixture())
+    const result = detectSlowMotion(probe)
+
+    // Before the fix: mediaRateInteger=1, mediaRateFraction=-32768 (the real on-wire encoding of
+    // 1.5x) was misread as rate 0.5 (indistinguishable from an ACTUAL 0.5x slowdown), which drove
+    // stretchFactor=2 and reported detected:true, confidence:'high' on a clip playing FASTER than
+    // native, not slower -- a real false positive at the top confidence tier. After the fix, the
+    // rate reads correctly as 1.5, stretchFactor ~0.667, well under the 1.5 threshold.
+    expect(result.detected).toBe(false)
+    expect(result.confidence).toBe('none')
+    expect(result.stretchFactorSource).toBe('direct-rate')
+    expect(result.stretchFactor).toBeCloseTo(1 / 1.5, 5)
+    expect(result.reason).toMatch(/ordinary trim/)
   })
 
   it('detects with medium confidence when the stretch is only inferable from the duration ratio', async () => {
@@ -57,13 +76,16 @@ describe('detectSlowMotion -- against real parsed fixtures', () => {
     expect(result.stretchFactor).toBeCloseTo(2.0, 2)
   })
 
-  it('does not detect the ffmpeg -itsscale shape -- the rewritten stts erases the fps signal', async () => {
+  it('does not detect the REAL measured ffmpeg -itsscale shape -- the rewritten stts erases the fps signal', async () => {
     const probe = await probeContainerTiming(buildHighFpsStretchingElstFfmpegShapeFixture())
     const result = detectSlowMotion(probe)
 
     expect(result.detected).toBe(false)
     expect(result.confidence).toBe('none')
-    // Fails on signal 1 (nominal fps reads the already-slowed ~15fps), not signal 2.
+    // Fails on signal 1 -- nominal fps reads the already-slowed ~7.49fps (the real measured
+    // value, not an idealized one; see containerTiming.test.ts for the exact figure), not signal
+    // 2.
+    expect(result.nominalFps).toBeCloseTo(7.492507492507492, 9)
     expect(result.reason).toMatch(/native-capture-rate threshold/)
   })
 
@@ -82,6 +104,33 @@ describe('detectSlowMotion -- against real parsed fixtures', () => {
 
     expect(result.detected).toBe(false)
     expect(result.confidence).toBe('none')
+  })
+
+  it('fails closed on a truncated-but-otherwise-valid MP4', async () => {
+    const probe = await probeContainerTiming(buildTruncatedMp4())
+    const result = detectSlowMotion(probe)
+
+    expect(result.detected).toBe(false)
+    expect(result.confidence).toBe('none')
+    expect(result.reason).toMatch(/unsupported-container/)
+  })
+
+  it('fails closed on a structurally-broken moov', async () => {
+    const probe = await probeContainerTiming(buildCorruptedMoovMp4())
+    const result = detectSlowMotion(probe)
+
+    expect(result.detected).toBe(false)
+    expect(result.confidence).toBe('none')
+    expect(result.reason).toMatch(/unsupported-container/)
+  })
+
+  it('fails closed on a real WebM file -- lands on parse-error, not unsupported-container, but still fails closed', async () => {
+    const probe = await probeContainerTiming(buildWebmBytes())
+    const result = detectSlowMotion(probe)
+
+    expect(result.detected).toBe(false)
+    expect(result.confidence).toBe('none')
+    expect(result.reason).toMatch(/parse-error/)
   })
 })
 

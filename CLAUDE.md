@@ -584,16 +584,26 @@ miss. Neither signal alone is trusted: real evidence for why is in the Findings 
 no `mdat`, no `vmhd`/`dinf`/`stco`/`stsz`/`stsc`) verified empirically to round-trip through
 `mp4box`'s own parser to `onReady` before committing to it — those extra boxes turned out to be
 unnecessary for `mp4box`'s parser specifically, not for ISO-BMFF conformance in general. One
-gotcha found the hard way: `mp4box`'s `elstBox` reads/writes `media_rate_fraction` as a **signed**
-16-bit int, so the spec-legal `32768` (`0.5` exactly) silently overflows on write — fixture values
-had to stay under `32768` (`16384` = `0.25` was used instead). Seven fixture modules, one per
-predicate branch plus two extra: `normalFps`, `highFpsNoElst`, `highFpsUnityRateElstNoStretch`
-(the ordinary-trim trap), `highFpsStretchingElstDirectRate` (high confidence),
+gotcha found the hard way, and corrected in review round 1 (see the addendum at the end of this
+section — the paragraph below states the corrected understanding, not the original, wrong one):
+`media_rate_integer`/`media_rate_fraction` are together ONE signed 32-bit 16.16 fixed-point value,
+but `mp4box` reads/writes each 16-bit half separately via `readInt16()`/`writeInt16()` (both
+signed) — so `0.5`'s spec-correct fraction encoding, bits `0x8000`, reads back as a NEGATIVE
+`mediaRateFraction` (`-32768`), not `32768`. This is a READ-side sign-reinterpretation issue, not
+a write-side overflow — `writeInt16(32768)` and `writeInt16(-32768)` emit identical bytes either
+way. Fixtures use the real, correctly-signed on-wire values (e.g. `-32768` for `0.5`) directly.
+Eight fixture modules, one per predicate branch plus three extra: `normalFps`, `highFpsNoElst`,
+`highFpsUnityRateElstNoStretch` (the ordinary-trim trap), `highFpsStretchingElstDirectRate` (high
+confidence), `highFpsFastPlaybackDirectRate` (1.5x FAST playback — the false-positive regression
+the sign bug produced, added in review round 1),
 `highFpsStretchingElstDurationRatio` (medium confidence, bonus coverage beyond the plan's four
 branches), `highFpsStretchingElstFfmpegShape` (models the real empirical finding below as a
-regression), `nonMp4Bytes` (garbage bytes + empty buffer). 19 tests across
-`containerTiming.test.ts`/`slowMotionDetection.test.ts`, all passing; full suite 523/523 passing;
-`tsc -b` clean; `eslint` clean on every new/touched file.
+regression — as of review round 1, with the REAL multi-run `stts` shape, straggler sample
+included, not an idealized single uniform run — see addendum), `nonMp4Bytes` (garbage bytes +
+empty buffer), plus two more added in review round 1: `webmBytes` (a real, tiny ffmpeg-generated
+WebM file) and `corruptedMp4` (a truncated buffer and a deliberately-corrupted `moov`) — see the
+addendum for why. `tsc -b` clean; `eslint` clean on every new/touched file; exact test counts are
+in the review round 1 addendum below (grew from the original pass).
 
 *Live pipeline (Step 3).* Generated the slow-motion-shaped fixture exactly as specified:
 `ffmpeg -itsscale 8 -i src/video/demo-clips/park-approach.mp4 -c copy /tmp/park-approach-8x-slowmo-shaped.mp4`
@@ -733,3 +743,75 @@ spike's momentum.
   gap.
 - **Threshold calibration** (`minNativeFps: 100`, `minStretchFactor: 1.5`) against a real
   distribution of clips, once real slow-motion samples exist to calibrate against.
+
+**Review round 1 fixes (2026-08-14).** Four issues found reviewing the first pass, all fixed on a
+follow-up commit (same branch, not amended):
+
+1. **MUST-FIX — a real false-positive bug in `elstEntryRate` (`containerTiming.ts`).**
+   `media_rate_integer`/`media_rate_fraction` are together one signed 32-bit 16.16 fixed-point
+   value, but `mp4box` reads each 16-bit half separately via `readInt16()` (signed) — so a real
+   0.5x rate (fraction bits `0x8000`) reads back as `mediaRateFraction: -32768`, and the original
+   `integer + fraction / 65536` naively SUBTRACTED instead of adding. Concretely: a real 0.5x
+   slow-motion rate computed as `-0.5` (silently fell through to the duration-ratio path instead
+   of being read directly), and — worse — a real 1.5x FAST-playback rate computed as `0.5`,
+   indistinguishable from an actual 0.5x slowdown, which would have reported `detected: true,
+   confidence: 'high'` on a clip playing faster than native, not slower. Fixed by reinterpreting
+   the fraction as unsigned before combining (`(mediaRateFraction & 0xffff) / 65536`), which is
+   also correct for genuinely negative/reverse-play rates since the two halves are one
+   two's-complement value regardless. Also collapsed the `find()` + ternary that had been
+   evaluating `elstEntryRate` twice for the winning entry into a single pass. Regression fixture:
+   `highFpsFastPlaybackDirectRate.ts` (1.5x fast playback, must NOT detect) — new test in
+   `slowMotionDetection.test.ts` asserts this explicitly. The original write-up above (What was
+   tried / Fixtures) had this bug BACKWARDS — claiming `mp4box` "silently overflows" a spec-legal
+   `32768` **on write** — which is wrong on both counts (`32768` is not the correct on-wire
+   encoding of `0.5` in the first place; `writeInt16(32768)` and `writeInt16(-32768)` emit
+   identical bytes, nothing overflows on write). That paragraph and
+   `highFpsStretchingElstDirectRate.ts`'s doc comment are corrected in place, above, to describe
+   the real bug (a read-side sign misinterpretation) rather than left as a wrong historical claim.
+
+2. **SHOULD-FIX — the ffmpeg-shape fixture had idealized away the real measured shape.**
+   `highFpsStretchingElstFfmpegShape.ts` modeled the `-itsscale` finding as a single uniform `stts`
+   run (`[[240, 800]]`), despite its own doc comment claiming to model what was ACTUALLY measured
+   — the real dump earlier in this write-up (98 samples @ 8008 ticks + 1 straggler sample @ 1001
+   ticks, 60000Hz timescale) is multi-run. Replaced with the exact real shape (`sttsRuns: [[98,
+   8008], [1, 1001]]`, `mediaTimescaleHz: 60000`, matching real `elst` values). This reproduces the
+   exact live numbers already quoted above (`nominalFps ≈ 7.492507492507492`, `stretchFactor ≈
+   1.0000445414458152`) — both now asserted precisely in `containerTiming.test.ts` — and gives
+   `weightedMedianSampleDeltaTicks` its first exercise with more than one run. Also asserted
+   explicitly, per the review's request: a naive sample-count-weighted MEAN over the same two runs
+   (`785785 ticks / 99 samples ≈ 7937.22 ticks` → `≈ 7.559fps`) differs measurably from the CORRECT
+   median (`8008 ticks` → `≈ 7.49fps`, anchored to the dominant run) — the straggler pulls a naive
+   mean upward; the median correctly ignores it.
+
+3. **SHOULD-FIX — the documented `parseStatus` mapping was backwards for the single most likely
+   real non-MP4 input.** The original doc claimed WebM/non-ISO-BMFF input maps to
+   `'unsupported-container'` and a corrupt-but-recognized MP4 maps to `'parse-error'`. Verified
+   against `mp4box` directly (a real ffmpeg-generated WebM file; a deliberately mdhd-corrupted
+   valid fixture; a truncated valid fixture) — actual behavior is close to inverted: WebM's EBML
+   header gets actively misparsed as a bogus box and rejected via `mp4box`'s own `onError` →
+   `'parse-error'`, WITH an error message. A structurally-plausible-but-broken `moov` (e.g. an
+   unrecognized box where `mdhd` should be) doesn't throw during the box walk itself, but `mp4box`'s
+   internal `getInfo()` unconditionally dereferences fields like `trak.mdia.mdhd.timescale` while
+   preparing the `Movie` object and throws a `TypeError` reading a property off `undefined` — caught
+   by the outer `appendBuffer`/`flush` `try`/`catch` → `'unsupported-container'`, WITH an error
+   message. Only genuinely unrecognizable input (truncated buffers, garbage bytes, empty buffers)
+   reaches `'unsupported-container'` with NO error message — nothing ever throws and neither
+   `onReady` nor `onError` fires. `containerTiming.ts`'s doc comments (`probeContainerTiming`'s
+   module doc, the trailing fallback comment, and `ContainerTimingProbe.error`'s doc, which
+   incorrectly claimed `error` is present "only on `'parse-error'`") are corrected in place to this
+   verified mapping. Two new fixtures lock it in: `webmBytes.ts` (a real, tiny ffmpeg-generated
+   WebM, base64-embedded) and `corruptedMp4.ts` (`buildTruncatedMp4`, `buildCorruptedMoovMp4`, both
+   built by slicing/corrupting `mp4BoxFixture.ts`'s own valid output rather than hand-rolled bytes).
+
+4. **SHOULD-FIX — the duration-ratio path double-counted empty/dwell edits.**
+   `computeStretchFactor`'s Path 2 summed `segmentDuration` across every `elst` entry, including
+   empty edits (`mediaTime === -1`, a presentation gap backed by no media) and dwell edits (rate
+   `0`) — both inflate the ratio in the false-positive direction without a matching native-duration
+   contribution. Fixed with a one-line filter (`entry.mediaTime >= 0 && elstEntryRate(entry) > 0`)
+   before the sum.
+
+Net effect on fixture/test counts: 8 fixture modules → 11 (added
+`highFpsFastPlaybackDirectRate.ts`, `webmBytes.ts`, `corruptedMp4.ts` — the last exports two
+builders; the ffmpeg-shape fixture was corrected in place, not added). Full suite still green
+after the fix — exact pass counts are in the commit that made these changes, not duplicated here
+to avoid this write-up drifting out of sync with the test files again.
