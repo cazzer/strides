@@ -43,6 +43,8 @@ const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
     'Whether your foot tends to land heel-, midfoot-, or forefoot-first — approximated from ankle position relative to the knee at footstrike, not a direct foot-angle measurement.',
   stepWidth:
     "How far your foot lands from your body's midline at footstrike, as a percentage of your hip width. Positive means it lands on its own side; negative means it crosses toward or past the midline — sometimes called a crossover gait, a pattern some runners work on for stability, not a diagnosis.",
+  stepWidthCm:
+    "How far to the side of your hip midline your foot lands at each footstrike, in real centimetres. Positive means it lands on its own side; negative means it crosses toward or past the midline — sometimes called a crossover gait, a pattern some runners work on for stability, not a diagnosis. It needs a real-world scale measurement from the clip, so it isn't always available.",
 }
 
 const FOOT_STRIKE_CLASS_LABELS: Record<FootStrikeClass, string> = {
@@ -197,6 +199,7 @@ export function MetricsPanel({ heuristics, scalePassStatus = 'idle' }: MetricsPa
     heuristics.armSwingSymmetry,
     heuristics.footStrikePattern,
     heuristics.stepWidth,
+    heuristics.stepWidthCm,
   ]
   const excluded = metrics.filter((metric) => metricTier(metric) === 'excluded')
   const caveatedCount = metrics.filter((metric) => metricTier(metric) === 'caveated').length
@@ -257,14 +260,18 @@ export function MetricsPanel({ heuristics, scalePassStatus = 'idle' }: MetricsPa
               <ExcludedEntry
                 key={metric.metric}
                 metric={metric}
-                // While the background scale pass is measuring, the centimetre metric's
+                // While the background scale pass is measuring, a scale-pass-backed metric's
                 // availability caveat ("no scale could be measured") isn't the truth yet-to-come —
                 // hint at the in-flight measurement instead; after a failed pass, say the
                 // attempt happened (the availability caveat alone would imply the capability
                 // is absent when the app just ran it). Null-value only: the only non-null
                 // excluded shape is an unsuitable view, whose own caveat is the accurate one.
+                // Both `verticalOscillationCm` and `stepWidthCm` are grafted from the same scale
+                // pass (#45) and share this hint — see scalePassGraft.ts.
                 hint={
-                  metric.metric === 'verticalOscillationCm' && metric.value === null
+                  (metric.metric === 'verticalOscillationCm' ||
+                    metric.metric === 'stepWidthCm') &&
+                  metric.value === null
                     ? scalePassInProgress
                       ? 'Measuring real-world scale with a second look at the clip…'
                       : scalePassStatus === 'failed'

@@ -63,6 +63,18 @@ function makeVerticalOscillationCm(
   }
 }
 
+function makeStepWidthCm(overrides: Partial<MetricResult> = {}): MetricResult {
+  return makeMetric({
+    metric: 'stepWidthCm',
+    value: 8.2,
+    unit: 'centimeters',
+    confidence: 0.9,
+    viewFit: 'primary',
+    sampleSize: 5,
+    ...overrides,
+  })
+}
+
 function makeHighConfidenceResult(): FormHeuristicsResult {
   return {
     view: {
@@ -120,6 +132,9 @@ function makeHighConfidenceResult(): FormHeuristicsResult {
       unit: 'percent',
       confidence: 0.8,
     }),
+    // Deliberately clean here too, same reasoning as verticalOscillationCm above -- a dedicated
+    // test below covers the unavailable-on-this-backend case.
+    stepWidthCm: makeStepWidthCm(),
   }
 }
 
@@ -194,11 +209,12 @@ function makeMixedTierResult(): FormHeuristicsResult {
       unit: 'percent',
       confidence: 0.72,
     }),
+    stepWidthCm: makeStepWidthCm({ confidence: 0.7 }),
   }
 }
 
 describe('MetricsPanel', () => {
-  it('renders all ten metrics with their plain-language labels', () => {
+  it('renders all eleven metrics with their plain-language labels', () => {
     render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
     expect(screen.getByText('Vertical oscillation')).toBeInTheDocument()
     expect(screen.getByText('Vertical ratio')).toBeInTheDocument()
@@ -210,15 +226,18 @@ describe('MetricsPanel', () => {
     expect(screen.getByText('Arm swing symmetry')).toBeInTheDocument()
     expect(screen.getByText('Foot strike pattern')).toBeInTheDocument()
     expect(screen.getByText('Step width')).toBeInTheDocument()
+    expect(screen.getByText('Step width (cm)')).toBeInTheDocument()
   })
 
   it('renders formatted values and high-confidence labels for a clean (all tier-1) result', () => {
     render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
     expect(screen.getByText('6.0°')).toBeInTheDocument()
-    // verticalOscillationCm's 'centimeters' unit formats with no "of torso length"/percent
-    // suffix at all -- an absolute quantity, unlike every other metric on the panel.
+    // verticalOscillationCm's and stepWidthCm's 'centimeters' unit formats with no
+    // "of torso length"/percent suffix at all -- an absolute quantity, unlike every other metric
+    // on the panel.
     expect(screen.getByText('4.8 cm')).toBeInTheDocument()
-    expect(screen.getAllByText(/high confidence/i).length).toBe(10)
+    expect(screen.getByText('8.2 cm')).toBeInTheDocument()
+    expect(screen.getAllByText(/high confidence/i).length).toBe(11)
     // No metric is excluded, so the excluded section doesn't render at all.
     expect(screen.queryByText(/not measured for this clip/i)).not.toBeInTheDocument()
     // footStrikePattern is the one deliberate exception: its caveat is always present, even in a
@@ -235,7 +254,7 @@ describe('MetricsPanel', () => {
   it('renders a tier-1 card with the plain border and no data-tier="caveated"/"excluded"', () => {
     const { container } = render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
     const cards = container.querySelectorAll('.metrics-panel__card')
-    expect(cards.length).toBe(10)
+    expect(cards.length).toBe(11)
     for (const card of Array.from(cards)) {
       expect(card.getAttribute('data-tier')).toBe('normal')
     }
@@ -296,7 +315,7 @@ describe('MetricsPanel', () => {
     render(<MetricsPanel heuristics={makeMixedTierResult()} />)
     expect(
       screen.getByText(
-        '7 metrics measured · 1 with caveat · 2 not measured for this clip (listed below)',
+        '8 metrics measured · 1 with caveat · 2 not measured for this clip (listed below)',
       ),
     ).toBeInTheDocument()
   })
@@ -306,11 +325,11 @@ describe('MetricsPanel', () => {
     expect(container.querySelector('.metrics-panel__tier-summary')).not.toBeInTheDocument()
   })
 
-  it('8 cards render in the grid and 2 metrics are excluded for the mixed-tier fixture', () => {
+  it('9 cards render in the grid and 2 metrics are excluded for the mixed-tier fixture', () => {
     const { container } = render(<MetricsPanel heuristics={makeMixedTierResult()} />)
     const cards = container.querySelectorAll('.metrics-panel__card')
-    // trunkLean and overstriding are excluded; the other 8 (1 caveated, 7 normal) render as cards.
-    expect(cards.length).toBe(8)
+    // trunkLean and overstriding are excluded; the other 9 (1 caveated, 8 normal) render as cards.
+    expect(cards.length).toBe(9)
     const caveatedCount = Array.from(cards).filter(
       (card) => card.getAttribute('data-tier') === 'caveated',
     ).length
@@ -325,9 +344,9 @@ describe('MetricsPanel', () => {
       (card) => card.getAttribute('aria-label'),
     )
     // Declaration order is verticalOscillation, verticalRatio, verticalOscillationCm, trunkLean,
-    // overstriding, cadence, kneeFlexion, armSwingSymmetry, footStrikePattern, stepWidth --
-    // trunkLean and overstriding (excluded) are omitted, but every other label keeps its
-    // relative position.
+    // overstriding, cadence, kneeFlexion, armSwingSymmetry, footStrikePattern, stepWidth,
+    // stepWidthCm -- trunkLean and overstriding (excluded) are omitted, but every other label
+    // keeps its relative position.
     expect(cardLabels).toEqual([
       'Vertical oscillation',
       'Vertical ratio',
@@ -337,6 +356,7 @@ describe('MetricsPanel', () => {
       'Arm swing symmetry',
       'Foot strike pattern',
       'Step width',
+      'Step width (cm)',
     ])
   })
 
@@ -348,6 +368,50 @@ describe('MetricsPanel', () => {
       .map((item) => item.querySelector('p')?.textContent)
     // trunkLean precedes overstriding in MetricId, and that order is preserved here.
     expect(names).toEqual(['Trunk lean', 'Overstriding'])
+  })
+
+  it('renders stepWidthCm in the excluded section (not a low-confidence card) when unavailable on this backend', () => {
+    // Same MediaPipe-only availability gate as verticalOscillationCm, on a different metric.
+    const unavailable = makeHighConfidenceResult()
+    unavailable.stepWidthCm = makeStepWidthCm({
+      value: null,
+      confidence: 0,
+      frameCoverage: 0,
+      sampleSize: 0,
+      caveat:
+        "No real-world scale could be measured for this clip, so step width can't be reported in centimetres.",
+    })
+
+    render(<MetricsPanel heuristics={unavailable} />)
+
+    expect(screen.queryByLabelText('Step width (cm)')).not.toBeInTheDocument()
+    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    expect(within(excludedSection).getByText('Step width (cm)')).toBeInTheDocument()
+    expect(
+      within(excludedSection).getByText(/no real-world scale could be measured/i),
+    ).toBeInTheDocument()
+  })
+
+  it('shows the measuring-scale hint for a null-value stepWidthCm while the scale pass runs, same as verticalOscillationCm', () => {
+    const heuristics = makeHighConfidenceResult()
+    heuristics.stepWidthCm = makeStepWidthCm({
+      value: null,
+      confidence: 0,
+      caveat:
+        "No real-world scale could be measured for this clip, so step width can't be reported in centimetres.",
+    })
+
+    render(<MetricsPanel heuristics={heuristics} scalePassStatus="running" />)
+
+    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    expect(
+      within(excludedSection).getByText(
+        'Measuring real-world scale with a second look at the clip…',
+      ),
+    ).toBeInTheDocument()
+    expect(
+      within(excludedSection).queryByText(/no real-world scale could be measured/i),
+    ).not.toBeInTheDocument()
   })
 
   it('renders verticalOscillationCm in the excluded section (not a low-confidence card) when unavailable on this backend', () => {
@@ -596,7 +660,7 @@ describe('MetricsPanel', () => {
 
     render(<MetricsPanel heuristics={heuristics} />)
 
-    expect(screen.getByText('9 metrics measured · 1 with caveat')).toBeInTheDocument()
+    expect(screen.getByText('10 metrics measured · 1 with caveat')).toBeInTheDocument()
   })
 
   it('falls back to a generic reason for an excluded metric with no caveat text', () => {

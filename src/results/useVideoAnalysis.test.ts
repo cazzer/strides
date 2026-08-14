@@ -244,6 +244,18 @@ const FAKE_HEURISTICS: FormHeuristicsResult = {
     sampleSize: 5,
     caveat: null,
   },
+  stepWidthCm: {
+    metric: 'stepWidthCm',
+    value: null,
+    unit: 'centimeters',
+    confidence: 0,
+    viewFit: 'primary',
+    interpolatedFraction: 0,
+    frameCoverage: 0,
+    sampleSize: 0,
+    caveat:
+      "No real-world scale could be measured for this clip, so step width can't be reported in centimetres.",
+  },
 }
 
 function makeFakeHandle(): SampleClipHandle {
@@ -274,9 +286,9 @@ const FAKE_SCALE_CALIBRATION: ScaleCalibratedVerticalOscillation = {
   integrationRuns: 1,
 }
 
-// What the scale pass's own computeFormHeuristics call returns: a measured centimetre metric,
-// plus a deliberately DIFFERENT trunkLean value (99 vs. the primary's 5) so a test can prove the
-// graft discarded everything except verticalOscillationCm.
+// What the scale pass's own computeFormHeuristics call returns: measured centimetre metrics for
+// BOTH verticalOscillationCm and stepWidthCm (#45), plus a deliberately DIFFERENT trunkLean value
+// (99 vs. the primary's 5) so a test can prove the graft discarded everything except those two.
 const FAKE_SCALE_HEURISTICS: FormHeuristicsResult = {
   ...FAKE_HEURISTICS,
   trunkLean: { ...FAKE_HEURISTICS.trunkLean, value: 99 },
@@ -291,6 +303,17 @@ const FAKE_SCALE_HEURISTICS: FormHeuristicsResult = {
     sampleSize: 3,
     caveat: null,
     calibration: FAKE_SCALE_CALIBRATION,
+  },
+  stepWidthCm: {
+    metric: 'stepWidthCm',
+    value: 8.2,
+    unit: 'centimeters',
+    confidence: 0.5,
+    viewFit: 'primary',
+    interpolatedFraction: 0,
+    frameCoverage: 1,
+    sampleSize: 5,
+    caveat: null,
   },
 }
 
@@ -726,7 +749,7 @@ describe('useVideoAnalysis', () => {
       }))
     }
 
-    it('runs after ready and grafts only verticalOscillationCm into the displayed heuristics', async () => {
+    it('runs after ready and grafts verticalOscillationCm AND stepWidthCm into the displayed heuristics', async () => {
       mockBothPassesResolving()
       computeFormHeuristicsMock
         .mockReturnValueOnce(FAKE_HEURISTICS)
@@ -747,12 +770,14 @@ describe('useVideoAnalysis', () => {
       expect(sampleClipMock.mock.calls[0][1]).toBe(detector)
       expect(sampleClipMock.mock.calls[1][1]).toBe(scaleDetector)
 
-      // Grafted: the centimetre metric is the scale pass's, provenance appended, calibration by
-      // reference...
+      // Grafted: both centimetre metrics are the scale pass's, provenance appended, calibration
+      // by reference (verticalOscillationCm only -- stepWidthCm has no such companion object)...
       const grafted = result.current.heuristics
       expect(grafted?.verticalOscillationCm.value).toBe(4.79)
       expect(grafted?.verticalOscillationCm.caveat).toBe(SCALE_PASS_PROVENANCE_CAVEAT)
       expect(grafted?.verticalOscillationCm.calibration).toBe(FAKE_SCALE_CALIBRATION)
+      expect(grafted?.stepWidthCm.value).toBe(8.2)
+      expect(grafted?.stepWidthCm.caveat).toBe(SCALE_PASS_PROVENANCE_CAVEAT)
       // ...and nothing else is: the scale pass's trunkLean (99) is discarded, the primary's (5)
       // survives by reference.
       expect(grafted?.trunkLean).toBe(FAKE_HEURISTICS.trunkLean)

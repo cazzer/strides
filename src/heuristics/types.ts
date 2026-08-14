@@ -45,6 +45,7 @@ export type MetricId =
   | 'armSwingSymmetry'
   | 'footStrikePattern'
   | 'stepWidth'
+  | 'stepWidthCm'
 
 export interface ViewDetectionResult {
   view: View
@@ -73,7 +74,7 @@ export interface MetricResult {
    * (American spelling, matching every identifier in this codebase that names the unit) is an
    * ABSOLUTE physical quantity with no denominator at all — unlike every other unit here, it is
    * not relative to torso length, stride length, or anything else about the runner's own body.
-   * `verticalOscillationCm` is its only producer. */
+   * `verticalOscillationCm` and `stepWidthCm` are its only producers. */
   unit: 'ratio' | 'degrees' | 'stepsPerMinute' | 'percent' | 'centimeters'
   /** 0..1; forced 0 when value is null. */
   confidence: number
@@ -275,6 +276,7 @@ export interface FormHeuristicsResult {
   armSwingSymmetry: MetricResult
   footStrikePattern: MetricResult
   stepWidth: MetricResult
+  stepWidthCm: MetricResult
 }
 
 export interface HeuristicsConfig {
@@ -533,6 +535,14 @@ export const DEFAULT_VIEW_FIT_TABLE: HeuristicsConfig['viewFitTable'] = {
   // side unsuitable) — arm swing is occluded/superimposed in side view for a different reason
   // (separability, not axis collapse), but lands on the identical numbers.
   stepWidth: {
+    front: { fit: 'primary', multiplier: 1.0 },
+    side: { fit: 'unsuitable', multiplier: 0.1 },
+    ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
+  },
+  // Same signal as stepWidth, converted to centimetres — identical view-tolerance reasoning,
+  // on the SAME terms as the ratio sibling (mirrors how verticalOscillationCm's row copies
+  // verticalOscillation's verbatim rather than being independently derived).
+  stepWidthCm: {
     front: { fit: 'primary', multiplier: 1.0 },
     side: { fit: 'unsuitable', multiplier: 0.1 },
     ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
