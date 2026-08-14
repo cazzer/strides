@@ -232,4 +232,85 @@ describe('MultiClipVideoSession', () => {
     // A lone remaining clip has nothing left to remove itself from.
     expect(screen.queryByRole('button', { name: /remove clip/i })).not.toBeInTheDocument()
   })
+
+  it('removing the currently-ACTIVE, mid-analysis clip deterministically tears down its detector-holding pipeline before the next clip becomes active', async () => {
+    // Clip 1's primary sampling pass hangs forever -- it never reaches a terminal state on its
+    // own (no 'ready'/'error', so its scale pass never even starts). This is what makes it
+    // genuinely mid-analysis, not already-terminal, when it gets removed below. Every other
+    // sampleClip call (clip 2's primary and scale pass) resolves immediately.
+    const callOrder: string[] = []
+    const clip1PrimaryStop = vi.fn(() => callOrder.push('clip1-primary-stop'))
+    sampleClipMock
+      .mockImplementationOnce(() => ({
+        promise: new Promise(() => {}), // never resolves
+        handle: { stop: clip1PrimaryStop },
+      }))
+      .mockImplementation(() => {
+        callOrder.push('other-sample-start')
+        return {
+          promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+          handle: { stop: vi.fn() },
+        }
+      })
+
+    const headingRef = createRef<HTMLHeadingElement>()
+    const detector = makeFakeDetector()
+    render(<MultiClipVideoSession detector={detector} headingRef={headingRef} />)
+
+    // Load clip 1 -- its primary pass starts sampling and hangs, holding the shared detector.
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    const file1 = new File(['x'], 'run1.mp4', { type: 'video/mp4' })
+    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
+      target: { files: [file1] },
+    })
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
+
+    // Add clip 2 while clip 1 is still mid-analysis -- it queues, waiting for the shared detector.
+    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
+    const file2 = new File(['y'], 'run2.mp4', { type: 'video/mp4' })
+    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
+      target: { files: [file2] },
+    })
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
+    markVideoReady(canonicalVideos()[1])
+    await waitFor(() =>
+      expect(screen.getByText(/queued.*waiting for another clip/i)).toBeInTheDocument(),
+    )
+    expect(clip1PrimaryStop).not.toHaveBeenCalled()
+
+    // Remove clip 1 -- the currently-ACTIVE clip, still genuinely mid-analysis (its primary
+    // sampleClip promise never resolves on its own, and its scale pass never even started).
+    // Before the fix, `removeClip` only deleted `clipIds`/`clipStates` and relied entirely on
+    // `ClipSlot`'s unmount cleanup (a *passive* effect) to eventually stop clip 1's sample loop.
+    //
+    // Dispatched via the raw DOM `.click()`, deliberately NOT through RTL's `fireEvent` (which
+    // wraps the whole thing -- state update, commit, AND passive-effect flush -- in `act()`,
+    // collapsing exactly the window this test needs to see). React still processes a native click
+    // event's state update and commit (including layout effects) synchronously either way, but
+    // passive effects are merely *scheduled*, not run, until something flushes them. That gap is
+    // precisely what distinguishes an explicit, synchronous `reset()` call inside `removeClip`
+    // itself (this fix) from an implicit dependence on `ClipSlot`'s unmount cleanup effect (the
+    // pre-fix behavior, which would NOT have stopped clip 1 yet at this point).
+    const removeButtons = screen.getAllByRole('button', { name: /remove clip/i })
+    expect(removeButtons).toHaveLength(2)
+    removeButtons[0].click()
+
+    // The detector-holding pipeline was torn down as a direct, synchronous consequence of
+    // `removeClip`'s own code -- provably not contingent on passive effects having flushed yet.
+    expect(clip1PrimaryStop).toHaveBeenCalledTimes(1)
+
+    // Let React finish flushing (passive effects, the resulting re-renders, etc.) before the
+    // remaining assertions.
+    await act(async () => {})
+
+    // Clip 2 becomes the sole remaining clip and is handed the shared detector -- but its own
+    // sampling only ever starts AFTER clip 1's stop() already ran, never overlapping with it.
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(1))
+    await waitFor(() => expect(callOrder).toContain('other-sample-start'))
+    expect(callOrder[0]).toBe('clip1-primary-stop')
+    expect(callOrder.indexOf('clip1-primary-stop')).toBeLessThan(
+      callOrder.indexOf('other-sample-start'),
+    )
+  })
 })

@@ -80,21 +80,41 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
     setPendingLoads((prev) => ({ ...prev, [id]: { source, opts } }))
   }, [])
 
-  const removeClip = useCallback((id: string) => {
-    setClipIds((prev) => (prev.length <= 1 ? prev : prev.filter((existing) => existing !== id)))
-    setPendingLoads((prev) => {
-      if (!(id in prev)) return prev
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
-    setClipStates((prev) => {
-      if (!(id in prev)) return prev
-      const next = { ...prev }
-      delete next[id]
-      return next
-    })
-  }, [])
+  const removeClip = useCallback(
+    (id: string) => {
+      // Tear down this clip's pipeline BEFORE it disappears from `clipStates` — otherwise, if `id`
+      // is the currently-ACTIVE clip and still mid-analysis (not yet primary+scale-pass terminal),
+      // `nextActiveClipIndex` would simply never see it again (removed from the array, not marked
+      // done) and would hand the shared detector to the next clip on the very next render. The only
+      // thing that made that safe in practice was React unmounting this clip's `ClipSlot` and
+      // running its cleanup effect (`abandonActiveRun`, via `useVideoAnalysis`'s unmount effect)
+      // before the newly-active clip's own auto-start effect fires — true today because both
+      // updates land in the same commit, but an implementation detail of React's passive-effect
+      // ordering, not a contract this architecture should lean on (see design.md D5/D6 and the
+      // review that flagged this). Calling `reset()` here — a plain, synchronous function call,
+      // not a scheduled effect — stops the sample loop (`handleRef.current?.stop()`) and bumps
+      // `runIdRef` deterministically, in this same tick, regardless of how/when React gets around
+      // to unmounting the slot. `reset()` is idempotent and cheap for a clip that was never active
+      // (idle) or already terminal (ready/error), so it's called unconditionally rather than only
+      // for the clip that happens to be active right now.
+      clipStates[id]?.analysis.reset()
+
+      setClipIds((prev) => (prev.length <= 1 ? prev : prev.filter((existing) => existing !== id)))
+      setPendingLoads((prev) => {
+        if (!(id in prev)) return prev
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+      setClipStates((prev) => {
+        if (!(id in prev)) return prev
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+    },
+    [clipStates],
+  )
 
   // Only clips whose ClipSlot has reported at least once — briefly excludes a just-mounted clip
   // for one render, which every consumer below tolerates (the aggregate and active-index

@@ -70,6 +70,12 @@ export function ClipSlot({
   useLayoutEffect(() => {
     if (loadStartedRef.current || !pendingLoad) return
     loadStartedRef.current = true
+    // Depends on StrictMode's mount→cleanup→remount dance running fully synchronously (no await/
+    // microtask yield in between) so that by the time this microtask callback runs, the dance has
+    // already settled — that's documented *behavior* of React's dev-only StrictMode simulation,
+    // not a guarantee of React's public API, so a future React version that changes StrictMode's
+    // internal timing could silently reopen the corruption bug this defers past (see the comment
+    // above) without anything here failing loudly.
     queueMicrotask(() => {
       videoSource.load(pendingLoad.source, pendingLoad.opts)
     })
