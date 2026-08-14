@@ -41,6 +41,8 @@ const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
     'How evenly your left and right arms swing relative to each other — 100% is perfectly even, lower values mean one arm is swinging noticeably more than the other.',
   footStrikePattern:
     'Whether your foot tends to land heel-, midfoot-, or forefoot-first — approximated from ankle position relative to the knee at footstrike, not a direct foot-angle measurement.',
+  stepWidth:
+    "How far your foot lands from your body's midline at footstrike, as a percentage of your hip width — positive means it lands on its own side, negative means it crosses toward or past the midline (a crossover-gait signal).",
 }
 
 const FOOT_STRIKE_CLASS_LABELS: Record<FootStrikeClass, string> = {
@@ -169,7 +171,7 @@ function ExcludedEntry({ metric, hint }: ExcludedEntryProps) {
 }
 
 /**
- * Numeric readouts for all nine form heuristics, partitioned into tiers (#37; exclusion rule
+ * Numeric readouts for all ten form heuristics, partitioned into tiers (#37; exclusion rule
  * reversed by exclude-only-unmeasurable-metrics) rather than one uniform grid: tier 1
  * ('normal', measured, view-workable, confidence >= 0.7) and tier 2 ('caveated', measured,
  * view-workable, confidence < 0.7 with no lower bound) render as cards in the grid above,
@@ -194,6 +196,7 @@ export function MetricsPanel({ heuristics, scalePassStatus = 'idle' }: MetricsPa
     heuristics.kneeFlexion,
     heuristics.armSwingSymmetry,
     heuristics.footStrikePattern,
+    heuristics.stepWidth,
   ]
   const excluded = metrics.filter((metric) => metricTier(metric) === 'excluded')
   const caveatedCount = metrics.filter((metric) => metricTier(metric) === 'caveated').length

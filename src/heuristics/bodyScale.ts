@@ -1,9 +1,14 @@
 import type { RobustPoseFrame } from '../pose/robustness/types'
-import { resolveMidpoint } from './keypoints'
+import { resolveBilateralPair, resolveMidpoint } from './keypoints'
 import { distance, median } from './mathUtils'
 
 export interface BodyScale {
   torsoLengthPx: number
+  sampleCoverage: number
+}
+
+export interface HipWidth {
+  hipWidthPx: number
   sampleCoverage: number
 }
 
@@ -35,5 +40,32 @@ export function estimateBodyScale(frames: RobustPoseFrame[]): BodyScale | null {
   return {
     torsoLengthPx: median(lengths),
     sampleCoverage: lengths.length / frames.length,
+  }
+}
+
+/**
+ * Left-right hip separation (median across frames) — `stepWidth`'s denominator, a different scale
+ * reference from `estimateBodyScale`'s torso length. Uses `resolveBilateralPair`, the same strict
+ * (both-sides-must-resolve) primitive `viewDetection.ts` uses for its own inline bilateral-spread
+ * calc — reused here rather than reimplemented, but kept a separate function from
+ * `estimateBodyScale` since the two are independent scale references over different keypoint pairs
+ * with their own reduction order; not shared code with `viewDetection.ts` itself, which blends
+ * hip+shoulder spread in a different reduction and would change its math if refactored to call
+ * this.
+ */
+export function estimateHipWidth(frames: RobustPoseFrame[]): HipWidth | null {
+  const widths: number[] = []
+
+  for (const frame of frames) {
+    const hips = resolveBilateralPair(frame, 'left_hip', 'right_hip')
+    if (hips === null) continue
+    widths.push(Math.abs(hips.left.x - hips.right.x))
+  }
+
+  if (widths.length === 0) return null
+
+  return {
+    hipWidthPx: median(widths),
+    sampleCoverage: widths.length / frames.length,
   }
 }
