@@ -17,11 +17,13 @@ const {
   applyRobustnessMock,
   computeFormHeuristicsMock,
   getScalePassDetectorMock,
+  canUseSequentialDecodeMock,
 } = vi.hoisted(() => ({
   sampleClipMock: vi.fn(),
   applyRobustnessMock: vi.fn(),
   computeFormHeuristicsMock: vi.fn(),
   getScalePassDetectorMock: vi.fn(),
+  canUseSequentialDecodeMock: vi.fn(),
 }))
 
 vi.mock('./sampleClip', () => ({
@@ -43,6 +45,18 @@ vi.mock('../heuristics/index', () => ({
 
 vi.mock('../pose/scalePassDetector', () => ({
   getScalePassDetector: getScalePassDetectorMock,
+}))
+
+// Mocked (rather than left real) specifically so the repair-round regression guard below can
+// assert it's never CALLED under the default config -- a real `canUseSequentialDecode` would
+// already resolve `false` in jsdom (no `VideoDecoder`), which is behaviorally identical for
+// every OTHER test in this file, but tells you nothing about whether the probe was skipped
+// entirely (the actual point of `SequentialSamplingConfig.enabled`) vs. called-and-happened-to-
+// fail. Every other test in this file never overrides `sequentialSampling.enabled`, so under the
+// real default-disabled gating this mock is never invoked for them either -- mocking it changes
+// nothing about their behavior, only makes it observable.
+vi.mock('../video/webCodecsSupport', () => ({
+  canUseSequentialDecode: canUseSequentialDecodeMock,
 }))
 
 import { useVideoAnalysis } from './useVideoAnalysis'
@@ -274,9 +288,15 @@ beforeEach(() => {
   applyRobustnessMock.mockReset()
   computeFormHeuristicsMock.mockReset()
   getScalePassDetectorMock.mockReset()
+  canUseSequentialDecodeMock.mockReset()
   applyRobustnessMock.mockReturnValue(FAKE_ROBUST_FRAMES)
   computeFormHeuristicsMock.mockReturnValue(FAKE_HEURISTICS)
   getScalePassDetectorMock.mockResolvedValue(makeFakeDetector())
+  // Matches what the REAL canUseSequentialDecode resolves to in jsdom anyway (no VideoDecoder
+  // global) -- only matters for a test that explicitly opts into the sequential plane via a
+  // config override; every other test never reaches this mock at all under the default-disabled
+  // gating (see the regression-guard test below).
+  canUseSequentialDecodeMock.mockResolvedValue(false)
   // Default: never resolves, so tests that don't care about sampling's outcome don't need to
   // supply their own implementation just to satisfy the auto-start effect firing on mount.
   // NOTE: since the background scale pass shipped, a run that reaches 'ready' calls sampleClip a
@@ -315,6 +335,44 @@ describe('useVideoAnalysis', () => {
     // firing start() — see useVideoAnalysis.ts's sequentialDecodeSupported doc.
     await waitFor(() => expect(result.current.phase).toBe('sampling'))
     expect(sampleClipMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('never calls canUseSequentialDecode under the default config — the sequential path is unreachable without an explicit opt-in', async () => {
+    // Regression guard for the repair round's must-fix #1: SequentialSamplingConfig.enabled
+    // defaults to false, and the probe-kickoff effect is supposed to skip calling
+    // canUseSequentialDecode ENTIRELY in that case (not call it and ignore the result) — a config-
+    // value-only test (samplingRobustnessConfig.test.ts's "ships disabled by default") can't catch
+    // a future edit that inverts the enabled ? ... : ... ternary, relaxes either
+    // `sequentialDecodeSupported === true` check, or flips the default, since none of those would
+    // fail a snapshot of the default object. This does: any of those edits would make this mock
+    // get called, failing the assertion below.
+    //
+    // sourceBlob is deliberately a real, non-null Blob (not the default null) -- with a null
+    // sourceBlob, sampleClipAdaptive.ts's own dispatch would use the playback path regardless of
+    // whether the probe ran, which would make this guard weaker than it looks.
+    const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+    sampleClipMock.mockImplementation(() => ({
+      promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+      handle: makeFakeHandle(),
+    }))
+
+    const videoSource = makeVideoSource({ sourceBlob })
+    const detector = makeFakeDetector()
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+    // Wait out the background scale pass too (it reads the same probe result) so this assertion
+    // covers the entire run, not just the point where the primary pass started sampling.
+    await waitFor(() =>
+      expect(['done', 'failed', 'skipped']).toContain(result.current.scalePass.status),
+    )
+
+    expect(canUseSequentialDecodeMock).not.toHaveBeenCalled()
+    // And the corollary: every sample the mocked sampler actually received came through the
+    // playback dispatch, i.e. sampleClip -- never sampleClipSequential (mocked away entirely at
+    // the ./sampleClip module boundary shared by both call sites, so if the sequential path had
+    // engaged, sampleClipMock would have been called fewer times than the two real passes below).
+    expect(sampleClipMock).toHaveBeenCalledTimes(2)
   })
 
   it('does not auto-start while no detector is available', () => {
