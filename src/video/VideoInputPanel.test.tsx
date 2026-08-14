@@ -51,7 +51,7 @@ describe('VideoInputPanel', () => {
 
     const videoSource = makeVideoSource()
     render(<VideoInputPanel videoSource={videoSource} />)
-    fireEvent.click(screen.getByRole('button', { name: /try a demo video/i }))
+    fireEvent.click(screen.getByRole('button', { name: /demo 1 \(side view\)/i }))
 
     await waitFor(() => expect(videoSource.load).toHaveBeenCalledWith(blob))
   })
