@@ -14,6 +14,25 @@ describe('FileUpload', () => {
     expect(input.accept).toBe('video/*')
   })
 
+  it('accepts multiple files in one picker interaction', () => {
+    render(<FileUpload onSelected={() => {}} />)
+    expect(getInput().multiple).toBe(true)
+  })
+
+  it('calls onSelected once per selected file, in order', () => {
+    const onSelected = vi.fn()
+    render(<FileUpload onSelected={onSelected} />)
+    const input = getInput()
+    const fileA = new File(['a'], 'a.mp4', { type: 'video/mp4' })
+    const fileB = new File(['b'], 'b.mp4', { type: 'video/mp4' })
+
+    fireEvent.change(input, { target: { files: [fileA, fileB] } })
+
+    expect(onSelected).toHaveBeenCalledTimes(2)
+    expect(onSelected).toHaveBeenNthCalledWith(1, fileA)
+    expect(onSelected).toHaveBeenNthCalledWith(2, fileB)
+  })
+
   it('calls onSelected with the chosen file', () => {
     const onSelected = vi.fn()
     render(<FileUpload onSelected={onSelected} />)

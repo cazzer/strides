@@ -2,13 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PoseDetector } from '../pose/detector'
 import type { VideoMetadata, VideoSource } from '../video/types'
 import { canUseSequentialDecode } from '../video/webCodecsSupport'
-import { applyRobustness } from '../pose/robustness/interpolate'
 import type { PoseSample } from '../pose/robustness/types'
-import { computeFormHeuristics } from '../heuristics/index'
-import { trimToPresenceWindow } from '../heuristics/presenceWindow'
 import type { SampleClipHandle } from './sampleClip'
 import { sampleClipAdaptive } from './sampleClipAdaptive'
-import { computeAnalysisDiagnostics } from './analysisDiagnostics'
+import { runClipAnalysisPipeline } from './runClipAnalysisPipeline'
 import { resolveSamplingRobustnessConfig } from './samplingRobustnessConfig'
 import { resolveScalePassConfig } from './scalePassConfig'
 import { graftScalePassResult } from './scalePassGraft'
@@ -314,27 +311,16 @@ export function useVideoAnalysis(
       if (runIdRef.current !== runId) return
 
       try {
-        // Cheap mitigation for mid-analysis scrubbing producing non-monotonic timestamps —
-        // interpolate.ts's existing gapSeconds > 0 guard already degrades non-positive gaps to
-        // 'unrecoverable' rather than crashing, so this is belt-and-suspenders.
-        const sorted = [...samples].sort((a, b) => a.timestamp - b.timestamp)
-        const robustFrames = applyRobustness(sorted, samplingRobustnessConfig.robustness)
-        // Metrics are computed over the presence-trimmed window (excludes stretches where the
-        // subject isn't in frame at all) so frameCoverage/confidence aren't diluted by dead time
-        // — but `robustFrames` itself stays untrimmed below, for the skeleton overlay and
-        // diagnostics, which should keep showing the full, honest picture of the whole clip.
-        // One trim, shared: `computeFormHeuristics` now computes the scale-calibrated centimetre
-        // figure itself, as part of `verticalOscillationCm` (#36, D1), over these same
-        // `metricFrames` — there is no second `trimToPresenceWindow` call left to drift apart from
-        // this one, because there is no second computation left to feed it. `computeAnalysisDiagnostics`
-        // reads that figure back off `heuristics.verticalOscillationCm.calibration` by reference
-        // (D1b) rather than taking it as an input.
-        const metricFrames = trimToPresenceWindow(robustFrames)
-        const heuristics = computeFormHeuristics(metricFrames)
-        const diagnostics = computeAnalysisDiagnostics(
-          sorted,
-          robustFrames,
-          heuristics,
+        // The synchronous sort → robustness → presence-trim → heuristics → diagnostics
+        // pipeline, shared verbatim with the background scale pass below — see
+        // runClipAnalysisPipeline.ts for what each step does and why. `computeFormHeuristics`
+        // computes the scale-calibrated centimetre figure itself, as part of
+        // `verticalOscillationCm` (#36, D1), so there is no second `trimToPresenceWindow` call
+        // left to drift apart from this one — `computeAnalysisDiagnostics` reads that figure back
+        // off `heuristics.verticalOscillationCm.calibration` by reference (D1b).
+        const { robustFrames, heuristics, diagnostics } = runClipAnalysisPipeline(
+          samples,
+          samplingRobustnessConfig,
           usesSequentialDecode ? 'sequential' : 'playback',
         )
         if (runIdRef.current !== runId) return
@@ -551,12 +537,15 @@ export function useVideoAnalysis(
       if (scaleHandleRef.current === handle) scaleHandleRef.current = null
 
       try {
-        // The byte-identical pipeline the primary run uses (sort → robustness → presence-trim →
-        // heuristics), over the scale pass's own samples.
-        const sorted = [...samples].sort((a, b) => a.timestamp - b.timestamp)
-        const scaleRobustFrames = applyRobustness(sorted, samplingRobustnessConfig.robustness)
-        const scaleMetricFrames = trimToPresenceWindow(scaleRobustFrames)
-        const scaleHeuristics = computeFormHeuristics(scaleMetricFrames)
+        // The byte-identical pipeline the primary run uses, over the scale pass's own samples.
+        // The pass's own `robustFrames` aren't retained — nothing renders a scale-pass skeleton
+        // overlay, and the graft below only ever reads `scaleHeuristics`/`scaleDiagnostics`.
+        const { heuristics: scaleHeuristics, diagnostics: scaleDiagnostics } =
+          runClipAnalysisPipeline(
+            samples,
+            samplingRobustnessConfig,
+            usesSequentialDecode ? 'sequential' : 'playback',
+          )
         // Graft rule: a pass that measured no real-world scale has nothing to graft — that is a
         // failed pass (named as such), never a silent no-op replacement of the primary metrics.
         // Still gated on `verticalOscillationCm.calibration` alone (#45): `stepWidthCm` has no
@@ -570,12 +559,6 @@ export function useVideoAnalysis(
           return
         }
         const grafted = graftScalePassResult(primaryHeuristics, scaleHeuristics)
-        const scaleDiagnostics = computeAnalysisDiagnostics(
-          sorted,
-          scaleRobustFrames,
-          scaleHeuristics,
-          usesSequentialDecode ? 'sequential' : 'playback',
-        )
         if (runIdRef.current !== runId) return
         setState((s) => ({
           ...s,
