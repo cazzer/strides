@@ -41,9 +41,12 @@ export function ResultsView({
   // A 'done' scale pass includes the measured-but-unfittable graft, where a grafted metric's
   // value is still null and the panel lists it as not measured — saying a metric "was added"
   // there would be false. Shared with the 'failed' branch: for the reader both outcomes are the
-  // same fact (the second look produced no extra metric(s)).
+  // same fact (the second look produced no extra metrics). Plain plural, not "metric(s)" — this
+  // call site only ever fires when the added count is 0 and there are always exactly 2 candidate
+  // metrics, so there's no real 0/1/2+ ambiguity here for a parenthetical marker to resolve
+  // (unlike the genuinely-ranging `footstrike(s)`/`frame(s)` caveat pattern elsewhere).
   const scalePassCouldntAdd =
-    " A second look at the clip couldn't add the extra metric(s)."
+    " A second look at the clip couldn't add the extra metrics."
   // Two metrics (`verticalOscillationCm`, `stepWidthCm`, #45) can now independently gain a value
   // from the same completed scale pass — count how many actually did, rather than assuming
   // "added" means exactly one, so the status line says "1 more metric" or "2 more metrics"

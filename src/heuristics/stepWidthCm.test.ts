@@ -14,15 +14,29 @@ const BASE_PARAMS = {
 }
 
 /**
- * Rewrites every frame's ankle x-position so that `ankle.x - hipMid.x === offsetPx` exactly, on
- * both legs, at every frame — not just at footstrikes. Same technique
- * `footStrikePattern.test.ts`'s `withKneeAnkleOffset` uses: it pins the signal this metric reads
- * to a known value while leaving footstrike timing (still driven by the fixture's own ankle-y)
- * and everything else about the clip realistic, so the expected centimetre value is exact rather
- * than approximate (no dependence on how closely a discretely-sampled frame lands on the
- * continuous ankle-y peak).
+ * Rewrites every frame's ankle x-position so that the sign-corrected own-side offset (the exact
+ * quantity `computeStepWidthCm` now reports — `(ankle.x - hipMid.x) * sign(sideHip.x - hipMid.x)`)
+ * is exactly `ownSideOffsetPx` on BOTH legs, at every frame — not just at footstrikes. Same
+ * technique `footStrikePattern.test.ts`'s `withKneeAnkleOffset` uses: it pins the signal this
+ * metric reads to a known value while leaving footstrike timing (still driven by the fixture's
+ * own ankle-y) and everything else about the clip realistic.
+ *
+ * Deliberately NOT a single shared absolute x for both ankles (as an earlier version of this
+ * fixture used): `generateSyntheticGait` places `left_hip.x` below hip-mid and `right_hip.x`
+ * above it, so pinning both ankles to the same absolute x makes one leg's offset read as
+ * "own side" and the other leg's the mirror-image "crossover" under the sign-corrected formula
+ * — the two legs' sign-corrected offsets become structural negatives of each other and the
+ * median collapses toward whichever side has more detected footstrikes, not toward the pinned
+ * value. Mirroring each ankle's offset outward from ITS OWN hip (`-` for the left leg, whose own
+ * side is the lower-x direction; `+` for the right) keeps both legs' sign-corrected offsets
+ * identically `ownSideOffsetPx`, positive or negative, regardless of footstrike-side balance —
+ * see `stepWidth.test.ts`'s (the ratio sibling, #46) `buildStepWidthFrames` for the same finding
+ * verified independently on that metric.
  */
-function withAnkleHipOffset(frames: RobustPoseFrame[], offsetPx: number): RobustPoseFrame[] {
+function withOwnSideAnkleHipOffset(
+  frames: RobustPoseFrame[],
+  ownSideOffsetPx: number,
+): RobustPoseFrame[] {
   return frames.map((frame) => {
     const leftHip = frame.keypoints.find((k) => k.name === 'left_hip')
     const rightHip = frame.keypoints.find((k) => k.name === 'right_hip')
@@ -30,41 +44,52 @@ function withAnkleHipOffset(frames: RobustPoseFrame[], offsetPx: number): Robust
     return {
       ...frame,
       keypoints: frame.keypoints.map((kp) => {
-        if (kp.name !== 'left_ankle' && kp.name !== 'right_ankle') return kp
-        return { ...kp, x: hipMidX + offsetPx }
+        if (kp.name === 'left_ankle') return { ...kp, x: hipMidX - ownSideOffsetPx }
+        if (kp.name === 'right_ankle') return { ...kp, x: hipMidX + ownSideOffsetPx }
+        return kp
       }),
     }
   })
 }
 
 describe('computeStepWidthCm', () => {
-  it('a clean front-view clip with a pinned offset: value close to offsetPx / scale in cm, sane sample size, high confidence', () => {
+  it('a clean front-view clip with a pinned own-side offset: value close to offsetPx / scale in cm, sane sample size, high confidence', () => {
     const scale = 300 // px/m
     const base = generateSyntheticGait({ ...BASE_PARAMS, view: 'front', pixelsPerMeter: scale })
-    const frames = withAnkleHipOffset(base, 15) // 15px = 5cm at 300px/m
+    const frames = withOwnSideAnkleHipOffset(base, 15) // 15px = 5cm at 300px/m
 
     const result = computeStepWidthCm(frames, 'front')
 
     expect(result.value).not.toBeNull()
     expect(result.value).toBeCloseTo(5, 6)
+    expect(result.value as number).toBeGreaterThan(0)
     expect(result.sampleSize).toBeGreaterThanOrEqual(4)
     expect(result.frameCoverage).toBe(1)
     expect(result.viewFit).toBe('primary')
     expect(result.unit).toBe('centimeters')
+    expect(result.caveat).toBeNull()
     // viewFitMultiplier 1, frameCoverage 1, interpolatedFraction 0, sampleSize well over the
     // minimum (capped at 1) -> confidence at or very near 1.
     expect(result.confidence).toBeGreaterThan(0.9)
   })
 
-  it('a signed offset (foot lands to the other side of the hip midline) reports a negative value', () => {
+  it('a crossover-gait clip (each foot lands on the OPPOSITE side of its own hip): negative value, crossover caveat fires', () => {
+    // A negative `ownSideOffsetPx` pushes both legs' ankles past hip-mid onto the opposite side
+    // from their own hip -- a genuine crossover, not merely "positive x" on an arbitrary axis.
+    // Both legs land on the wrong side, so this isn't sensitive to detected-footstrike side
+    // balance the way a single-absolute-x fixture would be -- see `withOwnSideAnkleHipOffset`'s
+    // doc for why that construction was rejected.
     const scale = 300
     const base = generateSyntheticGait({ ...BASE_PARAMS, view: 'front', pixelsPerMeter: scale })
-    const frames = withAnkleHipOffset(base, -15)
+    const frames = withOwnSideAnkleHipOffset(base, -15) // -15px = -5cm at 300px/m
 
     const result = computeStepWidthCm(frames, 'front')
 
     expect(result.value).not.toBeNull()
     expect(result.value).toBeCloseTo(-5, 6)
+    expect(result.value as number).toBeLessThan(0)
+    expect(result.viewFit).toBe('primary')
+    expect(result.caveat).toContain('crossover gait')
   })
 
   it('a side-view clip: viewFit unsuitable, confidence discounted to the 0.1 multiplier', () => {
@@ -107,7 +132,7 @@ describe('computeStepWidthCm', () => {
   it('excludes candidate footstrikes on frames with no usable scale, using only the scaled ones', () => {
     const scale = 300
     const base = generateSyntheticGait({ ...BASE_PARAMS, view: 'front', pixelsPerMeter: scale })
-    const pinned = withAnkleHipOffset(base, 15)
+    const pinned = withOwnSideAnkleHipOffset(base, 15)
     // Null out the scale on every OTHER frame -- some footstrike candidates now sit on an
     // unscaled frame and must be excluded rather than crash or corrupt the median.
     const mixed = pinned.map((frame, i) => ({
@@ -163,7 +188,7 @@ describe('computeStepWidthCm', () => {
       view: 'front',
       pixelsPerMeter: scale,
     })
-    const frames = withAnkleHipOffset(base, 15)
+    const frames = withOwnSideAnkleHipOffset(base, 15)
 
     const result = computeStepWidthCm(frames, 'front')
 

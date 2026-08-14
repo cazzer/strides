@@ -42,7 +42,7 @@ const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
   footStrikePattern:
     'Whether your foot tends to land heel-, midfoot-, or forefoot-first — approximated from ankle position relative to the knee at footstrike, not a direct foot-angle measurement.',
   stepWidthCm:
-    "How far to the side of your hip midline your foot lands at each footstrike, in real centimetres. It needs a real-world scale measurement from the clip, so it isn't always available.",
+    "How far to the side of your hip midline your foot lands at each footstrike, in real centimetres. Positive means it lands on its own side; negative means it crosses toward or past the midline — sometimes called a crossover gait, a pattern some runners work on for stability, not a diagnosis. It needs a real-world scale measurement from the clip, so it isn't always available.",
 }
 
 const FOOT_STRIKE_CLASS_LABELS: Record<FootStrikeClass, string> = {

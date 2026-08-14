@@ -2,7 +2,7 @@ import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { HeuristicsConfig, MetricResult, View } from './types'
-import { resolveMidpoint, resolvePoint } from './keypoints'
+import { resolveBilateralPair, resolvePoint } from './keypoints'
 import { detectFootstrikes } from './footstrikes'
 import type { FootstrikeCandidate } from './footstrikes'
 import { computeMetricConfidence } from './confidence'
@@ -18,6 +18,11 @@ const MIN_STEP_WIDTH_CM_SAMPLE_SIZE = 4
 const ANKLE_NAME: Record<'left' | 'right', KeypointName> = {
   left: 'left_ankle',
   right: 'right_ankle',
+}
+
+const HIP_NAME: Record<'left' | 'right', KeypointName> = {
+  left: 'left_hip',
+  right: 'right_hip',
 }
 
 /**
@@ -56,10 +61,20 @@ function nullResult(
 
 /**
  * Step width in real centimetres: at each footstrike, how far to the side of the hip midline the
- * foot lands (signed — sign is whichever side the fixture/camera happens to place positive x on,
- * not "left"/"right" or "inside"/"outside", since there's no travel-direction concept for a
- * mediolateral offset the way overstriding has one for a fore-aft one), converted to centimetres
- * via that same frame's `pixelsPerMeter`.
+ * foot lands, converted to centimetres via that same frame's `pixelsPerMeter`. Sign: POSITIVE =
+ * foot landed on its own anatomical side of the midline; NEGATIVE = crossed to the opposite side
+ * (crossover gait). Polarity is resolved per-footstrike from that frame's own-side hip position
+ * relative to hip-mid — NOT from a clip-wide travelDirection-style constant (that solves a
+ * different, fore-aft problem) — because a raw, unflipped ankle.x - hipMid.x combined across both
+ * legs cancels toward ~0 for any symmetric gait, destroying the crossover signal this metric
+ * exists to report. This mirrors `stepWidth`'s (the ratio sibling, #46) sign convention exactly —
+ * same semantics, just different units.
+ *
+ * Hip-mid is resolved via the STRICT bilateral primitive (`resolveBilateralPair`), not
+ * `resolveMidpoint`'s tolerant single-hip fallback: a frame where only one hip resolves would
+ * otherwise silently substitute "my own hip" for the midline, which corrupts both the raw offset
+ * and — worse, since it's now sign-bearing — the crossover polarity itself. Such frames are
+ * discarded rather than approximated.
  *
  * Despite the name parallel to `verticalOscillationCm`, this metric's shape is `overstriding`'s,
  * not `verticalOscillationCm`'s: an INSTANTANEOUS per-frame spatial offset (ankle vs. hip-mid,
@@ -105,14 +120,37 @@ export function computeStepWidthCm(
   for (const candidate of candidates) {
     const frame = frames[candidate.frameIndex]
     const ankle = resolvePoint(frame, ANKLE_NAME[candidate.side])
-    const hipMid = resolveMidpoint(frame, 'left_hip', 'right_hip')
-    if (ankle === null || hipMid === null || !isUsableScale(frame.pixelsPerMeter)) continue
+    // Strict bilateral resolution for hip-mid: both hips must independently resolve, or the
+    // frame is discarded. `resolveMidpoint`'s tolerant single-hip fallback would silently stand
+    // in "my own hip" for the midline when the other side is briefly unresolved — harmless for a
+    // magnitude-only reading, but corrupting for this metric now that the offset's SIGN is the
+    // point: a fallback hip-mid can flip which side of the (fabricated) midline the ankle reads
+    // as landing on.
+    const hips = resolveBilateralPair(frame, 'left_hip', 'right_hip')
+    const sideHip = resolvePoint(frame, HIP_NAME[candidate.side])
+    if (
+      ankle === null ||
+      hips === null ||
+      sideHip === null ||
+      !isUsableScale(frame.pixelsPerMeter)
+    ) {
+      continue
+    }
 
-    // Signed; unlike overstriding there's no travel-direction correction to apply — a lateral
-    // offset has no fore-aft sign for `estimateTravelDirection` to resolve.
-    const dx = ankle.x - hipMid.x
-    offsetsCm.push((dx / frame.pixelsPerMeter) * 100) // px / (px/m) = m; ×100 = cm
-    if (ankle.interpolated || hipMid.interpolated) interpolatedCount += 1
+    const hipMidX = (hips.left.x + hips.right.x) / 2
+    // Sign: which side of hip-mid this leg's OWN hip sits on. Flipping the raw offset by this
+    // sign turns "positive x" (camera-arbitrary) into "landed on its own side" (meaningful,
+    // camera-orientation-independent) — see the module doc. Guarded: only reaches 0 when the
+    // side hip and hip-mid exactly coincide in x, which correlates with near-pure side view
+    // (already discounted to the `unsuitable` view-fit tier), so `|| 1` never masks a real
+    // mediolateral reading.
+    const outwardSign = Math.sign(sideHip.x - hipMidX) || 1
+    const dx = ankle.x - hipMidX
+    offsetsCm.push(((dx * outwardSign) / frame.pixelsPerMeter) * 100) // px / (px/m) = m; ×100 = cm
+
+    const otherHip = resolvePoint(frame, HIP_NAME[candidate.side === 'left' ? 'right' : 'left'])
+    const hipMidInterpolated = sideHip.interpolated || (otherHip?.interpolated ?? false)
+    if (ankle.interpolated || hipMidInterpolated) interpolatedCount += 1
   }
 
   const usableStrikeCount = offsetsCm.length
@@ -153,6 +191,11 @@ export function computeStepWidthCm(
   if (usableStrikeCount < MIN_STEP_WIDTH_CM_SAMPLE_SIZE) {
     caveats.push(
       `Only ${usableStrikeCount} footstrike(s) detected (recommend at least ${MIN_STEP_WIDTH_CM_SAMPLE_SIZE}) — confidence reduced accordingly.`,
+    )
+  }
+  if (value < 0) {
+    caveats.push(
+      "This clip's footstrikes tend to cross the body's midline (crossover gait) rather than landing on their own side. Based on this one clip's footstrikes, not a diagnosis.",
     )
   }
 

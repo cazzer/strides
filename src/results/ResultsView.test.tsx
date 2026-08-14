@@ -227,7 +227,7 @@ describe('ResultsView', () => {
     expect(text).not.toMatch(/more metrics/i)
   })
 
-  it("says the second look couldn't add the extra metric(s) when it completes without any grafted value", () => {
+  it("says the second look couldn't add the extra metrics when it completes without any grafted value", () => {
     // A 'done' pass includes the measured-but-unfittable graft: calibration is non-null but the
     // centimetre value stays null and the panel still lists the metric as not measured — the
     // status line must not claim a metric was added. Both scale-pass-backed metrics (#45) must be
@@ -248,7 +248,7 @@ describe('ResultsView', () => {
       }),
     })
     expect(screen.getByRole('status').textContent).toMatch(
-      /second look at the clip couldn't add the extra metric\(s\)/i,
+      /second look at the clip couldn't add the extra metrics/i,
     )
     expect(screen.getByRole('status').textContent).not.toMatch(/added \d+ more metric/i)
   })
