@@ -17,7 +17,15 @@ describe('DEFAULT_SAMPLING_ROBUSTNESS_CONFIG', () => {
       robustness: DEFAULT_ROBUSTNESS_CONFIG,
       maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
       detectionTimeoutMs: DEFAULT_DETECTION_TIMEOUT_MS,
+      sequentialSampling: { enabled: false, targetSamplesPerSecond: null },
     })
+  })
+
+  it('ships the sequential-decode path disabled by default', () => {
+    // Must-fix from the repair round: the sequential path auto-engaged for every MP4 with no
+    // off switch. `enabled: false` is the fix -- same "ship the new plane off by default"
+    // precedent as ScalePassConfig/tracking-crop (see this repo's CLAUDE.md).
+    expect(DEFAULT_SAMPLING_ROBUSTNESS_CONFIG.sequentialSampling.enabled).toBe(false)
   })
 })
 
@@ -46,5 +54,37 @@ describe('resolveSamplingRobustnessConfig', () => {
     window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = { maxConsecutiveErrors: 5 }
 
     expect(resolveSamplingRobustnessConfig()).toEqual(DEFAULT_SAMPLING_ROBUSTNESS_CONFIG)
+  })
+
+  it('merges a sequentialSampling override on top of the default, same nested-partial pattern as robustness', () => {
+    window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = {
+      sequentialSampling: { targetSamplesPerSecond: 15 },
+    }
+
+    const resolved = resolveSamplingRobustnessConfig()
+
+    // enabled keeps its default (false) since the override only touched targetSamplesPerSecond.
+    expect(resolved.sequentialSampling).toEqual({ enabled: false, targetSamplesPerSecond: 15 })
+    // Untouched fields keep their default values -- a partial override, same as robustness.
+    expect(resolved.maxConsecutiveErrors).toBe(DEFAULT_MAX_CONSECUTIVE_ERRORS)
+    expect(resolved.robustness).toEqual(DEFAULT_ROBUSTNESS_CONFIG)
+  })
+
+  it('defaults sequentialSampling to every-decoded-frame (null) and disabled when no override touches it', () => {
+    window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = { maxConsecutiveErrors: 5 }
+
+    const resolved = resolveSamplingRobustnessConfig()
+
+    expect(resolved.sequentialSampling).toEqual({ enabled: false, targetSamplesPerSecond: null })
+  })
+
+  it('lets a dev-only override flip the sequential-decode path on', () => {
+    window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = {
+      sequentialSampling: { enabled: true },
+    }
+
+    const resolved = resolveSamplingRobustnessConfig()
+
+    expect(resolved.sequentialSampling).toEqual({ enabled: true, targetSamplesPerSecond: null })
   })
 })

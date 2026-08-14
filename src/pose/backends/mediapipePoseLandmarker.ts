@@ -1,5 +1,5 @@
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision'
-import type { PoseDetector } from '../detector'
+import type { PoseDetector, PoseFrameSource } from '../detector'
 import type { PoseFrame } from '../types'
 import type { RawKeypoint } from './common'
 import { toPoseFrame } from './common'
@@ -157,26 +157,26 @@ export async function createMediaPipePoseLandmarkerDetector(): Promise<PoseDetec
   let lastEmittedMs = -1
 
   return {
-    async estimatePose(video: HTMLVideoElement): Promise<PoseFrame | null> {
-      const rawMs = Math.round(video.currentTime * 1000)
+    async estimatePose(source: PoseFrameSource): Promise<PoseFrame | null> {
+      const rawMs = Math.round(source.timestampSec * 1000)
       if (rawMs + timestampOffsetMs <= lastEmittedMs) {
         timestampOffsetMs = lastEmittedMs + TIMESTAMP_RESTART_GAP_MS - rawMs
       }
       const timestampMs = rawMs + timestampOffsetMs
       lastEmittedMs = timestampMs
-      const result = landmarker.detectForVideo(video, timestampMs)
+      const result = landmarker.detectForVideo(source.image, timestampMs)
       const landmarks = result.landmarks[0]
       if (!landmarks) return null
 
       const rawKeypoints: RawKeypoint[] = landmarks.map((landmark, i) => ({
         name: MEDIAPIPE_POSE_LANDMARK_NAMES[i],
-        x: landmark.x * video.videoWidth,
-        y: landmark.y * video.videoHeight,
+        x: landmark.x * source.width,
+        y: landmark.y * source.height,
         score: landmark.visibility,
       }))
       return toPoseFrame(
         rawKeypoints,
-        video.currentTime,
+        source.timestampSec,
         // `?.` rather than `[0]`: the type says worldLandmarks is always an array, but this is a
         // WASM boundary — an older/newer runtime that simply doesn't populate it should degrade to
         // "no scale on this backend", not throw on every frame.

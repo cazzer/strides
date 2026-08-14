@@ -27,6 +27,11 @@ export function useVideoSource(): VideoSource {
   const [status, setStatus] = useState<VideoSource['status']>('empty')
   const [metadata, setMetadata] = useState<VideoMetadata | null>(null)
   const [error, setError] = useState<VideoSourceError | null>(null)
+  // State, not a ref: this hook's return value reads it directly during render (see the return
+  // statement below), and `react-hooks/refs` correctly flags a ref's `.current` being read there
+  // — `.current` can change without triggering a re-render, so a consumer could observe a stale
+  // value. Written in lockstep with `status`/`metadata` in `load()`/`reset()`, same as those.
+  const [sourceBlob, setSourceBlob] = useState<Blob | null>(null)
 
   const revokeCurrentObjectUrl = useCallback(() => {
     if (objectUrlRef.current) {
@@ -82,6 +87,7 @@ export function useVideoSource(): VideoSource {
       setStatus('loading')
       setError(null)
       setMetadata(null)
+      setSourceBlob(source)
 
       const url = URL.createObjectURL(source)
       objectUrlRef.current = url
@@ -106,6 +112,7 @@ export function useVideoSource(): VideoSource {
     setStatus('empty')
     setError(null)
     setMetadata(null)
+    setSourceBlob(null)
   }, [revokeCurrentObjectUrl])
 
   // Revoke the last object URL and detach listeners on unmount.
@@ -116,5 +123,5 @@ export function useVideoSource(): VideoSource {
     }
   }, [revokeCurrentObjectUrl])
 
-  return { videoRef, status, metadata, error, load, reset }
+  return { videoRef, status, metadata, error, sourceBlob, load, reset }
 }

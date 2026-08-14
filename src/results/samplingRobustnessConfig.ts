@@ -1,25 +1,34 @@
 import { DEFAULT_ROBUSTNESS_CONFIG } from '../pose/robustness/types'
 import type { RobustnessConfig } from '../pose/robustness/types'
 import { DEFAULT_MAX_CONSECUTIVE_ERRORS, DEFAULT_DETECTION_TIMEOUT_MS } from './sampleClip'
+import type { SequentialSamplingConfig } from './sequentialSamplingStep'
 
 /**
  * The sampling/robustness plane as one swappable object — bundles the interpolation layer's
  * `RobustnessConfig` (keypoint-confidence filtering, interpolation gap tolerance) together with
- * `sampleClip`'s detection error tolerance and per-frame timeout, so an eval harness comparing
- * pipeline variants has one thing to swap for this whole plane instead of two differently-shaped
- * ones. `interpolate.ts`/`confidenceFilter.ts`/`sampleClip.ts` are untouched — they already took
- * these values as parameters; this only bundles them for the one call site that resolves them.
+ * `sampleClip`'s detection error tolerance and per-frame timeout, and (since
+ * add-webcodecs-sequential-sampling) the WebCodecs sequential-decode path's sampling-density knob,
+ * so an eval harness comparing pipeline variants has one thing to swap for this whole plane
+ * instead of several differently-shaped ones. `interpolate.ts`/`confidenceFilter.ts`/
+ * `sampleClip.ts`/`sequentialSamplingStep.ts` are untouched — they already took these values as
+ * parameters; this only bundles them for the one call site that resolves them.
  */
 export interface SamplingRobustnessConfig {
   robustness: RobustnessConfig
   maxConsecutiveErrors: number
   detectionTimeoutMs: number
+  sequentialSampling: SequentialSamplingConfig
 }
 
 export const DEFAULT_SAMPLING_ROBUSTNESS_CONFIG: SamplingRobustnessConfig = {
   robustness: DEFAULT_ROBUSTNESS_CONFIG,
   maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
   detectionTimeoutMs: DEFAULT_DETECTION_TIMEOUT_MS,
+  // `enabled: false` — the sequential-decode path is a no-op by default, see
+  // SequentialSamplingConfig.enabled's doc for why. `targetSamplesPerSecond: null` = every
+  // decoded frame, matching the playback path's existing "sample whatever the detector can keep
+  // up with" behavior rather than imposing a new fixed rate, for whenever it IS enabled.
+  sequentialSampling: { enabled: false, targetSamplesPerSecond: null },
 }
 
 declare global {
@@ -32,7 +41,10 @@ declare global {
      * pattern `analysisDiagnostics`'s console auto-log already uses.
      */
     __STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__?: Partial<
-      Omit<SamplingRobustnessConfig, 'robustness'> & { robustness: Partial<RobustnessConfig> }
+      Omit<SamplingRobustnessConfig, 'robustness' | 'sequentialSampling'> & {
+        robustness: Partial<RobustnessConfig>
+        sequentialSampling: Partial<SequentialSamplingConfig>
+      }
     >
   }
 }
@@ -54,6 +66,10 @@ export function resolveSamplingRobustnessConfig(): SamplingRobustnessConfig {
     robustness: {
       ...DEFAULT_SAMPLING_ROBUSTNESS_CONFIG.robustness,
       ...override.robustness,
+    },
+    sequentialSampling: {
+      ...DEFAULT_SAMPLING_ROBUSTNESS_CONFIG.sequentialSampling,
+      ...override.sequentialSampling,
     },
   }
 }

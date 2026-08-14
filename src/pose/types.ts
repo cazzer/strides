@@ -31,9 +31,13 @@ export interface PoseFrame {
    * not degraded input. */
   keypoints: Keypoint[]
   /**
-   * video.currentTime (seconds) — NOT wall-clock time. This is what lets a PoseFrame mean
-   * the same thing for a live webcam stream and an uploaded file's playback position;
-   * performance.now() would not.
+   * Seconds on the producing clip's own media clock — NOT wall-clock time. Two different clocks
+   * feed this depending on which sampling path produced the frame: `video.currentTime`/
+   * `requestVideoFrameCallback`'s `metadata.mediaTime` for the `<video>`-playback path
+   * (`sampleClip.ts`), or a decoded `VideoFrame.timestamp` (converted from microseconds) for the
+   * WebCodecs sequential-decode path (`sampleClipSequential.ts`). Both land in the same unit
+   * (seconds since clip start) precisely so a PoseFrame means the same thing regardless of which
+   * path produced it; performance.now() would not.
    */
   timestamp: number
   /**

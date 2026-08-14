@@ -29,6 +29,7 @@ import * as poseDetection from '@tensorflow-models/pose-detection'
 import { createBlazePoseDetector } from './blazepose'
 import { BLAZEPOSE_RAW_KEYPOINTS } from './__fixtures__/blazepose-keypoints.fixture'
 import { COMMON_KEYPOINT_NAMES } from '../types'
+import { videoFrameSource } from '../detector'
 
 beforeEach(() => {
   estimatePoses.mockReset()
@@ -54,7 +55,7 @@ describe('createBlazePoseDetector', () => {
     const video = { currentTime: 12.5 } as HTMLVideoElement
 
     const detector = await createBlazePoseDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     expect(estimatePoses).toHaveBeenCalledWith(video)
     expect(frame?.timestamp).toBe(12.5)
@@ -76,7 +77,7 @@ describe('createBlazePoseDetector', () => {
     const video = { currentTime: 3 } as HTMLVideoElement
 
     const detector = await createBlazePoseDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     expect(frame).toBeNull()
   })

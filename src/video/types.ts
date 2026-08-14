@@ -30,6 +30,15 @@ export interface VideoSource {
   status: VideoSourceStatus
   metadata: VideoMetadata | null
   error: VideoSourceError | null
+  /**
+   * The original `Blob`/`File` handed to `load()`, retained verbatim (not re-derived from the
+   * `<video>` element, which only ever exposes decoded pixels/playback state, never its own
+   * source bytes back out). `useVideoAnalysis.ts`'s WebCodecs sequential-decode path demuxes this
+   * directly — `<video>`/`src`/object-URL playback is a completely separate consumer of the same
+   * underlying bytes, not a dependency of this one. `null` before any clip has been loaded, and
+   * after `reset()`.
+   */
+  sourceBlob: Blob | null
   load: (source: Blob | File, opts?: { frameRateHint?: number }) => void
   reset: () => void
 }
