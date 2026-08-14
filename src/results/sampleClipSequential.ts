@@ -129,10 +129,20 @@ export function sampleClipSequential(
     stopFrameSource = source.stop
 
     const handleSelectedFrame = async ({ frame, ptsSec }: SelectedVideoFrame): Promise<void> => {
-      canvas.width = frame.displayWidth
-      canvas.height = frame.displayHeight
-      ctx.drawImage(frame, 0, 0, canvas.width, canvas.height)
-      frame.close()
+      // Per the HTML spec, assigning to `canvas.width`/`.height` clears the bitmap regardless of
+      // whether the new value actually differs from the current one — guarding against a same-
+      // size reassignment avoids that pointless clear-and-resize on every one of a clip's several
+      // hundred frames (review finding).
+      if (canvas.width !== frame.displayWidth) canvas.width = frame.displayWidth
+      if (canvas.height !== frame.displayHeight) canvas.height = frame.displayHeight
+      try {
+        ctx.drawImage(frame, 0, 0, canvas.width, canvas.height)
+      } finally {
+        // Always closed, even if drawImage throws — an open VideoFrame leaking past this point
+        // would violate the one-frame-open-at-a-time discipline this module's whole design rests
+        // on (see the module doc comment).
+        frame.close()
+      }
 
       const poseSource: PoseFrameSource = {
         image: canvas,

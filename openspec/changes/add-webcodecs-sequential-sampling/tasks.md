@@ -116,3 +116,28 @@
       low, see D7; gate 6 (no VideoFrame pool exhaustion) PASS, directly instrumented — peak 1
       concurrently-open frame across a full 228-frame run, 0 leaked. Full numbers in the
       implementation report.
+
+## 9. Repair round (2026-08-14) — D8
+
+- [x] 9.1 `SequentialSamplingConfig.enabled: boolean`, default `false` — the sequential path is a
+      genuine no-op (probe never called) unless explicitly turned on. Live-verified: zero config
+      overrides, track demo clip, `sampling.path: 'playback'`.
+- [x] 9.2 `mp4Demux.ts` reads the `tkhd` transform matrix (`Track.matrix`, typed, no undocumented
+      box-tree walk needed); `webCodecsSupport.ts` rejects any non-identity matrix, falling back
+      to the playback path. Test fixture: a byte-patched copy of `park-approach.mp4` with a real
+      90-degree rotation matrix, asserted non-identity and rejected.
+- [x] 9.3 `video.play()` (both call sites) and the scale pass's `currentTime = 0`/`loop = false`
+      reset now skip while the sequential path is active. Re-tested live against D7's gate-4
+      regression: NOT recovered (ruled out as the cause, not confirmed) — shipped anyway on its
+      own correctness merits.
+- [x] 9.4 New test files: `src/video/sequentialFrameSource.test.ts` (5 tests),
+      `src/results/sampleClipSequential.test.ts` (4 tests), `src/video/webCodecsSupport.test.ts`
+      (8 tests, new file).
+- [x] 9.5 Medium/low: blob size cap, canvas same-size guard, `drawImage`/`close()` try/finally,
+      `mp4box` exact-pinned, `queue.isDone()` feed-loop hardening, `SelectedFrameQueue.waitForDone()`
+      (closes a real decoder-error-while-parked-on-dequeue-only-wait gap). Deferred to design.md's
+      Backlog: the orphaned-`waitForRoom()`-promise and outlived-`{once:true}`-listener items
+      (both assessed genuinely benign, would need an `AbortController`-shaped restructuring to
+      close cleanly).
+- [x] 9.6 `npx vitest run` all green (546 tests, up from 525); `npx tsc -b` clean; `npx eslint .`
+      clean; `openspec validate add-webcodecs-sequential-sampling --strict` passes.

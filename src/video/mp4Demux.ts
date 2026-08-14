@@ -43,8 +43,43 @@ export interface DemuxedTrack {
    * correct for CFR content, a reasonable single-number summary for VFR. */
   fps: number
   durationSec: number
+  /**
+   * The track's `tkhd` transformation matrix, verbatim (9 values, ISO 14496-12 §8.3.2.3 —
+   * 16.16 fixed-point for the a/b/c/d/x/y terms, 2.30 fixed-point for u/v/w). NOT applied to any
+   * sample pixel data anywhere in this module or in `sequentialFrameSource.ts`'s decode — a
+   * non-identity matrix (typically a 90°/270° rotation baked into a portrait phone capture) means
+   * `width`x`height` as parsed here is the CODED orientation, not the on-screen one a `<video>`
+   * element would paint. `webCodecsSupport.ts`'s feasibility probe rejects any non-identity
+   * matrix outright (see `isIdentityMatrix`'s doc for why reject-and-fall-back, not
+   * apply-the-rotation) rather than let a wrong assumption here reach the pose pipeline.
+   */
+  matrix: readonly number[]
   /** Decode order — see the field's own doc above. */
   samples: DemuxedSample[]
+}
+
+/**
+ * The ISO 14496-12 §8.3.2.3 identity transformation matrix — what a `tkhd` box's `matrix` field
+ * is when the track carries no rotation/skew/scale for a renderer to apply. `0x00010000` (65536)
+ * is `1.0` in the 16.16 fixed-point format the a/b/c/d/x/y terms use; `0x40000000` is `1.0` in
+ * the 2.30 fixed-point format u/v/w use.
+ */
+export const IDENTITY_TKHD_MATRIX: readonly number[] = [
+  0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000,
+]
+
+/**
+ * Whether `matrix` (a `tkhd`'s 9-value transformation matrix, see `DemuxedTrack.matrix`'s doc)
+ * is the identity matrix — i.e. the track carries no baked-in rotation, skew, or scale.
+ * Compared exactly, not approximately: real encoders write one of a small, fixed set of exact
+ * matrices (identity, or a 90/180/270-degree rotation for portrait capture), never a near-
+ * identity float that would need a tolerance.
+ */
+export function isIdentityMatrix(matrix: readonly number[]): boolean {
+  return (
+    matrix.length === IDENTITY_TKHD_MATRIX.length &&
+    matrix.every((value, i) => value === IDENTITY_TKHD_MATRIX[i])
+  )
 }
 
 export class Mp4DemuxError extends Error {
@@ -165,6 +200,7 @@ export function demuxMp4(bytes: ArrayBuffer): Promise<DemuxedTrack> {
         height,
         fps: samples.length / durationSec,
         durationSec,
+        matrix: Array.from(videoTrack.matrix),
         samples,
       })
     }

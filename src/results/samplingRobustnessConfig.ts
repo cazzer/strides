@@ -24,9 +24,11 @@ export const DEFAULT_SAMPLING_ROBUSTNESS_CONFIG: SamplingRobustnessConfig = {
   robustness: DEFAULT_ROBUSTNESS_CONFIG,
   maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
   detectionTimeoutMs: DEFAULT_DETECTION_TIMEOUT_MS,
-  // `null` = every decoded frame, matching the playback path's existing "sample whatever the
-  // detector can keep up with" behavior rather than imposing a new fixed rate by default.
-  sequentialSampling: { targetSamplesPerSecond: null },
+  // `enabled: false` — the sequential-decode path is a no-op by default, see
+  // SequentialSamplingConfig.enabled's doc for why. `targetSamplesPerSecond: null` = every
+  // decoded frame, matching the playback path's existing "sample whatever the detector can keep
+  // up with" behavior rather than imposing a new fixed rate, for whenever it IS enabled.
+  sequentialSampling: { enabled: false, targetSamplesPerSecond: null },
 }
 
 declare global {

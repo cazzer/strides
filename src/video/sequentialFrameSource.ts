@@ -50,6 +50,16 @@ class SelectedFrameQueue {
   private waitingProducer: (() => void) | null = null
   private done = false
   private error: Error | null = null
+  // Resolved exactly once, by finish()/fail() — see waitForDone()'s doc for why this exists as
+  // its own promise rather than reusing waitForRoom().
+  private readonly donePromise: Promise<void>
+  private resolveDonePromise!: () => void
+
+  constructor() {
+    this.donePromise = new Promise((resolve) => {
+      this.resolveDonePromise = resolve
+    })
+  }
 
   push(item: SelectedVideoFrame): void {
     if (this.done) {
@@ -87,6 +97,22 @@ class SelectedFrameQueue {
     }
   }
 
+  /**
+   * Resolves once — and only once — `finish()`/`fail()` is called, i.e. the queue has reached a
+   * terminal state. Unlike `waitForRoom()`, this NEVER resolves early just because there happens
+   * to be room right now, so it's safe to include unconditionally in every `Promise.race` the
+   * feed loop below builds, without reproducing the tight, non-yielding loop D3's fix exists to
+   * prevent (that bug was specifically about racing against an ALREADY-resolved promise on every
+   * iteration). Closes a real gap the unconditional gating otherwise leaves: if the feed loop is
+   * parked waiting ONLY on the decoder's own `dequeue` event (i.e. `queue.size()` had room, so no
+   * `waitForRoom()` waiter was in the race) and the decoder then hits a fatal error — which
+   * doesn't necessarily fire one more `dequeue` event — the loop would otherwise wait forever for
+   * an event that's never coming, even though `fail()` already recorded the error.
+   */
+  waitForDone(): Promise<void> {
+    return this.donePromise
+  }
+
   next(): Promise<IteratorResult<SelectedVideoFrame>> {
     const item = this.pending.shift()
     if (item) {
@@ -103,6 +129,7 @@ class SelectedFrameQueue {
   /** Marks no more items will ever arrive — a pending/future `next()` call resolves `done: true`. */
   finish(): void {
     this.done = true
+    this.resolveDonePromise()
     this.wakeProducer()
     if (this.waitingConsumer) {
       const resolve = this.waitingConsumer
@@ -115,6 +142,7 @@ class SelectedFrameQueue {
   fail(error: Error): void {
     this.error = error
     this.done = true
+    this.resolveDonePromise()
     this.wakeProducer()
     if (this.waitingConsumer) {
       const resolve = this.waitingConsumer
@@ -138,6 +166,13 @@ class SelectedFrameQueue {
 
   readError(): Error | null {
     return this.error
+  }
+
+  /** Whether `finish()`/`fail()` has already been called — the feed loop's own hardening check
+   * uses this (see its call site) so a done queue can never re-enter the tight backpressure wait
+   * below, independent of whichever OTHER condition happens to end up closing the decoder too. */
+  isDone(): boolean {
+    return this.done
   }
 }
 
@@ -218,6 +253,15 @@ export async function openSequentialFrameSource(
         while (
           !stopped &&
           !isDecoderClosed() &&
+          // Cheap hardening, not currently reachable: today a fatal decoder error also flips
+          // `decoder.state` to `'closed'`, which `isDecoderClosed()` above already catches — but
+          // that's an incidental side effect of how errors happen to propagate, not a documented
+          // guarantee this loop should depend on. `queue.isDone()` closes the same hole directly,
+          // on the queue's OWN terminal state, so a future change to error propagation (or a
+          // `queue.fail()` call added somewhere that doesn't also close the decoder) can't
+          // reopen the exact non-yielding tight-loop bug this backpressure rewrite already fixed
+          // once (see this loop's own comment below).
+          !queue.isDone() &&
           (decoder.decodeQueueSize >= MAX_DECODE_QUEUE_SIZE || queue.size() >= MAX_QUEUED_FRAMES)
         ) {
           // Only race a wait actually tied to whichever resource is over-full right now — NOT
@@ -227,7 +271,14 @@ export async function openSequentialFrameSource(
           // `Promise.race` settle on every loop iteration without ever really waiting for the
           // decoder to catch up — a tight, non-yielding microtask loop that starves the event
           // loop entirely (confirmed live: the page became fully unresponsive, not just slow).
-          const waiters: Promise<void>[] = []
+          // Always included, unconditionally: `waitForDone()` only ever resolves on the queue's
+          // own terminal transition (never early, see its doc), so it can't reproduce the tight-
+          // loop bug the conditional gating above exists to avoid — but it DOES close a real gap
+          // the conditional gating alone leaves open: a fatal decoder error while this wait is
+          // parked on ONLY the `dequeue` listener below (queue.size() had room, so no
+          // waitForRoom() waiter was even in the race) wouldn't otherwise unblock this loop, since
+          // an error doesn't necessarily fire one more `dequeue` event of its own.
+          const waiters: Promise<void>[] = [queue.waitForDone()]
           if (decoder.decodeQueueSize >= MAX_DECODE_QUEUE_SIZE) {
             waiters.push(
               new Promise<void>((resolve) => {

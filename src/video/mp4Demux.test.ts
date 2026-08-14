@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { Mp4DemuxError, demuxMp4 } from './mp4Demux'
+import { IDENTITY_TKHD_MATRIX, Mp4DemuxError, demuxMp4, isIdentityMatrix } from './mp4Demux'
 
 /**
  * Real bytes off disk, not a synthetic/mocked container — this repo's CLAUDE.md precedent for
@@ -85,6 +85,58 @@ describe('demuxMp4', () => {
     // This short, single-GOP clip has exactly one sync sample (measured directly).
     expect(keyframeCount).toBe(1)
     expect(track.samples[0].isKeyframe).toBe(true)
+  })
+
+  it('parses the tkhd matrix as the identity matrix on the (ffmpeg-transcoded) demo clip', async () => {
+    const bytes = readAsArrayBuffer(PARK_APPROACH_PATH)
+
+    const track = await demuxMp4(bytes)
+
+    // This repo's own CLAUDE.md documents ffmpeg-transcoding raw phone footage before checking
+    // it in, which bakes any capture-time rotation into the pixels themselves -- confirmed here,
+    // rather than assumed, since this is what makes the "no real rotated fixture is checked in"
+    // gap safe: the checked-in clip genuinely carries no tkhd rotation to test against.
+    expect(track.matrix).toEqual(IDENTITY_TKHD_MATRIX)
+    expect(isIdentityMatrix(track.matrix)).toBe(true)
+  })
+
+  it('rejects a non-identity tkhd matrix (simulated 90-degree portrait rotation) as non-identity', async () => {
+    // Real, checked-in phone-capture fixtures are always ffmpeg-transcoded per this repo's own
+    // workflow (see the identity-matrix test above), so there's no naturally-occurring rotated
+    // clip to test against -- this patches the one field that matters, byte-for-byte, into a
+    // copy of the real demo clip, the same technique the "unparseable stsd" test below already
+    // uses for a different box.
+    const bytes = readAsArrayBuffer(PARK_APPROACH_PATH)
+    const view = new Uint8Array(bytes.slice(0))
+    const tkhdFourcc = [0x74, 0x6b, 0x68, 0x64] // 'tkhd'
+    let tkhdIndex = -1
+    for (let i = 0; i < view.length - tkhdFourcc.length; i += 1) {
+      if (tkhdFourcc.every((b, j) => view[i + j] === b)) {
+        tkhdIndex = i
+        break
+      }
+    }
+    expect(tkhdIndex).toBeGreaterThan(-1)
+    // tkhd (version 0) layout, counted from the fourcc: version/flags(4) + creation_time(4) +
+    // modification_time(4) + track_id(4) + reserved(4) + duration(4) + reserved[2](8) + layer(2)
+    // + alternate_group(2) + volume(2) + reserved(2) = 44 bytes, then the 9x int32 matrix starts
+    // -- verified directly against this exact file (byte offset, pre-patch values) before this
+    // test was written.
+    const matrixOffset = tkhdIndex + 44
+    const dataView = new DataView(view.buffer, view.byteOffset, view.byteLength)
+    expect(dataView.getInt32(matrixOffset)).toBe(IDENTITY_TKHD_MATRIX[0])
+    // A standard 90-degree clockwise portrait-rotation matrix: a=0, b=1.0, c=-1.0, d=0 (16.16
+    // fixed-point) -- u/v/w (matrix[2,5,8]) are left at their identity values, a real matrix a
+    // rotation-only capture would actually produce, not an arbitrary corruption.
+    dataView.setInt32(matrixOffset + 0, 0) // a
+    dataView.setInt32(matrixOffset + 4, 0x10000) // b
+    dataView.setInt32(matrixOffset + 12, -0x10000) // c
+    dataView.setInt32(matrixOffset + 16, 0) // d
+
+    const track = await demuxMp4(view.buffer as ArrayBuffer)
+
+    expect(track.matrix).toEqual([0, 0x10000, 0, -0x10000, 0, 0, 0, 0, 0x40000000])
+    expect(isIdentityMatrix(track.matrix)).toBe(false)
   })
 
   it('every sample carries non-empty data and a positive duration', async () => {

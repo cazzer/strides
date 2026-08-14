@@ -224,7 +224,139 @@ is sensitive to the sample composition itself — analyzing 100% of decoded fram
 time is a materially different input than a real-time-throttled subset, even though both are
 "correct" samplings of the same clip.
 
-**Disposition**: not a blocker for this change (the plumbing gates below all measure real,
-positive, or neutral results) but a genuine open question for whoever tunes the sequential path's
-default `targetSamplesPerSecond` or investigates MoveNet-on-VideoFrame quality further — tracked
-as a follow-up, not fixed here.
+**Disposition, updated 2026-08-14 (repair round)**: this is no longer a live-default risk — fix
+\#1 below ships `SequentialSamplingConfig.enabled: false` by default, so the regressed path isn't
+reachable by a real user unless someone deliberately flips the dev-only override. That's the
+actual reason this is "not a blocker," replacing the original framing (which read as though the
+regression itself didn't matter — it does, it's just gated off now). It remains a genuine open
+question for whoever investigates MoveNet-on-VideoFrame quality further or considers flipping the
+default; the working theory below is not fixed.
+
+**`video.play()` contention hypothesis — tested, ruled out.** A pre-repair-round review proposed
+an alternative, simpler explanation for the above: `useVideoAnalysis.ts` called `video.play()`
+unconditionally regardless of which sampler was active, so a sequential-decode run had the
+browser's native hardware decoder decoding the clip for on-screen playback AT THE SAME TIME
+`VideoDecoder` decoded it again for sampling — real GPU/decoder contention, coincident with
+MoveNet's own WebGL inference, plausibly explaining detections landing less *contiguously* (the
+actual `sampleCoverage` failure mode above) even though the raw detected-frame ratio was higher.
+This was fixed (fix #3 below: `video.play()` and the scale pass's `video.currentTime =
+0`/`loop = false` reset are now both skipped while the sequential path is active — there is no
+correctness reason either needs to run, since the sequential path never reads the `<video>`
+element at all) and then RE-MEASURED live, 3 trials, same track clip, same conditions as the
+original 12-trial run above, with the fix in place and sequential decode force-enabled via the
+dev override:
+
+| | `view` result | `view` confidence | `sampleCoverage` | `detectedFrames` |
+|---|---|---|---|---|
+| Pre-fix (original 12-trial run, above) | `'ambiguous'` (3/3) | `0` (3/3) | ~0.37 | 84 (then 82, 82) |
+| Post-fix (`video.play()` skipped, 3 fresh trials) | `'ambiguous'` (3/3) | `0` (3/3) | 0.371 (3/3, exact) | 84 (3/3, exact) |
+
+**Not recovered — the hypothesis is ruled out, not confirmed.** The post-fix numbers are, if
+anything, MORE stable than the pre-fix ones (bit-identical across all 3 trials vs. the pre-fix
+run's small 84/82/82 spread), and land on essentially the same `sampleCoverage`/confidence-0
+result. Whatever produces the `'ambiguous'` result on this clip, it is not GPU/decoder contention
+from a concurrently-playing `<video>` element — that variable has now been eliminated directly,
+not just reasoned about. The `video.play()` gating fix ships anyway (skipping needless native
+decode/paint work during sequential sampling is correct on its own terms, and the reviewer's
+"purely cosmetic" observation about on-screen playback during sampling still holds), but D7's
+actual root cause remains the unisolated "working theory" above — MoveNet-on-canvas-drawn-
+`VideoFrame` quality, not resource contention.
+
+## D8 — 2026-08-14 repair round: default-off, rotation rejection, contention fix, test coverage
+
+A review of the original commit (`f945684`) found the sequential path shipped with no off switch
+at all — every demuxable MP4, including both demo clips, auto-engaged it — and no rotation check,
+despite the pipeline's own `PoseFrameSource` never applying a `tkhd` transform. This section
+records what changed as a direct result.
+
+**`enabled: false` by default (must-fix).** `SequentialSamplingConfig` gained an `enabled: boolean`
+field (`src/results/sequentialSamplingStep.ts`), default `false`, same "ship the new plane off"
+precedent this repo already used for the scale pass and tracking-crop. `useVideoAnalysis.ts`'s
+feasibility-probe effect reads it BEFORE calling `canUseSequentialDecode` at all — when disabled,
+the probe settles to `false` without ever reading the blob's bytes or demuxing anything, so the
+"zero runtime cost when the sequential path isn't used" claim in proposal.md's Impact section
+holds for the default-disabled case, not just the "probe said no" case. Live-verified: with zero
+config overrides set, the track demo clip's `[analysis-diagnostics]` line now reports
+`sampling.path: 'playback'` (previously always `'sequential'` for any demuxable MP4). Flip via
+`window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = { sequentialSampling: { enabled: true
+} }`, same dev-only plumbing as the rest of the sampling/robustness plane.
+
+**Rotation-matrix rejection (must-fix).** `mp4Demux.ts`'s `DemuxedTrack` gained a `matrix` field
+(the `tkhd` box's 9-value transform, read straight off mp4box's own typed `Track.matrix` — no
+undocumented box-tree walk needed here, unlike `extractDescription`) and an `isIdentityMatrix`
+helper. `webCodecsSupport.ts`'s `canUseSequentialDecode` rejects any non-identity matrix (gate 6
+of 8) — falling back to the `<video>`-playback path, which already applies rotation correctly via
+the browser's own decode/paint pipeline. Deliberately does NOT attempt to apply the rotation
+itself in `sampleClipSequential.ts`'s canvas draw — a correctness-critical transform not worth
+getting wrong blind when reject-and-fall-back is safe and cheap. Both demo clips carry the
+identity matrix (confirmed directly: ffmpeg transcoding, per this repo's own CLAUDE.md workflow,
+bakes any capture-time rotation into the pixels themselves before a clip is ever checked in), so
+there's no real rotated fixture available — `mp4Demux.test.ts` instead byte-patches a copy of the
+real `park-approach.mp4` clip's `tkhd.matrix` field to a real 90-degree portrait-rotation matrix
+(offset verified directly against the real file before the test was written) and confirms it
+parses as non-identity; `webCodecsSupport.test.ts` covers the actual rejection via a mocked
+`demuxMp4`.
+
+**`video.play()` / scale-pass reset gating (high, see D7's update above for the measured
+result).** Both `start()`'s and the scale pass's `video.play()` calls, and the scale pass's
+`video.currentTime = 0`/`video.loop = false` reset, now skip entirely while the sequential path is
+active — it never reads from the `<video>` element, so none of that has a functional purpose
+during sequential sampling; the loop-restart effect already re-arms visible looping playback once
+analysis reaches a terminal state, regardless of which sampler produced it. Shipped even though
+the live re-test (D7) ruled out this specific contention hypothesis as D7's root cause — skipping
+needless native decode/paint work and a needless mid-view seek-to-0 are correct on their own
+terms, independent of what turned out NOT to explain the confidence drop.
+
+**New test coverage (high).** `src/video/sequentialFrameSource.test.ts` (5 tests: unselected
+frames close immediately and are never yielded; sequential one-at-a-time consumption never has
+more than one frame open; the internal queue bounds decoded-but-unconsumed frames even against a
+consumer that never closes anything, a permanent regression guard for the exact tight-loop hang
+D3 above records; `stop()` mid-stream closes every queued, unconsumed frame and ends the
+iterator; `stop()` is idempotent) and `src/results/sampleClipSequential.test.ts` (4 tests:
+samples collect in presentation order and the promise resolves on natural stream end; `stop()`
+resolves with only the already-collected samples, and a detection that settles AFTER `stop()` does
+not get appended to the already-resolved array — the specific must-fix #5 concern; `stop()` calls
+through to the underlying frame source so the decoder actually releases resources; a demux
+failure aborts the promise rather than hanging). Both files use a fully-synchronous fake
+`VideoDecoder`/`EncodedVideoChunk` (`sequentialFrameSource.test.ts`) or a manually-driven
+controlled async frame stream (`sampleClipSequential.test.ts`) rather than a real decoder, since
+neither jsdom nor Node ships a working `VideoDecoder`.
+
+**Medium/low items fixed in this round**: a size cap on `canUseSequentialDecode`'s blob
+(`MAX_SEQUENTIAL_DECODE_BLOB_BYTES`, 200MB — rejects and falls back to playback before reading any
+bytes); a same-size guard on `sampleClipSequential.ts`'s per-frame `canvas.width`/`.height`
+reassignment (avoids the HTML-spec-mandated bitmap clear on every frame when the size didn't
+actually change); a `try/finally` around that same file's `drawImage`/`frame.close()` pair (a
+`drawImage` throw can no longer leak the frame); `mp4box` pinned to an exact version (`2.4.1`, no
+caret) given this module's reliance on its undocumented internal box tree; `queue.isDone()` added
+to the feed loop's outer `while` exit condition (cheap hardening — see `sequentialFrameSource.ts`'s
+comment at that call site for why it was previously only incidentally safe); a genuine gap closed
+in the same feed loop's backpressure wait — a new `SelectedFrameQueue.waitForDone()` promise,
+resolved only on a terminal `finish()`/`fail()` transition and safe to include unconditionally in
+every `Promise.race` (it never resolves early, unlike `waitForRoom()`), fixes a real scenario
+where a fatal decoder error arriving while the loop was parked on ONLY the `dequeue`-event waiter
+(the queue itself had room, so no `waitForRoom()` waiter was in that particular race) could park
+the feed loop forever, since an error doesn't necessarily fire one more `dequeue` event of its
+own. This last fix has no dedicated regression test — the fake `VideoDecoder` used in
+`sequentialFrameSource.test.ts` decodes synchronously (`decodeQueueSize` never leaves 0), so it
+never exercises the decode-queue-side wait this fix targets; the existing suite continues to pass
+unmodified, and the fix is a strictly additive, terminal-only promise that cannot cause a premature
+resolution on its own.
+
+**Deferred to backlog, not fixed this round**: two smaller items from the same review, both
+assessed as genuinely low-severity and not worth the round's remaining budget —
+1. An orphaned `waitForRoom()` promise when a `Promise.race` in the feed loop resolves via the
+   OTHER waiter (the `dequeue` listener) instead. The abandoned promise is never referenced again
+   once the next loop iteration overwrites `SelectedFrameQueue`'s single `waitingProducer` slot, so
+   it's GC-eligible almost immediately — a promise that never resolves, not a growing leak.
+2. The `dequeue` listener itself is registered `{ once: true }` per race, so a race the listener
+   LOSES leaves it attached to the decoder until an actual future `dequeue` event fires it
+   (harmlessly, resolving a promise nothing awaits) — or, in the rare case no further `dequeue`
+   ever fires, until the decoder itself is closed at the end of the run. Bounded by the run's own
+   lifetime either way.
+
+Both would need the losing side of each backpressure race to be explicitly cancelled (an
+`AbortController`-shaped restructuring of the wait) to close cleanly — a real but narrow
+correctness nice-to-have, not a user-visible bug today. Revisit if `sequentialFrameSource.ts` ever
+needs a broader rework anyway (e.g. to unblock the deferred shared-parse-result optimization in
+D5).

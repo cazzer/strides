@@ -21,9 +21,15 @@ webcam recordings, in particular).
   HTMLCanvasElement, timestampSec, width, height }`) instead of a raw `HTMLVideoElement` — the
   backend-agnostic bridge both sampling paths funnel through, since MoveNet's `PixelInput` union
   has no `VideoFrame` variant and WebCodecs `VideoFrame`s have no common ground with
-  `HTMLVideoElement` otherwise. Landed first, alone, as a pure refactor (zero behavior change,
-  verified by the full existing test suite passing unmodified in substance) before any new
-  sampling code was added.
+  `HTMLVideoElement` otherwise. Landed first, alone, as a pure refactor, before any new sampling
+  code was added — **not literally "zero behavior change"**, though it was originally described
+  that way here: `sampleClip.ts` now passes `metadata.mediaTime` as `timestampSec` where backends
+  previously read `video.currentTime` directly. Reviewed as part of the repair round (2026-08-14)
+  and confirmed low-risk — that value only reaches MediaPipe's monotonic-timestamp bookkeeping,
+  never the heuristics pipeline, and both `mediaTime` and `currentTime` are monotonic on the
+  playback path — but it's a real, if inconsequential, behavior difference, not none. The full
+  existing test suite did pass unmodified in substance, which is what "zero behavior change" was
+  actually verifying.
 - **New `src/video/mp4Demux.ts`**: a pure, `mp4box`-based MP4 parser — `demuxMp4(bytes)` extracts
   codec, dimensions, average fps, duration, and every sample (bitstream bytes, PTS, duration,
   keyframe flag) in **decode order**. Never hangs or throws uncaught on malformed/non-MP4 input;
@@ -47,9 +53,15 @@ webcam recordings, in particular).
 - **`VideoSource` gains `sourceBlob`** (`src/video/useVideoSource.ts` + `types.ts`): the original
   `Blob`/`File` retained verbatim, as `useState` (not the originally-sketched ref — see Deviations
   below).
-- **`SamplingRobustnessConfig` gains `sequentialSampling: { targetSamplesPerSecond: number |
-  null }`** (`src/results/samplingRobustnessConfig.ts`), default `null` (every decoded frame),
-  same dev-only override plumbing as the rest of the plane.
+- **`SamplingRobustnessConfig` gains `sequentialSampling: { enabled: boolean,
+  targetSamplesPerSecond: number | null }`** (`src/results/samplingRobustnessConfig.ts`),
+  `targetSamplesPerSecond` default `null` (every decoded frame), same dev-only override plumbing
+  as the rest of the plane. `enabled` was added in the 2026-08-14 repair round, default **`false`**
+  — a pre-launch review found the sequential path auto-engaging for every demuxable MP4 with no
+  off switch at all, on a plane already known (design.md's D7) to measurably regress `view`
+  detection confidence on one of the two reference clips. Off means `canUseSequentialDecode` is
+  never even called, not merely "called and ignored" — see `useVideoAnalysis.ts`'s probe-kickoff
+  effect.
 - **`AnalysisDiagnostics.sampling` gains `path: 'sequential' | 'playback'`**
   (`src/results/analysisDiagnostics.ts`) so a run's console diagnostics report which sampler
   actually produced its samples.

@@ -134,6 +134,7 @@ export function useVideoAnalysis(
   useEffect(() => {
     if (!metadata || sequentialDecodeProbedForRef.current === metadata) return
     sequentialDecodeProbedForRef.current = metadata
+
     setSequentialDecodeSupported(null)
     const probedFor = metadata
     let settled = false
@@ -146,7 +147,21 @@ export function useVideoAnalysis(
         setSequentialDecodeSupported(supported)
       }
     }
-    void canUseSequentialDecode(sourceBlob).then(settle)
+
+    // The sequential-decode plane is a no-op unless explicitly enabled (default `false` — see
+    // SequentialSamplingConfig.enabled's doc). When it's off, the probe itself
+    // (`canUseSequentialDecode`) is never even called — skipping its real cost (a full
+    // `blob.arrayBuffer()` read plus an MP4 demux pass) for a result that can never be used, so
+    // this change's documented "zero runtime cost when the sequential path isn't used" claim
+    // holds for the default-disabled case too, not just the "probe said no" case. Still routed
+    // through the same `.then(settle)` shape as the real probe below (rather than an early
+    // `return` with its own direct `setSequentialDecodeSupported` call) — a second, differently-
+    // shaped call site to the same setter read as a render-cascade risk to `react-hooks/set-
+    // state-in-effect`'s static analysis even though this one is also microtask-deferred.
+    const probe = resolveSamplingRobustnessConfig().sequentialSampling.enabled
+      ? canUseSequentialDecode(sourceBlob)
+      : Promise.resolve(false)
+    void probe.then(settle)
     // Defensive bound, not an expected path: canUseSequentialDecode is documented to never hang
     // (every gate resolves, nothing awaits an unbounded external operation once a Blob is already
     // in hand) — this exists so a future regression there degrades to "no sequential decode this
@@ -233,26 +248,38 @@ export function useVideoAnalysis(
     handleRef.current = handle
 
     // sampleClip deliberately doesn't call play() itself (see its docstring) — it must happen
-    // here. Muted unconditionally: a manual "Analyze" click satisfies autoplay policy via its
-    // synchronous call stack regardless, but start() is also called from the auto-start effect
-    // below (no such call stack), so muting here — rather than only for that path — keeps one
-    // code path reliable everywhere clips carry no audio the app uses anyway.
+    // here, but only on the playback path. Muted unconditionally regardless: a manual "Analyze"
+    // click satisfies autoplay policy via its synchronous call stack regardless, but start() is
+    // also called from the auto-start effect below (no such call stack), so muting here — rather
+    // than only for that path — keeps one code path reliable everywhere clips carry no audio the
+    // app uses anyway.
     video.muted = true
-    video.play().catch((err: unknown) => {
-      handle.stop()
-      if (runIdRef.current !== runId) return
-      setState({
-        ...idleState(),
-        phase: 'error',
-        error: {
-          kind: 'unknown',
-          message:
-            err instanceof Error
-              ? `Could not start video playback: ${err.message}`
-              : 'Could not start video playback to begin analysis.',
-        },
+    // The sequential-decode path samples directly off `sourceBlob`'s own bytes via VideoDecoder
+    // and never reads from the <video> element at all — playing it here would only run the
+    // browser's native hardware decoder concurrently with WebCodecs' own decode of the identical
+    // clip for no reason. (A GPU/decoder-contention explanation for design.md's D7 confidence
+    // regression was tested by gating this exact call and re-measuring live — it did NOT recover
+    // the regression, see D7's update, so this gate is not a fix for that; it's just correct on
+    // its own terms.) On-screen playback during sampling is purely cosmetic either way — the
+    // skeleton-overlay replay effect (below) starts it once analysis is ready, independent of
+    // which path did the actual sampling.
+    if (!usesSequentialDecode) {
+      video.play().catch((err: unknown) => {
+        handle.stop()
+        if (runIdRef.current !== runId) return
+        setState({
+          ...idleState(),
+          phase: 'error',
+          error: {
+            kind: 'unknown',
+            message:
+              err instanceof Error
+                ? `Could not start video playback: ${err.message}`
+                : 'Could not start video playback to begin analysis.',
+          },
+        })
       })
-    })
+    }
 
     void (async () => {
       let samples: PoseSample[]
@@ -425,16 +452,27 @@ export function useVideoAnalysis(
         return
       }
 
+      // Same capture-once discipline as start()'s usesSequentialDecode above — resolved before
+      // the playback-path-only reset immediately below, since that reset only matters when the
+      // pass is actually about to read frames off the <video> element itself.
+      const usesSequentialDecode = sequentialDecodeSupported === true
+
       // Replay from the top, muted (this play() is far outside any user click's synchronous
-      // call stack) and un-looped (sampleClip needs the natural 'ended' event to resolve).
-      video.muted = true
-      video.loop = false
-      video.currentTime = 0
+      // call stack) and un-looped (sampleClip needs the natural 'ended' event to resolve) — but
+      // ONLY on the playback path. The sequential-decode path samples `sourceBlob`'s own bytes
+      // directly and never reads from the <video> element at all, so this reset would only yank
+      // the user's just-started skeleton-overlay replay back to frame 0 and un-loop it mid-view,
+      // for no functional reason (review finding) — the loop-restart effect above already
+      // re-arms looping playback once this pass reaches a terminal status, regardless of which
+      // path sampled it.
+      if (!usesSequentialDecode) {
+        video.muted = true
+        video.loop = false
+        video.currentTime = 0
+      }
 
       // Forward declaration: onPausedChange below needs abortPass, which needs the handle.
       let abortPassRef: (error: string) => void = () => {}
-      // Same capture-once discipline as start()'s usesSequentialDecode above.
-      const usesSequentialDecode = sequentialDecodeSupported === true
       const { promise, handle } = sampleClipAdaptive(
         video,
         // Same already-resolved signal start() uses above — the scale pass replays the same
@@ -480,13 +518,19 @@ export function useVideoAnalysis(
         abortPass(`The scale pass exceeded its ${watchdogMs}ms watchdog and was stopped.`)
       }, watchdogMs)
 
-      video.play().catch((err: unknown) => {
-        abortPass(
-          err instanceof Error
-            ? `Could not start video playback for the scale pass: ${err.message}`
-            : 'Could not start video playback for the scale pass.',
-        )
-      })
+      // Same gate as start()'s own play() call above, same reason: the sequential path never
+      // touches <video> playback, so playing it here would only run the native decoder alongside
+      // WebCodecs' own decode for no reason — see that comment for why this is correct on its own
+      // terms even though it turned out not to explain D7's confidence regression.
+      if (!usesSequentialDecode) {
+        video.play().catch((err: unknown) => {
+          abortPass(
+            err instanceof Error
+              ? `Could not start video playback for the scale pass: ${err.message}`
+              : 'Could not start video playback for the scale pass.',
+          )
+        })
+      }
 
       let samples: PoseSample[]
       try {
