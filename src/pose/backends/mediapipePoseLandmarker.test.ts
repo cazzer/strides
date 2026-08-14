@@ -158,7 +158,7 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
     const video = { currentTime: 12.5, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement
 
     const detector = await createMediaPipePoseLandmarkerDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     expect(frame?.keypoints.find((k) => k.name === 'left_heel')).toEqual({
       name: 'left_heel',

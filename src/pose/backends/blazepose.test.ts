@@ -79,7 +79,7 @@ describe('createBlazePoseDetector', () => {
     const video = { currentTime: 12.5 } as HTMLVideoElement
 
     const detector = await createBlazePoseDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     expect(frame?.keypoints.find((k) => k.name === 'left_heel')).toEqual({
       name: 'left_heel',
