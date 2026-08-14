@@ -128,7 +128,7 @@ export function computeStepWidth(
   }
   if (value < 0) {
     caveats.push(
-      "This clip's footstrikes tend to cross the body's midline (crossover gait) rather than landing on their own side.",
+      "This clip's footstrikes tend to cross the body's midline (crossover gait) rather than landing on their own side. Based on this one clip's footstrikes, not a diagnosis.",
     )
   }
 
