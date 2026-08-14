@@ -87,6 +87,15 @@ const SIDE_VIEW_EAR_SPREAD_PX = 8
  * measurement. */
 const FRONT_VIEW_EAR_SPREAD_PX = 70
 
+/** Rigid fore-aft offset from the ankle to the heel, opposite the direction of travel — a
+ * plausible foot geometry, not a measurement. No metric consumes these points yet, so unlike the
+ * head model above there's no hand-computable expected value to preserve; the bar is geometric
+ * plausibility for skeleton-overlay/robustness fixtures. */
+const HEEL_BEHIND_ANKLE_PX = 15
+/** Rigid fore-aft offset from the ankle to the foot index (toe), ahead of the direction of
+ * travel. See HEEL_BEHIND_ANKLE_PX's doc for why this is a judgment call, not a measurement. */
+const FOOT_INDEX_AHEAD_ANKLE_PX = 22
+
 function detectedKeypoint(name: KeypointName, x: number, y: number): RobustKeypoint {
   return { name, x, y, score: 0.9, status: 'detected' }
 }
@@ -153,6 +162,9 @@ export function generateSyntheticGait(params: SyntheticGaitParams): RobustPoseFr
     view === 'side' ? SIDE_VIEW_BILATERAL_OFFSET_PX : FRONT_VIEW_BILATERAL_OFFSET_PX
   const ankleSwayAmplitude =
     view === 'side' ? strideAmplitudePx : strideAmplitudePx * FRONT_VIEW_ANKLE_SWAY_FACTOR
+  // Fore-aft foot offsets (heel/foot_index) nearly disappear face-on, same reasoning as ankle
+  // sway itself above.
+  const footOffsetScale = view === 'side' ? 1 : FRONT_VIEW_ANKLE_SWAY_FACTOR
   // Lean is a sagittal-plane rotation, invisible face-on — a front-view figure keeps its
   // shoulders x-aligned with its hips regardless of the requested trunkLeanDeg.
   const lean = view === 'side' ? trunkLeanDeg : 0
@@ -234,6 +246,14 @@ export function generateSyntheticGait(params: SyntheticGaitParams): RobustPoseFr
           return detectedKeypoint(name, leftEarX, headMidY)
         case 'right_ear':
           return detectedKeypoint(name, rightEarX, headMidY)
+        case 'left_heel':
+          return detectedKeypoint(name, leftAnkleX - HEEL_BEHIND_ANKLE_PX * footOffsetScale, leftAnkleY)
+        case 'right_heel':
+          return detectedKeypoint(name, rightAnkleX - HEEL_BEHIND_ANKLE_PX * footOffsetScale, rightAnkleY)
+        case 'left_foot_index':
+          return detectedKeypoint(name, leftAnkleX + FOOT_INDEX_AHEAD_ANKLE_PX * footOffsetScale, leftAnkleY)
+        case 'right_foot_index':
+          return detectedKeypoint(name, rightAnkleX + FOOT_INDEX_AHEAD_ANKLE_PX * footOffsetScale, rightAnkleY)
         default: {
           const exhaustiveCheck: never = name
           throw new Error(`unhandled keypoint name: ${String(exhaustiveCheck)}`)

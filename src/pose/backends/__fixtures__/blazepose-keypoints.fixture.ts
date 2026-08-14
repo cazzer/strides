@@ -1,12 +1,14 @@
 import type { RawKeypoint } from '../common'
 
 /**
- * A hand-built subset of BlazePose's 33-point output: the COMMON_KEYPOINT_NAMES subset (limbs
- * plus nose/ears) plus a handful of BlazePose-only points (face refinements, fingers,
- * heel/foot-index) that fall outside that subset and must be dropped by toPoseFrame, same as
- * MoveNet's remaining non-subset face points (eyes) are. This backend is registered but broken
- * end to end (see CLAUDE.md's "Known issues") — this fixture only exercises compile-time
- * name-mapping, never a live inference result.
+ * A hand-built subset of BlazePose's 33-point output: the COMMON_KEYPOINT_NAMES subset (limbs,
+ * nose/ears, and heel/foot-index) plus a handful of BlazePose-only points (face refinements,
+ * fingers) that fall outside that subset and must be dropped by toPoseFrame, same as MoveNet's
+ * remaining non-subset face points (eyes) are. heel/foot-index were added here in anticipation
+ * (#30) before COMMON_KEYPOINT_NAMES widened to include them (#44) — they now pass through like
+ * any other common keypoint. This backend is registered but broken end to end (see CLAUDE.md's
+ * "Known issues") — this fixture only exercises compile-time name-mapping, never a live
+ * inference result.
  */
 export const BLAZEPOSE_RAW_KEYPOINTS: RawKeypoint[] = [
   { name: 'nose', x: 320, y: 100, score: 0.98 },

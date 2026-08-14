@@ -152,6 +152,39 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
     })
   })
 
+  it('maps landmark indices 29/30/31/32 to left_heel/right_heel/left_foot_index/right_foot_index, denormalized like every other point', async () => {
+    detectForVideo.mockReturnValue({ landmarks: [makeLandmarks()], worldLandmarks: [] })
+    const video = { currentTime: 12.5, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement
+
+    const detector = await createMediaPipePoseLandmarkerDetector()
+    const frame = await detector.estimatePose(video)
+
+    expect(frame?.keypoints.find((k) => k.name === 'left_heel')).toEqual({
+      name: 'left_heel',
+      x: 0.1 * 29 * 640,
+      y: 0.2 * 29 * 480,
+      score: 0.8,
+    })
+    expect(frame?.keypoints.find((k) => k.name === 'right_heel')).toEqual({
+      name: 'right_heel',
+      x: 0.1 * 30 * 640,
+      y: 0.2 * 30 * 480,
+      score: 0.8,
+    })
+    expect(frame?.keypoints.find((k) => k.name === 'left_foot_index')).toEqual({
+      name: 'left_foot_index',
+      x: 0.1 * 31 * 640,
+      y: 0.2 * 31 * 480,
+      score: 0.8,
+    })
+    expect(frame?.keypoints.find((k) => k.name === 'right_foot_index')).toEqual({
+      name: 'right_foot_index',
+      x: 0.1 * 32 * 640,
+      y: 0.2 * 32 * 480,
+      score: 0.8,
+    })
+  })
+
   it('returns null when no pose is detected', async () => {
     detectForVideo.mockReturnValue({ landmarks: [], worldLandmarks: [] })
     const video = { currentTime: 3, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement

@@ -22,8 +22,27 @@ export interface CropRectPx {
  * jitter destabilizes the box frame-to-frame (track detectedFrames 69-72 vs 75 disabled; park
  * cadence/VO confidence roughly halved). Limb extremities stay in on purpose: this app's metrics
  * depend on wrists/ankles a torso-only box would clip mid-stride.
+ *
+ * Foot keypoints (heel/foot_index, #44) are excluded too, but for a different reason: no A/B
+ * evidence, just COCO-17 topology. This function's box was designed and empirically tuned around
+ * COCO-17-shaped limb/torso points; MoveNet (the only backend this crop ever runs against) never
+ * produces heel/foot_index at all, so they'd resolve to `{x:0,y:0,score:0}` via toPoseFrame's
+ * missing-subset-keypoint default and get excluded from the box incidentally on every real call.
+ * They're listed explicitly anyway rather than relying on that: coupling this function's
+ * correctness to an unrelated module's default-fill contract, with no reference between the two,
+ * is fragile — and `minKeypointConfidence` is runtime-overridable down to 0 via
+ * `window.__STRIDES_POSE_BACKEND_OVERRIDE__`, which would silently defeat incidental exclusion by
+ * confidence alone.
  */
-const BBOX_EXCLUDED_KEYPOINT_NAMES = new Set(['nose', 'left_ear', 'right_ear'])
+const BBOX_EXCLUDED_KEYPOINT_NAMES = new Set([
+  'nose',
+  'left_ear',
+  'right_ear',
+  'left_heel',
+  'right_heel',
+  'left_foot_index',
+  'right_foot_index',
+])
 
 /**
  * Bounding box over the non-head keypoints scoring at or above `minKeypointConfidence`, or

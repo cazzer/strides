@@ -114,11 +114,16 @@ describe('computeAnalysisDiagnostics', () => {
     })
   })
 
-  it('the keypoints record has one entry per COMMON_KEYPOINT_NAMES name, and head counts aggregate like any other', () => {
+  it('the keypoints record has one entry per COMMON_KEYPOINT_NAMES name, and head/foot counts aggregate like any other', () => {
     const frames = [
       makeRobustFrame(),
-      makeRobustFrame({ nose: 'interpolated' }),
-      makeRobustFrame({ left_ear: 'unrecoverable', right_ear: 'unrecoverable' }),
+      makeRobustFrame({ nose: 'interpolated', left_heel: 'interpolated' }),
+      makeRobustFrame({
+        left_ear: 'unrecoverable',
+        right_ear: 'unrecoverable',
+        left_foot_index: 'unrecoverable',
+        right_foot_index: 'unrecoverable',
+      }),
     ]
     const diagnostics = computeAnalysisDiagnostics([], frames, makeHeuristics())
 
@@ -131,6 +136,26 @@ describe('computeAnalysisDiagnostics', () => {
       unrecoverable: 1,
     })
     expect(diagnostics.keypoints.right_ear).toEqual({
+      detected: 2,
+      interpolated: 0,
+      unrecoverable: 1,
+    })
+    expect(diagnostics.keypoints.left_heel).toEqual({
+      detected: 2,
+      interpolated: 1,
+      unrecoverable: 0,
+    })
+    expect(diagnostics.keypoints.right_heel).toEqual({
+      detected: 3,
+      interpolated: 0,
+      unrecoverable: 0,
+    })
+    expect(diagnostics.keypoints.left_foot_index).toEqual({
+      detected: 2,
+      interpolated: 0,
+      unrecoverable: 1,
+    })
+    expect(diagnostics.keypoints.right_foot_index).toEqual({
       detected: 2,
       interpolated: 0,
       unrecoverable: 1,

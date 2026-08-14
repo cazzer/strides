@@ -71,6 +71,23 @@ describe('createBlazePoseDetector', () => {
     })
   })
 
+  it('passes through x/y/score for the newly widened foot keypoints (fixture already carried this data since #30)', async () => {
+    estimatePoses.mockResolvedValue([
+      { keypoints: BLAZEPOSE_RAW_KEYPOINTS, score: 0.9 },
+    ])
+    const video = { currentTime: 12.5 } as HTMLVideoElement
+
+    const detector = await createBlazePoseDetector()
+    const frame = await detector.estimatePose(video)
+
+    expect(frame?.keypoints.find((k) => k.name === 'left_heel')).toEqual({
+      name: 'left_heel',
+      x: 362,
+      y: 495,
+      score: 0.83,
+    })
+  })
+
   it('returns null when estimatePoses finds no one in frame', async () => {
     estimatePoses.mockResolvedValue([])
     const video = { currentTime: 3 } as HTMLVideoElement
