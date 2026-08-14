@@ -36,6 +36,7 @@ import { DEFAULT_TRACKING_CROP_CONFIG } from './trackingCropConfig'
 import type { TrackingCropConfig } from './trackingCropConfig'
 import { stubCanvas2DContext } from '../../test/canvasTestUtils'
 import type { FakeCanvasRenderingContext2D } from '../../test/canvasTestUtils'
+import { videoFrameSource } from '../detector'
 
 /**
  * Crop-mode tests opt in explicitly: the shipped default is `enabled: false` (see
@@ -110,7 +111,7 @@ describe('createMoveNetDetector', () => {
     const video = { currentTime: 12.5 } as HTMLVideoElement
 
     const detector = await createMoveNetDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     expect(estimatePoses).toHaveBeenCalledWith(video)
     expect(frame?.timestamp).toBe(12.5)
@@ -134,7 +135,7 @@ describe('createMoveNetDetector', () => {
     const video = { currentTime: 12.5 } as HTMLVideoElement
 
     const detector = await createMoveNetDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     expect(frame?.keypoints.find((k) => k.name === 'nose')).toEqual({
       name: 'nose',
@@ -161,7 +162,7 @@ describe('createMoveNetDetector', () => {
     const video = { currentTime: 3 } as HTMLVideoElement
 
     const detector = await createMoveNetDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     expect(frame).toBeNull()
   })
@@ -180,8 +181,8 @@ describe('createMoveNetDetector', () => {
       estimatePoses.mockResolvedValue([
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
       ])
-      await detector.estimatePose(makeVideo(0))
-      await detector.estimatePose(makeVideo(1))
+      await detector.estimatePose(videoFrameSource(makeVideo(0)))
+      await detector.estimatePose(videoFrameSource(makeVideo(1)))
 
       expect(estimatePoses.mock.calls[0]).toHaveLength(1)
       expect(estimatePoses.mock.calls[1]).toHaveLength(1)
@@ -192,7 +193,7 @@ describe('createMoveNetDetector', () => {
       estimatePoses.mockResolvedValue([])
       const detector = await createMoveNetDetector(undefined, CROP_ON)
 
-      await detector.estimatePose(makeVideo(0))
+      await detector.estimatePose(videoFrameSource(makeVideo(0)))
 
       expect(estimatePoses).toHaveBeenCalledWith(makeVideo(0))
       expect(estimatePoses.mock.calls[0]).toHaveLength(1)
@@ -206,7 +207,7 @@ describe('createMoveNetDetector', () => {
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
       ])
       const video1 = makeVideo(0, 1280, 720)
-      await detector.estimatePose(video1)
+      await detector.estimatePose(videoFrameSource(video1))
 
       expect(estimatePoses.mock.calls[0]).toEqual([video1])
 
@@ -218,7 +219,7 @@ describe('createMoveNetDetector', () => {
         { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
       ])
       const video2 = makeVideo(1, 1280, 720)
-      await detector.estimatePose(video2)
+      await detector.estimatePose(videoFrameSource(video2))
 
       expect(fakeCtx.drawImage).toHaveBeenCalledWith(
         video2,
@@ -244,7 +245,7 @@ describe('createMoveNetDetector', () => {
       estimatePoses.mockResolvedValueOnce([
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
       ])
-      await detector.estimatePose(makeVideo(0, 1280, 720))
+      await detector.estimatePose(videoFrameSource(makeVideo(0, 1280, 720)))
 
       // Same bbox/crop-rect math as the Lightning case above (crop-rect geometry doesn't depend
       // on model resolution) -- only the destination size differs.
@@ -252,7 +253,7 @@ describe('createMoveNetDetector', () => {
         { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
       ])
       const video2 = makeVideo(1, 1280, 720)
-      await detector.estimatePose(video2)
+      await detector.estimatePose(videoFrameSource(video2))
 
       expect(fakeCtx.drawImage).toHaveBeenCalledWith(video2, 40, 40, 560, 560, 0, 0, 256, 256)
       expect(estimatePoses.mock.calls[1][2]).toBe(video2.currentTime * 1000)
@@ -273,7 +274,7 @@ describe('createMoveNetDetector', () => {
           score: 0.9,
         },
       ])
-      await detector.estimatePose(makeVideo(0, 800, 600))
+      await detector.estimatePose(videoFrameSource(makeVideo(0, 800, 600)))
 
       // computeCropRect({100,100,300,300}, 800, 600, 1.75, 256) -> side 350, position (25, 25).
       // A canvas-space keypoint at (48, 144) should remap to:
@@ -290,7 +291,7 @@ describe('createMoveNetDetector', () => {
           score: 0.9,
         },
       ])
-      const frame = await detector.estimatePose(makeVideo(1, 800, 600))
+      const frame = await detector.estimatePose(videoFrameSource(makeVideo(1, 800, 600)))
 
       expect(frame?.keypoints.find((k) => k.name === 'left_shoulder')).toEqual({
         name: 'left_shoulder',
@@ -306,26 +307,26 @@ describe('createMoveNetDetector', () => {
       estimatePoses.mockResolvedValueOnce([
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
       ])
-      await detector.estimatePose(makeVideo(0))
+      await detector.estimatePose(videoFrameSource(makeVideo(0)))
 
       // reacquisitionLossThreshold defaults to 5 -- feed 4 (threshold - 1) not-usable frames.
       for (let i = 0; i < DEFAULT_TRACKING_CROP_CONFIG.reacquisitionLossThreshold - 1; i += 1) {
         estimatePoses.mockResolvedValueOnce([])
-        await detector.estimatePose(makeVideo(i + 1))
+        await detector.estimatePose(videoFrameSource(makeVideo(i + 1)))
       }
 
       // Still crop mode: this call is itself the 5th not-usable frame, and since the drop only
       // takes effect starting the *next* call, it still runs in crop mode.
       estimatePoses.mockResolvedValueOnce([])
       const stillCropCallIndex = estimatePoses.mock.calls.length
-      await detector.estimatePose(makeVideo(100))
+      await detector.estimatePose(videoFrameSource(makeVideo(100)))
       expect(estimatePoses.mock.calls[stillCropCallIndex]).toHaveLength(3)
 
       // The 5th not-usable frame (above) tripped reacquisition loss, so this next call falls
       // back to full-frame.
       estimatePoses.mockResolvedValueOnce([])
       const fallbackCallIndex = estimatePoses.mock.calls.length
-      await detector.estimatePose(makeVideo(101))
+      await detector.estimatePose(videoFrameSource(makeVideo(101)))
       expect(estimatePoses.mock.calls[fallbackCallIndex]).toHaveLength(1)
     })
 
@@ -336,12 +337,12 @@ describe('createMoveNetDetector', () => {
       estimatePoses.mockResolvedValueOnce([
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
       ])
-      await detector.estimatePose(makeVideo(0))
+      await detector.estimatePose(videoFrameSource(makeVideo(0)))
 
       estimatePoses.mockResolvedValueOnce([
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
       ])
-      await detector.estimatePose(makeVideo(1))
+      await detector.estimatePose(videoFrameSource(makeVideo(1)))
 
       expect(estimatePoses.mock.calls[0]).toHaveLength(1)
       expect(estimatePoses.mock.calls[1]).toHaveLength(1)
@@ -357,21 +358,21 @@ describe('createMoveNetDetector', () => {
 
       // Cold start: no reset.
       estimatePoses.mockResolvedValueOnce([])
-      await detector.estimatePose(makeVideo(0))
+      await detector.estimatePose(videoFrameSource(makeVideo(0)))
       expect(reset).toHaveBeenCalledTimes(0)
 
       // Engage (still a full-frame call itself -- no reset).
       estimatePoses.mockResolvedValueOnce([
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
       ])
-      await detector.estimatePose(makeVideo(1))
+      await detector.estimatePose(videoFrameSource(makeVideo(1)))
       expect(reset).toHaveBeenCalledTimes(0)
 
       // Crop mode, transition in: reset fires once.
       estimatePoses.mockResolvedValueOnce([
         { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
       ])
-      await detector.estimatePose(makeVideo(2))
+      await detector.estimatePose(videoFrameSource(makeVideo(2)))
       expect(reset).toHaveBeenCalledTimes(1)
 
       // Crop mode, steady tracking: NOT a mode transition, so no reset -- a same-size square
@@ -380,25 +381,25 @@ describe('createMoveNetDetector', () => {
       estimatePoses.mockResolvedValueOnce([
         { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
       ])
-      await detector.estimatePose(makeVideo(3))
+      await detector.estimatePose(videoFrameSource(makeVideo(3)))
       expect(reset).toHaveBeenCalledTimes(1)
 
       // Crop mode, this frame is not usable -- with reacquisitionLossThreshold: 1, tracking
       // drops after this call, but this call itself still ran in (non-transition) crop mode, so
       // still no reset.
       estimatePoses.mockResolvedValueOnce([])
-      await detector.estimatePose(makeVideo(4))
+      await detector.estimatePose(videoFrameSource(makeVideo(4)))
       expect(reset).toHaveBeenCalledTimes(1)
 
       // Transition out: reset fires exactly once.
       estimatePoses.mockResolvedValueOnce([])
-      await detector.estimatePose(makeVideo(5))
+      await detector.estimatePose(videoFrameSource(makeVideo(5)))
       expect(reset).toHaveBeenCalledTimes(2)
       expect(estimatePoses.mock.calls[5]).toHaveLength(1)
 
       // Steady full-frame run: no more resets.
       estimatePoses.mockResolvedValueOnce([])
-      await detector.estimatePose(makeVideo(6))
+      await detector.estimatePose(videoFrameSource(makeVideo(6)))
       expect(reset).toHaveBeenCalledTimes(2)
       expect(estimatePoses.mock.calls[6]).toHaveLength(1)
     })
@@ -410,21 +411,21 @@ describe('createMoveNetDetector', () => {
       estimatePoses.mockResolvedValueOnce([
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
       ])
-      await detector.estimatePose(makeVideo(8, 1280, 720))
+      await detector.estimatePose(videoFrameSource(makeVideo(8, 1280, 720)))
 
       // Confirm tracking actually engaged: the next call, still within run 1, uses the crop
       // canvas.
       estimatePoses.mockResolvedValueOnce([
         { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
       ])
-      await detector.estimatePose(makeVideo(8.5, 1280, 720))
+      await detector.estimatePose(videoFrameSource(makeVideo(8.5, 1280, 720)))
       expect(estimatePoses.mock.calls[1]).toHaveLength(3)
 
       // Run 2: a different clip loaded into this same cached detector instance (this app never
       // recreates the detector between clips, see design.md) -- playback starts again near 0,
       // well past run 1's tracked currentTime (8.5).
       estimatePoses.mockResolvedValueOnce([])
-      await detector.estimatePose(makeVideo(0, 1280, 720))
+      await detector.estimatePose(videoFrameSource(makeVideo(0, 1280, 720)))
 
       expect(estimatePoses.mock.calls[2]).toHaveLength(1)
     })
@@ -435,14 +436,14 @@ describe('createMoveNetDetector', () => {
       estimatePoses.mockResolvedValueOnce([
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
       ])
-      await detector.estimatePose(makeVideo(5, 1280, 720))
+      await detector.estimatePose(videoFrameSource(makeVideo(5, 1280, 720)))
 
       // A 0.2s backward step -- well within the new-run drop threshold -- must not be treated as
       // a new run; tracking should still be active.
       estimatePoses.mockResolvedValueOnce([
         { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
       ])
-      await detector.estimatePose(makeVideo(4.8, 1280, 720))
+      await detector.estimatePose(videoFrameSource(makeVideo(4.8, 1280, 720)))
 
       expect(estimatePoses.mock.calls[1]).toHaveLength(3)
     })
@@ -458,7 +459,7 @@ describe('createMoveNetDetector', () => {
       estimatePoses.mockResolvedValueOnce([
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
       ])
-      await detector.estimatePose(makeVideo(0, 1280, 720))
+      await detector.estimatePose(videoFrameSource(makeVideo(0, 1280, 720)))
 
       // Call 2 (crop mode) stalls -- its detection promise doesn't resolve yet, simulating
       // `sampleClip`'s timeout moving on without cancelling the underlying detector call.
@@ -467,13 +468,13 @@ describe('createMoveNetDetector', () => {
         resolveStale = resolve
       })
       estimatePoses.mockReturnValueOnce(stalePromise)
-      const stalePoseCall = detector.estimatePose(makeVideo(1, 1280, 720))
+      const stalePoseCall = detector.estimatePose(videoFrameSource(makeVideo(1, 1280, 720)))
 
       // Call 3 starts on the same detector instance before call 2 resolves, and succeeds.
       estimatePoses.mockResolvedValueOnce([
         { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
       ])
-      const freshFrame = await detector.estimatePose(makeVideo(2, 1280, 720))
+      const freshFrame = await detector.estimatePose(videoFrameSource(makeVideo(2, 1280, 720)))
       expect(freshFrame).not.toBeNull()
 
       // Call 2 finally resolves -- with a *low-confidence* ("not usable") result. Were this
@@ -488,7 +489,7 @@ describe('createMoveNetDetector', () => {
       estimatePoses.mockResolvedValueOnce([
         { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
       ])
-      await detector.estimatePose(makeVideo(3, 1280, 720))
+      await detector.estimatePose(videoFrameSource(makeVideo(3, 1280, 720)))
       const lastCall = estimatePoses.mock.calls[estimatePoses.mock.calls.length - 1]
       expect(lastCall).toHaveLength(3) // still crop mode, not fallen back to full-frame
     })
@@ -498,9 +499,9 @@ describe('createMoveNetDetector', () => {
 
       // 1. Absent at start: two calls with nobody detected.
       estimatePoses.mockResolvedValueOnce([])
-      await detector.estimatePose(makeVideo(0))
+      await detector.estimatePose(videoFrameSource(makeVideo(0)))
       estimatePoses.mockResolvedValueOnce([])
-      await detector.estimatePose(makeVideo(1))
+      await detector.estimatePose(videoFrameSource(makeVideo(1)))
       expect(estimatePoses.mock.calls[0]).toHaveLength(1)
       expect(estimatePoses.mock.calls[1]).toHaveLength(1)
 
@@ -508,7 +509,7 @@ describe('createMoveNetDetector', () => {
       estimatePoses.mockResolvedValueOnce([
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
       ])
-      const enterFrame = await detector.estimatePose(makeVideo(2))
+      const enterFrame = await detector.estimatePose(videoFrameSource(makeVideo(2)))
       expect(estimatePoses.mock.calls[2]).toHaveLength(1)
       expect(enterFrame).not.toBeNull()
 
@@ -517,7 +518,7 @@ describe('createMoveNetDetector', () => {
         estimatePoses.mockResolvedValueOnce([
           { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
         ])
-        const frame = await detector.estimatePose(makeVideo(3 + i))
+        const frame = await detector.estimatePose(videoFrameSource(makeVideo(3 + i)))
         expect(estimatePoses.mock.calls[3 + i]).toHaveLength(3)
         expect(frame).not.toBeNull()
       }
@@ -530,7 +531,7 @@ describe('createMoveNetDetector', () => {
         estimatePoses.mockResolvedValueOnce([
           { keypoints: CROP_SPACE_LOW_CONFIDENCE_KEYPOINTS, score: 0.2 },
         ])
-        const frame = await detector.estimatePose(makeVideo(5 + i))
+        const frame = await detector.estimatePose(videoFrameSource(makeVideo(5 + i)))
         expect(estimatePoses.mock.calls[lossStart + i]).toHaveLength(3)
         expect(frame).not.toBeNull()
       }
@@ -538,9 +539,9 @@ describe('createMoveNetDetector', () => {
       // 5. Falls back to full-frame and stays there -- doesn't oscillate back into crop mode.
       const fallbackStart = estimatePoses.mock.calls.length
       estimatePoses.mockResolvedValueOnce([])
-      await detector.estimatePose(makeVideo(20))
+      await detector.estimatePose(videoFrameSource(makeVideo(20)))
       estimatePoses.mockResolvedValueOnce([])
-      await detector.estimatePose(makeVideo(21))
+      await detector.estimatePose(videoFrameSource(makeVideo(21)))
       expect(estimatePoses.mock.calls[fallbackStart]).toHaveLength(1)
       expect(estimatePoses.mock.calls[fallbackStart + 1]).toHaveLength(1)
     })

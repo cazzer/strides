@@ -17,6 +17,7 @@ describe('DEFAULT_SAMPLING_ROBUSTNESS_CONFIG', () => {
       robustness: DEFAULT_ROBUSTNESS_CONFIG,
       maxConsecutiveErrors: DEFAULT_MAX_CONSECUTIVE_ERRORS,
       detectionTimeoutMs: DEFAULT_DETECTION_TIMEOUT_MS,
+      sequentialSampling: { targetSamplesPerSecond: null },
     })
   })
 })
@@ -46,5 +47,26 @@ describe('resolveSamplingRobustnessConfig', () => {
     window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = { maxConsecutiveErrors: 5 }
 
     expect(resolveSamplingRobustnessConfig()).toEqual(DEFAULT_SAMPLING_ROBUSTNESS_CONFIG)
+  })
+
+  it('merges a sequentialSampling override on top of the default, same nested-partial pattern as robustness', () => {
+    window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = {
+      sequentialSampling: { targetSamplesPerSecond: 15 },
+    }
+
+    const resolved = resolveSamplingRobustnessConfig()
+
+    expect(resolved.sequentialSampling).toEqual({ targetSamplesPerSecond: 15 })
+    // Untouched fields keep their default values -- a partial override, same as robustness.
+    expect(resolved.maxConsecutiveErrors).toBe(DEFAULT_MAX_CONSECUTIVE_ERRORS)
+    expect(resolved.robustness).toEqual(DEFAULT_ROBUSTNESS_CONFIG)
+  })
+
+  it('defaults sequentialSampling to every-decoded-frame (null) when no override touches it', () => {
+    window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = { maxConsecutiveErrors: 5 }
+
+    const resolved = resolveSamplingRobustnessConfig()
+
+    expect(resolved.sequentialSampling).toEqual({ targetSamplesPerSecond: null })
   })
 })

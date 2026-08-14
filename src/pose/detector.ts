@@ -16,9 +16,40 @@ export interface PoseDetectorConfig {
   trackingCrop?: TrackingCropConfig
 }
 
+/**
+ * One decoded/presented frame handed to a `PoseDetector`, decoupled from any single concrete
+ * source element. `sampleClip.ts`'s `<video>`-playback path and `sampleClipSequential.ts`'s
+ * WebCodecs `VideoFrame` path both funnel into this same shape — the latter draws each selected
+ * `VideoFrame` onto a reusable offscreen `<canvas>` first, since `VideoFrame` has no common
+ * ground with `HTMLVideoElement` that every backend's underlying library accepts (MoveNet's
+ * `PixelInput` union has no `VideoFrame` variant at all). `timestampSec`/`width`/`height` are
+ * pulled out explicitly rather than read off `image` because a canvas has no notion of "current
+ * playback time" and, for the video path, `video.currentTime` and the frame actually presented to
+ * `requestVideoFrameCallback` can differ by the time an `await` resolves.
+ */
+export interface PoseFrameSource {
+  image: HTMLVideoElement | HTMLCanvasElement
+  timestampSec: number
+  width: number
+  height: number
+}
+
 export interface PoseDetector {
-  estimatePose(video: HTMLVideoElement): Promise<PoseFrame | null>
+  estimatePose(source: PoseFrameSource): Promise<PoseFrame | null>
   dispose(): void
+}
+
+/**
+ * Wraps a `<video>` element into a `PoseFrameSource`, pulling `width`/`height` off the element's
+ * own decoded dimensions. `timestampSec` defaults to `video.currentTime` but callers sampling off
+ * `requestVideoFrameCallback` (`sampleClip.ts`) should pass the callback's own `metadata.mediaTime`
+ * instead — the two can drift apart by the time an in-flight detection's `await` resolves.
+ */
+export function videoFrameSource(
+  video: HTMLVideoElement,
+  timestampSec: number = video.currentTime,
+): PoseFrameSource {
+  return { image: video, timestampSec, width: video.videoWidth, height: video.videoHeight }
 }
 
 const backends: Record<PoseBackendId, (config: PoseDetectorConfig) => Promise<PoseDetector>> = {

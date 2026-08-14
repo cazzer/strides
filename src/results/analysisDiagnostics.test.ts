@@ -94,7 +94,7 @@ describe('computeAnalysisDiagnostics', () => {
       makeRobustFrame({ left_ankle: 'interpolated' }),
       makeRobustFrame({ left_ankle: 'unrecoverable', right_ankle: 'unrecoverable' }),
     ]
-    const diagnostics = computeAnalysisDiagnostics([], frames, makeHeuristics())
+    const diagnostics = computeAnalysisDiagnostics([], frames, makeHeuristics(), 'playback')
 
     expect(diagnostics.keypoints.left_ankle).toEqual({
       detected: 1,
@@ -120,7 +120,7 @@ describe('computeAnalysisDiagnostics', () => {
       makeRobustFrame({ nose: 'interpolated' }),
       makeRobustFrame({ left_ear: 'unrecoverable', right_ear: 'unrecoverable' }),
     ]
-    const diagnostics = computeAnalysisDiagnostics([], frames, makeHeuristics())
+    const diagnostics = computeAnalysisDiagnostics([], frames, makeHeuristics(), 'playback')
 
     expect(Object.keys(diagnostics.keypoints)).toHaveLength(COMMON_KEYPOINT_NAMES.length)
     expect(Object.keys(diagnostics.keypoints).sort()).toEqual([...COMMON_KEYPOINT_NAMES].sort())
@@ -139,7 +139,7 @@ describe('computeAnalysisDiagnostics', () => {
 
   it('surfaces view diagnostics verbatim, not recomputed', () => {
     const heuristics = makeHeuristics()
-    const diagnostics = computeAnalysisDiagnostics([], [], heuristics)
+    const diagnostics = computeAnalysisDiagnostics([], [], heuristics, 'playback')
     expect(diagnostics.view).toBe(heuristics.view)
   })
 
@@ -149,12 +149,18 @@ describe('computeAnalysisDiagnostics', () => {
       { timestamp: 1, frame: null },
       { timestamp: 2, frame: { keypoints: [], timestamp: 2 } },
     ]
-    const diagnostics = computeAnalysisDiagnostics(samples, [], makeHeuristics())
+    const diagnostics = computeAnalysisDiagnostics(samples, [], makeHeuristics(), 'playback')
     expect(diagnostics.sampling).toEqual({
       totalSamples: 3,
       detectedFrames: 2,
       missingFrames: 1,
+      path: 'playback',
     })
+  })
+
+  it('reports the sampling path exactly as passed in, for the sequential-decode path too', () => {
+    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics(), 'sequential')
+    expect(diagnostics.sampling.path).toBe('sequential')
   })
 
   it('collects every metric\'s confidence-relevant fields, keyed by metric id', () => {
@@ -167,7 +173,7 @@ describe('computeAnalysisDiagnostics', () => {
         caveat: 'No resolvable body-scale reference.',
       }),
     })
-    const diagnostics = computeAnalysisDiagnostics([], [], heuristics)
+    const diagnostics = computeAnalysisDiagnostics([], [], heuristics, 'playback')
 
     expect(diagnostics.metrics.trunkLean).toEqual({
       value: null,
@@ -212,6 +218,7 @@ describe('computeAnalysisDiagnostics', () => {
       [],
       [],
       { ...heuristics, verticalOscillation: { ...heuristics.verticalOscillation, fit } },
+      'playback',
     )
 
     expect(diagnostics.verticalOscillationFit).toBe(fit)
@@ -219,19 +226,20 @@ describe('computeAnalysisDiagnostics', () => {
 
   it('reports a null spectral fit when vertical oscillation produced no value', () => {
     // The metric's own invariant: no value means no fit, and the diagnostics must not invent one.
-    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics())
+    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics(), 'playback')
     expect(diagnostics.verticalOscillationFit).toBeNull()
   })
 
   it('handles empty samples and frames without throwing', () => {
     expect(() =>
-      computeAnalysisDiagnostics([], [], makeHeuristics()),
+      computeAnalysisDiagnostics([], [], makeHeuristics(), 'playback'),
     ).not.toThrow()
-    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics())
+    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics(), 'playback')
     expect(diagnostics.sampling).toEqual({
       totalSamples: 0,
       detectedFrames: 0,
       missingFrames: 0,
+      path: 'playback',
     })
     expect(diagnostics.keypoints.left_hip).toEqual({
       detected: 0,
@@ -245,7 +253,7 @@ describe('computeAnalysisDiagnostics', () => {
   // producer now, so these two tests assert the derivation directly off that field rather than
   // passing a calibration object in independently.
   it('omits scaleCalibration entirely when the metric carries no calibration', () => {
-    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics())
+    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics(), 'playback')
 
     // `in`, not a null/undefined comparison: a MoveNet run has to serialize to exactly the JSON it
     // did before this key existed, so "absent" and "present but empty" are different outcomes.
@@ -289,7 +297,7 @@ describe('computeAnalysisDiagnostics', () => {
       },
     })
 
-    const diagnostics = computeAnalysisDiagnostics([], [], heuristics)
+    const diagnostics = computeAnalysisDiagnostics([], [], heuristics, 'playback')
 
     // Reference identity, not merely deep equality -- the whole point of D1b is that no second
     // computation ever produces a structurally-equal-but-distinct object.

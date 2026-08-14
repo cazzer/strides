@@ -14,6 +14,7 @@ vi.mock('@mediapipe/tasks-vision', () => ({
 
 import { createMediaPipePoseLandmarkerDetector } from './mediapipePoseLandmarker'
 import { COMMON_KEYPOINT_NAMES } from '../types'
+import { videoFrameSource } from '../detector'
 
 /** 33 landmarks, index-ordered per MediaPipe Pose's fixed topology. left_shoulder is index 11. */
 function makeLandmarks() {
@@ -84,7 +85,7 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
     const video = { currentTime: 12.5, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement
 
     const detector = await createMediaPipePoseLandmarkerDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     expect(detectForVideo).toHaveBeenCalledWith(video, 12500)
     expect(frame?.timestamp).toBe(12.5)
@@ -105,13 +106,13 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
     const video = { currentTime: 12.5, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement
 
     const detector = await createMediaPipePoseLandmarkerDetector()
-    await detector.estimatePose(video)
+    await detector.estimatePose(videoFrameSource(video))
 
     // Clip replayed from the start on the same instance.
     ;(video as { currentTime: number }).currentTime = 0
-    const restartFrame = await detector.estimatePose(video)
+    const restartFrame = await detector.estimatePose(videoFrameSource(video))
     ;(video as { currentTime: number }).currentTime = 0.1
-    const nextFrame = await detector.estimatePose(video)
+    const nextFrame = await detector.estimatePose(videoFrameSource(video))
 
     const emitted = detectForVideo.mock.calls.map((call) => call[1] as number)
     expect(emitted[0]).toBe(12500)
@@ -130,7 +131,7 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
     const video = { currentTime: 12.5, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement
 
     const detector = await createMediaPipePoseLandmarkerDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     expect(frame?.keypoints.find((k) => k.name === 'nose')).toEqual({
       name: 'nose',
@@ -157,7 +158,7 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
     const video = { currentTime: 3, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement
 
     const detector = await createMediaPipePoseLandmarkerDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     expect(frame).toBeNull()
   })
@@ -170,7 +171,7 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
     const video = { currentTime: 1, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement
 
     const detector = await createMediaPipePoseLandmarkerDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     // 120px torso / 0.5m 3D torso. The xy-projected torso (0.3m) would give 400 instead.
     expect(frame?.pixelsPerMeter).toBe(240)
@@ -181,7 +182,7 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
     const video = { currentTime: 1, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement
 
     const detector = await createMediaPipePoseLandmarkerDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     // `in`, not `toBeUndefined`: a present-but-undefined key would still change the frame's shape
     // for `toStrictEqual` and `JSON.stringify`, which the scale-less backends must not see.
@@ -199,7 +200,7 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
     const video = { currentTime: 1, videoWidth: 640, videoHeight: 480 } as HTMLVideoElement
 
     const detector = await createMediaPipePoseLandmarkerDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     expect(frame !== null && 'pixelsPerMeter' in frame).toBe(false)
   })

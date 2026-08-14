@@ -31,6 +31,12 @@ export interface AnalysisDiagnostics {
     totalSamples: number
     detectedFrames: number
     missingFrames: number
+    /** Which sampler (`sampleClipAdaptive.ts`) actually produced these samples for this run —
+     * `'sequential'` for the WebCodecs decode-order path (`sampleClipSequential.ts`),
+     * `'playback'` for the original `<video>`-`requestVideoFrameCallback` path (`sampleClip.ts`).
+     * Passed in by the caller rather than inferred, since nothing about the samples themselves
+     * (both paths produce plain `PoseSample[]`) reveals which path made them. */
+    path: 'sequential' | 'playback'
   }
   view: FormHeuristicsResult['view']
   keypoints: Record<KeypointName, KeypointResolutionStats>
@@ -75,11 +81,17 @@ function emptyKeypointStats(): Record<KeypointName, KeypointResolutionStats> {
  * `scaleCalibration` (below) is derived from `heuristics.verticalOscillationCm.calibration`, not
  * a separate parameter (#36, D1b) — `computeVerticalOscillationCmMetric` is this data's one
  * producer now, so there is nothing left for a caller to pass in independently.
+ *
+ * `samplingPath` (since add-webcodecs-sequential-sampling) IS a separate, required parameter —
+ * unlike `scaleCalibration`, nothing in `samples`/`robustFrames`/`heuristics` reveals which
+ * sampler produced them, so the caller (`useVideoAnalysis.ts`, which just decided that dispatch
+ * via `sampleClipAdaptive.ts`) has to state it explicitly.
  */
 export function computeAnalysisDiagnostics(
   samples: PoseSample[],
   robustFrames: RobustPoseFrame[],
   heuristics: FormHeuristicsResult,
+  samplingPath: 'sequential' | 'playback',
 ): AnalysisDiagnostics {
   const detectedFrames = samples.filter((s) => s.frame !== null).length
 
@@ -111,6 +123,7 @@ export function computeAnalysisDiagnostics(
       totalSamples: samples.length,
       detectedFrames,
       missingFrames: samples.length - detectedFrames,
+      path: samplingPath,
     },
     view: heuristics.view,
     keypoints,

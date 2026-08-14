@@ -1,7 +1,7 @@
 import '@tensorflow/tfjs-backend-webgl'
 import * as tf from '@tensorflow/tfjs-core'
 import * as poseDetection from '@tensorflow-models/pose-detection'
-import type { PoseDetector } from '../detector'
+import type { PoseDetector, PoseFrameSource } from '../detector'
 import type { PoseFrame } from '../types'
 import { toPoseFrame } from './common'
 import type { RawKeypoint } from './common'
@@ -99,20 +99,21 @@ export async function createMoveNetDetector(
   }
 
   return {
-    async estimatePose(video: HTMLVideoElement): Promise<PoseFrame | null> {
+    async estimatePose(source: PoseFrameSource): Promise<PoseFrame | null> {
       // Total kill-switch: no tracking state read or written, byte-identical to the pre-existing
       // full-frame-only implementation.
       if (!trackingCropConfig.enabled) {
-        const poses = await rawDetector.estimatePoses(video)
+        const poses = await rawDetector.estimatePoses(source.image)
         if (poses.length === 0) return null
-        return toPoseFrame(poses[0].keypoints, video.currentTime)
+        return toPoseFrame(poses[0].keypoints, source.timestampSec)
       }
 
-      // Every call captures its own generation and reads `video.currentTime` once, synchronously,
-      // before any `await` — both the new-run check below and the reentrancy guard after the
-      // detection call rely on this snapshot being consistent for the lifetime of this call.
+      // Every call captures its own generation and reads the source's timestamp once,
+      // synchronously, before any `await` — both the new-run check below and the reentrancy guard
+      // after the detection call rely on this snapshot being consistent for the lifetime of this
+      // call.
       const myGeneration = ++generation
-      const currentTime = video.currentTime
+      const currentTime = source.timestampSec
 
       // A new analysis run (a different clip, or the same clip replayed) always starts playback
       // near 0 — lower than wherever the previous run's tracking left off — since this detector
@@ -148,13 +149,13 @@ export async function createMoveNetDetector(
       if (usingCrop) {
         cropRect = computeCropRect(
           lastBoundingBox as BoundingBoxPx,
-          video.videoWidth,
-          video.videoHeight,
+          source.width,
+          source.height,
           trackingCropConfig.paddingMultiplier,
           trackingCropConfig.minCropSidePx,
         )
         cropCtx.drawImage(
-          video,
+          source.image,
           cropRect.x,
           cropRect.y,
           cropRect.side,
@@ -166,7 +167,7 @@ export async function createMoveNetDetector(
         )
         poses = await rawDetector.estimatePoses(cropCanvas, undefined, currentTime * 1000)
       } else {
-        poses = await rawDetector.estimatePoses(video)
+        poses = await rawDetector.estimatePoses(source.image)
       }
 
       // `sampleClip.ts` wraps every call in a timeout that, on expiry, moves on without

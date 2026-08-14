@@ -1,6 +1,6 @@
 import * as tf from '@tensorflow/tfjs-core'
 import * as poseDetection from '@tensorflow-models/pose-detection'
-import type { PoseDetector } from '../detector'
+import type { PoseDetector, PoseFrameSource } from '../detector'
 import type { PoseFrame } from '../types'
 import { toPoseFrame } from './common'
 
@@ -20,10 +20,10 @@ export async function createBlazePoseDetector(): Promise<PoseDetector> {
   )
 
   return {
-    async estimatePose(video: HTMLVideoElement): Promise<PoseFrame | null> {
-      const poses = await rawDetector.estimatePoses(video)
+    async estimatePose(source: PoseFrameSource): Promise<PoseFrame | null> {
+      const poses = await rawDetector.estimatePoses(source.image)
       if (poses.length === 0) return null
-      return toPoseFrame(poses[0].keypoints, video.currentTime)
+      return toPoseFrame(poses[0].keypoints, source.timestampSec)
     },
     dispose(): void {
       rawDetector.dispose()

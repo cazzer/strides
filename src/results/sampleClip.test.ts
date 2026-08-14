@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { sampleClip } from './sampleClip'
 import { stubRequestVideoFrameCallback } from '../test/videoFrameCallbackTestUtils'
-import type { PoseDetector } from '../pose/detector'
+import type { PoseDetector, PoseFrameSource } from '../pose/detector'
 import type { PoseFrame } from '../pose/types'
 
 function flush(): Promise<void> {
@@ -39,8 +39,8 @@ function makeQueuedDetector() {
 
 function makeResolvingDetector(): PoseDetector {
   return {
-    estimatePose: vi.fn((video: HTMLVideoElement) =>
-      Promise.resolve(makeFrame(video.currentTime)),
+    estimatePose: vi.fn((source: PoseFrameSource) =>
+      Promise.resolve(makeFrame(source.timestampSec)),
     ),
     dispose: vi.fn(),
   }

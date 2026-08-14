@@ -18,6 +18,35 @@ describe('useVideoSource', () => {
     expect(result.current.status).toBe('empty')
     expect(result.current.metadata).toBeNull()
     expect(result.current.error).toBeNull()
+    expect(result.current.sourceBlob).toBeNull()
+  })
+
+  it('exposes the original Blob passed to load(), verbatim', () => {
+    const { result } = renderHook(() => useVideoSource())
+    attachDetachedVideo(result.current.videoRef)
+    const blob = new Blob(['x'], { type: 'video/mp4' })
+
+    act(() => {
+      result.current.load(blob)
+    })
+
+    expect(result.current.sourceBlob).toBe(blob)
+  })
+
+  it('clears sourceBlob on reset()', () => {
+    const { result } = renderHook(() => useVideoSource())
+    attachDetachedVideo(result.current.videoRef)
+
+    act(() => {
+      result.current.load(new Blob(['x']))
+    })
+    expect(result.current.sourceBlob).not.toBeNull()
+
+    act(() => {
+      result.current.reset()
+    })
+
+    expect(result.current.sourceBlob).toBeNull()
   })
 
   it('does nothing if load() is called with no video element attached', () => {

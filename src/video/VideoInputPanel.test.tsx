@@ -14,6 +14,7 @@ function makeVideoSource(overrides: Partial<VideoSource> = {}): VideoSource {
     status: 'empty',
     metadata: null,
     error: null,
+    sourceBlob: null,
     load: vi.fn(),
     reset: vi.fn(),
     ...overrides,

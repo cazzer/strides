@@ -29,6 +29,7 @@ import * as poseDetection from '@tensorflow-models/pose-detection'
 import { createPoseNetDetector } from './posenet'
 import { POSENET_RAW_KEYPOINTS } from './__fixtures__/posenet-keypoints.fixture'
 import { COMMON_KEYPOINT_NAMES } from '../types'
+import { videoFrameSource } from '../detector'
 
 beforeEach(() => {
   estimatePoses.mockReset()
@@ -51,7 +52,7 @@ describe('createPoseNetDetector', () => {
     const video = { currentTime: 12.5 } as HTMLVideoElement
 
     const detector = await createPoseNetDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     expect(estimatePoses).toHaveBeenCalledWith(video)
     expect(frame?.timestamp).toBe(12.5)
@@ -73,7 +74,7 @@ describe('createPoseNetDetector', () => {
     const video = { currentTime: 3 } as HTMLVideoElement
 
     const detector = await createPoseNetDetector()
-    const frame = await detector.estimatePose(video)
+    const frame = await detector.estimatePose(videoFrameSource(video))
 
     expect(frame).toBeNull()
   })

@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PoseDetector } from '../pose/detector'
 import type { VideoMetadata, VideoSource } from '../video/types'
+import { canUseSequentialDecode } from '../video/webCodecsSupport'
 import { applyRobustness } from '../pose/robustness/interpolate'
 import type { PoseSample } from '../pose/robustness/types'
 import { computeFormHeuristics } from '../heuristics/index'
 import { trimToPresenceWindow } from '../heuristics/presenceWindow'
-import { sampleClip } from './sampleClip'
 import type { SampleClipHandle } from './sampleClip'
+import { sampleClipAdaptive } from './sampleClipAdaptive'
 import { computeAnalysisDiagnostics } from './analysisDiagnostics'
 import { resolveSamplingRobustnessConfig } from './samplingRobustnessConfig'
 import { resolveScalePassConfig } from './scalePassConfig'
 import { graftScalePassResult } from './scalePassGraft'
 import { getScalePassDetector } from '../pose/scalePassDetector'
 import type { ScalePassState, VideoAnalysisState } from './types'
+
+/** Defensive upper bound on the sequential-decode feasibility probe the auto-start effect waits
+ * on — see `sequentialDecodeSupported`'s doc for why auto-start waits at all. */
+const SEQUENTIAL_DECODE_PROBE_TIMEOUT_MS = 3000
 
 function idleState(): Omit<VideoAnalysisState, 'start' | 'reset'> {
   return {
@@ -39,7 +44,7 @@ export function useVideoAnalysis(
   videoSource: VideoSource,
   detector: PoseDetector | null,
 ): VideoAnalysisState {
-  const { videoRef, metadata } = videoSource
+  const { videoRef, metadata, sourceBlob } = videoSource
 
   const [state, setState] =
     useState<Omit<VideoAnalysisState, 'start' | 'reset'>>(idleState)
@@ -64,6 +69,33 @@ export function useVideoAnalysis(
   // already started for, so a re-render between the 'pending' commit and the 'running' commit
   // (or a strict-mode double-fire) can't start the pass twice for one run.
   const scalePassStartedForRunRef = useRef<number | null>(null)
+  // Whether the WebCodecs sequential-decode sampling path (`sampleClipAdaptive.ts`) can be used
+  // for the currently loaded clip — resolved once per clip, ahead of time, specifically so
+  // `start()` never has to await it: `start()`'s `video.play()` call must stay in the same
+  // synchronous, click-derived call stack as a user-initiated "Analyze"/"Analyze again" click
+  // (autoplay policy), so the probe can't live inside `start()` itself. `null` means "not yet
+  // known" (still resolving, or no clip loaded) — `start()` and the scale-pass effect below both
+  // treat that identically to "false", i.e. fall back to the existing `<video>`-playback path for
+  // that run.
+  //
+  // State, not a ref: the auto-start effect further below (the only trigger for the very first
+  // run of almost every clip — this app has no manual "run again on a completed clip" affordance)
+  // WAITS for this to leave `null` before firing `start()` at all, and a ref write can't be an
+  // effect dependency. Measured directly: without that wait, auto-start's own effect always fires
+  // synchronously in the same passive-effects flush as the probe-kickoff effect below, before the
+  // probe's `async`/`await` chain gets a single microtask tick to advance — i.e. the "best-effort,
+  // might miss the first run" framing this was originally built to was actually "always misses
+  // every auto-started run," a structural loss, not a race. Bounded by a timeout below so a
+  // pathological probe hang can't stall auto-start forever.
+  const [sequentialDecodeSupported, setSequentialDecodeSupported] = useState<boolean | null>(
+    null,
+  )
+  // Which clip's `metadata` the probe above has already been kicked off for — mirrors
+  // `autoStartedForRef`'s "fire once per freshly loaded clip" pattern, comparing `metadata`
+  // object identity (always a fresh object per clip, per that ref's own doc). A ref, unlike
+  // `sequentialDecodeSupported` itself: this is read-and-written only inside the effect that owns
+  // it, never needs to trigger a render on its own.
+  const sequentialDecodeProbedForRef = useRef<VideoMetadata | null>(null)
 
   const abandonActiveRun = () => {
     handleRef.current?.stop()
@@ -95,6 +127,33 @@ export function useVideoAnalysis(
       abandonActiveRun()
     }
   }, [metadata])
+
+  // Kicks off the sequential-decode feasibility probe as early as possible for a freshly loaded
+  // clip — see `sequentialDecodeSupported`'s doc above for why this has to happen ahead of time
+  // rather than inside `start()`. Fires at most once per clip (mirrors `autoStartedForRef`).
+  useEffect(() => {
+    if (!metadata || sequentialDecodeProbedForRef.current === metadata) return
+    sequentialDecodeProbedForRef.current = metadata
+    setSequentialDecodeSupported(null)
+    const probedFor = metadata
+    let settled = false
+    const settle = (supported: boolean) => {
+      if (settled) return
+      settled = true
+      // A newer clip may have loaded (and re-triggered this effect) while this was resolving —
+      // only commit the result if it's still the clip this probe was actually run for.
+      if (sequentialDecodeProbedForRef.current === probedFor) {
+        setSequentialDecodeSupported(supported)
+      }
+    }
+    void canUseSequentialDecode(sourceBlob).then(settle)
+    // Defensive bound, not an expected path: canUseSequentialDecode is documented to never hang
+    // (every gate resolves, nothing awaits an unbounded external operation once a Blob is already
+    // in hand) — this exists so a future regression there degrades to "no sequential decode this
+    // run" instead of stalling auto-start indefinitely.
+    const timeoutId = setTimeout(() => settle(false), SEQUENTIAL_DECODE_PROBE_TIMEOUT_MS)
+    return () => clearTimeout(timeoutId)
+  }, [metadata, sourceBlob])
 
   const reset = useCallback(() => {
     abandonActiveRun()
@@ -144,8 +203,17 @@ export function useVideoAnalysis(
     // samplingRobustnessConfig.ts.
     const samplingRobustnessConfig = resolveSamplingRobustnessConfig()
 
-    const { promise, handle } = sampleClip(
+    // Captured once, here, rather than re-read later: `sequentialDecodeSupported` could in
+    // principle change (a later clip's probe resolving) before this run's diagnostics get
+    // computed, and diagnostics must report the path THIS run actually took, not whatever the
+    // state says by the time the run finishes.
+    const usesSequentialDecode = sequentialDecodeSupported === true
+    const { promise, handle } = sampleClipAdaptive(
       video,
+      // Already-resolved boolean, not an internal probe — see sequentialDecodeSupported's doc
+      // above. `null` (not yet known) and `false` (probe said no) both fall back to `null` here,
+      // which is sampleClipAdaptive's own signal to use the playback path.
+      usesSequentialDecode ? sourceBlob : null,
       detector,
       metadata.durationSec,
       {
@@ -160,6 +228,7 @@ export function useVideoAnalysis(
         maxConsecutiveErrors: samplingRobustnessConfig.maxConsecutiveErrors,
         detectionTimeoutMs: samplingRobustnessConfig.detectionTimeoutMs,
       },
+      samplingRobustnessConfig.sequentialSampling,
     )
     handleRef.current = handle
 
@@ -235,7 +304,12 @@ export function useVideoAnalysis(
         // (D1b) rather than taking it as an input.
         const metricFrames = trimToPresenceWindow(robustFrames)
         const heuristics = computeFormHeuristics(metricFrames)
-        const diagnostics = computeAnalysisDiagnostics(sorted, robustFrames, heuristics)
+        const diagnostics = computeAnalysisDiagnostics(
+          sorted,
+          robustFrames,
+          heuristics,
+          usesSequentialDecode ? 'sequential' : 'playback',
+        )
         if (runIdRef.current !== runId) return
         // Decide the background scale pass's fate at the moment the primary result exists
         // (add-background-scale-pass, D1): nothing to add when the primary backend already
@@ -274,7 +348,7 @@ export function useVideoAnalysis(
         })
       }
     })()
-  }, [detector, videoRef, metadata])
+  }, [detector, videoRef, metadata, sourceBlob, sequentialDecodeSupported])
 
   // Once analysis reaches 'ready', sampling has already left the video paused at 'ended' (see
   // sampleClip's docstring) — restart it with looping enabled so the skeleton overlay keeps
@@ -359,18 +433,31 @@ export function useVideoAnalysis(
 
       // Forward declaration: onPausedChange below needs abortPass, which needs the handle.
       let abortPassRef: (error: string) => void = () => {}
-      const { promise, handle } = sampleClip(video, scaleDetector, metadata.durationSec, {
-        maxConsecutiveErrors: samplingRobustnessConfig.maxConsecutiveErrors,
-        detectionTimeoutMs: samplingRobustnessConfig.detectionTimeoutMs,
-        // Fail fast on a user pause instead of letting the pass zombie-stall until the
-        // watchdog: the native controls are visible, and a paused replay produces no frames.
-        // A natural clip end also fires 'pause' — video.ended distinguishes it.
-        onPausedChange: (paused) => {
-          if (paused && !video.ended) {
-            abortPassRef('Video playback was paused before the scale pass finished.')
-          }
+      // Same capture-once discipline as start()'s usesSequentialDecode above.
+      const usesSequentialDecode = sequentialDecodeSupported === true
+      const { promise, handle } = sampleClipAdaptive(
+        video,
+        // Same already-resolved signal start() uses above — the scale pass replays the same
+        // clip, so the same feasibility result applies.
+        usesSequentialDecode ? sourceBlob : null,
+        scaleDetector,
+        metadata.durationSec,
+        {
+          maxConsecutiveErrors: samplingRobustnessConfig.maxConsecutiveErrors,
+          detectionTimeoutMs: samplingRobustnessConfig.detectionTimeoutMs,
+          // Fail fast on a user pause instead of letting the pass zombie-stall until the
+          // watchdog: the native controls are visible, and a paused replay produces no frames.
+          // A natural clip end also fires 'pause' — video.ended distinguishes it. Only meaningful
+          // on the playback path — the sequential-decode path never invokes onPausedChange at
+          // all (see sampleClipSequential.ts's doc), since it doesn't depend on video playback.
+          onPausedChange: (paused) => {
+            if (paused && !video.ended) {
+              abortPassRef('Video playback was paused before the scale pass finished.')
+            }
+          },
         },
-      })
+        samplingRobustnessConfig.sequentialSampling,
+      )
       scaleHandleRef.current = handle
 
       // `handle.stop()` RESOLVES the promise with whatever partial samples were collected
@@ -434,6 +521,7 @@ export function useVideoAnalysis(
           sorted,
           scaleRobustFrames,
           scaleHeuristics,
+          usesSequentialDecode ? 'sequential' : 'playback',
         )
         if (runIdRef.current !== runId) return
         setState((s) => ({
@@ -447,7 +535,15 @@ export function useVideoAnalysis(
         failPass(err instanceof Error ? err.message : 'Scale pass failed unexpectedly.')
       }
     })()
-  }, [state.phase, state.scalePass.status, state.heuristics, videoRef, metadata])
+  }, [
+    state.phase,
+    state.scalePass.status,
+    state.heuristics,
+    videoRef,
+    metadata,
+    sourceBlob,
+    sequentialDecodeSupported,
+  ])
 
   // Auto-starts analysis the moment a freshly loaded clip is ready and a detector exists — no
   // explicit click required. Doesn't fire while `detector` is `null` (still loading, or it never
@@ -455,18 +551,26 @@ export function useVideoAnalysis(
   // surfaces the real `detector-unavailable` error if the detector truly never becomes available.
   // Fires at most once per clip (`autoStartedForRef`) — otherwise an explicit `reset()` back to
   // `'idle'` while the same clip is still `'ready'` would immediately auto-restart itself.
+  //
+  // Also waits for `sequentialDecodeSupported` to leave `null` (the probe above to settle, or its
+  // own timeout) before firing — see that state's doc comment for why this matters: this app has
+  // no "run again on an already-completed clip" control (`ResultsView.tsx` only shows a re-run
+  // button after an *error*), so auto-start is the only trigger for nearly every real run, and
+  // without this wait the sequential-decode path would never actually engage in practice, not
+  // merely "sometimes miss the first run" as originally assumed.
   useEffect(() => {
     if (
       videoSource.status !== 'ready' ||
       state.phase !== 'idle' ||
       !detector ||
       !metadata ||
+      sequentialDecodeSupported === null ||
       autoStartedForRef.current === metadata
     )
       return
     autoStartedForRef.current = metadata
     start()
-  }, [videoSource.status, state.phase, detector, metadata, start])
+  }, [videoSource.status, state.phase, detector, metadata, sequentialDecodeSupported, start])
 
   // Development-only: auto-logs the full diagnostics object once a run reaches 'ready', for
   // driving the app via browser automation across a batch of test clips and reading the result

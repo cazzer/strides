@@ -1,3 +1,4 @@
+import { videoFrameSource } from '../pose/detector'
 import type { PoseDetector } from '../pose/detector'
 import type { PoseSample } from '../pose/robustness/types'
 
@@ -31,9 +32,12 @@ export interface SampleClipOptions {
 export const DEFAULT_MAX_CONSECUTIVE_ERRORS = 30
 export const DEFAULT_DETECTION_TIMEOUT_MS = 5000
 
-class DetectionTimeoutError extends Error {}
+export class DetectionTimeoutError extends Error {}
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+/** Exported for `sampleClipSequential.ts`'s reuse — the WebCodecs sequential-decode path applies
+ * the identical per-detection timeout discipline this playback path does, and duplicating this
+ * small wrapper would just be two copies to keep in sync. */
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
       () =>
@@ -148,7 +152,8 @@ export function sampleClip(
 
     if (!inFlight) {
       const t = metadata.mediaTime
-      inFlight = withTimeout(detector.estimatePose(video), detectionTimeoutMs)
+      const source = videoFrameSource(video, t)
+      inFlight = withTimeout(detector.estimatePose(source), detectionTimeoutMs)
         .then((frame) => {
           // Cancellation can land between this attempt starting and settling (e.g. `stop()`
           // mid-detection) — `finish()`/`abort()` already resolved/rejected the outer promise
