@@ -242,7 +242,10 @@ export function useVideoAnalysis(
         // measured a real-world scale (only possible via the dev-only mediapipe-primary backend
         // override today), and nothing to do when the kill switch is off. Config resolved once
         // per run, here — the same once-per-run discipline `resolveSamplingRobustnessConfig`
-        // gets above.
+        // gets above. Gating on `verticalOscillationCm.calibration` alone is still the right
+        // single check even though the pass now also backfills `stepWidthCm` (#45): both metrics
+        // key off the identical underlying fact (`pixelsPerMeter` populated that frame), so this
+        // gate already covers whether there's anything for either metric to gain from a pass.
         const scalePass: ScalePassState =
           heuristics.verticalOscillationCm.calibration !== null
             ? { status: 'skipped', reason: 'primary-scale', diagnostics: null }
@@ -424,7 +427,13 @@ export function useVideoAnalysis(
         const scaleMetricFrames = trimToPresenceWindow(scaleRobustFrames)
         const scaleHeuristics = computeFormHeuristics(scaleMetricFrames)
         // Graft rule: a pass that measured no real-world scale has nothing to graft — that is a
-        // failed pass (named as such), never a silent no-op replacement of the primary metric.
+        // failed pass (named as such), never a silent no-op replacement of the primary metrics.
+        // Still gated on `verticalOscillationCm.calibration` alone (#45): `stepWidthCm` has no
+        // calibration object of its own to check, and it reads the identical per-frame
+        // `pixelsPerMeter` fact this gate already tests — a pass that cleared this check grafts
+        // both metrics (see `graftScalePassResult`), including a `stepWidthCm` that
+        // independently found no footstrikes of its own (grafted with its own null value and
+        // caveat, not a reason to fail the whole pass).
         if (scaleHeuristics.verticalOscillationCm.calibration === null) {
           failPass('The scale pass completed but measured no real-world scale.')
           return

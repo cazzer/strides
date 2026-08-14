@@ -38,12 +38,20 @@ export function ResultsView({
 }: ResultsViewProps) {
   const { phase, progress, isPausedMidAnalysis, heuristics, error, start } =
     analysis
-  // A 'done' scale pass includes the measured-but-unfittable graft, where the centimetre
-  // metric's value is still null and the panel lists it as not measured — saying a metric "was
-  // added" there would be false. Shared with the 'failed' branch: for the reader both outcomes
-  // are the same fact (the second look produced no extra metric).
+  // A 'done' scale pass includes the measured-but-unfittable graft, where a grafted metric's
+  // value is still null and the panel lists it as not measured — saying a metric "was added"
+  // there would be false. Shared with the 'failed' branch: for the reader both outcomes are the
+  // same fact (the second look produced no extra metric(s)).
   const scalePassCouldntAdd =
-    " A second look at the clip couldn't add the extra metric."
+    " A second look at the clip couldn't add the extra metric(s)."
+  // Two metrics (`verticalOscillationCm`, `stepWidthCm`, #45) can now independently gain a value
+  // from the same completed scale pass — count how many actually did, rather than assuming
+  // "added" means exactly one, so the status line says "1 more metric" or "2 more metrics"
+  // correctly instead of a copy that undercounts once a pass grafts both.
+  const addedMetricCount = heuristics
+    ? [heuristics.verticalOscillationCm.value !== null, heuristics.stepWidthCm.value !== null]
+        .filter(Boolean).length
+    : 0
   // 'error' doesn't disable the button -- Analyze must stay re-runnable after a failed run,
   // not get stuck permanently disabled with no way forward. After a *completed* run the
   // button doesn't render at all: analysis is deterministic, so re-running the same clip has
@@ -89,13 +97,16 @@ export function ResultsView({
           Analysis complete.
           {/* The scale pass's only always-visible narrative (and the screen-reader
               announcement path): the hint in the excluded list sits below the fold, and the
-              video visibly replays during the pass — this line explains both. */}
+              video visibly replays during the pass — this line explains both. Count-agnostic
+              while in progress ("more metrics", not "one more metric") because how many of the
+              two scale-pass-backed metrics (#45) end up gaining a value isn't known until the
+              pass concludes — see `addedMetricCount` above for the done-state count itself. */}
           {(analysis.scalePass.status === 'pending' ||
             analysis.scalePass.status === 'running') &&
-            ' Measuring one more metric with a second look at the clip…'}
+            ' Measuring more metrics with a second look at the clip…'}
           {analysis.scalePass.status === 'done' &&
-            (heuristics && heuristics.verticalOscillationCm.value !== null
-              ? ' A second look at the clip added one more metric.'
+            (addedMetricCount > 0
+              ? ` A second look at the clip added ${addedMetricCount} more metric${addedMetricCount === 1 ? '' : 's'}.`
               : scalePassCouldntAdd)}
           {analysis.scalePass.status === 'failed' && scalePassCouldntAdd}
         </p>

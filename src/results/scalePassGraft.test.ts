@@ -67,8 +67,20 @@ function makeVerticalOscillationCm(
   }
 }
 
+function makeStepWidthCm(overrides: Partial<MetricResult> = {}): MetricResult {
+  return makeMetric({
+    metric: 'stepWidthCm',
+    value: 8.2,
+    unit: 'centimeters',
+    confidence: 0.5,
+    sampleSize: 5,
+    ...overrides,
+  })
+}
+
 function makeResult(
   verticalOscillationCm: VerticalOscillationCmResult,
+  stepWidthCm: MetricResult = makeStepWidthCm(),
 ): FormHeuristicsResult {
   return {
     view: {
@@ -103,11 +115,13 @@ function makeResult(
       unit: 'ratio',
       caveat: 'Approximated from ankle position relative to the knee at footstrike.',
     }),
+    stepWidthCm,
   }
 }
 
 function makePrimary(): FormHeuristicsResult {
-  // A realistic MoveNet primary: no measured scale, availability caveat, null value.
+  // A realistic MoveNet primary: no measured scale, availability caveat, null value for both
+  // scale-pass-backed metrics (#45).
   return makeResult(
     makeVerticalOscillationCm({
       value: null,
@@ -117,18 +131,28 @@ function makePrimary(): FormHeuristicsResult {
       caveat: "No real-world scale could be measured for this clip, so bounce can't be reported in centimetres.",
       calibration: null,
     }),
+    makeStepWidthCm({
+      value: null,
+      confidence: 0,
+      frameCoverage: 0,
+      sampleSize: 0,
+      caveat:
+        "No real-world scale could be measured for this clip, so step width can't be reported in centimetres.",
+    }),
   )
 }
 
 describe('graftScalePassResult', () => {
-  it('grafts only verticalOscillationCm — every other metric and view stay reference-identical to the primary', () => {
+  it('grafts verticalOscillationCm AND stepWidthCm — every other metric and view stay reference-identical to the primary', () => {
     const primary = makePrimary()
-    const scale = makeResult(makeVerticalOscillationCm())
+    const scale = makeResult(makeVerticalOscillationCm(), makeStepWidthCm())
 
     const grafted = graftScalePassResult(primary, scale)
 
     expect(grafted.verticalOscillationCm.value).toBe(4.79)
     expect(grafted.verticalOscillationCm.confidence).toBe(0.5)
+    expect(grafted.stepWidthCm.value).toBe(8.2)
+    expect(grafted.stepWidthCm.confidence).toBe(0.5)
     // Reference identity, not just equality — the graft must not rebuild anything else.
     expect(grafted.view).toBe(primary.view)
     expect(grafted.verticalOscillation).toBe(primary.verticalOscillation)
@@ -143,15 +167,46 @@ describe('graftScalePassResult', () => {
 
   it('does not mutate either input', () => {
     const primary = makePrimary()
-    const scale = makeResult(makeVerticalOscillationCm({ caveat: 'Scale coverage was low.' }))
+    const scale = makeResult(
+      makeVerticalOscillationCm({ caveat: 'Scale coverage was low.' }),
+      makeStepWidthCm({ caveat: 'Only 3 footstrike(s) detected.' }),
+    )
     const primaryCmBefore = primary.verticalOscillationCm
+    const primaryStepWidthBefore = primary.stepWidthCm
     const scaleCmBefore = { ...scale.verticalOscillationCm }
+    const scaleStepWidthBefore = { ...scale.stepWidthCm }
 
     graftScalePassResult(primary, scale)
 
     expect(primary.verticalOscillationCm).toBe(primaryCmBefore)
     expect(primary.verticalOscillationCm.value).toBeNull()
+    expect(primary.stepWidthCm).toBe(primaryStepWidthBefore)
+    expect(primary.stepWidthCm.value).toBeNull()
     expect(scale.verticalOscillationCm).toEqual(scaleCmBefore)
+    expect(scale.stepWidthCm).toEqual(scaleStepWidthBefore)
+  })
+
+  it('grafts stepWidthCm with its own null value and caveat when the pass measured scale broadly but found no footstrikes for it — verticalOscillationCm unaffected', () => {
+    const primary = makePrimary()
+    const scale = makeResult(
+      makeVerticalOscillationCm(), // the pass DID measure scale and fit a bounce
+      makeStepWidthCm({
+        value: null,
+        confidence: 0,
+        frameCoverage: 0,
+        sampleSize: 0,
+        caveat: 'No footstrikes could be detected in this clip.',
+      }),
+    )
+
+    const grafted = graftScalePassResult(primary, scale)
+
+    expect(grafted.verticalOscillationCm.value).toBe(4.79)
+    expect(grafted.verticalOscillationCm.caveat).toBe(SCALE_PASS_PROVENANCE_CAVEAT)
+    expect(grafted.stepWidthCm.value).toBeNull()
+    expect(grafted.stepWidthCm.caveat).toBe(
+      `No footstrikes could be detected in this clip. ${SCALE_PASS_PROVENANCE_CAVEAT}`,
+    )
   })
 
   it('appends the provenance sentence after the scale result caveat when one exists', () => {

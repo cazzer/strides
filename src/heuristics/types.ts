@@ -44,6 +44,7 @@ export type MetricId =
   | 'kneeFlexion'
   | 'armSwingSymmetry'
   | 'footStrikePattern'
+  | 'stepWidthCm'
 
 export interface ViewDetectionResult {
   view: View
@@ -72,7 +73,7 @@ export interface MetricResult {
    * (American spelling, matching every identifier in this codebase that names the unit) is an
    * ABSOLUTE physical quantity with no denominator at all — unlike every other unit here, it is
    * not relative to torso length, stride length, or anything else about the runner's own body.
-   * `verticalOscillationCm` is its only producer. */
+   * `verticalOscillationCm` and `stepWidthCm` are its only producers. */
   unit: 'ratio' | 'degrees' | 'stepsPerMinute' | 'percent' | 'centimeters'
   /** 0..1; forced 0 when value is null. */
   confidence: number
@@ -273,6 +274,7 @@ export interface FormHeuristicsResult {
   kneeFlexion: MetricResult
   armSwingSymmetry: MetricResult
   footStrikePattern: MetricResult
+  stepWidthCm: MetricResult
 }
 
 export interface HeuristicsConfig {
@@ -522,6 +524,17 @@ export const DEFAULT_VIEW_FIT_TABLE: HeuristicsConfig['viewFitTable'] = {
   footStrikePattern: {
     side: { fit: 'primary', multiplier: 1.0 },
     front: { fit: 'unsuitable', multiplier: 0.1 },
+    ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
+  },
+  // Mirror image of trunkLean/overstriding/footStrikePattern, same reasoning as
+  // armSwingSymmetry: step width is a mediolateral (side-to-side) offset, which a side-on camera
+  // collapses toward zero (the near/far foot's lateral offset from the hip projects onto the
+  // sagittal axis, not the image-x axis a side view actually resolves) rather than merely reading
+  // it noisily — a confidently-wrong small number, not an obviously-degraded one. Front (or rear
+  // — 'front' means front-or-back, see `View`'s own doc) is where the offset is directly visible.
+  stepWidthCm: {
+    front: { fit: 'primary', multiplier: 1.0 },
+    side: { fit: 'unsuitable', multiplier: 0.1 },
     ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
   },
 }

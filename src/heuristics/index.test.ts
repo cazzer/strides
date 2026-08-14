@@ -29,6 +29,7 @@ describe('computeFormHeuristics', () => {
     expect(result.overstriding.metric).toBe('overstriding')
     expect(result.cadence.metric).toBe('cadence')
     expect(result.footStrikePattern.metric).toBe('footStrikePattern')
+    expect(result.stepWidthCm.metric).toBe('stepWidthCm')
 
     expect(result.verticalOscillation.value).not.toBeNull()
     expect(result.verticalRatio.value).not.toBeNull()
@@ -36,6 +37,16 @@ describe('computeFormHeuristics', () => {
     expect(result.overstriding.value).not.toBeNull()
     expect(result.cadence.value).not.toBeNull()
     expect(result.footStrikePattern.value).not.toBeNull()
+    // PARAMS is a side-view clip -- stepWidthCm's primary view is front (mirroring
+    // armSwingSymmetry), so side is its unsuitable view; it's still computed (never a silent
+    // wrong number) but excluded here for the same reason armSwingSymmetry is below.
+    expect(result.stepWidthCm.viewFit).toBe('unsuitable')
+    // PARAMS carries no pixelsPerMeter -- an "unscaled" clip, like every non-MediaPipe backend --
+    // so stepWidthCm also reports its availability caveat rather than a value, same as
+    // verticalOscillationCm below.
+    expect(result.stepWidthCm.value).toBeNull()
+    expect(result.stepWidthCm.confidence).toBe(0)
+    expect(result.stepWidthCm.caveat).toMatch(/no real-world scale could be measured/i)
     // generateSyntheticGait's elbow/wrist keypoints are static relative to the shoulder (this
     // shared fixture has no arm-swing motion), so armSwingSymmetry correctly reports null here
     // ("no complete arm-swing cycle") rather than a fabricated value — see armSwingSymmetry.test.ts
@@ -87,6 +98,25 @@ describe('computeFormHeuristics', () => {
     expect(scaled.verticalOscillationCm.value).toBe(
       scaled.verticalOscillationCm.calibration?.verticalOscillationCm,
     )
+  })
+
+  it('gates stepWidthCm on measured scale the same way, independently of view (#45)', () => {
+    // stepWidthCm's own backend gate runs first, same ordering as verticalOscillationCm's -- an
+    // unscaled clip reports the availability caveat regardless of whether the view is even
+    // workable for the metric.
+    const unscaledSide = computeFormHeuristics(generateSyntheticGait(PARAMS))
+    const unscaledFront = computeFormHeuristics(
+      generateSyntheticGait({ ...PARAMS, view: 'front' }),
+    )
+    const scaledFront = computeFormHeuristics(
+      generateSyntheticGait({ ...PARAMS, view: 'front', pixelsPerMeter: 800 }),
+    )
+
+    expect(unscaledSide.stepWidthCm.value).toBeNull()
+    expect(unscaledFront.stepWidthCm.value).toBeNull()
+    expect(scaledFront.stepWidthCm.value).not.toBeNull()
+    expect(scaledFront.stepWidthCm.unit).toBe('centimeters')
+    expect(scaledFront.stepWidthCm.viewFit).toBe('primary')
   })
 
   it('cadence and vertical oscillation agree exactly, since both fit the identical shared hip-bounce signal', () => {
@@ -178,7 +208,7 @@ describe('computeFormHeuristics', () => {
     expect(orchestrated.view).toEqual(standaloneView)
   })
 
-  it('gates all eight metrics consistently off an ambiguous view', () => {
+  it('gates all ten metrics consistently off an ambiguous view', () => {
     const frames = generateSyntheticGait({
       ...PARAMS,
       strideAmplitudePx: 20, // engineered BSR/SER disagreement, see viewDetection.test.ts
@@ -203,6 +233,9 @@ describe('computeFormHeuristics', () => {
     expect(result.cadence.viewFit).toBe('tolerated')
     expect(result.armSwingSymmetry.viewFit).toBe('unsuitable')
     expect(result.footStrikePattern.viewFit).toBe('unsuitable')
+    // stepWidthCm is hard-gated like armSwingSymmetry (its own mirror-image reasoning, see
+    // viewFitTable.stepWidthCm in types.ts), not view-tolerant.
+    expect(result.stepWidthCm.viewFit).toBe('unsuitable')
   })
 
   it('never throws on an empty frame list and returns a well-formed, non-null-crashing result', () => {
@@ -218,6 +251,7 @@ describe('computeFormHeuristics', () => {
     expect(result.cadence.value).toBeNull()
     expect(result.armSwingSymmetry.value).toBeNull()
     expect(result.footStrikePattern.value).toBeNull()
+    expect(result.stepWidthCm.value).toBeNull()
     expect(result.verticalOscillation.confidence).toBe(0)
     expect(result.verticalRatio.confidence).toBe(0)
     expect(result.verticalOscillationCm.confidence).toBe(0)
@@ -226,9 +260,11 @@ describe('computeFormHeuristics', () => {
     expect(result.cadence.confidence).toBe(0)
     expect(result.armSwingSymmetry.confidence).toBe(0)
     expect(result.footStrikePattern.confidence).toBe(0)
+    expect(result.stepWidthCm.confidence).toBe(0)
     expect(result.footStrikePattern.caveat).not.toBeNull()
     expect(result.verticalOscillationCm.calibration).toBeNull()
     expect(result.verticalOscillationCm.caveat).not.toBeNull()
+    expect(result.stepWidthCm.caveat).not.toBeNull()
     expect(result.verticalOscillation.series).toEqual([])
   })
 })

@@ -50,6 +50,7 @@ function makeHeuristics(): FormHeuristicsResult {
       value: 0.01,
       caveat: 'Approximated from ankle position relative to the knee at footstrike.',
     },
+    stepWidthCm: { ...base, metric: 'stepWidthCm', value: 8.2, unit: 'centimeters' },
   }
 }
 
@@ -173,9 +174,11 @@ describe('ResultsView', () => {
     expect(screen.getByRole('status').textContent).toMatch(/complete/i)
   })
 
-  it('narrates the scale pass through the status line: measuring, then measured', () => {
+  it('narrates the scale pass through the status line: measuring (count-agnostic), then measured', () => {
     // The status line is the pass's only always-visible surface (the excluded-list hint sits
-    // below the fold) and its only screen-reader announcement path.
+    // below the fold) and its only screen-reader announcement path. The in-progress phrasing is
+    // count-agnostic ("more metrics", not "one more metric") since #45 -- how many of the two
+    // scale-pass-backed metrics will end up gaining a value isn't known until the pass concludes.
     const { rerender } = render(
       <ResultsView
         analysis={makeAnalysis({
@@ -188,9 +191,11 @@ describe('ResultsView', () => {
       />,
     )
     expect(screen.getByRole('status').textContent).toMatch(
-      /measuring one more metric with a second look at the clip/i,
+      /measuring more metrics with a second look at the clip/i,
     )
 
+    // makeHeuristics()'s default fixture carries a non-null value for BOTH verticalOscillationCm
+    // and stepWidthCm -- once 'done', both count as added.
     rerender(
       <ResultsView
         analysis={makeAnalysis({
@@ -203,20 +208,38 @@ describe('ResultsView', () => {
       />,
     )
     expect(screen.getByRole('status').textContent).toMatch(
-      /a second look at the clip added one more metric/i,
+      /a second look at the clip added 2 more metrics/i,
     )
   })
 
-  it("says the second look couldn't add the extra metric when it completes without a grafted value", () => {
+  it('pluralizes "1 more metric" (singular) when exactly one of the two grafted metrics gained a value', () => {
+    const heuristics = makeHeuristics()
+    heuristics.stepWidthCm = { ...heuristics.stepWidthCm, value: null, confidence: 0 }
+    renderResultsView({
+      analysis: makeAnalysis({
+        phase: 'ready',
+        heuristics,
+        scalePass: { status: 'done', diagnostics: null },
+      }),
+    })
+    const text = screen.getByRole('status').textContent
+    expect(text).toMatch(/a second look at the clip added 1 more metric\./i)
+    expect(text).not.toMatch(/more metrics/i)
+  })
+
+  it("says the second look couldn't add the extra metric(s) when it completes without any grafted value", () => {
     // A 'done' pass includes the measured-but-unfittable graft: calibration is non-null but the
     // centimetre value stays null and the panel still lists the metric as not measured — the
-    // status line must not claim a metric was added.
+    // status line must not claim a metric was added. Both scale-pass-backed metrics (#45) must be
+    // null for the "couldn't add" branch to fire -- a fixture where only one is null still counts
+    // as 1 added (see the singular-pluralization test above).
     const heuristics = makeHeuristics()
     heuristics.verticalOscillationCm = {
       ...heuristics.verticalOscillationCm,
       value: null,
       confidence: 0,
     }
+    heuristics.stepWidthCm = { ...heuristics.stepWidthCm, value: null, confidence: 0 }
     renderResultsView({
       analysis: makeAnalysis({
         phase: 'ready',
@@ -225,9 +248,9 @@ describe('ResultsView', () => {
       }),
     })
     expect(screen.getByRole('status').textContent).toMatch(
-      /second look at the clip couldn't add the extra metric/i,
+      /second look at the clip couldn't add the extra metric\(s\)/i,
     )
-    expect(screen.getByRole('status').textContent).not.toMatch(/added one more metric/i)
+    expect(screen.getByRole('status').textContent).not.toMatch(/added \d+ more metric/i)
   })
 
   it("says the second look couldn't add the extra metric, in the status line, when it fails", () => {

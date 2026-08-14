@@ -63,6 +63,17 @@ function makeHeuristics(overrides: Partial<FormHeuristicsResult> = {}): FormHeur
     kneeFlexion: makeMetric({ metric: 'kneeFlexion' }),
     armSwingSymmetry: makeMetric({ metric: 'armSwingSymmetry', unit: 'percent', value: 0.9 }),
     footStrikePattern: makeMetric({ metric: 'footStrikePattern', unit: 'ratio' }),
+    stepWidthCm: {
+      metric: 'stepWidthCm',
+      value: null,
+      unit: 'centimeters',
+      confidence: 0,
+      viewFit: 'primary',
+      interpolatedFraction: 0,
+      frameCoverage: 0,
+      sampleSize: 0,
+      caveat: "No real-world scale could be measured for this clip, so step width can't be reported in centimetres. Step width measures the same offset without it.",
+    },
     ...overrides,
   }
 }
@@ -186,6 +197,7 @@ describe('computeAnalysisDiagnostics', () => {
         'footStrikePattern',
         'kneeFlexion',
         'overstriding',
+        'stepWidthCm',
         'trunkLean',
         'verticalOscillation',
         'verticalOscillationCm',

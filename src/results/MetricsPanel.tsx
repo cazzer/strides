@@ -41,6 +41,8 @@ const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
     'How evenly your left and right arms swing relative to each other — 100% is perfectly even, lower values mean one arm is swinging noticeably more than the other.',
   footStrikePattern:
     'Whether your foot tends to land heel-, midfoot-, or forefoot-first — approximated from ankle position relative to the knee at footstrike, not a direct foot-angle measurement.',
+  stepWidthCm:
+    "How far to the side of your hip midline your foot lands at each footstrike, in real centimetres. It needs a real-world scale measurement from the clip, so it isn't always available.",
 }
 
 const FOOT_STRIKE_CLASS_LABELS: Record<FootStrikeClass, string> = {
@@ -169,7 +171,7 @@ function ExcludedEntry({ metric, hint }: ExcludedEntryProps) {
 }
 
 /**
- * Numeric readouts for all nine form heuristics, partitioned into tiers (#37; exclusion rule
+ * Numeric readouts for all ten form heuristics, partitioned into tiers (#37; exclusion rule
  * reversed by exclude-only-unmeasurable-metrics) rather than one uniform grid: tier 1
  * ('normal', measured, view-workable, confidence >= 0.7) and tier 2 ('caveated', measured,
  * view-workable, confidence < 0.7 with no lower bound) render as cards in the grid above,
@@ -194,6 +196,7 @@ export function MetricsPanel({ heuristics, scalePassStatus = 'idle' }: MetricsPa
     heuristics.kneeFlexion,
     heuristics.armSwingSymmetry,
     heuristics.footStrikePattern,
+    heuristics.stepWidthCm,
   ]
   const excluded = metrics.filter((metric) => metricTier(metric) === 'excluded')
   const caveatedCount = metrics.filter((metric) => metricTier(metric) === 'caveated').length
@@ -254,14 +257,18 @@ export function MetricsPanel({ heuristics, scalePassStatus = 'idle' }: MetricsPa
               <ExcludedEntry
                 key={metric.metric}
                 metric={metric}
-                // While the background scale pass is measuring, the centimetre metric's
+                // While the background scale pass is measuring, a scale-pass-backed metric's
                 // availability caveat ("no scale could be measured") isn't the truth yet-to-come —
                 // hint at the in-flight measurement instead; after a failed pass, say the
                 // attempt happened (the availability caveat alone would imply the capability
                 // is absent when the app just ran it). Null-value only: the only non-null
                 // excluded shape is an unsuitable view, whose own caveat is the accurate one.
+                // Both `verticalOscillationCm` and `stepWidthCm` are grafted from the same scale
+                // pass (#45) and share this hint — see scalePassGraft.ts.
                 hint={
-                  metric.metric === 'verticalOscillationCm' && metric.value === null
+                  (metric.metric === 'verticalOscillationCm' ||
+                    metric.metric === 'stepWidthCm') &&
+                  metric.value === null
                     ? scalePassInProgress
                       ? 'Measuring real-world scale with a second look at the clip…'
                       : scalePassStatus === 'failed'

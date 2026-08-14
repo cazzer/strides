@@ -1,4 +1,4 @@
-import type { FormHeuristicsResult } from '../heuristics/types'
+import type { FormHeuristicsResult, MetricResult } from '../heuristics/types'
 
 /**
  * Appended to the grafted metric's caveat so the one scale-pass-sourced number on the panel
@@ -12,25 +12,48 @@ export const SCALE_PASS_PROVENANCE_CAVEAT =
   'From a second look at the same clip.'
 
 /**
- * Grafts a completed background scale pass's `verticalOscillationCm` onto the primary pass's
- * result (D3) — the ONE metric the scale pass exists to provide. Pure and composed OUTSIDE
- * `src/heuristics/`: the heuristics layer computes one result from one set of frames and knows
- * nothing about passes; combining two passes' results is the results layer's policy.
+ * Appends the provenance sentence to one scale-pass-sourced metric's own caveat (space-joined,
+ * the same composition idiom the heuristics layer's multi-caveat paths use) — the shared shape
+ * behind grafting either `verticalOscillationCm` or `stepWidthCm` below.
+ */
+function withProvenance<T extends MetricResult>(scaleMetric: T): T {
+  return {
+    ...scaleMetric,
+    caveat: [scaleMetric.caveat, SCALE_PASS_PROVENANCE_CAVEAT].filter(Boolean).join(' '),
+  }
+}
+
+/**
+ * Grafts a completed background scale pass's `verticalOscillationCm` AND `stepWidthCm` onto the
+ * primary pass's result (D3; extended to `stepWidthCm` by #45) — the metrics the scale pass
+ * exists to provide. Pure and composed OUTSIDE `src/heuristics/`: the heuristics layer computes
+ * one result from one set of frames and knows nothing about passes; combining two passes'
+ * results is the results layer's policy.
+ *
+ * Extending the graft to `stepWidthCm` rather than scoping it to MediaPipe-primary-only was a
+ * deliberate call, not an oversight: the caller's gate for even running the pass at all
+ * (`heuristics.verticalOscillationCm.calibration !== null`, in `useVideoAnalysis.ts`) already
+ * tests the exact same underlying fact — a measured `pixelsPerMeter` — that gates `stepWidthCm`,
+ * so extending the graft costs no new branch anywhere in the decision to run the pass; it only
+ * widens what gets pulled out of an already-computed scale-pass result.
  *
  * - Every other metric, and `view`, stay reference-identical to `primary`'s — the scale pass's
- *   versions of them are deliberately discarded (MoveNet remains the better primary for all
- *   eight; see the change's proposal.md for the assessed evidence).
+ *   versions of them are deliberately discarded (MoveNet remains the better primary for the
+ *   rest; see the change's proposal.md for the assessed evidence).
  * - `calibration` carries by reference, preserving the identity invariant #36 established
  *   (`scalePass.diagnostics.scaleCalibration === grafted.verticalOscillationCm.calibration`).
- * - The provenance sentence is appended after the scale result's own caveat when one exists
- *   (space-joined, the same composition idiom the heuristics layer's multi-caveat paths use).
- *   A measured-but-unfittable scale result grafts too — its named fit-failure caveat plus
+ *   `stepWidthCm` has no such companion object to carry — see its own module doc for why.
+ * - The provenance sentence is appended after each grafted metric's own caveat when one exists.
+ *   A measured-but-unfittable/no-footstrikes scale result grafts too — its named caveat plus
  *   provenance replaces the primary's "no scale could be measured" availability caveat, which
  *   after a completed MediaPipe pass would be false.
  *
- * The caller (`useVideoAnalysis.ts`) only invokes this when the scale result's `calibration` is
- * non-null — a pass that measured no scale at all is a failed pass, not a graft. Neither input
- * is mutated.
+ * The caller (`useVideoAnalysis.ts`) only invokes this when the scale result's
+ * `verticalOscillationCm.calibration` is non-null — a pass that measured no scale at all is a
+ * failed pass, not a graft. `stepWidthCm` grafts unconditionally alongside it once that gate
+ * passes: a clip that measured scale but found no footstrikes for step width still grafts its own
+ * null value and caveat, independently of whatever `verticalOscillationCm` did. Neither input is
+ * mutated.
  */
 export function graftScalePassResult(
   primary: FormHeuristicsResult,
@@ -38,11 +61,7 @@ export function graftScalePassResult(
 ): FormHeuristicsResult {
   return {
     ...primary,
-    verticalOscillationCm: {
-      ...scale.verticalOscillationCm,
-      caveat: [scale.verticalOscillationCm.caveat, SCALE_PASS_PROVENANCE_CAVEAT]
-        .filter(Boolean)
-        .join(' '),
-    },
+    verticalOscillationCm: withProvenance(scale.verticalOscillationCm),
+    stepWidthCm: withProvenance(scale.stepWidthCm),
   }
 }

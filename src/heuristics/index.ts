@@ -11,9 +11,10 @@ import { computeCadence } from './cadence'
 import { computeKneeFlexion } from './kneeFlexion'
 import { computeArmSwingSymmetry } from './armSwingSymmetry'
 import { computeFootStrikePattern } from './footStrikePattern'
+import { computeStepWidthCm } from './stepWidthCm'
 
 /**
- * View detection must run before all nine metrics — each one's view-fit gating and confidence
+ * View detection must run before all ten metrics — each one's view-fit gating and confidence
  * depend on the detected `View`. Encoding that ordering dependency here, rather than leaving it
  * to every caller, means the results view makes one call instead of ten that have to be
  * invoked in the right order.
@@ -22,7 +23,9 @@ import { computeFootStrikePattern } from './footStrikePattern'
  * `verticalOscillation` and `verticalRatio` — #35's shipped orchestration requirement says
  * `verticalRatio` sits immediately after `verticalOscillation` in `MetricId` and every
  * enumeration of it, and appending keeps that literally true rather than requiring it to be
- * re-verified against a new neighbour (#36, D1).
+ * re-verified against a new neighbour (#36, D1). `stepWidthCm` is appended last, after
+ * `footStrikePattern` — the same append-only discipline, and it matches `MetricId`'s own
+ * declaration order (#45).
  */
 export function computeFormHeuristics(
   frames: RobustPoseFrame[],
@@ -41,5 +44,6 @@ export function computeFormHeuristics(
     kneeFlexion: computeKneeFlexion(frames, view.view, config),
     armSwingSymmetry: computeArmSwingSymmetry(frames, view.view, config),
     footStrikePattern: computeFootStrikePattern(frames, view.view, config),
+    stepWidthCm: computeStepWidthCm(frames, view.view, config),
   }
 }
