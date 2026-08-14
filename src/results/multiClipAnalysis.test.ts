@@ -120,6 +120,19 @@ describe('computeAggregateAnalysisState', () => {
     expect(computeAggregateAnalysisState(clips).phase).toBe('sampling')
   })
 
+  it('is NOT idle when one clip is ready and another is idle, genuinely queued behind the shared detector', () => {
+    // This is the normal, expected state whenever N>=2 clips are uploaded and the earlier ones
+    // haven't all finished yet -- not an edge case. Falling through to 'idle' here would render
+    // ResultsView's bare, re-enabled "Analyze" button, indistinguishable from a fresh session,
+    // and clicking it would discard clip 'a's finished results via the aggregate start() fan-out.
+    const clips = [
+      makeClip('a', { phase: 'ready', heuristics: makeHeuristics() }),
+      makeClip('b', { phase: 'idle' }),
+    ]
+    const phase = computeAggregateAnalysisState(clips).phase
+    expect(phase).not.toBe('idle')
+  })
+
   it('is ready only when every clip is ready, and fuses heuristics at that point', () => {
     const h0 = makeHeuristics(0.9)
     const h1 = makeHeuristics(0.1)
@@ -188,6 +201,21 @@ describe('computeAggregateAnalysisState', () => {
     expect(clips[0].analysis.reset).toHaveBeenCalledTimes(1)
     expect(clips[1].analysis.reset).toHaveBeenCalledTimes(1)
   })
+
+  it('start() skips a clip that is already ready, even if called unexpectedly', () => {
+    // Belt-and-suspenders alongside the phase-combinator fix above: whatever state this
+    // aggregate is computed from, an already-finished clip's results must never be discardable
+    // by a fanned-out start() call.
+    const clips = [
+      makeClip('a', { phase: 'ready', heuristics: makeHeuristics() }),
+      makeClip('b', { phase: 'idle' }),
+    ]
+    const agg = computeAggregateAnalysisState(clips)
+
+    agg.start()
+    expect(clips[0].analysis.start).not.toHaveBeenCalled()
+    expect(clips[1].analysis.start).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('nextActiveClipIndex', () => {
@@ -226,16 +254,61 @@ describe('nextActiveClipIndex', () => {
     expect(nextActiveClipIndex(clips, 0)).toBe(1)
   })
 
-  it('advances past an errored clip too (error counts as primary-terminal)', () => {
+  it('advances past an errored clip too, even though its scale pass never left idle', () => {
+    // A real errored clip's scalePass never reaches a terminal status -- useVideoAnalysis.ts's
+    // scale-pass effect only ever fires out of phase === 'ready', and every 'error' transition
+    // spreads idleState() (scalePass: { status: 'idle', diagnostics: null }) verbatim. A fixture
+    // asserting 'skipped' here would test a state the real state machine can never produce and
+    // would pass even against the pre-fix gate (which required BOTH phase-terminal AND
+    // scalePass-terminal) -- this is the exact reachable state instead, so this test actually
+    // exercises the fix: it fails against `(phase === 'ready' || phase === 'error') &&
+    // scalePassTerminal` and passes against `phase === 'error' || (phase === 'ready' &&
+    // scalePassTerminal)`.
     const clips = [
       makeClip('a', {
         phase: 'error',
         error: { kind: 'unknown', message: 'x' },
-        scalePass: makeScalePass('skipped'),
+        scalePass: { status: 'idle', diagnostics: null },
       }),
       makeClip('b'),
     ]
     expect(nextActiveClipIndex(clips, 0)).toBe(1)
+  })
+
+  it('does not deadlock: an errored clip releases the detector to the very next clip in the queue', () => {
+    // The concrete deadlock this bug produced: a clip queued directly behind an errored clip
+    // stuck "Queued" forever (analysis.phase 'idle', detector null), with no automatic recovery,
+    // because the errored clip's scalePass.status could never become terminal. `nextActiveIndex`
+    // only ever walks past clips that are THEMSELVES terminal -- a genuinely queued ('idle')
+    // clip is exactly where the walk should stop, since it hasn't had a chance to run yet (it's
+    // that clip's own eventual 'ready'/'error' transition that lets the walk continue past it).
+    // What must not happen is getting stuck at index 0, on the errored clip itself.
+    const clips = [
+      makeClip('a', {
+        phase: 'error',
+        error: { kind: 'unknown', message: 'x' },
+        scalePass: { status: 'idle', diagnostics: null },
+      }),
+      makeClip('b'),
+      makeClip('c'),
+    ]
+    expect(nextActiveClipIndex(clips, 0)).toBe(1)
+  })
+
+  it('advances through a run of an errored clip followed by an already-finished clip in one call', () => {
+    // Mirrors the existing "advances through multiple already-finished clips" case above, but
+    // with the run starting on an errored clip rather than a ready one -- both terminal kinds
+    // should chain through a single nextActiveClipIndex call identically.
+    const clips = [
+      makeClip('a', {
+        phase: 'error',
+        error: { kind: 'unknown', message: 'x' },
+        scalePass: { status: 'idle', diagnostics: null },
+      }),
+      makeClip('b', { phase: 'ready', scalePass: makeScalePass('done') }),
+      makeClip('c'),
+    ]
+    expect(nextActiveClipIndex(clips, 0)).toBe(2)
   })
 
   it('advances through multiple already-finished clips in one call', () => {

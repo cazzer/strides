@@ -28,6 +28,15 @@ function aggregatePhase(clips: ClipSession[]): AnalysisPhase {
   if (clips.some((c) => c.analysis.phase === 'sampling')) return 'sampling'
   if (clips.some((c) => c.analysis.phase === 'processing')) return 'processing'
   if (clips.every((c) => c.analysis.phase === 'ready')) return 'ready'
+  // A clip has already finished ('ready') while another sits genuinely 'idle' -- queued behind
+  // the shared detector (ClipSlot's "Queued -- waiting for another clip to finish analyzing…"
+  // message), not the "nothing has ever run" case (that one only happens when EVERY clip is
+  // idle, handled by the fallthrough below). Reporting 'sampling' here keeps ResultsView's
+  // "Analyze" button disabled and its progress readout visible instead of falling through to
+  // 'idle' and rendering a bare, re-enabled "Analyze" indistinguishable from a fresh session --
+  // which, via `start()`'s fan-out below, would re-sample the already-finished clip from
+  // scratch if clicked.
+  if (clips.some((c) => c.analysis.phase === 'ready')) return 'sampling'
   return 'idle'
 }
 
@@ -69,8 +78,16 @@ export function computeAggregateAnalysisState(clips: ClipSession[]): VideoAnalys
     diagnostics: null,
     scalePass: { status: aggregateScalePassStatus(clips), diagnostics: null },
     error: aggregateError(clips),
+    // Defense in depth alongside the `aggregatePhase` fix above: a 'ready' clip is finished and
+    // deterministic (re-running it has nothing new to say -- see ResultsView's own comment on
+    // why the button doesn't even render once a clip is ready). Skipping it here means that even
+    // if this combinator is ever invoked from a phase this module didn't anticipate, calling the
+    // aggregate `start()` can never discard an already-finished clip's results out from under it.
     start: () => {
-      for (const clip of clips) clip.analysis.start()
+      for (const clip of clips) {
+        if (clip.analysis.phase === 'ready') continue
+        clip.analysis.start()
+      }
     },
     reset: () => {
       for (const clip of clips) clip.analysis.reset()
@@ -79,21 +96,34 @@ export function computeAggregateAnalysisState(clips: ClipSession[]): VideoAnalys
 }
 
 function isDoneWithSharedDetector(clip: ClipSession): boolean {
-  const primaryDone = clip.analysis.phase === 'ready' || clip.analysis.phase === 'error'
-  const scalePassDone =
+  // An errored clip's primary pass never reached 'ready', so `useVideoAnalysis.ts`'s scale-pass
+  // effect (gated on `state.phase === 'ready'`) never fires for it -- its `scalePass.status`
+  // stays 'idle' forever (see `idleState()`/`start()`'s error branches, both of which spread
+  // `idleState()` verbatim). Waiting for that scale pass to reach a terminal status is waiting
+  // for something structurally incapable of happening: an errored clip's scale pass isn't "not
+  // yet terminal", it never had the chance to start. Treat 'error' as immediately, fully
+  // terminal -- releasing both the primary and scale-pass detector claims -- without requiring
+  // `scalePass.status` to move at all.
+  if (clip.analysis.phase === 'error') return true
+  if (clip.analysis.phase !== 'ready') return false
+  // The 'ready' path is unchanged: the primary pass succeeded, and its background scale pass --
+  // which uses its OWN separately-shared, module-cached MediaPipe detector -- genuinely needs to
+  // finish before that scale-pass detector is safe to reuse for the next clip.
+  return (
     clip.analysis.scalePass.status === 'done' ||
     clip.analysis.scalePass.status === 'failed' ||
     clip.analysis.scalePass.status === 'skipped'
-  return primaryDone && scalePassDone
+  )
 }
 
 /**
- * The shared-detector serialization rule (see the change's design.md, D5): a clip is only
- * skipped past once its ENTIRE pipeline — primary analysis run AND background scale pass — has
- * reached a terminal state. Only one clip ever holds a live detector at a time; every other clip
- * must receive `null` (see `MultiClipVideoSession`). For a single clip this is a permanent
- * no-op — the loop's bound (`clips.length - 1`) never lets it advance past the only clip there
- * is, done or not.
+ * The shared-detector serialization rule (see the change's design.md, D5): a clip is skipped
+ * past once EITHER (a) it errored -- its primary pass never reached 'ready', so it never started
+ * a scale pass and never will, making it terminal on the spot -- or (b) its ENTIRE pipeline --
+ * primary analysis run AND background scale pass -- has reached a terminal state. Only one clip
+ * ever holds a live detector at a time; every other clip must receive `null` (see
+ * `MultiClipVideoSession`). For a single clip this is a permanent no-op — the loop's bound
+ * (`clips.length - 1`) never lets it advance past the only clip there is, done or not.
  *
  * `currentActiveIndex` is clamped into range first so a clip removal (shrinking the array) can't
  * leave the index pointing past the end.
