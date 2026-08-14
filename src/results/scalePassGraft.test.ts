@@ -103,6 +103,7 @@ function makeResult(
       unit: 'ratio',
       caveat: 'Approximated from ankle position relative to the knee at footstrike.',
     }),
+    stepWidth: makeMetric({ metric: 'stepWidth', value: 0.15, unit: 'percent' }),
   }
 }
 
@@ -139,6 +140,7 @@ describe('graftScalePassResult', () => {
     expect(grafted.kneeFlexion).toBe(primary.kneeFlexion)
     expect(grafted.armSwingSymmetry).toBe(primary.armSwingSymmetry)
     expect(grafted.footStrikePattern).toBe(primary.footStrikePattern)
+    expect(grafted.stepWidth).toBe(primary.stepWidth)
   })
 
   it('does not mutate either input', () => {

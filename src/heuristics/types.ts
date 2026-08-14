@@ -44,6 +44,7 @@ export type MetricId =
   | 'kneeFlexion'
   | 'armSwingSymmetry'
   | 'footStrikePattern'
+  | 'stepWidth'
 
 export interface ViewDetectionResult {
   view: View
@@ -273,6 +274,7 @@ export interface FormHeuristicsResult {
   kneeFlexion: MetricResult
   armSwingSymmetry: MetricResult
   footStrikePattern: MetricResult
+  stepWidth: MetricResult
 }
 
 export interface HeuristicsConfig {
@@ -522,6 +524,17 @@ export const DEFAULT_VIEW_FIT_TABLE: HeuristicsConfig['viewFitTable'] = {
   footStrikePattern: {
     side: { fit: 'primary', multiplier: 1.0 },
     front: { fit: 'unsuitable', multiplier: 0.1 },
+    ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
+  },
+  // Mediolateral, the opposite view-tolerance from most existing (sagittal-plane) metrics: a
+  // side-on camera looks straight along the axis this metric measures (foot offset from the
+  // hip midline), collapsing it toward a degenerate reading, while front/rear view is exactly
+  // where mediolateral foot placement is visible. Mirrors armSwingSymmetry's row (front primary,
+  // side unsuitable) — arm swing is occluded/superimposed in side view for a different reason
+  // (separability, not axis collapse), but lands on the identical numbers.
+  stepWidth: {
+    front: { fit: 'primary', multiplier: 1.0 },
+    side: { fit: 'unsuitable', multiplier: 0.1 },
     ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
   },
 }

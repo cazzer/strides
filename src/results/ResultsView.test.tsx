@@ -50,6 +50,7 @@ function makeHeuristics(): FormHeuristicsResult {
       value: 0.01,
       caveat: 'Approximated from ankle position relative to the knee at footstrike.',
     },
+    stepWidth: { ...base, metric: 'stepWidth', value: 0.15, unit: 'percent' },
   }
 }
 

@@ -29,6 +29,7 @@ describe('computeFormHeuristics', () => {
     expect(result.overstriding.metric).toBe('overstriding')
     expect(result.cadence.metric).toBe('cadence')
     expect(result.footStrikePattern.metric).toBe('footStrikePattern')
+    expect(result.stepWidth.metric).toBe('stepWidth')
 
     expect(result.verticalOscillation.value).not.toBeNull()
     expect(result.verticalRatio.value).not.toBeNull()
@@ -36,6 +37,9 @@ describe('computeFormHeuristics', () => {
     expect(result.overstriding.value).not.toBeNull()
     expect(result.cadence.value).not.toBeNull()
     expect(result.footStrikePattern.value).not.toBeNull()
+    // stepWidth is front-primary/side-unsuitable (the mirror of armSwingSymmetry) -- still
+    // computed on this side-view clip, per "never a silent wrong number", just view-discounted.
+    expect(result.stepWidth.value).not.toBeNull()
     // generateSyntheticGait's elbow/wrist keypoints are static relative to the shoulder (this
     // shared fixture has no arm-swing motion), so armSwingSymmetry correctly reports null here
     // ("no complete arm-swing cycle") rather than a fabricated value — see armSwingSymmetry.test.ts
@@ -61,6 +65,8 @@ describe('computeFormHeuristics', () => {
     // armSwingSymmetry is the mirror image of trunkLean/overstriding: side is its unsuitable
     // view, not its primary one.
     expect(result.armSwingSymmetry.viewFit).toBe('unsuitable')
+    // stepWidth mirrors armSwingSymmetry's row exactly: front-primary, side-unsuitable.
+    expect(result.stepWidth.viewFit).toBe('unsuitable')
 
     // footStrikePattern's caveat is non-null even here, in the fully-populated clean case — the
     // one metric where that's true by design (it's always a proxy, never a direct measurement).
@@ -178,7 +184,7 @@ describe('computeFormHeuristics', () => {
     expect(orchestrated.view).toEqual(standaloneView)
   })
 
-  it('gates all eight metrics consistently off an ambiguous view', () => {
+  it('gates all nine metrics consistently off an ambiguous view', () => {
     const frames = generateSyntheticGait({
       ...PARAMS,
       strideAmplitudePx: 20, // engineered BSR/SER disagreement, see viewDetection.test.ts
@@ -203,6 +209,9 @@ describe('computeFormHeuristics', () => {
     expect(result.cadence.viewFit).toBe('tolerated')
     expect(result.armSwingSymmetry.viewFit).toBe('unsuitable')
     expect(result.footStrikePattern.viewFit).toBe('unsuitable')
+    // stepWidth is front-primary, so it is ALSO 'unsuitable' on an ambiguous view -- same
+    // reasoning as armSwingSymmetry above.
+    expect(result.stepWidth.viewFit).toBe('unsuitable')
   })
 
   it('never throws on an empty frame list and returns a well-formed, non-null-crashing result', () => {
@@ -218,6 +227,7 @@ describe('computeFormHeuristics', () => {
     expect(result.cadence.value).toBeNull()
     expect(result.armSwingSymmetry.value).toBeNull()
     expect(result.footStrikePattern.value).toBeNull()
+    expect(result.stepWidth.value).toBeNull()
     expect(result.verticalOscillation.confidence).toBe(0)
     expect(result.verticalRatio.confidence).toBe(0)
     expect(result.verticalOscillationCm.confidence).toBe(0)
@@ -226,6 +236,7 @@ describe('computeFormHeuristics', () => {
     expect(result.cadence.confidence).toBe(0)
     expect(result.armSwingSymmetry.confidence).toBe(0)
     expect(result.footStrikePattern.confidence).toBe(0)
+    expect(result.stepWidth.confidence).toBe(0)
     expect(result.footStrikePattern.caveat).not.toBeNull()
     expect(result.verticalOscillationCm.calibration).toBeNull()
     expect(result.verticalOscillationCm.caveat).not.toBeNull()

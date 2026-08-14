@@ -19,7 +19,7 @@ export const SCALE_PASS_PROVENANCE_CAVEAT =
  *
  * - Every other metric, and `view`, stay reference-identical to `primary`'s — the scale pass's
  *   versions of them are deliberately discarded (MoveNet remains the better primary for all
- *   eight; see the change's proposal.md for the assessed evidence).
+ *   nine; see the change's proposal.md for the assessed evidence).
  * - `calibration` carries by reference, preserving the identity invariant #36 established
  *   (`scalePass.diagnostics.scaleCalibration === grafted.verticalOscillationCm.calibration`).
  * - The provenance sentence is appended after the scale result's own caveat when one exists

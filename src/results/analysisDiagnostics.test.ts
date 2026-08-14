@@ -63,6 +63,7 @@ function makeHeuristics(overrides: Partial<FormHeuristicsResult> = {}): FormHeur
     kneeFlexion: makeMetric({ metric: 'kneeFlexion' }),
     armSwingSymmetry: makeMetric({ metric: 'armSwingSymmetry', unit: 'percent', value: 0.9 }),
     footStrikePattern: makeMetric({ metric: 'footStrikePattern', unit: 'ratio' }),
+    stepWidth: makeMetric({ metric: 'stepWidth', unit: 'percent', value: 0.15 }),
     ...overrides,
   }
 }
@@ -217,6 +218,7 @@ describe('computeAnalysisDiagnostics', () => {
         'footStrikePattern',
         'kneeFlexion',
         'overstriding',
+        'stepWidth',
         'trunkLean',
         'verticalOscillation',
         'verticalOscillationCm',

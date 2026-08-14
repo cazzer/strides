@@ -233,6 +233,17 @@ const FAKE_HEURISTICS: FormHeuristicsResult = {
     sampleSize: 5,
     caveat: 'Approximated from ankle position relative to the knee at footstrike.',
   },
+  stepWidth: {
+    metric: 'stepWidth',
+    value: 0.15,
+    unit: 'percent',
+    confidence: 1,
+    viewFit: 'primary',
+    interpolatedFraction: 0,
+    frameCoverage: 1,
+    sampleSize: 5,
+    caveat: null,
+  },
 }
 
 function makeFakeHandle(): SampleClipHandle {
