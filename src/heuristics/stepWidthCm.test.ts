@@ -82,7 +82,7 @@ describe('computeStepWidthCm', () => {
   it("reports the backend-gate availability caveat, verbatim, when no frame carries a measured scale", () => {
     const frames = generateSyntheticGait({ ...BASE_PARAMS, view: 'front' }) // no pixelsPerMeter
     const NO_SCALE_CAVEAT =
-      "No real-world scale could be measured for this clip, so step width can't be reported in centimetres. Step width measures the same offset without it."
+      "No real-world scale could be measured for this clip, so step width can't be reported in centimetres."
 
     expect(() => computeStepWidthCm(frames, 'front')).not.toThrow()
     const result = computeStepWidthCm(frames, 'front')

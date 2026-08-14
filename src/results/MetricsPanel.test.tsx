@@ -363,7 +363,7 @@ describe('MetricsPanel', () => {
       frameCoverage: 0,
       sampleSize: 0,
       caveat:
-        "No real-world scale could be measured for this clip, so step width can't be reported in centimetres. Step width measures the same offset without it.",
+        "No real-world scale could be measured for this clip, so step width can't be reported in centimetres.",
     })
 
     render(<MetricsPanel heuristics={unavailable} />)

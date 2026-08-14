@@ -34,7 +34,7 @@ function isUsableScale(value: number | null): value is number {
 // British spelling in user-facing prose is this codebase's established convention for the VO-cm
 // family (identifiers use "centimeters", prose uses "centimetres") — follow it here too.
 const NO_SCALE_CAVEAT =
-  "No real-world scale could be measured for this clip, so step width can't be reported in centimetres. Step width measures the same offset without it."
+  "No real-world scale could be measured for this clip, so step width can't be reported in centimetres."
 
 function nullResult(
   viewFit: MetricResult['viewFit'],
