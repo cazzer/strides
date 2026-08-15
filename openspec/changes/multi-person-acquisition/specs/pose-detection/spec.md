@@ -149,20 +149,28 @@ call.
 - **THEN** only the ordinary single-pose call is issued for that frame (optionally in crop mode,
   per `TrackingCropConfig.enabled` or an active settle-in window); no multi-pose model is invoked
 
-### Requirement: Settle-in window follows a successful multi-pose selection event
+### Requirement: Settle-in window follows a multi-pose selection event that carries new identity information
 
 The system SHALL, for `POST_ACQUISITION_SETTLE_FRAMES` calls immediately following any call where
-a multi-pose acquisition, reacquisition, or periodic re-verification event selects a usable
-candidate, run those calls in crop mode around the selected/reconfirmed bounding box — using the
-same crop-canvas mechanism `TrackingCropConfig`-driven crop-mode tracking already uses
+a multi-pose acquisition selects a usable candidate, OR a reacquisition/periodic-re-verification
+event selects a usable candidate that is NOT continuous with the last known anchor (its IoU and
+proximity against that anchor both failed, so selection fell through to the acquisition
+heuristic), run those calls in crop mode around the selected bounding box — using the same
+crop-canvas mechanism `TrackingCropConfig`-driven crop-mode tracking already uses
 (`computeCropRect`, the reusable crop canvas, remapping returned keypoints back to source-video
-pixel space) — independent of `TrackingCropConfig.enabled`. Each settle-in call re-derives the
-tracked bounding box from its own fresh detection exactly as ordinary crop-mode steady-state
-tracking already does, so tracking state never goes stale during the window; the window's purpose
-is to give the single-pose detector a run of calls actually centered on the just-identified person
-before any continuous whole-clip crop optimization (or lack thereof) takes over, since nothing
-about a multi-pose selection otherwise carries forward into the single-pose detector's own next
-call.
+pixel space) — independent of `TrackingCropConfig.enabled`. A reacquisition or periodic
+re-verification event whose selected candidate IS continuous with the last known anchor does NOT
+engage or restart this window: continuity confirms the single-pose detector was already tracking
+the right person, so no new identity information exists to carry forward, and forcing extra
+crop-mode calls (and, per "Multi-pose reacquisition applies regardless of tracking-crop
+configuration" and "Periodic re-verification during steady-state tracking", resetting the
+single-pose detector's internal state) in that case would only discard working tracking
+continuity for no benefit. Each settle-in call re-derives the tracked bounding box from its own
+fresh detection exactly as ordinary crop-mode steady-state tracking already does, so tracking
+state never goes stale during the window; the window's purpose is to give the single-pose
+detector a run of calls actually centered on the just-identified person before any continuous
+whole-clip crop optimization (or lack thereof) takes over, since nothing about a multi-pose
+selection otherwise carries forward into the single-pose detector's own next call.
 
 #### Scenario: A successful acquisition engages the settle-in window
 
@@ -170,12 +178,21 @@ call.
 - **THEN** the next `POST_ACQUISITION_SETTLE_FRAMES` calls run in crop mode around the selected
   bounding box, regardless of `TrackingCropConfig.enabled`
 
-#### Scenario: A successful reacquisition engages the settle-in window
+#### Scenario: A non-continuous reacquisition or re-verification engages the settle-in window
 
-- **WHEN** a multi-pose reacquisition call (confidence-triggered or periodic) selects a usable
-  candidate
-- **THEN** the next `POST_ACQUISITION_SETTLE_FRAMES` calls run in crop mode around the selected
-  bounding box, regardless of `TrackingCropConfig.enabled`
+- **WHEN** a multi-pose reacquisition or periodic-re-verification call (confidence-triggered or
+  periodic) selects a usable candidate that is NOT continuous with the last known anchor
+- **THEN** the next `POST_ACQUISITION_SETTLE_FRAMES` calls run in crop mode around the newly
+  selected bounding box, regardless of `TrackingCropConfig.enabled`
+
+#### Scenario: A continuous reacquisition or re-verification does not engage the settle-in window
+
+- **WHEN** a multi-pose reacquisition or periodic-re-verification call selects a usable candidate
+  that IS continuous with the last known anchor (matched by IoU or proximity)
+- **THEN** no settle-in window starts or restarts — the next call runs ordinary framing (crop mode
+  only if `TrackingCropConfig.enabled` or an already-active settle-in window from an earlier,
+  non-continuous event says so, full-frame otherwise), unaffected by this selection beyond the
+  anchor's bounding box itself being updated
 
 #### Scenario: The settle-in window is a no-op when tracking-crop is already continuously enabled
 
@@ -200,13 +217,18 @@ continuity against the current tracked anchor (the same heuristic and code path 
 triggered reacquisition already uses), even when the anchor's confidence has not dropped below
 the usability gate — since MoveNet's own saliency can drift smoothly onto a different person
 without the confidence-based reacquisition trigger ever firing. A continuous match resets the
-re-verification interval counter. A non-continuous match (the multi-pose pass disagrees with what
-the single-pose detector has been tracking) is treated exactly as a non-continuous confidence-
+re-verification interval counter and updates the tracked bounding box, but does NOT reset the
+single-pose detector's internal state or engage a settle-in window (see "Settle-in window follows
+a multi-pose selection event that carries new identity information") — no new identity
+information exists to act on. A non-continuous match (the multi-pose pass disagrees with what the
+single-pose detector has been tracking) is treated exactly as a non-continuous confidence-
 triggered reacquisition already is: the underlying single-pose detector's internal state is reset,
 the anchor is re-seeded from the newly-selected candidate, and a settle-in window begins. An empty
 or not-usable periodic check is a strict no-op on every piece of tracking state except the
-re-verification interval counter itself — it must never be able to degrade steady-state tracking
-that was already working.
+re-verification interval counter itself, AND falls through to the ordinary, already-in-progress
+single-pose call for that same sampled frame rather than resolving to no detection at all — it
+must never be able to degrade steady-state tracking that was already working, in either the
+tracking state it leaves behind or the frame it produces for that call.
 
 #### Scenario: The periodic interval triggers a re-verification call
 
@@ -216,12 +238,13 @@ that was already working.
 - **THEN** the next call is a multi-pose re-verification call scored by continuity against the
   current anchor, not an ordinary single-pose call
 
-#### Scenario: A continuous re-verification match resets the interval
+#### Scenario: A continuous re-verification match resets the interval without disrupting tracking
 
 - **WHEN** a periodic re-verification call selects a candidate continuous with the current anchor
   (matched by IoU or proximity)
-- **THEN** the re-verification interval counter resets, and steady-state tracking continues
-  unaffected otherwise
+- **THEN** the re-verification interval counter resets and the tracked bounding box updates to the
+  reconfirmed candidate, but the single-pose detector's internal state is NOT reset and no
+  settle-in window engages — steady-state tracking continues otherwise unaffected
 
 #### Scenario: A non-continuous re-verification match corrects tracking onto the right person
 
@@ -236,5 +259,8 @@ that was already working.
 - **WHEN** a periodic re-verification call returns zero candidates, or candidates none of which
   clear the usability gate
 - **THEN** the current anchor, its loss counters, and the give-up budget are left completely
-  untouched — only the re-verification interval counter resets, so the next periodic check is
-  attempted after another full interval rather than every subsequent call
+  untouched, and the call falls through to the ordinary, already-in-progress single-pose call for
+  that same sampled frame instead of resolving to no detection — only the re-verification interval
+  counter resets, so the next periodic check is attempted after another full interval rather than
+  every subsequent call, and the extra multi-pose model invocation is paid only on this rare failed
+  check, not on every periodic tick

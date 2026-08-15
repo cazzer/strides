@@ -89,8 +89,11 @@
 
 - [x] 8.1 Add closure state tracking how many of the next calls should be forced into crop mode
       (e.g. `settleFramesRemaining`), reset to `POST_ACQUISITION_SETTLE_FRAMES` whenever a
-      multi-pose acquisition, reacquisition, or periodic re-verification event selects a usable
-      candidate; cleared alongside the rest of anchor state by `clearAnchor()`/new-run detection.
+      multi-pose acquisition selects a usable candidate, or a reacquisition/periodic
+      re-verification event selects a usable candidate that is NOT continuous with the last known
+      anchor (review F4 -- a continuous match confirms no new identity information exists, so it
+      does not (re)start this window); cleared alongside the rest of anchor state by
+      `clearAnchor()`/new-run detection.
 - [x] 8.2 Extend the crop-vs-full-frame framing decision to
       `usingCrop = !dispatchMultiPose && boxForFraming !== null && (trackingCropConfig.enabled ||
       withinSettleWindow)`, reusing the existing `computeCropRect`/`cropCanvas`/crop-call code
@@ -115,17 +118,25 @@
       same `selectByReacquisitionHeuristic`/`pickBestCandidate` call already built for
       confidence-triggered reacquisition (scored by continuity against the current anchor) — no
       new selection logic.
-- [x] 9.3 On a usable (continuous or non-continuous) periodic result: reset
-      `callsSinceLastVerification`, update the anchor, start a settle-in window (task 8), and — for
-      a non-continuous result specifically — apply the identical NEW-1/NEW-2 treatment a
-      non-continuous confidence-triggered reacquisition already gets (`rawDetector.reset()`,
-      `anchorWasReacquired` treated as a fresh acquisition, not "already reacquired once").
+- [x] 9.3 On a usable periodic result: reset `callsSinceLastVerification` and update the anchor's
+      bounding box in every case; for a NON-continuous result specifically (review F4 -- not a
+      continuous one), also start a settle-in window (task 8) and apply the identical NEW-1/NEW-2
+      treatment a non-continuous confidence-triggered reacquisition already gets
+      (`rawDetector.reset()`, `anchorWasReacquired` treated as a fresh acquisition, not "already
+      reacquired once"). A continuous result updates the anchor and the interval only -- no
+      settle-in window, no `rawDetector.reset()` (review F4: no new identity information exists to
+      act on, so forcing either would only discard working tracking continuity for no benefit).
 - [x] 9.4 On an empty or not-usable periodic result: strict no-op on every anchor/give-up-budget
       counter (`consecutiveLowConfidence`, `consecutiveEmptyReacquisitions`, `anchorWasReacquired`,
       `personOfInterestSuspended`, `lastBoundingBox`) — only reset
       `callsSinceLastVerification` (so the next attempt waits a full interval rather than retrying
       every subsequent call, which would silently turn "periodic" into "continuous" multi-pose
-      dispatch). Multi-pose detector creation failure during a periodic attempt must be an
+      dispatch). The call itself falls through to the ordinary, already-in-progress single-pose
+      call for that SAME sampled frame rather than resolving to no detection (review F2 -- the
+      sampled frame must not be lost just because a speculative, safe-to-fail check happened to
+      land on it); `advanceContinuityCounters`'s verification-counter increment is suppressed for
+      that fallen-through call specifically, since the counter was already reset moments earlier
+      in the same call. Multi-pose detector creation failure during a periodic attempt must be an
       equally strict no-op (fall through using the EXISTING anchor/framing unchanged, not the
       acquisition/reacquisition creation-failure path's `clearAnchor()`) — a periodic check failing
       to even start must never be allowed to degrade already-working steady-state tracking.
@@ -138,6 +149,23 @@
       re-verification's trigger/continuity-reset/non-continuous-correction/strict-no-op-on-empty/
       strict-no-op-on-not-usable/strict-no-op-on-creation-failure behavior, mirroring this file's
       existing test rigor and style.
+- [x] 9.6 Re-review fixes (F1-F5): gated the settle-in window to genuine identity changes only
+      (F4, `dispatchReason === 'acquisition' || !continuous`); an empty/unusable periodic check now
+      falls through to the ordinary single-pose call for the same frame instead of resolving `null`
+      (F2), requiring `usingCrop`/the transition-reset decision to move to AFTER the multi-pose
+      dispatch attempt so it's computed from the FINAL `dispatchMultiPose` value rather than a
+      stale pre-await one, and `advanceContinuityCounters` to take a flag suppressing the
+      already-just-reset verification counter's double-increment on that fall-through call;
+      `settleFramesRemainingAtStart` moved to snapshot AFTER the give-up block, not before it (F5);
+      design.md's settle-in-window A/B justification rewritten from a self-correction argument
+      (does not address the park-clip regression mechanism) to a duty-cycle one (F3); design.md
+      Risks gained a periodic-structured-contamination entry for task 10.4's A/B to check
+      `fit.sinusoidR2`, not just tier/detected-frame-count (F1). Four new tests added: settle-in
+      window under mid-window loss of confidence (expires on schedule, crops around an
+      increasingly stale box); two consecutive periodic re-verification cycles; reset-call-count
+      on the shipped default (crop-disabled) config specifically; a settle window re-triggered
+      mid-window (reacquisition landing inside an already-active window, low
+      `reacquisitionLossThreshold`).
 
 ## 10. Live-browser validation
 

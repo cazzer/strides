@@ -415,10 +415,18 @@ export async function createMoveNetDetector(
    * (non-multi-pose-dispatch) call, regardless of whether it found a usable detection --
    * design.md's "Carry POI identity forward via a bounded settle-in window" and "Periodic
    * re-verification" both count elapsed CALLS, not just successful ones.
+   *
+   * `incrementVerificationCounter: false` skips the `callsSinceLastVerification` bump only --
+   * used when this ordinary call is itself the fall-through continuation of a periodic
+   * re-verification check that just reset that counter to `0` moments ago (review F2); bumping it
+   * again in the same call would just be off-by-one noise. The settle-in countdown still
+   * decrements regardless, since this call is a real framing decision either way.
    */
-  function advanceContinuityCounters(): void {
+  function advanceContinuityCounters(
+    incrementVerificationCounter: boolean,
+  ): void {
     if (settleFramesRemaining > 0) settleFramesRemaining -= 1
-    callsSinceLastVerification += 1
+    if (incrementVerificationCounter) callsSinceLastVerification += 1
   }
 
   return {
@@ -473,7 +481,6 @@ export async function createMoveNetDetector(
         !anchorMissing &&
         consecutiveLowConfidence >=
           trackingCropConfig.reacquisitionLossThreshold
-      const settleFramesRemainingAtStart = settleFramesRemaining
 
       // "Give up" (review item #4): an anchor that has ALREADY been through one successful
       // reacquisition, and has now gone stale again, is not worth another reacquisition attempt
@@ -492,6 +499,13 @@ export async function createMoveNetDetector(
         personOfInterestSuspended = true
         giveUpBoxAtStart = null
       }
+
+      // Snapshotted AFTER the give-up block, not before it (review F5): give-up can call
+      // `clearAnchor()`, which zeroes `settleFramesRemaining` -- reading this earlier would be an
+      // ordering landmine for any future give-up variant that preserves the box while still
+      // clearing the settle window (today it's harmless only because give-up always also nulls
+      // the box, and `usingCrop` below requires a non-null box regardless of this value).
+      const settleFramesRemainingAtStart = settleFramesRemaining
 
       const effectiveAnchorMissing = giveUpBoxAtStart === null
       const effectiveAnchorStale =
@@ -558,44 +572,6 @@ export async function createMoveNetDetector(
         }
       }
 
-      const usingCrop =
-        !dispatchMultiPose &&
-        boxForFraming !== null &&
-        (trackingCropConfig.enabled || settleFramesRemainingAtStart > 0)
-      const rawDetectorUsage: RawDetectorUsage = usingCrop
-        ? 'crop'
-        : 'fullFrame'
-
-      // `rawDetector` is reused across calls, so its own internal cropRegion/smoothing-filter
-      // state (computed relative to whatever canvas we fed it on its LAST ACTUAL invocation)
-      // would otherwise fight our externally-computed framing at the moment framing actually
-      // changes shape. Only that transition boundary needs it: for a same-size square canvas
-      // across consecutive crop-mode calls, `initCropRegion` (see design.md's Context) always
-      // resolves to full `[0,1]x[0,1]` coverage regardless of MoveNet's own stale `cropRegion`, so
-      // resetting on every steady-tracking call would only cost MoveNet's one-euro smoothing
-      // continuity for no correctness benefit. A call the acquisition/reacquisition path
-      // intercepts entirely (`dispatchMultiPose`) never invokes `rawDetector` at all, so this
-      // comparison is SKIPPED for it entirely, not just evaluated against a placeholder usage --
-      // `rawDetectorUsage` computed for such a call would be a meaningless artifact of
-      // `usingCrop`'s `!dispatchMultiPose` guard (always 'fullFrame'), and comparing it against
-      // `previousRawDetectorUsage` would fire a spurious reset the instant a reacquisition
-      // dispatch interrupts steady-state crop tracking, regardless of whether the eventual
-      // selection turns out continuous or not. `previousRawDetectorUsage` is only ever updated by
-      // a call that ACTUALLY invoked `rawDetector` (see `commitCallProgress`), so an intervening
-      // acquisition/reacquisition "hole" of any length never triggers this transition-based reset
-      // on its own, preserving whatever continuity `rawDetector`'s own internal state had going
-      // into it -- separate from the identity-switch-specific reset inside the multi-pose branch
-      // below (review NEW-1). Guarded by the same reentrancy check as above: a stale call
-      // resuming after a slow `await` must not reset `rawDetector` out from under a newer call
-      // that has already started using it.
-      if (
-        !dispatchMultiPose &&
-        rawDetectorUsage !== previousRawDetectorUsage &&
-        myGeneration === generation
-      ) {
-        rawDetector.reset()
-      }
-
       // `sampleClip.ts` wraps every call in a timeout that, on expiry, moves on without
       // cancelling the underlying call — so a stalled call can still be pending when a newer one
       // starts on this same cached detector instance, sharing this closure's tracking state and
@@ -614,6 +590,13 @@ export async function createMoveNetDetector(
         if (usage !== null) previousRawDetectorUsage = usage
         lastSeenTime = currentTime
       }
+
+      // Set when a periodic re-verification check came back empty/unusable and this call fell
+      // through to the ordinary single-pose call below for the SAME frame (review F2) --
+      // suppresses the fallen-through call's own `callsSinceLastVerification` increment, since
+      // that counter was already reset to `0` by the failed check itself moments ago; incrementing
+      // it again in the same call would just be off-by-one bookkeeping noise.
+      let cameFromFailedReverificationCheck = false
 
       if (
         dispatchMultiPose &&
@@ -649,80 +632,157 @@ export async function createMoveNetDetector(
             // 'acquisition': fresh acquisition found no one at all -- nothing was seeded, so the
             // next call is still an ordinary acquisition attempt (spec.md's "No candidates
             // returned").
-            commitCallProgress(null)
           }
-          return null
-        }
+          if (dispatchReason === 'reverification') {
+            // Review F2: an empty periodic check must not drop the sampled frame outright --
+            // fall through to the ordinary single-pose call below for this SAME frame instead of
+            // resolving `null`, paying the extra model invocation only on this rare failed check,
+            // not on every periodic tick. `boxForFraming`/`giveUpBoxAtStart` are untouched, so
+            // that ordinary call frames exactly as if this call had never attempted a check.
+            dispatchMultiPose = false
+            cameFromFailedReverificationCheck = true
+          } else {
+            if (isCurrent) commitCallProgress(null)
+            return null
+          }
+        } else {
+          const candidates = toCandidates(
+            multiPoses,
+            currentTime,
+            trackingCropConfig,
+          )
+          const {
+            candidate: selected,
+            usable,
+            continuous,
+          } = pickBestCandidate(
+            candidates,
+            effectiveAnchorMissing,
+            giveUpBoxAtStart,
+          )
 
-        const candidates = toCandidates(
-          multiPoses,
-          currentTime,
-          trackingCropConfig,
-        )
-        const {
-          candidate: selected,
-          usable,
-          continuous,
-        } = pickBestCandidate(
-          candidates,
-          effectiveAnchorMissing,
-          giveUpBoxAtStart,
-        )
-
-        if (isCurrent) {
           if (usable) {
-            lastBoundingBox = selected.box
-            consecutiveLowConfidence = 0
-            consecutiveEmptyReacquisitions = 0
-            // Any successful multi-pose selection -- acquisition, reacquisition, or periodic
-            // re-verification -- starts (or restarts) a bounded settle-in window: force the next
-            // few calls into crop mode around the just-selected/reconfirmed anchor, independent
-            // of `trackingCropConfig.enabled`, so the single-pose detector's very next calls are
-            // actually centered on the right person instead of running full-frame and unbiased
-            // (design.md's "Carry POI identity forward via a bounded settle-in window").
-            settleFramesRemaining = POST_ACQUISITION_SETTLE_FRAMES
-            if (dispatchReason === 'reverification') {
-              callsSinceLastVerification = 0
+            if (isCurrent) {
+              lastBoundingBox = selected.box
+              consecutiveLowConfidence = 0
+              consecutiveEmptyReacquisitions = 0
+              // A bounded settle-in window only starts (or restarts) when this selection carries
+              // NEW identity information -- a fresh acquisition, or a reacquisition/re-verification
+              // that switched to a genuinely different (non-continuous) person (review F4). A
+              // continuous reacquisition/re-verification confirms `rawDetector` was already
+              // tracking the right person; forcing crop-mode calls and (see below) resetting
+              // `rawDetector` in that case would just discard working smoothing continuity for no
+              // benefit, at real per-event cost every `REVERIFICATION_INTERVAL_FRAMES` calls even
+              // when everything was already fine. When it DOES start: force the next few calls
+              // into crop mode around the just-selected/reconfirmed anchor, independent of
+              // `trackingCropConfig.enabled`, so the single-pose detector's very next calls are
+              // actually centered on the right person instead of running full-frame and unbiased
+              // (design.md's "Carry POI identity forward via a bounded settle-in window").
+              if (dispatchReason === 'acquisition' || !continuous) {
+                settleFramesRemaining = POST_ACQUISITION_SETTLE_FRAMES
+              }
+              if (dispatchReason === 'reverification') {
+                callsSinceLastVerification = 0
+              }
+              // Only a GENUINE reacquisition/re-verification (continuity actually matched via
+              // IoU/proximity) counts as "already reacquired once" for the give-up budget (review
+              // NEW-2): a selection that fell through to the acquisition-heuristic fallback is,
+              // per spec.md's "No candidate matches the last known position" scenario, treated as
+              // a fresh acquisition instead -- it shouldn't burn the one-shot budget early.
+              anchorWasReacquired =
+                dispatchReason !== 'acquisition' && continuous
+              // Identity actually switched to a different, non-continuous person during
+              // reacquisition or periodic re-verification (review NEW-1): `rawDetector`'s own
+              // internal state (its cropRegion, one-euro smoothing, etc. -- see design.md's
+              // Context), if it has any, was built tracking the OLD, just-rejected person. Left
+              // uncleared, the very next full-frame call would silently resume locked onto them
+              // via MoveNet's own saliency continuity -- exactly the bug this capability exists
+              // to fix. A continuous match, or a fresh acquisition with no prior anchor to have
+              // switched away from, leaves it alone.
+              if (dispatchReason !== 'acquisition' && !continuous) {
+                rawDetector.reset()
+              }
+              commitCallProgress(null)
             }
-            // Only a GENUINE reacquisition/re-verification (continuity actually matched via
-            // IoU/proximity) counts as "already reacquired once" for the give-up budget (review
-            // NEW-2): a selection that fell through to the acquisition-heuristic fallback is, per
-            // spec.md's "No candidate matches the last known position" scenario, treated as a
-            // fresh acquisition instead -- it shouldn't burn the one-shot budget early.
-            anchorWasReacquired = dispatchReason !== 'acquisition' && continuous
-            // Identity actually switched to a different, non-continuous person during
-            // reacquisition or periodic re-verification (review NEW-1): `rawDetector`'s own
-            // internal state (its cropRegion, one-euro smoothing, etc. -- see design.md's
-            // Context), if it has any, was built tracking the OLD, just-rejected person. Left
-            // uncleared, the very next full-frame call would silently resume locked onto them via
-            // MoveNet's own saliency continuity -- exactly the bug this capability exists to fix.
-            // A continuous match, or a fresh acquisition with no prior anchor to have switched
-            // away from, leaves it alone.
-            if (dispatchReason !== 'acquisition' && !continuous) {
-              rawDetector.reset()
-            }
+            return selected.frame
           } else if (dispatchReason === 'reverification') {
             // Strict no-op: raw candidates existed but none cleared the usability gate -- the
-            // existing (still working) anchor is untouched; only the interval resets.
-            callsSinceLastVerification = 0
-          } else if (dispatchReason === 'reacquisition') {
-            // Raw candidates existed but none cleared the usability gate during reacquisition --
-            // counts toward the same bounded retry budget as a fully-empty result (review item
-            // #2 + #5 together): still returns a frame (the invariant), but doesn't treat it as
-            // a trustworthy anchor.
-            consecutiveEmptyReacquisitions += 1
-            if (
-              consecutiveEmptyReacquisitions >=
-              reacquisitionMissBudget(trackingCropConfig)
-            ) {
-              clearAnchor()
-              personOfInterestSuspended = true
+            // existing (still working) anchor is untouched; only the interval resets. Review F2:
+            // fall through to the ordinary single-pose call below rather than returning this
+            // unreliable multi-pose fallback frame (or worse, dropping the sample).
+            if (isCurrent) {
+              callsSinceLastVerification = 0
             }
+            dispatchMultiPose = false
+            cameFromFailedReverificationCheck = true
+          } else {
+            // 'acquisition' or 'reacquisition', not usable -- still returns the frame (the
+            // "always return a frame" invariant), just doesn't seed a trustworthy anchor.
+            if (isCurrent) {
+              if (dispatchReason === 'reacquisition') {
+                // Raw candidates existed but none cleared the usability gate during
+                // reacquisition -- counts toward the same bounded retry budget as a fully-empty
+                // result (review item #2 + #5 together).
+                consecutiveEmptyReacquisitions += 1
+                if (
+                  consecutiveEmptyReacquisitions >=
+                  reacquisitionMissBudget(trackingCropConfig)
+                ) {
+                  clearAnchor()
+                  personOfInterestSuspended = true
+                }
+              }
+              commitCallProgress(null)
+            }
+            return selected.frame
           }
-          commitCallProgress(null)
         }
+      }
 
-        return selected.frame
+      // `usingCrop`/`rawDetectorUsage`/the transition-reset decision are computed HERE, using the
+      // FINAL value of `dispatchMultiPose` -- not just its initial, pre-await value -- so a call
+      // that started as a multi-pose dispatch attempt but ended up falling through to the
+      // ordinary single-pose path below (multi-pose detector creation failure, or (review F2) a
+      // failed periodic re-verification check) gets a framing decision computed as if it had been
+      // an ordinary call from the start, not a stale decision frozen from before either `await`
+      // resolved.
+      const usingCrop =
+        !dispatchMultiPose &&
+        boxForFraming !== null &&
+        (trackingCropConfig.enabled || settleFramesRemainingAtStart > 0)
+      const rawDetectorUsage: RawDetectorUsage = usingCrop
+        ? 'crop'
+        : 'fullFrame'
+
+      // `rawDetector` is reused across calls, so its own internal cropRegion/smoothing-filter
+      // state (computed relative to whatever canvas we fed it on its LAST ACTUAL invocation)
+      // would otherwise fight our externally-computed framing at the moment framing actually
+      // changes shape. Only that transition boundary needs it: for a same-size square canvas
+      // across consecutive crop-mode calls, `initCropRegion` (see design.md's Context) always
+      // resolves to full `[0,1]x[0,1]` coverage regardless of MoveNet's own stale `cropRegion`, so
+      // resetting on every steady-tracking call would only cost MoveNet's one-euro smoothing
+      // continuity for no correctness benefit. A call the acquisition/reacquisition/re-
+      // verification path intercepts entirely (`dispatchMultiPose` still `true` here) never
+      // invokes `rawDetector` at all, so this comparison is SKIPPED for it entirely, not just
+      // evaluated against a placeholder usage -- `rawDetectorUsage` computed for such a call would
+      // be a meaningless artifact of `usingCrop`'s `!dispatchMultiPose` guard (always
+      // 'fullFrame'), and comparing it against `previousRawDetectorUsage` would fire a spurious
+      // reset the instant a reacquisition dispatch interrupts steady-state crop tracking,
+      // regardless of whether the eventual selection turns out continuous or not.
+      // `previousRawDetectorUsage` is only ever updated by a call that ACTUALLY invoked
+      // `rawDetector` (see `commitCallProgress`), so an intervening acquisition/reacquisition
+      // "hole" of any length never triggers this transition-based reset on its own, preserving
+      // whatever continuity `rawDetector`'s own internal state had going into it -- separate from
+      // the identity-switch-specific reset inside the multi-pose branch above (review NEW-1).
+      // Guarded by the same reentrancy check as above: a stale call resuming after a slow `await`
+      // must not reset `rawDetector` out from under a newer call that has already started using
+      // it.
+      if (
+        !dispatchMultiPose &&
+        rawDetectorUsage !== previousRawDetectorUsage &&
+        myGeneration === generation
+      ) {
+        rawDetector.reset()
       }
 
       let cropRect: CropRectPx | null = null
@@ -761,7 +821,7 @@ export async function createMoveNetDetector(
       if (poses.length === 0) {
         if (isCurrent) {
           registerTrackingLoss()
-          advanceContinuityCounters()
+          advanceContinuityCounters(!cameFromFailedReverificationCheck)
           commitCallProgress(usingCrop ? 'crop' : 'fullFrame')
         }
         return null
@@ -790,7 +850,7 @@ export async function createMoveNetDetector(
         } else {
           registerTrackingLoss()
         }
-        advanceContinuityCounters()
+        advanceContinuityCounters(!cameFromFailedReverificationCheck)
         commitCallProgress(usingCrop ? 'crop' : 'fullFrame')
       }
 

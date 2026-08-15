@@ -102,20 +102,43 @@ with zero shared internal state, so nothing about a multi-pose selection carries
 against the full, unmodified frame — exactly as unbiased as the very first call of a run, with no
 mechanism to prefer the region the multi-pose pass just identified.
 
-Fix: for `POST_ACQUISITION_SETTLE_FRAMES` calls immediately following any successful acquisition,
-reacquisition, or periodic re-verification event (see below), force the SAME crop-mode call this
-backend already knows how to make (`computeCropRect`/`cropCanvas`/`rawDetector.estimatePoses(
-cropCanvas, ...)`, entirely reused, no new crop-geometry code) around the just-selected anchor —
-independent of `trackingCropConfig.enabled`. Each settle-in call re-derives `lastBoundingBox` from
-its own fresh detection exactly like ordinary crop-mode steady-state already does, so this is a
-self-correcting, bounded few-frame exposure, not the continuous whole-clip crop optimization the
-2026-08-13 tracking-crop revival A/B measured a regression from on the front-approach clip (see
-`openspec/changes/archive/*movenet-tracking-crop/design.md`'s "Revival note") — that finding does
-not automatically transfer to a 3-ish-frame window immediately after a person is freshly
-identified, and needs its own A/B (Migration Plan) rather than inheriting the earlier verdict.
-`TrackingCropConfig.enabled` continues to gate only the continuous optimization; the settle-in
-window is a no-op whenever it's already `true` (crop is already engaged continuously, so there is
-nothing extra for the settle window to force).
+Fix: for `POST_ACQUISITION_SETTLE_FRAMES` calls immediately following a successful acquisition, or
+a reacquisition/re-verification event that switches to a genuinely different (non-continuous)
+person (a continuous reacquisition/re-verification confirms `rawDetector` was already tracking the
+right person and does NOT re-trigger the window — see "Gate the settle-in window to genuine
+identity changes only", below), force the SAME crop-mode call this backend already knows how to
+make (`computeCropRect`/`cropCanvas`/`rawDetector.estimatePoses(cropCanvas, ...)`, entirely reused,
+no new crop-geometry code) around the just-selected anchor — independent of
+`trackingCropConfig.enabled`. `TrackingCropConfig.enabled` continues to gate only the continuous
+optimization; the settle-in window is a no-op whenever it's already `true` (crop is already
+engaged continuously, so there is nothing extra for the settle window to force).
+
+**Why this still needs its own A/B, not the tracking-crop revival's verdict, and not a
+self-correction argument either.** Each settle-in call re-derives `lastBoundingBox` from its own
+fresh detection exactly like ordinary crop-mode steady-state already does, so staleness never
+accumulates beyond one frame within the window — that claim is true, but it does NOT address the
+mechanism the 2026-08-13 tracking-crop revival A/B actually measured a regression from on the
+front-approach park clip (see `openspec/changes/archive/*movenet-tracking-crop/design.md`'s
+"Revival note"): a lagging tracked box computed one frame ago mismatching the subject's on-screen
+position/scale THIS frame, on a clip where that scale changes ~3× across its ~1.65s duration. That
+mismatch is a property of a SINGLE crop-mode call relative to the ONE frame its box was computed
+from — identical in size whether the window containing that call is 3 frames long or 3000 frames
+long. Self-correction bounds how far staleness can accumulate ACROSS a window; it says nothing
+about whether the first (or any) call INSIDE a settle-in window suffers the exact one-frame-lag
+mismatch the revival A/B already found harmful. The real reason a separate A/B is still required
+is duty cycle, not self-correction: a settle-in window that fires on every event exposes roughly
+`POST_ACQUISITION_SETTLE_FRAMES / REVERIFICATION_INTERVAL_FRAMES` (≈ 3/45, ~6.5%) of otherwise-
+steady-state frames to this per-call lag risk — a meaningfully different, and non-zero, exposure
+than the revival A/B's baseline of zero (crop-disabled) for the shipped default. Gating the window
+to genuine identity changes only (see below) reduces the CONTINUOUS-match share of that duty cycle
+to near-zero, but acquisition and genuine reacquisition events still pay it, and the rate is
+plausibly HIGHER, not lower, on exactly the clips most likely to need re-disambiguation in the
+first place (a borderline-confidence clip like park, where the subject's rapidly-changing scale
+that makes tracking hard in general also makes reacquisition/re-verification events more frequent)
+— the clip class where the revival A/B measured its regression is not a coincidentally-unrelated
+edge case, it is closer to a worst case for this exact duty-cycle argument. This is squarely an
+empirical question the live-browser A/B (Migration Plan) needs to answer on both demo clips, not
+something the self-correction property settles on its own.
 
 **Alternative considered and rejected: seed `rawDetector`'s own internal `cropRegion` from the
 acquisition/reacquisition crop call, instead of running extra crop-mode calls.** Verified against
@@ -134,6 +157,25 @@ There is no cropRegion-seeding trick that survives a shape change back to full-f
 crop-mode call (this decision) is the only mechanism that keeps `rawDetector` centered on the
 right region without reinterpreting the seed against a different image size.
 
+### Gate the settle-in window to genuine identity changes only
+
+A continuous reacquisition or periodic re-verification match confirms `rawDetector` was already
+tracking the right person — no new identity information exists. Forcing a settle-in window in
+that case fires crop-mode calls (and, worse, a `rawDetector.reset()`, since the original
+implementation of this decision unconditionally reset alongside the window) that throw away
+working smoothing continuity for no benefit, at real per-event duty-cycle cost every
+`REVERIFICATION_INTERVAL_FRAMES` calls even when everything was already fine (see the duty-cycle
+discussion above). The settle-in window and the identity-switch `rawDetector.reset()` (see NEW-1)
+now only trigger when a selection carries NEW identity information: a fresh acquisition (no prior
+anchor existed to compare against), or a reacquisition/re-verification whose winning candidate is
+NOT continuous with the last known anchor (IoU and proximity both rejected it, so the selection
+fell through to the acquisition heuristic). A continuous reacquisition/re-verification match
+updates `lastBoundingBox` (the box may be slightly tightened) and resets the relevant loss/interval
+counters, but does neither of those two disruptive things — this is the common case in a clip
+where tracking is working, so gating it here is what keeps this extension's typical per-clip cost
+close to the acquisition/reacquisition-only baseline rather than paying the full settle-in/reset
+cost on every periodic tick regardless of whether anything was actually wrong.
+
 ### Periodic re-verification
 
 The confidence-collapse reacquisition trigger (existing `reacquisitionLossThreshold` mechanism)
@@ -148,10 +190,11 @@ re-verification event, proactively re-run the exact same multi-pose selection pa
 reacquisition-scoring path (`selectByReacquisitionHeuristic`/`pickBestCandidate`, unchanged) this
 backend already runs on a confidence-triggered reacquisition — scored by continuity against the
 CURRENT anchor, not a fresh acquisition-heuristic pass, since a periodic check is asking "is this
-still the same person," not "who's the most prominent person here." A continuous match just
-resets the interval counter (and may as well kick off a fresh settle-in window too, since the box
-was just reconfirmed/tightened — see tasks.md). A non-continuous match — the multi-pose pass
-disagrees with what `rawDetector` has been tracking — gets the identical treatment a non-continuous
+still the same person," not "who's the most prominent person here." A continuous match resets the
+interval counter and updates the tracked box, but (see "Gate the settle-in window to genuine
+identity changes only", above) does NOT start a settle-in window or reset `rawDetector` — nothing
+new was learned. A non-continuous match — the multi-pose pass disagrees with what `rawDetector`
+has been tracking — gets the identical treatment a non-continuous confidence-triggered
 reacquisition already gets: `rawDetector.reset()` (clear its now-wrong internal state) and start a
 fresh settle-in window around the newly-selected person.
 
@@ -164,8 +207,13 @@ if the interval counter were left untouched, since the trigger condition would s
 (b) treating an ambiguous periodic disagreement as evidence the anchor itself is going stale
 (which would incorrectly start consuming the same one-shot give-up budget confidence-based
 reacquisition uses, for a mechanism that exists specifically to be safe to fire speculatively).
-Steady-state tracking that was already working must never be made worse by a periodic check that
-happens not to find a clean match this one time.
+Beyond leaving tracking STATE untouched, a failed periodic check must not drop the SAMPLED FRAME
+either: it falls through to the ordinary, already-in-progress single-pose call for that same
+frame instead of resolving `null` (review F2) — the extra multi-pose model invocation is paid only
+on the rare failed check, never on every periodic tick, and the pipeline never loses a frame
+purely because a speculative, safe-to-fail verification happened to land on it. Steady-state
+tracking that was already working must never be made worse — in EITHER state or sampled output —
+by a periodic check that happens not to find a clean match this one time.
 
 **Alternative considered**: no periodic trigger at all, relying solely on the confidence-collapse
 trigger plus the settle-in window above. Rejected — the settle-in window only re-centers tracking
@@ -199,15 +247,18 @@ identity was already known to be ambiguous") specifically calls for.
   boundary explicitly; tasks.md includes a regression check that both existing (single-person)
   demo clips produce behavior-equivalent tracking before/after this change.
 - **[Risk]** The settle-in window pays crop-mode inference cost (a canvas draw + a differently-
-  shaped `estimatePoses` call) for `POST_ACQUISITION_SETTLE_FRAMES` calls after EVERY acquisition,
-  reacquisition, and periodic re-verification event — under the shipped
-  `trackingCropConfig.enabled: false` default this is genuinely new per-event cost that never
-  existed before this extension, not a reuse of already-paid crop-mode cost. → **Mitigation**:
-  bounded to a first-guess default of a few frames per event (not the whole clip), and explicitly
-  unmeasured — tasks.md's live-browser A/B (task 7, still not this implementer's job to run) must
-  measure the actual per-event cost on both existing demo clips before any default-on call is
-  reaffirmed for this extension specifically; the original acquisition/reacquisition default-on
-  decision does not automatically cover these two new mechanisms.
+  shaped `estimatePoses` call) for `POST_ACQUISITION_SETTLE_FRAMES` calls after every acquisition
+  and every reacquisition/re-verification event that switches to a non-continuous person (gated
+  per "Gate the settle-in window to genuine identity changes only" above — a continuous match does
+  NOT pay this) — under the shipped `trackingCropConfig.enabled: false` default this is genuinely
+  new per-event cost that never existed before this extension, not a reuse of already-paid
+  crop-mode cost. → **Mitigation**: bounded to a first-guess default of a few frames per event
+  (not the whole clip), gated to the events that actually carry new identity information, and
+  explicitly unmeasured — tasks.md's live-browser A/B (task 10, still not this implementer's job
+  to run) must measure the actual per-event cost and real-world duty cycle (see the "Why this
+  still needs its own A/B" discussion above) on both existing demo clips before any default-on
+  call is reaffirmed for this extension specifically; the original acquisition/reacquisition
+  default-on decision does not automatically cover these two new mechanisms.
 - **[Risk]** Periodic re-verification adds a new, ongoing per-clip cost with no natural ceiling
   tied to how many people are ever in frame — unlike acquisition/reacquisition (bounded by how
   often identity is ambiguous), a long, entirely single-person, never-ambiguous clip still pays a
@@ -215,8 +266,29 @@ identity was already known to be ambiguous") specifically calls for.
   → **Mitigation**: the interval is a first-guess default (`45`, roughly 1.5s of steady 30fps
   sampling) intentionally coarse enough that the amortized cost per tracked frame is small;
   bounded, not unlimited, per-call empty-check no-op behavior (see the Decisions section above)
-  keeps a failed check from compounding into worse-than-periodic cost; still needs the same A/B
-  measurement as the settle-in window before the interval default is treated as final.
+  keeps a failed check from compounding into worse-than-periodic cost, and a failed check now also
+  falls through to the ordinary single-pose call for that same frame (review F2) rather than
+  dropping the sample outright; still needs the same A/B measurement as the settle-in window
+  before the interval default is treated as final.
+- **[Risk]** Periodic re-verification and the settle-in window inject STRUCTURED, PERIODIC
+  contamination into the sampled keypoint series, not random noise — this is a materially
+  different risk than raw throughput cost, and needs its own check in the A/B, not just tier/
+  detected-frame-count comparisons. Two concrete mechanisms: (a) a re-verification cycle briefly
+  substitutes `MULTIPOSE_LIGHTNING`'s output for `rawDetector`'s (model-heterogeneity frames —
+  different model, different keypoint precision/bias, injected at a fixed cadence rather than
+  randomly), and (b) a non-continuous identity switch's `rawDetector.reset()` introduces a
+  smoothing-filter discontinuity at that same fixed cadence. CLAUDE.md's "MediaPipe metric
+  calibration" section already documents this pipeline's cadence/vertical-oscillation spectral fit
+  sitting close to its own quality gate on real footage (`sinusoidR2 ≈ 0.49` on the side-view track
+  clip vs. a `0.30` gate) — a fit that marginal has little headroom to absorb a periodic,
+  structured contamination source on top of ordinary GPU float non-associativity noise, and a
+  period near a real stride frequency could in principle alias into the fitted frequency itself
+  rather than just adding broadband noise. → **Mitigation**: not a code fix, a documentation
+  flag — task 10.4's A/B must explicitly check `fit.sinusoidR2` (and, ideally, `fit.frequencyHz ×
+  60` against `cadence.value`, the same free cross-check CLAUDE.md's VO section already uses) with
+  these two mechanisms active vs. disabled, not only detected-frame-count/confidence-tier
+  comparisons, which would not by themselves surface a spectral-fit-quality regression these
+  mechanisms could plausibly cause.
 - **[Risk]** Both mechanisms add new closure state (`settleFramesRemaining`,
   `callsSinceLastVerification`) and a third multi-pose dispatch reason alongside acquisition and
   reacquisition, widening the reentrancy surface NEW-1/NEW-2 (see this change's implementation
