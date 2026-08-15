@@ -68,35 +68,50 @@ function toVideoSpaceKeypoints(
 
 interface Candidate {
   frame: PoseFrame
-  box: BoundingBoxPx
+  /** `null` when this candidate failed the usability gate (too few confident keypoints) --
+   * still carried through rather than dropped, so a call where every candidate is unusable can
+   * still return the best raw one instead of `null` (see `pickBestCandidate`). */
+  box: BoundingBoxPx | null
+  /** MoveNet's own overall per-pose confidence -- the only ranking signal available for a
+   * candidate whose `box` is `null`. */
+  poseScore: number
 }
 
 /**
- * Maps a `MULTIPOSE_LIGHTNING` call's raw candidates to usable `{frame, box}` pairs, dropping any
- * candidate whose bounding box can't be derived (too few confident keypoints, same usability gate
- * `deriveBoundingBox` applies to the single-pose path) -- an unusable candidate can't be scored.
+ * Maps a `MULTIPOSE_LIGHTNING` call's raw candidates to `{frame, box, poseScore}` triples.
+ * Deliberately does NOT drop candidates that fail the usability gate (`box: null`) -- doing so
+ * would make "every candidate is unusable" indistinguishable from "no candidates at all", which
+ * would violate this backend's "always return a frame, usability only controls tracking state"
+ * invariant (the single-pose path already honors this; see `pickBestCandidate`).
+ *
+ * Reuses `trackingCropConfig.minKeypointConfidence`/`minConfidentKeypoints` as the per-candidate
+ * usability gate rather than a separate multi-pose-specific pair: "is this detection usable" is
+ * the same question regardless of which detector produced it, and design.md's "one shared
+ * threshold, not two" reasoning for `reacquisitionLossThreshold` applies here too -- a second,
+ * independently-tunable confidence pair for the multi-pose path would only drift out of sync with
+ * the single-pose path's own gate over time.
  */
-function toUsableCandidates(
+function toCandidates(
   poses: poseDetection.Pose[],
   currentTime: number,
   trackingCropConfig: TrackingCropConfig,
 ): Candidate[] {
-  const candidates: Candidate[] = []
-  for (const pose of poses) {
+  return poses.map((pose) => {
     const frame = toPoseFrame(pose.keypoints, currentTime)
     const box = deriveBoundingBox(
       frame.keypoints,
       trackingCropConfig.minKeypointConfidence,
       trackingCropConfig.minConfidentKeypoints,
     )
-    if (box !== null) candidates.push({ frame, box })
-  }
-  return candidates
+    return { frame, box, poseScore: pose.score ?? 0 }
+  })
 }
 
 /** Acquisition heuristic (design.md's "Person-of-interest scoring"): highest bbox-area-weighted-
- * by-confidence score wins. `candidates` must be non-empty. */
-function selectByAcquisitionHeuristic(candidates: Candidate[]): Candidate {
+ * by-confidence score wins. `candidates` must be non-empty and every `box` non-null. */
+function selectByAcquisitionHeuristic(
+  candidates: (Candidate & { box: BoundingBoxPx })[],
+): Candidate {
   return candidates.reduce((best, candidate) =>
     computeAcquisitionScore(candidate.box, candidate.frame.keypoints) >
     computeAcquisitionScore(best.box, best.frame.keypoints)
@@ -110,14 +125,14 @@ function selectByAcquisitionHeuristic(candidates: Candidate[]): Candidate {
  * highest nonzero IoU against `lastKnownBox` wins; if every candidate has zero IoU, the closest
  * candidate within `REACQUISITION_PROXIMITY_DISTANCE_MULTIPLE * lastKnownBox`'s own side wins
  * instead; if none qualify there either, this call is treated as a fresh acquisition among the
- * same candidates. `candidates` must be non-empty.
+ * same candidates. `candidates` must be non-empty and every `box` non-null.
  */
 function selectByReacquisitionHeuristic(
-  candidates: Candidate[],
+  candidates: (Candidate & { box: BoundingBoxPx })[],
   lastKnownBox: BoundingBoxPx,
 ): Candidate {
   let bestIoU = 0
-  let bestIoUCandidate: Candidate | null = null
+  let bestIoUCandidate: (Candidate & { box: BoundingBoxPx }) | null = null
   for (const candidate of candidates) {
     const iou = computeBoundingBoxIoU(candidate.box, lastKnownBox)
     if (iou > bestIoU) {
@@ -146,10 +161,56 @@ function selectByReacquisitionHeuristic(
   return selectByAcquisitionHeuristic(candidates)
 }
 
-/** What `rawDetector` was asked to do on the previous call -- the reset-timing state machine's
- * tri-state generalization of the old crop/full-frame boolean, adding 'none' for a call the
- * acquisition/reacquisition path (below) intercepted before `rawDetector` was ever invoked. */
-type RawDetectorUsage = 'crop' | 'fullFrame' | 'none'
+/**
+ * Picks one candidate from a non-empty `MULTIPOSE_LIGHTNING` result, honoring "always return a
+ * frame, usability only controls tracking state" (movenet.test.ts's own stated invariant for the
+ * single-pose path, item #2 of the multi-person-acquisition review): candidates that clear the
+ * usability gate (`box !== null`) are scored by the acquisition/reacquisition heuristics as
+ * before; if NONE clear it, the raw candidate with the highest MoveNet-native `poseScore` is
+ * returned instead of resolving `null` for the whole call. `usable: false` tells the caller not
+ * to treat the result as a trustworthy anchor (same meaning as `derived === null` on the
+ * single-pose path).
+ */
+function pickBestCandidate(
+  candidates: Candidate[],
+  anchorMissing: boolean,
+  lastKnownBox: BoundingBoxPx | null,
+): { candidate: Candidate; usable: boolean } {
+  const boxed = candidates.filter(
+    (c): c is Candidate & { box: BoundingBoxPx } => c.box !== null,
+  )
+  if (boxed.length > 0) {
+    const selected =
+      anchorMissing || lastKnownBox === null
+        ? selectByAcquisitionHeuristic(boxed)
+        : selectByReacquisitionHeuristic(boxed, lastKnownBox)
+    return { candidate: selected, usable: true }
+  }
+
+  const bestRaw = candidates.reduce((best, c) =>
+    c.poseScore > best.poseScore ? c : best,
+  )
+  return { candidate: bestRaw, usable: false }
+}
+
+/**
+ * How many consecutive reacquisition-dispatch calls may come up with no usable candidate at all
+ * (zero raw poses, or poses but none clearing the usability gate) before giving up on this
+ * anchor entirely, rather than retrying forever while the subject is simply absent from frame.
+ * Reuses `TrackingCropConfig.reacquisitionLossThreshold` — same magnitude as "how long we wait
+ * before first declaring an anchor stale" is a reasonable, already-tuned-by-convention budget for
+ * "how long we keep trying to get it back", not a fresh independently-tunable number.
+ */
+function reacquisitionMissBudget(
+  trackingCropConfig: TrackingCropConfig,
+): number {
+  return trackingCropConfig.reacquisitionLossThreshold
+}
+
+/** What `rawDetector` was asked to do on the previous call that actually invoked it. Calls
+ * intercepted entirely by the acquisition/reacquisition path never invoke `rawDetector` at all,
+ * so they're transparent to this state -- see the reset-timing comment in `estimatePose`. */
+type RawDetectorUsage = 'crop' | 'fullFrame'
 
 export async function createMoveNetDetector(
   modelType: MoveNetModelType = 'lightning',
@@ -178,8 +239,11 @@ export async function createMoveNetDetector(
   // The multi-pose acquisition/reacquisition detector: lazily created on first actual use
   // (`getMultiPoseDetector`, below), not here -- its own model download/init cost should only be
   // paid by a run that actually reaches an acquisition moment, not by every detector's cold
-  // start. Memoized for this detector instance's lifetime; same lazy-create/memoize/
-  // no-throw-on-failure shape as `scalePassDetector.ts`'s `getScalePassDetector`.
+  // start. Memoized for this detector instance's lifetime; same lazy-create/memoize shape as
+  // `scalePassDetector.ts`'s `getScalePassDetector`, but with per-RUN (not per-instance) failure
+  // caching -- see `multiPoseCreationFailedThisRun` -- since `getScalePassDetector` only ever
+  // needs per-instance memoization (it isn't invoked from inside a tight per-frame sampling loop
+  // the way this is).
   let multiPoseDetector: Awaited<
     ReturnType<typeof poseDetection.createDetector>
   > | null = null
@@ -187,10 +251,19 @@ export async function createMoveNetDetector(
     typeof poseDetection.createDetector
   > | null = null
 
+  // Set once creation has failed for the current run, so a whole clip's worth of remaining
+  // frames don't each re-attempt (and re-await) the same doomed model fetch -- reset alongside
+  // the rest of this run's tracking state on new-run detection, below. NOTE: whether the
+  // multi-pose model's cold-start fetch should be kicked off *before* frame sampling begins,
+  // rather than on the first acquisition call mid-sampling-loop, is a separate, larger question
+  // this fix does not attempt -- see the review discussion this change responds to.
+  let multiPoseCreationFailedThisRun = false
+
   async function getMultiPoseDetector(): Promise<Awaited<
     ReturnType<typeof poseDetection.createDetector>
   > | null> {
     if (multiPoseDetector) return multiPoseDetector
+    if (multiPoseCreationFailedThisRun) return null
     if (!multiPoseDetectorPromise) {
       multiPoseDetectorPromise = poseDetection.createDetector(
         poseDetection.SupportedModels.MoveNet,
@@ -205,12 +278,13 @@ export async function createMoveNetDetector(
       multiPoseDetector = created
       return created
     } catch {
-      // Creation failed (e.g. the model asset fetch failed) -- reset the pending promise so the
-      // next acquisition attempt retries instead of awaiting a cached rejection forever. The
-      // caller falls back to the single-pose path for this call (task 2.2); only forget OUR
-      // attempt, a concurrent caller may already have installed a fresh one.
+      // Creation failed (e.g. the model asset fetch failed) -- cache the failure for the rest of
+      // this run (see `multiPoseCreationFailedThisRun`'s doc) rather than retrying every frame,
+      // and forget the pending promise so a *future* run gets a clean retry. Only forget OUR
+      // attempt: a concurrent caller may already have installed a fresh one.
       if (multiPoseDetectorPromise === attempted)
         multiPoseDetectorPromise = null
+      multiPoseCreationFailedThisRun = true
       return null
     }
   }
@@ -231,6 +305,39 @@ export async function createMoveNetDetector(
   let lastSeenTime: number | null = null
   let generation = 0
 
+  // Whether the CURRENT anchor has already been through one successful reacquisition since it
+  // was last freshly established via acquisition. Gates the "give up" rule below (item #4 of the
+  // review this responds to): a fresh anchor gets one reacquisition attempt if it goes stale;
+  // if THAT reacquired anchor also goes stale, we stop re-disambiguating and fall back to the
+  // plain, undisambiguated single-pose path (`personOfInterestSuspended`) instead of looping
+  // reacquisition-succeeds/loses-again forever against a scene the heuristic can't actually
+  // resolve (e.g. the real subject is gone and only a bystander remains for the acquisition
+  // fallback to repeatedly "successfully" reacquire).
+  let anchorWasReacquired = false
+
+  // How many consecutive reacquisition-dispatch calls in the CURRENT reacquisition episode have
+  // come up with no usable candidate (zero raw poses, or none clearing the usability gate). See
+  // `reacquisitionMissBudget` -- bounded, not unlimited, so a genuinely absent subject doesn't
+  // pin the anchor (and keep paying for multi-pose calls) forever.
+  let consecutiveEmptyReacquisitions = 0
+
+  // Set when this run has given up on multi-pose disambiguation (see `anchorWasReacquired`'s
+  // doc and the exhausted-miss-budget case below) -- suppresses acquisition/reacquisition
+  // dispatch entirely until an ordinary single-pose detection re-establishes a confident anchor
+  // on its own, at which point normal dynamics (including a fresh acquisition/reacquisition cycle
+  // if THAT anchor is later lost) resume.
+  let personOfInterestSuspended = false
+
+  /** Clears all anchor and multi-pose-episode state -- used both for a genuine "no one is
+   * trackable" reset and as the internals of "giving up" (which additionally suspends
+   * multi-pose dispatch, see call sites). */
+  function clearAnchor(): void {
+    lastBoundingBox = null
+    consecutiveLowConfidence = 0
+    anchorWasReacquired = false
+    consecutiveEmptyReacquisitions = 0
+  }
+
   /**
    * Increments the reacquisition-loss counter for a not-usable steady-state call -- unconditional
    * on crop-vs-full-frame (design.md's "Unify anchor-tracking state": the full-frame path had no
@@ -238,8 +345,8 @@ export async function createMoveNetDetector(
    * the threshold reproduces this backend's pre-existing behavior exactly: drop the anchor and
    * fall back to an ordinary full-frame call next time. When enabled, the anchor is deliberately
    * left in place -- it's the last-known position the reacquisition heuristic (below) scores
-   * candidates against, and nulling it here would erase that signal at the exact moment it's
-   * needed.
+   * candidates against, and clearing it here would erase that signal at the exact moment it's
+   * needed; the dispatch check at the top of the next call routes to reacquisition instead.
    */
   function registerTrackingLoss(): void {
     consecutiveLowConfidence += 1
@@ -248,13 +355,25 @@ export async function createMoveNetDetector(
         trackingCropConfig.reacquisitionLossThreshold &&
       !personOfInterestConfig.enabled
     ) {
-      lastBoundingBox = null
-      consecutiveLowConfidence = 0
+      clearAnchor()
     }
   }
 
   return {
     async estimatePose(source: PoseFrameSource): Promise<PoseFrame | null> {
+      // True byte-for-byte kill-switch, matching this backend's behavior before
+      // `multi-person-acquisition` existed: no generation bookkeeping, no new-run check, no
+      // crop-mode tracking state read or written, no `rawDetector.reset()` ever. This is the ONE
+      // config combination that had special-cased behavior before this capability existed
+      // (`trackingCropConfig.enabled: false` alone) -- personOfInterest didn't exist yet, so its
+      // disabled state is the "doesn't exist" state, and both together must reproduce that exact
+      // pre-existing path (task 6.1's "byte-identical to pre-change behavior" guarantee).
+      if (!trackingCropConfig.enabled && !personOfInterestConfig.enabled) {
+        const poses = await rawDetector.estimatePoses(source.image)
+        if (poses.length === 0) return null
+        return toPoseFrame(poses[0].keypoints, source.timestampSec)
+      }
+
       // Every call captures its own generation and reads the source's timestamp once,
       // synchronously, before any `await` — both the new-run check below and the reentrancy guard
       // after the detection call rely on this snapshot being consistent for the lifetime of this
@@ -271,30 +390,65 @@ export async function createMoveNetDetector(
         lastSeenTime !== null &&
         currentTime < lastSeenTime - NEW_RUN_TIME_DROP_SEC
       ) {
-        lastBoundingBox = null
-        consecutiveLowConfidence = 0
+        clearAnchor()
+        personOfInterestSuspended = false
+        multiPoseCreationFailedThisRun = false
         previousRawDetectorUsage = 'fullFrame'
         rawDetector.reset()
       }
 
-      // Captured synchronously, before any `await` below, for the same reason `myGeneration`/
-      // `currentTime` are: the reacquisition heuristic (below) reads this a second time after two
-      // `await`s (detector creation, then detection itself), by which point a newer overlapping
-      // call could already have mutated the live `lastBoundingBox` -- scoring against this
-      // snapshot instead keeps a stale call's candidate selection self-consistent even if it
-      // ultimately loses the reentrancy race below.
+      // Captured synchronously, before any `await` below: both `anchorBoxAtStart` (the
+      // reacquisition heuristic's scoring target) and the crop-vs-full-frame framing decision for
+      // THIS call are derived from this snapshot, not from `lastBoundingBox` re-read after an
+      // `await` -- a newer overlapping call (`sampleClip.ts`'s per-frame timeout lets calls
+      // overlap, see the reentrancy guard below) could otherwise mutate the live value in
+      // between, corrupting a stale call's own framing/scoring or, worse, letting a stale call's
+      // late failure clobber a newer call's progress.
       const anchorBoxAtStart = lastBoundingBox
       const anchorMissing = anchorBoxAtStart === null
       const anchorStale =
         !anchorMissing &&
         consecutiveLowConfidence >=
           trackingCropConfig.reacquisitionLossThreshold
+
+      // "Give up" (review item #4): an anchor that has ALREADY been through one successful
+      // reacquisition, and has now gone stale again, is not worth another reacquisition attempt
+      // -- the multi-pose pass had its one shot at re-disambiguating this specific anchor and the
+      // scene still isn't resolving cleanly (e.g. reacquisition's own acquisition-heuristic
+      // fallback keeps landing on the same bystander). Drop to the plain, undisambiguated
+      // single-pose path -- same shape as the original crop-mode fallback -- rather than looping
+      // reacquire/lose forever.
+      let giveUpBoxAtStart = anchorBoxAtStart
+      if (
+        anchorStale &&
+        personOfInterestConfig.enabled &&
+        anchorWasReacquired
+      ) {
+        clearAnchor()
+        personOfInterestSuspended = true
+        giveUpBoxAtStart = null
+      }
+
+      const effectiveAnchorMissing = giveUpBoxAtStart === null
+      const effectiveAnchorStale =
+        !effectiveAnchorMissing &&
+        consecutiveLowConfidence >=
+          trackingCropConfig.reacquisitionLossThreshold
+
       let dispatchMultiPose =
-        personOfInterestConfig.enabled && (anchorMissing || anchorStale)
+        personOfInterestConfig.enabled &&
+        !personOfInterestSuspended &&
+        (effectiveAnchorMissing || effectiveAnchorStale)
 
       const multiPoseDet = dispatchMultiPose
         ? await getMultiPoseDetector()
         : null
+
+      // From here on, `boxForFraming` -- not live `lastBoundingBox` -- decides crop-vs-full-frame
+      // for THIS call, so a call that started with one anchor snapshot never crops against a
+      // *different*, newer anchor a concurrent call may have installed while we awaited detector
+      // creation above (review item #3).
+      let boxForFraming = giveUpBoxAtStart
       if (dispatchMultiPose && multiPoseDet === null) {
         // Multi-pose detector creation failed -- fall back to the ordinary single-pose full-frame
         // call below rather than surfacing a hard error (task 2.2), never regressing below this
@@ -305,35 +459,39 @@ export async function createMoveNetDetector(
         // already ran to completion while this one awaited `getMultiPoseDetector()` may have
         // seeded a perfectly good, fresh anchor, which this stale call must not clobber.
         dispatchMultiPose = false
+        boxForFraming = null
         if (myGeneration === generation) {
-          lastBoundingBox = null
-          consecutiveLowConfidence = 0
+          clearAnchor()
         }
       }
 
       const usingCrop =
         !dispatchMultiPose &&
         trackingCropConfig.enabled &&
-        lastBoundingBox !== null
-      const rawDetectorUsage: RawDetectorUsage = dispatchMultiPose
-        ? 'none'
-        : usingCrop
-          ? 'crop'
-          : 'fullFrame'
+        boxForFraming !== null
+      const rawDetectorUsage: RawDetectorUsage = usingCrop
+        ? 'crop'
+        : 'fullFrame'
 
       // `rawDetector` is reused across calls, so its own internal cropRegion/smoothing-filter
-      // state (computed relative to whatever canvas -- or absence of a call at all -- we left it
-      // with last call) would otherwise fight our externally-computed framing at the moment
-      // framing actually changes shape. Only the transition boundary needs it: for a same-size
-      // square canvas across consecutive crop-mode calls, `initCropRegion` (see design.md's
-      // Context) always resolves to full `[0,1]x[0,1]` coverage regardless of MoveNet's own stale
-      // `cropRegion`, so resetting on every steady-tracking call would only cost MoveNet's
-      // one-euro smoothing continuity for no correctness benefit. As of
-      // `multi-person-acquisition`, the transition set also includes moving into or out of a call
-      // the acquisition/reacquisition path intercepts entirely (`'none'`) -- otherwise
-      // `rawDetector`'s state survives an acquisition/reacquisition event uncleared, and the next
-      // steady-state call inherits it stale.
-      if (rawDetectorUsage !== previousRawDetectorUsage) {
+      // state (computed relative to whatever canvas we fed it on its LAST ACTUAL invocation)
+      // would otherwise fight our externally-computed framing at the moment framing actually
+      // changes shape. Only that transition boundary needs it: for a same-size square canvas
+      // across consecutive crop-mode calls, `initCropRegion` (see design.md's Context) always
+      // resolves to full `[0,1]x[0,1]` coverage regardless of MoveNet's own stale `cropRegion`, so
+      // resetting on every steady-tracking call would only cost MoveNet's one-euro smoothing
+      // continuity for no correctness benefit. A call the acquisition/reacquisition path
+      // intercepts entirely never invokes `rawDetector` at all, so it's transparent here: this
+      // compares against `previousRawDetectorUsage`, which is only ever updated by a call that
+      // ACTUALLY invoked `rawDetector` (see `commitCallProgress`) -- an intervening acquisition/
+      // reacquisition "hole" of any length never triggers a reset on its own, preserving whatever
+      // continuity `rawDetector`'s own internal state had going into it. Guarded by the same
+      // reentrancy check as above: a stale call resuming after a slow `await` must not reset
+      // `rawDetector` out from under a newer call that has already started using it.
+      if (
+        rawDetectorUsage !== previousRawDetectorUsage &&
+        myGeneration === generation
+      ) {
         rawDetector.reset()
       }
 
@@ -348,41 +506,76 @@ export async function createMoveNetDetector(
       // ones that found a usable detection -- otherwise a not-usable result would leave the
       // transition-detection state machine and the new-run clock stuck at whatever the last
       // successful call left them, corrupting the transition check for later calls even though
-      // the video kept playing forward in the meantime.
-      function commitCallProgress(usage: RawDetectorUsage): void {
-        previousRawDetectorUsage = usage
+      // the video kept playing forward in the meantime. `usage` is `null` for a call the
+      // acquisition/reacquisition path intercepted entirely -- it never touched `rawDetector`, so
+      // it must not overwrite `previousRawDetectorUsage`.
+      function commitCallProgress(usage: RawDetectorUsage | null): void {
+        if (usage !== null) previousRawDetectorUsage = usage
         lastSeenTime = currentTime
       }
 
       if (dispatchMultiPose && multiPoseDet !== null) {
-        const multiPoses = await multiPoseDet.estimatePoses(source.image)
-        const isCurrent = myGeneration === generation
-        const candidates = toUsableCandidates(
-          multiPoses,
-          currentTime,
-          trackingCropConfig,
+        const multiPoses = await multiPoseDet.estimatePoses(
+          source.image,
+          undefined,
+          currentTime * 1000,
         )
+        const isCurrent = myGeneration === generation
 
-        if (candidates.length === 0) {
+        if (multiPoses.length === 0) {
           if (isCurrent) {
-            lastBoundingBox = null
-            consecutiveLowConfidence = 0
-            commitCallProgress('none')
+            if (effectiveAnchorMissing) {
+              // Fresh acquisition found no one at all -- nothing was seeded, so the next call is
+              // still an ordinary acquisition attempt (spec.md's "No candidates returned").
+            } else {
+              consecutiveEmptyReacquisitions += 1
+              if (
+                consecutiveEmptyReacquisitions >=
+                reacquisitionMissBudget(trackingCropConfig)
+              ) {
+                clearAnchor()
+                personOfInterestSuspended = true
+              }
+            }
+            commitCallProgress(null)
           }
           return null
         }
 
-        const selected = anchorMissing
-          ? selectByAcquisitionHeuristic(candidates)
-          : selectByReacquisitionHeuristic(
-              candidates,
-              anchorBoxAtStart as BoundingBoxPx,
-            )
+        const candidates = toCandidates(
+          multiPoses,
+          currentTime,
+          trackingCropConfig,
+        )
+        const { candidate: selected, usable } = pickBestCandidate(
+          candidates,
+          effectiveAnchorMissing,
+          giveUpBoxAtStart,
+        )
 
         if (isCurrent) {
-          lastBoundingBox = selected.box
-          consecutiveLowConfidence = 0
-          commitCallProgress('none')
+          if (usable) {
+            lastBoundingBox = selected.box
+            consecutiveLowConfidence = 0
+            consecutiveEmptyReacquisitions = 0
+            // A candidate selected while reacquiring (not a fresh acquisition) has now been
+            // through one reacquisition cycle; a fresh acquisition starts a clean slate.
+            anchorWasReacquired = !effectiveAnchorMissing
+          } else if (!effectiveAnchorMissing) {
+            // Raw candidates existed but none cleared the usability gate during reacquisition --
+            // counts toward the same bounded retry budget as a fully-empty result (review item
+            // #2 + #5 together): still returns a frame (the invariant), but doesn't treat it as
+            // a trustworthy anchor.
+            consecutiveEmptyReacquisitions += 1
+            if (
+              consecutiveEmptyReacquisitions >=
+              reacquisitionMissBudget(trackingCropConfig)
+            ) {
+              clearAnchor()
+              personOfInterestSuspended = true
+            }
+          }
+          commitCallProgress(null)
         }
 
         return selected.frame
@@ -393,7 +586,7 @@ export async function createMoveNetDetector(
 
       if (usingCrop) {
         cropRect = computeCropRect(
-          lastBoundingBox as BoundingBoxPx,
+          boxForFraming as BoundingBoxPx,
           source.width,
           source.height,
           trackingCropConfig.paddingMultiplier,
@@ -443,6 +636,12 @@ export async function createMoveNetDetector(
         if (derived !== null) {
           lastBoundingBox = derived
           consecutiveLowConfidence = 0
+          // An ordinary single-pose detection re-established a confident anchor on its own --
+          // whatever multi-pose "give up" state was active no longer applies to this fresh
+          // anchor.
+          personOfInterestSuspended = false
+          anchorWasReacquired = false
+          consecutiveEmptyReacquisitions = 0
         } else {
           registerTrackingLoss()
         }
@@ -453,7 +652,13 @@ export async function createMoveNetDetector(
     },
     dispose(): void {
       rawDetector.dispose()
-      multiPoseDetector?.dispose()
+      if (multiPoseDetector) {
+        multiPoseDetector.dispose()
+      } else if (multiPoseDetectorPromise) {
+        multiPoseDetectorPromise
+          .then((created) => created.dispose())
+          .catch(() => {})
+      }
     },
   }
 }

@@ -525,6 +525,31 @@ describe('createMoveNetDetector', () => {
       expect(reset).not.toHaveBeenCalled()
     })
 
+    it('trackingCrop AND personOfInterest both disabled: byte-identical to pre-change behavior across a new-run boundary too', async () => {
+      const config: TrackingCropConfig = {
+        ...DEFAULT_TRACKING_CROP_CONFIG,
+        enabled: false,
+      }
+      const detector = await createMoveNetDetector(undefined, config, POI_OFF)
+
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(10)))
+
+      // A new-run-shaped drop in currentTime -- the pre-existing kill switch had no "new run"
+      // concept at all (no generation/lastSeenTime bookkeeping ever ran), so this must not call
+      // reset() either, unlike every other config combination in this file.
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(0)))
+
+      expect(reset).not.toHaveBeenCalled()
+      expect(estimatePoses.mock.calls[0]).toHaveLength(1)
+      expect(estimatePoses.mock.calls[1]).toHaveLength(1)
+    })
+
     it('reset() call-timing: only on mode-transition calls, never mid-steady-tracking or during a full-frame-only run', async () => {
       const config: TrackingCropConfig = {
         ...CROP_ON,
@@ -816,7 +841,11 @@ describe('person-of-interest acquisition/reacquisition', () => {
 
       const frame = await detector.estimatePose(videoFrameSource(video))
 
-      expect(multiPoseEstimatePoses).toHaveBeenCalledWith(video)
+      expect(multiPoseEstimatePoses).toHaveBeenCalledWith(
+        video,
+        undefined,
+        12500,
+      )
       expect(frame?.timestamp).toBe(12.5)
       expect(frame?.keypoints.map((k) => k.name)).toEqual([
         ...COMMON_KEYPOINT_NAMES,
@@ -863,6 +892,62 @@ describe('person-of-interest acquisition/reacquisition', () => {
       expect(multiPoseEstimatePoses).toHaveBeenCalledTimes(2)
     })
 
+    it('nonzero raw candidates but none clearing the usability gate still returns a frame, not null', async () => {
+      const detector = await createMoveNetDetector()
+      // Both candidates present, but each with too few confident keypoints to pass the bbox
+      // usability gate (default minConfidentKeypoints: 4) -- must not be treated the same as
+      // "zero candidates" (spec.md's "No candidates returned" scenario is about zero *raw poses*,
+      // not zero *usable* ones).
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        {
+          keypoints: [{ name: 'left_shoulder', x: 10, y: 10, score: 0.9 }],
+          score: 0.4,
+        },
+        {
+          keypoints: [{ name: 'left_hip', x: 20, y: 20, score: 0.9 }],
+          score: 0.8,
+        },
+      ])
+
+      const frame = await detector.estimatePose(videoFrameSource(makeVideo(0)))
+
+      expect(frame).not.toBeNull()
+      // Picked by MoveNet's own per-pose score (0.8 > 0.4) since neither candidate has a
+      // derivable bbox to rank by.
+      expect(frame?.keypoints.find((k) => k.name === 'left_hip')).toEqual({
+        name: 'left_hip',
+        x: 20,
+        y: 20,
+        score: 0.9,
+      })
+    })
+
+    it('does not seed the anchor from a not-usable candidate', async () => {
+      const detector = await createMoveNetDetector()
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        {
+          keypoints: [{ name: 'left_shoulder', x: 10, y: 10, score: 0.9 }],
+          score: 0.5,
+        },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(0)))
+
+      // Anchor was never seeded above -- the next call is still treated as a fresh acquisition
+      // attempt, scored by the acquisition heuristic (highest area x confidence), not
+      // reacquisition continuity against a stale not-usable "anchor".
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_CANDIDATE_KEYPOINTS, score: 0.9 },
+        { keypoints: LARGE_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      const frame = await detector.estimatePose(
+        videoFrameSource(makeVideo(1, 1280, 720)),
+      )
+
+      expect(frame?.keypoints.find((k) => k.name === 'left_shoulder')?.x).toBe(
+        600,
+      )
+    })
+
     it('multi-pose detector creation failure falls back to the single-pose full-frame call, seeding the anchor from a usable result', async () => {
       createDetectorMock.mockImplementation(
         async (_model: unknown, config?: { modelType?: string }) => {
@@ -889,6 +974,33 @@ describe('person-of-interest acquisition/reacquisition', () => {
         y: 160,
         score: 0.95,
       })
+    })
+
+    it('caches a multi-pose detector creation failure for the run instead of retrying the fetch every frame', async () => {
+      createDetectorMock.mockImplementation(
+        async (_model: unknown, config?: { modelType?: string }) => {
+          if (
+            config?.modelType ===
+            poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING
+          ) {
+            throw new Error('model load failed')
+          }
+          return { estimatePoses, dispose, reset }
+        },
+      )
+      const detector = await createMoveNetDetector()
+
+      // Three consecutive frames, each failing to seed an anchor via the single-pose fallback too
+      // (so every one of them independently re-evaluates "should I attempt multi-pose
+      // acquisition again").
+      for (let i = 0; i < 3; i += 1) {
+        estimatePoses.mockResolvedValueOnce([])
+        await detector.estimatePose(videoFrameSource(makeVideo(i)))
+      }
+
+      // createDetectorMock: once for the raw single-pose detector at construction, plus exactly
+      // ONE attempt at the multi-pose detector -- not one per frame.
+      expect(createDetectorMock).toHaveBeenCalledTimes(2)
     })
   })
 
@@ -974,7 +1086,7 @@ describe('person-of-interest acquisition/reacquisition', () => {
       )
     })
 
-    it('zero candidates resolves null and clears the anchor', async () => {
+    it('an empty reacquisition attempt preserves the anchor for a retry, scored by continuity against the original position', async () => {
       const detector = await detectorWithSeededAnchor()
 
       multiPoseEstimatePoses.mockResolvedValueOnce([])
@@ -983,15 +1095,176 @@ describe('person-of-interest acquisition/reacquisition', () => {
       )
       expect(frame).toBeNull()
 
-      // Anchor cleared: the next call still goes through the multi-pose path and can seed a
-      // brand new anchor, rather than being stuck scoring continuity against a cleared box.
+      // If the anchor had been cleared by the empty attempt above, this retry would be scored as
+      // a fresh acquisition (area x confidence) and LARGE would win. Since the anchor survived,
+      // continuity against the ORIGINAL seeded position wins instead.
       multiPoseEstimatePoses.mockResolvedValueOnce([
-        { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
+        { keypoints: LARGE_CANDIDATE_KEYPOINTS, score: 0.9 },
+        { keypoints: SMALL_DISTANT_MOVED_CANDIDATE_KEYPOINTS, score: 0.9 },
       ])
-      const nextFrame = await detector.estimatePose(
+      const retried = await detector.estimatePose(
         videoFrameSource(makeVideo(101, 1280, 720)),
       )
-      expect(nextFrame).not.toBeNull()
+
+      expect(
+        retried?.keypoints.find((k) => k.name === 'left_shoulder')?.x,
+      ).toBe(115)
+    })
+
+    it('gives up after exhausting the empty-reacquisition retry budget, falling back to the plain single-pose path', async () => {
+      const detector = await detectorWithSeededAnchor()
+
+      for (
+        let i = 0;
+        i < DEFAULT_TRACKING_CROP_CONFIG.reacquisitionLossThreshold;
+        i += 1
+      ) {
+        multiPoseEstimatePoses.mockResolvedValueOnce([])
+        await detector.estimatePose(
+          videoFrameSource(makeVideo(100 + i, 1280, 720)),
+        )
+      }
+      // seed (1) + every empty retry (reacquisitionLossThreshold), all dispatched to multi-pose.
+      expect(multiPoseEstimatePoses).toHaveBeenCalledTimes(
+        1 + DEFAULT_TRACKING_CROP_CONFIG.reacquisitionLossThreshold,
+      )
+
+      // Budget exhausted: the next call no longer dispatches to multi-pose at all -- ordinary
+      // single-pose full-frame tracking, same shape as the pre-existing crop-mode fallback.
+      const multiPoseCallsBefore = multiPoseEstimatePoses.mock.calls.length
+      estimatePoses.mockResolvedValueOnce([])
+      const frame = await detector.estimatePose(
+        videoFrameSource(makeVideo(200, 1280, 720)),
+      )
+
+      expect(frame).toBeNull()
+      expect(multiPoseEstimatePoses).toHaveBeenCalledTimes(multiPoseCallsBefore)
+      expect(estimatePoses).toHaveBeenCalledWith(makeVideo(200, 1280, 720))
+    })
+
+    it("reentrancy: a stale, late-resolving multi-pose call does not clobber a newer call's reacquired anchor", async () => {
+      const detector = await detectorWithSeededAnchor()
+
+      // Call X: reacquisition-shaped; the multi-pose detector is already created and memoized
+      // (from seeding above), but X's OWN detection call stalls.
+      let resolveStale!: (value: unknown) => void
+      const staleDetectionPromise = new Promise((resolve) => {
+        resolveStale = resolve
+      })
+      multiPoseEstimatePoses.mockReturnValueOnce(staleDetectionPromise)
+      const stalePoseCall = detector.estimatePose(
+        videoFrameSource(makeVideo(100, 1280, 720)),
+      )
+
+      // Call Y: starts before X resolves, against the same (still-stale) shared anchor state --
+      // since the multi-pose detector is already memoized, Y's own detection call resolves
+      // immediately, ahead of X, and successfully reacquires.
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_MOVED_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      const freshFrame = await detector.estimatePose(
+        videoFrameSource(makeVideo(101, 1280, 720)),
+      )
+      expect(freshFrame).not.toBeNull()
+
+      // X finally resolves -- with a DIFFERENT candidate that would, if allowed to mutate shared
+      // state, overwrite Y's already-committed reacquisition.
+      resolveStale([{ keypoints: LARGE_CANDIDATE_KEYPOINTS, score: 0.9 }])
+      const staleFrame = await stalePoseCall
+      expect(staleFrame).not.toBeNull() // still returns whatever it detected
+
+      // Y's reacquisition must still be what steady-state tracking uses next: the follow-up call
+      // must not re-dispatch to multi-pose (which would mean the anchor got cleared/corrupted by
+      // X's late arrival).
+      const multiPoseCallsBeforeFollowUp =
+        multiPoseEstimatePoses.mock.calls.length
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
+      ])
+      const followUp = await detector.estimatePose(
+        videoFrameSource(makeVideo(102, 1280, 720)),
+      )
+      expect(followUp).not.toBeNull()
+      expect(multiPoseEstimatePoses).toHaveBeenCalledTimes(
+        multiPoseCallsBeforeFollowUp,
+      )
+    })
+
+    it('gives up after a second stale streak following a successful reacquisition, dropping to the plain full-frame path (POI-enabled + crop-enabled)', async () => {
+      const detector = await createMoveNetDetector(undefined, CROP_ON)
+
+      // Seed the anchor.
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(0, 1280, 720)))
+
+      // Trip the first loss streak (crop-mode not-usable calls).
+      for (let i = 0; i < CROP_ON.reacquisitionLossThreshold; i += 1) {
+        estimatePoses.mockResolvedValueOnce([])
+        await detector.estimatePose(
+          videoFrameSource(makeVideo(i + 1, 1280, 720)),
+        )
+      }
+
+      // First reacquisition: succeeds, continuity-scored against the seeded anchor.
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_MOVED_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      const reacquired = await detector.estimatePose(
+        videoFrameSource(makeVideo(100, 1280, 720)),
+      )
+      expect(reacquired).not.toBeNull()
+
+      // Trip a SECOND loss streak against the reacquired anchor.
+      for (let i = 0; i < CROP_ON.reacquisitionLossThreshold; i += 1) {
+        estimatePoses.mockResolvedValueOnce([])
+        await detector.estimatePose(
+          videoFrameSource(makeVideo(101 + i, 1280, 720)),
+        )
+      }
+
+      const multiPoseCallsBefore = multiPoseEstimatePoses.mock.calls.length
+      // A third stale trigger: without giving up, this would re-dispatch to reacquisition
+      // (possibly forever). It should instead drop straight to the plain single-pose full-frame
+      // path -- same shape as the original crop-mode fallback.
+      estimatePoses.mockResolvedValueOnce([])
+      const gaveUp = await detector.estimatePose(
+        videoFrameSource(makeVideo(200, 1280, 720)),
+      )
+
+      expect(gaveUp).toBeNull()
+      expect(multiPoseEstimatePoses).toHaveBeenCalledTimes(multiPoseCallsBefore)
+      expect(estimatePoses).toHaveBeenCalledWith(makeVideo(200, 1280, 720))
+    })
+
+    it('reset-timing: a "none" acquisition/reacquisition hole does not itself trigger a rawDetector reset', async () => {
+      const detector = await createMoveNetDetector(undefined, CROP_ON)
+
+      // Call 1: cold start, dispatches to acquisition ('none' usage) -- must not reset
+      // rawDetector, since rawDetector was never invoked by any previous call either.
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(0, 1280, 720)))
+      expect(reset).toHaveBeenCalledTimes(0)
+
+      // Call 2: steady-state crop mode, now that an anchor exists -- the first REAL rawDetector
+      // invocation. Exactly one reset fires here (the genuine fullFrame(never-invoked)->crop
+      // transition) -- not two, which the old tri-state design (resetting on entry AND exit of
+      // 'none') would have fired.
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(1, 1280, 720)))
+      expect(reset).toHaveBeenCalledTimes(1)
+
+      // Call 3: steady-state crop mode again -- no further reset.
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(2, 1280, 720)))
+      expect(reset).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -1020,6 +1293,45 @@ describe('person-of-interest acquisition/reacquisition', () => {
 
       expect(dispose).toHaveBeenCalledTimes(1)
       expect(multiPoseDispose).not.toHaveBeenCalled()
+    })
+
+    it('disposes an in-flight multi-pose detector creation once it resolves', async () => {
+      let resolveCreation!: (detector: unknown) => void
+      const pendingCreation = new Promise((resolve) => {
+        resolveCreation = resolve
+      })
+      createDetectorMock.mockImplementation(
+        async (_model: unknown, config?: { modelType?: string }) => {
+          if (
+            config?.modelType ===
+            poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING
+          ) {
+            return pendingCreation
+          }
+          return { estimatePoses, dispose, reset }
+        },
+      )
+      const detector = await createMoveNetDetector()
+
+      multiPoseEstimatePoses.mockResolvedValueOnce([])
+      const estimatePromise = detector.estimatePose(
+        videoFrameSource(makeVideo(0)),
+      )
+
+      detector.dispose()
+      expect(multiPoseDispose).not.toHaveBeenCalled() // creation hasn't resolved yet
+
+      resolveCreation({
+        estimatePoses: multiPoseEstimatePoses,
+        dispose: multiPoseDispose,
+        reset: multiPoseReset,
+      })
+      await estimatePromise
+      // Let the fire-and-forget disposal `.then()`, chained off the same creation promise, run.
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(multiPoseDispose).toHaveBeenCalledTimes(1)
     })
   })
 })

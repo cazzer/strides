@@ -7,7 +7,15 @@
  * than each config plane growing its own separate `window` global.
  */
 export interface TrackingCropConfig {
-  /** Total kill-switch: `false` bypasses all tracking state, always calling the full-frame path. */
+  /**
+   * `false` bypasses the cropped-canvas optimization: no crop canvas is ever built, every call
+   * runs the full-frame single-pose path. As of `multi-person-acquisition`, this alone is no
+   * longer a total kill-switch on all tracking state -- `lastBoundingBox`/loss-counting/etc. are
+   * unconditional (see `PersonOfInterestConfig` and `movenet.ts`'s "Unify anchor-tracking state")
+   * so the multi-pose acquisition/reacquisition path still runs. The true byte-identical-to-
+   * pre-change kill switch is `trackingCrop.enabled: false` AND `personOfInterest.enabled: false`
+   * together.
+   */
   enabled: boolean
   /**
    * Per-keypoint score gate (over the bbox-eligible `COMMON_KEYPOINT_NAMES` — head points are
