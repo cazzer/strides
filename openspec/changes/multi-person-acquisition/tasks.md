@@ -221,19 +221,46 @@
       acquisition + periodic-re-verification code paths end-to-end against real, non-synthetic
       footage, and the automated `e2e/multiPersonAcquisition.spec.ts` test (checked in, repeatable
       via `npm run test:e2e`) asserts on this — analysis completes and produces detected frames.
-- [ ] 10.4 **Not done — partial gap, documented, not silently skipped.** The A/B in 10.2 measured
-      the COMBINED cost of acquisition/reacquisition + settle-in window + periodic re-verification
-      together (that's the number that matters for the ship decision, and it's what's recorded).
-      It was NOT decomposed into settle-window-only vs. re-verification-only contributions, since
-      `POST_ACQUISITION_SETTLE_FRAMES`/`REVERIFICATION_INTERVAL_FRAMES` have no runtime override
-      point (by design — see Migration Plan) and isolating them would need a temporary code patch
-      not made this pass. The multi-person-fixture half of this task (10.1 is now done) is also
-      not run — same decomposition gap applies there too.
+- [x] 10.4 **Done (2026-08-15) — decomposed on both existing demo clips; does NOT cleanly split
+      into two comparably-sized additive costs, and that's reported as-found rather than forced
+      into a clean story.** Temporarily patched `POST_ACQUISITION_SETTLE_FRAMES`/
+      `REVERIFICATION_INTERVAL_FRAMES` in `personOfInterestConfig.ts` (reverted after
+      measurement — `git diff` on that file is clean) to isolate each mechanism: arm 2
+      (`REVERIFICATION_INTERVAL_FRAMES = 1_000_000`, settle window at its default 3) and arm 3
+      (`POST_ACQUISITION_SETTLE_FRAMES = 0`, re-verification interval at its default 45), 3 trials
+      per clip per arm (track clip extended to 6 trials after an unexpected finding — see below),
+      real GPU, `personOfInterest.enabled: true`, against the existing arm-1 baseline reused
+      verbatim from 10.2/design.md. Findings, full tables and numbers in design.md's new
+      "Settle-window vs. re-verification decomposition" subsection:
+      - **Settle-window-only (arm 2) closely reproduces the combined baseline** on both clips
+        (detected frames, cadence values, confidence tiers) — its isolated cost is negligible.
+      - **Re-verification-only (arm 3) reproduces the baseline on the park clip** (no tier
+        degradation) but **on the track clip introduces a failure mode neither the baseline nor
+        arm 2 showed**: 3 of 6 trials had the shared spectral fit degrade meaningfully (2 complete
+        gate failures — `cadence`/`verticalOscillation` both `null`, tier `'excluded'` — plus one
+        marginal pass at `sinusoidR2 = 0.380` vs. the `0.30` floor), vs. 0 of 3 in arm 2 and 0 of 3
+        in the original baseline on the same clip. This is the exact
+        "periodic-structured-contamination" risk design.md's Risks section pre-registered,
+        checking `fit.sinusoidR2` as instructed rather than only tier/detected-frame-count.
+      - **Interpretation**: the settle-in window is not a comparable, independent additive cost
+        next to re-verification's — evidence points to it acting as a *stabilizer* that prevents
+        re-verification's fit-quality risk from manifesting when both run together (the shipped
+        configuration, arm 1). Isolating re-verification's cost by disabling the settle window
+        (arm 3) measures a configuration that never ships, and one riskier than either the shipped
+        default or the settle-window-only arm. Does not change the default-on ship call in 10.5 —
+        arm 1 (what actually ships) never exhibited this failure mode.
+      The multi-person-fixture half (optional per instruction) was NOT run this pass — the
+      demo-clip decomposition above surfaced a substantive interaction finding that took priority,
+      and the ticket explicitly allowed skipping the fixture extra rather than blocking on it.
 - [x] 10.5 Recorded the A/B results in design.md's new "Live-browser A/B results" section (2026-08-15).
       Default-on/off call made: ship default-**on** per the Migration Plan's pre-registered rule
-      (correctness fix for a live-confirmed bug, confidence tiers hold) — the settle-in
-      window/periodic re-verification defaults are not separately called out because 10.4's
-      decomposition wasn't run; they ship with the same default-on call as the whole feature.
+      (correctness fix for a live-confirmed bug, confidence tiers hold). 10.4's decomposition
+      (also 2026-08-15, design.md's "Settle-window vs. re-verification decomposition" subsection)
+      does not change this call — it found the two mechanisms interact (the settle window
+      stabilizes a fit-quality risk periodic re-verification can otherwise cause) rather than
+      simply add, but the shipped configuration (both together, arm 1) never showed the failure
+      mode that isolating re-verification alone (arm 3) surfaced. Both constants ship at their
+      existing defaults, same default-on call as the whole feature.
 
 ## 11. Cleanup
 

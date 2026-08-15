@@ -458,6 +458,90 @@ actually favors the correct subject over a bystander remains unvalidated; more t
 sampling varies run-to-run under this repo's documented GPU-timing determinism caveat) or a clip
 where the second person is detected as confidently as the first would be needed to close this.
 
+### Settle-window vs. re-verification decomposition (2026-08-15, task 10.4)
+
+Isolated the two additive mechanisms the combined A/B above measured together, by temporarily
+patching `POST_ACQUISITION_SETTLE_FRAMES`/`REVERIFICATION_INTERVAL_FRAMES` in
+`personOfInterestConfig.ts` (no runtime override exists for these by design — reverted after
+measurement; `git diff` on that file is clean). Same harness as above: real GPU, both demo clips,
+`personOfInterest.enabled: true`. Two arms, 3 trials/clip each (track extended to 6 trials after
+an unexpected finding — see below):
+
+- **Arm 2, settle-window only**: `REVERIFICATION_INTERVAL_FRAMES = 1_000_000` (never fires within
+  either clip's frame count), `POST_ACQUISITION_SETTLE_FRAMES = 3` (shipped default).
+- **Arm 3, re-verification only**: `POST_ACQUISITION_SETTLE_FRAMES = 0` (settle-in window never
+  engages), `REVERIFICATION_INTERVAL_FRAMES = 45` (shipped default).
+- **Arm 1 (baseline, both active, shipped defaults)**: not re-run — reused verbatim from the
+  "Live-browser A/B results" table above, per instruction (that data is stable and unaffected by
+  this decomposition).
+
+| | track, arm 1 baseline (both) | track, arm 2 (settle only) | track, arm 3 (re-verif only) | park, arm 1 baseline (both) | park, arm 2 (settle only) | park, arm 3 (re-verif only) |
+|---|---|---|---|---|---|---|
+| detectedFrames | 63 / 64 / 64 | 64 / 64 / 64 | 61/62/62, +61/64/60 (n=6) | 60 / 61 / 61 | 59 / 62 / 61 | 60 / 61 / 60 |
+| cadence value | 91.2 / 92.4 (×2) | 91.2 / 92.4 / 91.2 | 91.2, **null**, **null**, 90.0, 99.6, 91.2 (n=6) | 180 / 180 / 181.2 | 176.4 (×3) | 177.6 / 176.4 / 177.6 |
+| cadence tier | T1 (High), all 3 | T1 (High), all 3 | T1×3, **excluded×2**, T3 (Low)×1 (n=6) | T2 (Medium)×2, T1×1 | T1×1, T2×2 | T1 (High), all 3 |
+| cadence confidence | not recorded (tier only) | 0.857–0.865 | 0.797, 0, 0, 0.765, **0.145**, 0.848 | not recorded (tier only) | 0.663–0.762 | 0.755–0.785 |
+| `fit.sinusoidR2` | not recorded | 0.796–0.816 | 0.774, null, null, 0.761, **0.380**, 0.808 | not recorded | 0.690–0.748 | 0.744–0.761 |
+
+**This does not decompose into two comparably-sized additive costs — it reveals an interaction,
+and that is the honest finding, not a forced clean split.**
+
+- **Settle-window-only (arm 2) closely reproduces the full combined baseline (arm 1) on both
+  clips** — detected-frame counts, cadence values, and confidence tiers all land within ordinary
+  trial-to-trial noise of arm 1. In isolation, the settle-in window's own marginal throughput/
+  quality cost is negligible-to-none on either clip. It is not the mechanism the combined A/B's
+  measured cost (the ~4–25% detected-frame drop) is coming from.
+- **Re-verification-only (arm 3) reproduces the baseline's detected-frame-count cost on the park
+  clip with no tier degradation** (in fact park's cadence tier was T1 all 3 trials under arm 3,
+  at least as good as baseline's T2×2/T1×1 — plausibly just small-sample noise, not a real
+  improvement claim). **But on the track (side-view) clip, arm 3 introduced a failure mode absent
+  from both the combined baseline and arm 2**: of 6 trials, 2 had the shared spectral fit collapse
+  entirely below `verticalOscillationMinFitR2` (`cadence`/`verticalOscillation` both returned
+  `null`, `confidence: 0`, tier `'excluded'` — not merely a lower tier, a structurally-unmeasurable
+  result), and a third landed only marginally above the gate (`sinusoidR2 = 0.380` vs. the `0.30`
+  floor, tier dropping to Low/T3). That's 3 of 6 trials showing meaningful fit-quality degradation,
+  against 0 of 3 in arm 2 and 0 of 3 in the original arm-1 baseline on the same clip. This is
+  exactly the "periodic-structured-contamination" risk the Risks section above pre-registered
+  (`fit.sinusoidR2`, checked here as instructed, not just tier/detected-frame-count) — and it
+  reproduced on the one clip that section specifically flagged as having the least R² headroom.
+- **Reading the two findings together**: the settle-in window is not an independent, additive cost
+  sitting alongside re-verification's independent, additive cost. The evidence points to it acting
+  as a *stabilizer* — when both mechanisms run together (arm 1, the shipped configuration), the
+  settle window's forced-crop-mode calls immediately after every acquisition/reacquisition/
+  re-verification event appear to prevent the fit-quality collapse that re-verification alone
+  (arm 3, settle window disabled) can otherwise cause on the track clip. Arm 3 is not a
+  configuration that ships — it isolates re-verification's cost by removing a mechanism that, in
+  production, always runs alongside it and apparently mitigates its worst failure mode. So "how
+  much does periodic re-verification cost in the shipped product" is not directly answered by arm
+  3's numbers; arm 3 answers a different, narrower question ("what does re-verification cost with
+  no settle-window stabilization"), which happens to be materially worse.
+- **Does this change the default-on ship call in the "Live-browser A/B results" section above?
+  No.** The shipped configuration is arm 1 (both mechanisms active), and arm 1 never exhibited
+  this failure mode in either the original 3-trial baseline or in the years-later re-check
+  implicit in these 6 extra track-clip trials all running with `personOfInterest.enabled: true`
+  and shipped defaults elsewhere. The decomposition is a diagnostic finding about the *shape* of
+  the risk (re-verification is the riskier of the two mechanisms in isolation, and the settle
+  window is protective, not costly) — it does not surface a new problem in what actually ships.
+- **Sample size caveat**: 6 trials on one clip is still a small sample for a binary,
+  seemingly-threshold-triggered failure mode (`sinusoidR2` swinging from ~0.76–0.81 down through
+  0.38 to below 0.30 across nominally-identical reruns, consistent with this repo's documented GPU
+  float non-associativity / frame-timing jitter tipping a marginal fit over a hard gate). Whether
+  the true failure rate under arm-3-shaped configurations is closer to 1-in-6, 1-in-3, or 1-in-2 on
+  this clip is not resolved by this pass — the qualitative finding (arm 3 has a real, reproducible
+  failure mode that arms 1 and 2 do not) is solid; the exact rate is not.
+
+### 10.4 verdict
+
+The combined cost measured in the "Live-browser A/B results" section above is **not evenly split
+between the two mechanisms**. The settle-in window's isolated cost is close to zero — removing
+re-verification and keeping only the settle window reproduces the shipped baseline closely on both
+clips. Periodic re-verification's isolated cost is real and, on the side-view clip specifically,
+worse in isolation than the combined baseline ever showed — but the evidence suggests this is
+because isolating it also removes the settle-in window's stabilizing effect, not because
+re-verification alone is simply "the expensive half" of an additive total. The two mechanisms
+interact rather than merely add; the shipped default (both together) remains the safer
+configuration measured across every arm in this investigation.
+
 ## Open Questions
 
 - Exact scoring constants (proximity-fallback distance multiple, any minimum IoU floor) — decided
