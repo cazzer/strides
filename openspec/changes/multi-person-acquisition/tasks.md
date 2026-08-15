@@ -272,5 +272,4 @@
       (`e2e/multiPersonAcquisition.spec.ts` + `e2e/fixtures/multiperson-track.mp4`) validation gap
       — the dispatch mechanism is confirmed on real footage, but the actual bystander-preference
       fix is not, since no trial observed 2 simultaneous confident candidates.
-- [ ] 11.2 Run `openspec archive multi-person-acquisition --yes` once shipped and verified, folding
-      this delta into `openspec/specs/pose-detection/spec.md`.
+- [x] 11.2 Merged to `main` (5d462a1) and archived.
