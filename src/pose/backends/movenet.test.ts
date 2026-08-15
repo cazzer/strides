@@ -1032,8 +1032,9 @@ describe('person-of-interest acquisition/reacquisition', () => {
       )
     })
 
-    it('continuity-scored candidate wins over a higher-scoring-by-area-alone candidate', async () => {
+    it('continuity-scored candidate wins over a higher-scoring-by-area-alone candidate, and does not reset rawDetector', async () => {
       const detector = await detectorWithSeededAnchor()
+      expect(reset).toHaveBeenCalledTimes(0)
 
       multiPoseEstimatePoses.mockResolvedValueOnce([
         { keypoints: LARGE_CANDIDATE_KEYPOINTS, score: 0.9 },
@@ -1048,10 +1049,14 @@ describe('person-of-interest acquisition/reacquisition', () => {
       expect(frame?.keypoints.find((k) => k.name === 'left_shoulder')?.x).toBe(
         115,
       )
+      // A continuous match -- the same person as the seeded anchor -- so rawDetector's own
+      // internal state is left alone (review NEW-1).
+      expect(reset).toHaveBeenCalledTimes(0)
     })
 
-    it('zero-IoU candidates fall back to the closest one within the proximity threshold', async () => {
+    it('zero-IoU candidates fall back to the closest one within the proximity threshold, and does not reset rawDetector', async () => {
       const detector = await detectorWithSeededAnchor()
+      expect(reset).toHaveBeenCalledTimes(0)
 
       multiPoseEstimatePoses.mockResolvedValueOnce([
         { keypoints: LARGE_CANDIDATE_KEYPOINTS, score: 0.9 },
@@ -1062,14 +1067,16 @@ describe('person-of-interest acquisition/reacquisition', () => {
       )
 
       // Neither candidate overlaps the seeded anchor (zero IoU for both), but NEARBY_NO_OVERLAP
-      // sits within the proximity threshold and LARGE does not.
+      // sits within the proximity threshold and LARGE does not -- still a continuous match.
+      expect(reset).toHaveBeenCalledTimes(0)
       expect(frame?.keypoints.find((k) => k.name === 'left_shoulder')?.x).toBe(
         300,
       )
     })
 
-    it('no candidate within the proximity threshold falls back to the acquisition heuristic', async () => {
+    it('no candidate within the proximity threshold falls back to the acquisition heuristic, and resets rawDetector for the non-continuous switch', async () => {
       const detector = await detectorWithSeededAnchor()
+      expect(reset).toHaveBeenCalledTimes(0) // crop disabled by default, nothing to reset yet
 
       multiPoseEstimatePoses.mockResolvedValueOnce([
         { keypoints: FAR_SMALL_CANDIDATE_KEYPOINTS, score: 0.9 },
@@ -1084,6 +1091,98 @@ describe('person-of-interest acquisition/reacquisition', () => {
       expect(frame?.keypoints.find((k) => k.name === 'left_shoulder')?.x).toBe(
         600,
       )
+      // The selected person is NOT continuous with the seeded anchor -- rawDetector's own
+      // internal state (if any) was tracking the OLD, rejected person and must be reset so the
+      // next full-frame call doesn't silently resume locked onto them (review NEW-1).
+      expect(reset).toHaveBeenCalledTimes(1)
+    })
+
+    it('raw candidates during reacquisition but none clearing the usability gate still returns a frame and preserves the anchor for a retry', async () => {
+      const detector = await detectorWithSeededAnchor()
+
+      // Both candidates present during reacquisition, but each with too few confident keypoints
+      // to pass the usability gate -- must not be treated as "zero candidates" (review item #2)
+      // even though this happens during REACQUISITION specifically, not just acquisition.
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        {
+          keypoints: [{ name: 'left_shoulder', x: 10, y: 10, score: 0.9 }],
+          score: 0.4,
+        },
+        {
+          keypoints: [{ name: 'left_hip', x: 20, y: 20, score: 0.9 }],
+          score: 0.8,
+        },
+      ])
+      const frame = await detector.estimatePose(
+        videoFrameSource(makeVideo(100, 1280, 720)),
+      )
+
+      expect(frame).not.toBeNull()
+      expect(frame?.keypoints.find((k) => k.name === 'left_hip')).toEqual({
+        name: 'left_hip',
+        x: 20,
+        y: 20,
+        score: 0.9,
+      })
+
+      // Anchor preserved (review item #5): the retry is still scored by continuity against the
+      // ORIGINAL seeded position, not treated as a fresh acquisition.
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: LARGE_CANDIDATE_KEYPOINTS, score: 0.9 },
+        { keypoints: SMALL_DISTANT_MOVED_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      const retried = await detector.estimatePose(
+        videoFrameSource(makeVideo(101, 1280, 720)),
+      )
+      expect(
+        retried?.keypoints.find((k) => k.name === 'left_shoulder')?.x,
+      ).toBe(115)
+    })
+
+    it('reset-timing: a mid-run reacquisition "none" hole between two crop-mode calls (continuous match) does not trigger an extra reset', async () => {
+      const detector = await createMoveNetDetector(undefined, CROP_ON)
+
+      // Engage crop mode via acquisition (cold start) -- the acquisition itself is a 'none' call,
+      // no reset.
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(0, 1280, 720)))
+      expect(reset).toHaveBeenCalledTimes(0)
+
+      // Steady-state crop mode: the first REAL rawDetector invocation -- exactly one reset (the
+      // genuine fullFrame(never-invoked)->crop transition).
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(1, 1280, 720)))
+      expect(reset).toHaveBeenCalledTimes(1)
+
+      // Trip the loss streak while steady-state crop mode continues -- no transition, no reset.
+      for (let i = 0; i < CROP_ON.reacquisitionLossThreshold; i += 1) {
+        estimatePoses.mockResolvedValueOnce([])
+        await detector.estimatePose(
+          videoFrameSource(makeVideo(2 + i, 1280, 720)),
+        )
+      }
+      expect(reset).toHaveBeenCalledTimes(1)
+
+      // The reacquisition ('none' hole) itself finds a CONTINUOUS match against the seeded
+      // anchor (the same person) -- no reset-timing transition (the hole is transparent) and no
+      // identity-switch reset (continuity matched) either.
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_MOVED_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(100, 1280, 720)))
+      expect(reset).toHaveBeenCalledTimes(1)
+
+      // Back to steady-state crop mode -- the actual usage before (crop) and after (crop) the
+      // hole is identical, so this doesn't trigger a reset either.
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(101, 1280, 720)))
+      expect(reset).toHaveBeenCalledTimes(1)
     })
 
     it('an empty reacquisition attempt preserves the anchor for a retry, scored by continuity against the original position', async () => {

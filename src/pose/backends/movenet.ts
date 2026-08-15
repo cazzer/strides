@@ -126,11 +126,17 @@ function selectByAcquisitionHeuristic(
  * candidate within `REACQUISITION_PROXIMITY_DISTANCE_MULTIPLE * lastKnownBox`'s own side wins
  * instead; if none qualify there either, this call is treated as a fresh acquisition among the
  * same candidates. `candidates` must be non-empty and every `box` non-null.
+ *
+ * `continuous: false` on the acquisition-heuristic-fallback branch means the selected candidate
+ * is NOT the same person as `lastKnownBox` (both the IoU and proximity checks rejected it) --
+ * the caller uses this to reset `rawDetector`'s own internal state (which may still be tracking
+ * the OLD, rejected person) and to avoid burning the one-shot give-up budget (see estimatePose's
+ * `anchorWasReacquired`/`rawDetector.reset()` handling, review items NEW-1/NEW-2).
  */
 function selectByReacquisitionHeuristic(
   candidates: (Candidate & { box: BoundingBoxPx })[],
   lastKnownBox: BoundingBoxPx,
-): Candidate {
+): { candidate: Candidate; continuous: boolean } {
   let bestIoU = 0
   let bestIoUCandidate: (Candidate & { box: BoundingBoxPx }) | null = null
   for (const candidate of candidates) {
@@ -140,7 +146,9 @@ function selectByReacquisitionHeuristic(
       bestIoUCandidate = candidate
     }
   }
-  if (bestIoUCandidate !== null) return bestIoUCandidate
+  if (bestIoUCandidate !== null) {
+    return { candidate: bestIoUCandidate, continuous: true }
+  }
 
   const withinProximity = candidates.filter((candidate) =>
     isWithinProximityThreshold(
@@ -150,15 +158,19 @@ function selectByReacquisitionHeuristic(
     ),
   )
   if (withinProximity.length > 0) {
-    return withinProximity.reduce((closest, candidate) =>
+    const closest = withinProximity.reduce((closest, candidate) =>
       boundingBoxCenterDistance(candidate.box, lastKnownBox) <
       boundingBoxCenterDistance(closest.box, lastKnownBox)
         ? candidate
         : closest,
     )
+    return { candidate: closest, continuous: true }
   }
 
-  return selectByAcquisitionHeuristic(candidates)
+  return {
+    candidate: selectByAcquisitionHeuristic(candidates),
+    continuous: false,
+  }
 }
 
 /**
@@ -169,28 +181,37 @@ function selectByReacquisitionHeuristic(
  * before; if NONE clear it, the raw candidate with the highest MoveNet-native `poseScore` is
  * returned instead of resolving `null` for the whole call. `usable: false` tells the caller not
  * to treat the result as a trustworthy anchor (same meaning as `derived === null` on the
- * single-pose path).
+ * single-pose path). `continuous` is only meaningful for a reacquisition call whose result is
+ * `usable` -- `false` in every other case (fresh acquisition, or not usable at all), since
+ * "continuous with the previous anchor" isn't a coherent question there.
  */
 function pickBestCandidate(
   candidates: Candidate[],
   anchorMissing: boolean,
   lastKnownBox: BoundingBoxPx | null,
-): { candidate: Candidate; usable: boolean } {
+): { candidate: Candidate; usable: boolean; continuous: boolean } {
   const boxed = candidates.filter(
     (c): c is Candidate & { box: BoundingBoxPx } => c.box !== null,
   )
   if (boxed.length > 0) {
-    const selected =
-      anchorMissing || lastKnownBox === null
-        ? selectByAcquisitionHeuristic(boxed)
-        : selectByReacquisitionHeuristic(boxed, lastKnownBox)
-    return { candidate: selected, usable: true }
+    if (anchorMissing || lastKnownBox === null) {
+      return {
+        candidate: selectByAcquisitionHeuristic(boxed),
+        usable: true,
+        continuous: false,
+      }
+    }
+    const { candidate, continuous } = selectByReacquisitionHeuristic(
+      boxed,
+      lastKnownBox,
+    )
+    return { candidate, usable: true, continuous }
   }
 
   const bestRaw = candidates.reduce((best, c) =>
     c.poseScore > best.poseScore ? c : best,
   )
-  return { candidate: bestRaw, usable: false }
+  return { candidate: bestRaw, usable: false, continuous: false }
 }
 
 /**
@@ -481,14 +502,22 @@ export async function createMoveNetDetector(
       // resolves to full `[0,1]x[0,1]` coverage regardless of MoveNet's own stale `cropRegion`, so
       // resetting on every steady-tracking call would only cost MoveNet's one-euro smoothing
       // continuity for no correctness benefit. A call the acquisition/reacquisition path
-      // intercepts entirely never invokes `rawDetector` at all, so it's transparent here: this
-      // compares against `previousRawDetectorUsage`, which is only ever updated by a call that
-      // ACTUALLY invoked `rawDetector` (see `commitCallProgress`) -- an intervening acquisition/
-      // reacquisition "hole" of any length never triggers a reset on its own, preserving whatever
-      // continuity `rawDetector`'s own internal state had going into it. Guarded by the same
-      // reentrancy check as above: a stale call resuming after a slow `await` must not reset
-      // `rawDetector` out from under a newer call that has already started using it.
+      // intercepts entirely (`dispatchMultiPose`) never invokes `rawDetector` at all, so this
+      // comparison is SKIPPED for it entirely, not just evaluated against a placeholder usage --
+      // `rawDetectorUsage` computed for such a call would be a meaningless artifact of
+      // `usingCrop`'s `!dispatchMultiPose` guard (always 'fullFrame'), and comparing it against
+      // `previousRawDetectorUsage` would fire a spurious reset the instant a reacquisition
+      // dispatch interrupts steady-state crop tracking, regardless of whether the eventual
+      // selection turns out continuous or not. `previousRawDetectorUsage` is only ever updated by
+      // a call that ACTUALLY invoked `rawDetector` (see `commitCallProgress`), so an intervening
+      // acquisition/reacquisition "hole" of any length never triggers this transition-based reset
+      // on its own, preserving whatever continuity `rawDetector`'s own internal state had going
+      // into it -- separate from the identity-switch-specific reset inside the multi-pose branch
+      // below (review NEW-1). Guarded by the same reentrancy check as above: a stale call
+      // resuming after a slow `await` must not reset `rawDetector` out from under a newer call
+      // that has already started using it.
       if (
+        !dispatchMultiPose &&
         rawDetectorUsage !== previousRawDetectorUsage &&
         myGeneration === generation
       ) {
@@ -547,7 +576,11 @@ export async function createMoveNetDetector(
           currentTime,
           trackingCropConfig,
         )
-        const { candidate: selected, usable } = pickBestCandidate(
+        const {
+          candidate: selected,
+          usable,
+          continuous,
+        } = pickBestCandidate(
           candidates,
           effectiveAnchorMissing,
           giveUpBoxAtStart,
@@ -558,9 +591,22 @@ export async function createMoveNetDetector(
             lastBoundingBox = selected.box
             consecutiveLowConfidence = 0
             consecutiveEmptyReacquisitions = 0
-            // A candidate selected while reacquiring (not a fresh acquisition) has now been
-            // through one reacquisition cycle; a fresh acquisition starts a clean slate.
-            anchorWasReacquired = !effectiveAnchorMissing
+            // Only a GENUINE reacquisition (continuity actually matched via IoU/proximity)
+            // counts as "already reacquired once" for the give-up budget (review NEW-2): a
+            // reacquisition call that fell through to the acquisition-heuristic fallback is, per
+            // spec.md's "No candidate matches the last known position" scenario, treated as a
+            // fresh acquisition instead -- it shouldn't burn the one-shot budget early.
+            anchorWasReacquired = !effectiveAnchorMissing && continuous
+            // Identity actually switched to a different, non-continuous person during
+            // reacquisition (review NEW-1): `rawDetector`'s own internal state (its cropRegion,
+            // one-euro smoothing, etc. -- see design.md's Context), if it has any, was built
+            // tracking the OLD, just-rejected person. Left uncleared, the very next full-frame
+            // call would silently resume locked onto them via MoveNet's own saliency continuity
+            // -- exactly the bug this capability exists to fix. A continuous match, or a fresh
+            // acquisition with no prior anchor to have switched away from, leaves it alone.
+            if (!effectiveAnchorMissing && !continuous) {
+              rawDetector.reset()
+            }
           } else if (!effectiveAnchorMissing) {
             // Raw candidates existed but none cleared the usability gate during reacquisition --
             // counts toward the same bounded retry budget as a fully-empty result (review item
