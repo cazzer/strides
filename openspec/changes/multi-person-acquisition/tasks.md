@@ -13,14 +13,30 @@
 
 ## 2. Multi-pose detector lifecycle
 
-- [x] 2.1 Add a lazy, memoized `MULTIPOSE_LIGHTNING` detector accessor in
+- [x] 2.1 **Revised after the live-browser A/B (task group 10) found the original lazy-creation
+      approach caused real, measured data loss** (park clip: cadence/vertical-oscillation lost
+      entirely, all 3 trials; track clip: 1 of 3 trials collapsed to 0 detected frames, the other
+      two lost 12-32% of samples; baseline fine across all 6 trials) — the original text below is
+      struck through and superseded by what `src/pose/backends/movenet.ts` actually does now:
+      ~~Add a lazy, memoized `MULTIPOSE_LIGHTNING` detector accessor in
       `src/pose/backends/movenet.ts`, created on first acquisition call rather than inside
       `createMoveNetDetector`, mirroring the existing scale-pass detector accessor's
-      lazy-create/memoize/no-throw-on-failure pattern.
+      lazy-create/memoize/no-throw-on-failure pattern.~~ **Now:** create the `MULTIPOSE_LIGHTNING`
+      detector EAGERLY, in parallel with the single-pose detector, inside `createMoveNetDetector`
+      -- both awaited (`Promise.all`-shaped) before its returned promise resolves, the same
+      treatment the single-pose model already gets, which `usePoseDetector.ts` already gates
+      auto-analyze on. Skipped entirely when `personOfInterestConfig.enabled` is `false` -- the
+      kill-switch kills this cost too. See design.md's "Create the MULTIPOSE_LIGHTNING detector
+      eagerly, in parallel with the single-pose detector" for the full rationale and the
+      superseded lazy-creation decision it replaces.
 - [x] 2.2 Decide and implement the failure behavior when multi-pose detector creation itself
       fails (network/model-load failure): fall back to the existing single-pose full-frame call
       for that run rather than surfacing a hard error, so a multi-pose failure never regresses
-      below today's baseline behavior.
+      below today's baseline behavior. **Still true, relocated**: with eager creation (task 2.1,
+      revised), the failure is now caught locally inside `createMoveNetDetector` at construction
+      time, leaving the multi-pose reference `null` permanently for that detector instance (no
+      retry -- there is no lazy accessor left to retry from); `estimatePose`'s dispatch logic
+      already had to handle "multi-pose unavailable" as a per-call case, and continues to.
 
 ## 3. Unify anchor-tracking state
 

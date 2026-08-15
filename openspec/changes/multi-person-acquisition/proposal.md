@@ -104,6 +104,9 @@ exiting/re-entering frame).
   capability's own mechanism, not a `TrackingCropConfig` field.
 - No API change to `PoseDetector`/`PoseFrame` — this is purely an internal MoveNet-backend
   behavior change, invisible to `usePoseDetector.ts` and everything downstream of it.
-- New model asset: MoveNet `MULTIPOSE_LIGHTNING`, fetched lazily (only if the acquisition/
-  reacquisition/re-verification path actually runs) via the same
-  `@tensorflow-models/pose-detection` model-URL mechanism the existing single-pose models use.
+- New model asset: MoveNet `MULTIPOSE_LIGHTNING`, fetched eagerly (in parallel with the
+  single-pose model, both awaited before `createMoveNetDetector` resolves — see design.md's
+  "Create the MULTIPOSE_LIGHTNING detector eagerly", a revision made after the live-browser A/B
+  found the originally-proposed lazy fetch caused real, measured data loss) via the same
+  `@tensorflow-models/pose-detection` model-URL mechanism the existing single-pose models use,
+  skipped entirely when `personOfInterestConfig.enabled` is `false`.

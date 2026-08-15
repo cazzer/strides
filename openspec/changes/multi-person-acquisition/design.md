@@ -44,20 +44,62 @@ CLAUDE.md's repeated preference for one config/override surface over parallel on
 unified version is what the MODIFIED spec's new scenario ("Disabling tracking-crop is a
 kill-switch for the cropped-canvas optimization only") describes directly.
 
-### Lazy-create the MULTIPOSE_LIGHTNING detector
+### Create the MULTIPOSE_LIGHTNING detector eagerly, in parallel with the single-pose detector
 
-Create the multi-pose detector on first actual use (the first acquisition call of the first run),
-not unconditionally inside `createMoveNetDetector`. `createMoveNetDetector`'s returned promise
-continues to resolve as soon as the single-pose detector is ready, matching today's cold-start
-experience; the first acquisition call pays the multi-pose model's own download/init cost
-in-line, and the created instance is memoized for the page lifetime (same pattern as the existing
-scale-pass detector accessor).
+**Superseded decision, kept for the record — see "Live-browser A/B found the original lazy-create
+decision catastrophic" immediately below for why.** The original version of this decision created
+the multi-pose detector lazily, on first actual use (the first acquisition call of the first run),
+on the theory that its download/init cost should only be paid by a run that actually reaches an
+acquisition moment — reasoning that turned out to be wrong: acquisition runs on the FIRST call of
+literally every run (no prior anchor ever exists yet), so lazy creation was never actually
+deferring a rare cost, it was relocating an unavoidable one to the single worst place to pay it —
+synchronously, mid-frame-sampling, during real-time playback.
 
-**Alternative considered**: create both detectors eagerly, in parallel, inside
-`createMoveNetDetector`. Rejected — adds the multi-pose model's download to every page load's
-cold-start even though it is only actually needed once inference starts, for no benefit (the
-first acquisition call already happens well after `createMoveNetDetector` resolves, since it
-requires a loaded video frame).
+**Current decision**: create both the single-pose and multi-pose detectors eagerly, in parallel
+(`Promise.all`-shaped, not sequential — so the wait is `max(singlePoseTime, multiPoseTime)`, not
+their sum), inside `createMoveNetDetector`, both awaited before its returned promise resolves —
+the same treatment the single-pose model has always gotten, which `usePoseDetector.ts` already
+gates auto-analyze on. This moves the model-fetch cost from a silent mid-clip stall (real,
+measured data loss — see below) to a visible, bounded "loading detector" wait before analysis
+starts (no data loss).
+
+**Skip the multi-pose fetch entirely when `personOfInterestConfig.enabled` is `false`.** The
+kill-switch should kill this cost too, not just the runtime dispatch behavior — there is no
+reason to pay for, or wait on, a model this detector instance will never invoke. `createDetector`
+for `MULTIPOSE_LIGHTNING` is only even called when the config says to.
+
+**A creation failure is caught locally**, inside `createMoveNetDetector`, so it degrades to
+"multi-pose unavailable for this detector instance" (a `null` reference from then on, permanently
+— no retry: there is no natural "try again" moment once creation has already been paid for, or
+failed, up front for every run this cached, page-lifetime detector instance will ever serve)
+rather than rejecting the whole `createMoveNetDetector` promise. Single-pose tracking must keep
+working even if the multi-pose model never loads — task 2.2's "never regress below baseline"
+guarantee, now enforced at construction time instead of per-call. This also means the lazy
+accessor's own per-run failure-caching (`multiPoseCreationFailedThisRun`, `getMultiPoseDetector`)
+is gone entirely, not just relocated: there is nothing left to cache across calls once creation
+happens exactly once, synchronously-relative-to-construction, for the instance's whole lifetime.
+
+#### Live-browser A/B found the original lazy-create decision catastrophic, not just costly
+
+Real GPU, 3 trials per clip, `personOfInterest.enabled: true` (lazy creation) vs. `false`
+(baseline): the park clip lost cadence/vertical-oscillation ENTIRELY (`null`, all 3 trials); the
+track clip had 1 of 3 trials collapse to 0 detected frames, the other two lost 12-32% of samples.
+The baseline was fine across all 6 trials. This is exactly the risk this section's original text
+flagged as "a separate, larger question this fix does not attempt" (see the superseded decision's
+now-rejected alternative above) — confirmed catastrophic by measurement, not theoretical. The
+mechanism: `sampleClip.ts` samples via `requestVideoFrameCallback` during literal 1x playback;
+every millisecond the multi-pose model's fetch/init takes on the (always-first-call) acquisition
+attempt is a video frame that plays past and is never sampled, with no way to "catch up" after the
+fact. A visible pre-analysis loading wait has no such failure mode — it costs wall-clock time
+before sampling starts, not video frames during it.
+
+**Alternative NOT taken: keep lazy creation, but kick off the fetch speculatively as soon as a
+video is selected, ahead of `estimatePose` ever being called.** Considered and rejected as a
+second-best option once the eager-at-construction fix above was confirmed with the user: it would
+still leave a real (if usually smaller) race between the fetch finishing and analysis actually
+reaching the first sampled frame, reintroducing exactly this class of bug under different timing
+conditions (a fast machine sampling before a slow network finishes) rather than eliminating it, for
+no benefit over the simpler, already-`usePoseDetector.ts`-gated eager-at-construction approach.
 
 ### One shared loss threshold, not two
 
@@ -226,10 +268,29 @@ identity was already known to be ambiguous") specifically calls for.
 
 - **[Risk]** `MULTIPOSE_LIGHTNING` is mandatory on every run's opening frames (acquisition always
   runs once), so any latency or accuracy difference from the single-pose models applies to every
-  clip, not just multi-person ones. → **Mitigation**: lazy creation keeps this off the
-  `createMoveNetDetector` cold-start path; the A/B (Migration Plan) measures the actual per-run
-  cost before this ships default-on, following the same practice already used for the MoveNet
-  Thunder-vs-Lightning and tracking-crop revival changes in this repo's history.
+  clip, not just multi-person ones. → **Mitigation**: unlike the model-fetch/init cost (moved to
+  eager, parallel `createMoveNetDetector`-time creation — see "Create the MULTIPOSE_LIGHTNING
+  detector eagerly" above, which supersedes this risk's original lazy-creation mitigation after
+  the live-browser A/B found it catastrophic, not just costly), the PER-INFERENCE-CALL accuracy/
+  latency difference between the multi-pose and single-pose models on the one call acquisition
+  actually runs is a separate, still-open question the A/B (Migration Plan) measures before this
+  ships default-on, following the same practice already used for the MoveNet Thunder-vs-Lightning
+  and tracking-crop revival changes in this repo's history.
+- **[Risk]** Eager, parallel creation adds real cold-start latency to `createMoveNetDetector`
+  itself — a genuinely new cost this change introduces, not a relocation of an existing one, since
+  `personOfInterestConfig.enabled: true` is the shipped default. → **Mitigation**: bounded by
+  `usePoseDetector.ts` already gating auto-analyze on this same promise (the same UX the
+  single-pose model's own load time already produces — a "loading detector" wait, not a broken or
+  silently-degraded page), and by running both detector creations in parallel rather than in
+  sequence (`max`, not sum, of the two fetch times). A rough gut-check, not a live A/B: MoveNet
+  `MULTIPOSE_LIGHTNING`'s published TF.js/TF Hub asset is on the same order of size as
+  `SINGLEPOSE_LIGHTNING` (a few MB, float16 MobileNet-based backbone) — this repo's own
+  `MODEL_INPUT_RESOLUTION`/`MOVENET_MULTIPOSE_LIGHTNING_URL` constants point at the same TF Hub
+  distribution family as the already-shipped single-pose models, so the added wait is plausibly
+  comparable to, not a multiple of, today's existing single-pose cold-start time — but this has
+  not been measured end-to-end (task 10's live-browser A/B measures runtime accuracy/cost, not
+  cold-start wall-clock time specifically) and should be spot-checked before this is treated as
+  settled, not just assumed acceptable from the size estimate alone.
 - **[Risk]** The IoU/proximity heuristic can still mis-reacquire in a genuinely ambiguous scene
   (two similar-looking people crossing paths near the last known position). → **Mitigation**:
   none is claimed to be perfect; this is an accepted, documented limitation, not a blocking bug —
@@ -326,6 +387,19 @@ added, whether the settle-in window/periodic re-verification measurably improve 
 clip stays correctly tracked on the intended subject (this change's actual goal, per the user's
 own framing: "track the POI so as much of the clip as possible"), not just whether the initial
 acquisition/reacquisition moment picks the right person.
+
+**Superseding revision (eager, parallel multi-pose detector creation)**: the live-browser A/B
+(task group 10) surfaced that the original lazy-creation design (see "Create the
+MULTIPOSE_LIGHTNING detector eagerly, in parallel with the single-pose detector" in Decisions)
+caused real, measured data loss under the shipped default -- not a tuning nit, a shipping blocker
+that has now been fixed by creating both detectors eagerly, in parallel, inside
+`createMoveNetDetector`, gated behind `personOfInterestConfig.enabled` (skipped entirely when
+`false`). This DOES add real cold-start latency to detector creation itself, gated behind whether
+that latency has been separately measured/deemed acceptable -- see the two new Risks entries
+above for a rough gut-check estimate (not yet a live A/B) and what would settle it properly. This
+supersedes only the CREATION-TIMING half of the original acquisition/reacquisition design; the
+per-inference-call multi-pose accuracy/latency question the original Risks entry raised is still
+open and still needs task 10's A/B, unrelated to this fix.
 
 ## Open Questions
 

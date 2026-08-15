@@ -991,7 +991,7 @@ describe('person-of-interest acquisition/reacquisition', () => {
       })
     })
 
-    it('caches a multi-pose detector creation failure for the run instead of retrying the fetch every frame', async () => {
+    it('attempts multi-pose detector creation exactly once, at construction, never retrying on later calls', async () => {
       createDetectorMock.mockImplementation(
         async (_model: unknown, config?: { modelType?: string }) => {
           if (
@@ -1005,17 +1005,65 @@ describe('person-of-interest acquisition/reacquisition', () => {
       )
       const detector = await createMoveNetDetector()
 
+      // Eager, parallel creation (see `createMoveNetDetector`'s doc comment) means
+      // `createDetectorMock` was already called exactly twice (raw + multi-pose attempt) by the
+      // time `createMoveNetDetector()` above resolved -- there is no lazy retry mechanism left to
+      // exercise, unlike the pre-eager-creation version of this test.
+      expect(createDetectorMock).toHaveBeenCalledTimes(2)
+
       // Three consecutive frames, each failing to seed an anchor via the single-pose fallback too
-      // (so every one of them independently re-evaluates "should I attempt multi-pose
-      // acquisition again").
+      // (so every one of them would, under the OLD lazy design, have re-evaluated "should I
+      // attempt multi-pose acquisition again") -- confirms no new creation attempts happen no
+      // matter how many calls follow.
       for (let i = 0; i < 3; i += 1) {
         estimatePoses.mockResolvedValueOnce([])
         await detector.estimatePose(videoFrameSource(makeVideo(i)))
       }
 
-      // createDetectorMock: once for the raw single-pose detector at construction, plus exactly
-      // ONE attempt at the multi-pose detector -- not one per frame.
       expect(createDetectorMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('the whole detector still constructs successfully, and single-pose tracking keeps working across many calls, when multi-pose creation fails', async () => {
+      createDetectorMock.mockImplementation(
+        async (_model: unknown, config?: { modelType?: string }) => {
+          if (
+            config?.modelType ===
+            poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING
+          ) {
+            throw new Error('model load failed')
+          }
+          return { estimatePoses, dispose, reset }
+        },
+      )
+
+      // The multi-pose creation failure must not propagate to `createMoveNetDetector`'s own
+      // returned promise -- it's caught locally (see `createMoveNetDetector`'s doc comment) so
+      // the app still gets a usable detector, just without person-of-interest disambiguation,
+      // rather than the whole pose-detection pipeline failing to start.
+      const detector = await createMoveNetDetector()
+      expect(detector).toBeTruthy()
+
+      // Ordinary single-pose tracking (via the acquisition-context fallback, then steady state)
+      // keeps working across many subsequent calls -- not just the first one.
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
+      ])
+      const first = await detector.estimatePose(videoFrameSource(makeVideo(0)))
+      expect(first).not.toBeNull()
+
+      for (let i = 1; i < 6; i += 1) {
+        estimatePoses.mockResolvedValueOnce([
+          { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
+        ])
+        const frame = await detector.estimatePose(
+          videoFrameSource(makeVideo(i)),
+        )
+        expect(frame).not.toBeNull()
+      }
+
+      // No multi-pose calls were ever issued -- the failure was permanent for this instance, not
+      // retried into eventually working.
+      expect(multiPoseEstimatePoses).not.toHaveBeenCalled()
     })
   })
 
@@ -1891,9 +1939,10 @@ describe('person-of-interest acquisition/reacquisition', () => {
       )
       const detector = await createMoveNetDetector(undefined, CROP_ON)
 
-      // Acquisition itself fails to get a multi-pose detector -- falls back to the ordinary
-      // single-pose call (task 2.2), which succeeds and seeds the anchor normally. The failure is
-      // cached for the rest of this run (`multiPoseCreationFailedThisRun`).
+      // Multi-pose creation already failed eagerly, at construction (see `createMoveNetDetector`'s
+      // doc comment) -- `multiPoseDetector` is permanently `null` for this detector instance's
+      // whole lifetime, no retry. Acquisition falls back to the ordinary single-pose call
+      // (task 2.2), which succeeds and seeds the anchor normally.
       estimatePoses.mockResolvedValueOnce([
         { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
       ])
@@ -1928,20 +1977,18 @@ describe('person-of-interest acquisition/reacquisition', () => {
   })
 
   describe('dispose', () => {
-    it('also disposes the multi-pose detector once it has been created', async () => {
+    it('also disposes the multi-pose detector -- already created eagerly at construction, before any estimatePose call', async () => {
       const detector = await createMoveNetDetector()
-      multiPoseEstimatePoses.mockResolvedValueOnce([
-        { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
-      ])
-      await detector.estimatePose(videoFrameSource(makeVideo(0)))
 
+      // No `estimatePose` call at all -- eager, parallel creation (see `createMoveNetDetector`'s
+      // doc comment) means the multi-pose detector already exists by the time this line runs.
       detector.dispose()
 
       expect(dispose).toHaveBeenCalledTimes(1)
       expect(multiPoseDispose).toHaveBeenCalledTimes(1)
     })
 
-    it('does not touch the multi-pose detector if it was never created', async () => {
+    it('does not touch the multi-pose detector when personOfInterest.enabled: false skipped creating it', async () => {
       const detector = await createMoveNetDetector(
         undefined,
         undefined,
@@ -1952,45 +1999,16 @@ describe('person-of-interest acquisition/reacquisition', () => {
 
       expect(dispose).toHaveBeenCalledTimes(1)
       expect(multiPoseDispose).not.toHaveBeenCalled()
+      // Confirms the skip happened at construction, not just that dispose() didn't find anything:
+      // only the single-pose detector was ever created.
+      expect(createDetectorMock).toHaveBeenCalledTimes(1)
     })
 
-    it('disposes an in-flight multi-pose detector creation once it resolves', async () => {
-      let resolveCreation!: (detector: unknown) => void
-      const pendingCreation = new Promise((resolve) => {
-        resolveCreation = resolve
-      })
-      createDetectorMock.mockImplementation(
-        async (_model: unknown, config?: { modelType?: string }) => {
-          if (
-            config?.modelType ===
-            poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING
-          ) {
-            return pendingCreation
-          }
-          return { estimatePoses, dispose, reset }
-        },
-      )
-      const detector = await createMoveNetDetector()
-
-      multiPoseEstimatePoses.mockResolvedValueOnce([])
-      const estimatePromise = detector.estimatePose(
-        videoFrameSource(makeVideo(0)),
-      )
-
-      detector.dispose()
-      expect(multiPoseDispose).not.toHaveBeenCalled() // creation hasn't resolved yet
-
-      resolveCreation({
-        estimatePoses: multiPoseEstimatePoses,
-        dispose: multiPoseDispose,
-        reset: multiPoseReset,
-      })
-      await estimatePromise
-      // Let the fire-and-forget disposal `.then()`, chained off the same creation promise, run.
-      await Promise.resolve()
-      await Promise.resolve()
-
-      expect(multiPoseDispose).toHaveBeenCalledTimes(1)
-    })
+    // The "dispose an in-flight multi-pose detector creation" scenario the pre-eager-creation
+    // version of this suite covered no longer applies: `createMoveNetDetector`'s eager, parallel
+    // creation (see its doc comment) means both detectors are fully created -- or definitively
+    // failed to create -- before `createMoveNetDetector`'s own promise resolves, so there is no
+    // longer any way for a caller to hold a `PoseDetector` handle while multi-pose creation is
+    // still pending.
   })
 })

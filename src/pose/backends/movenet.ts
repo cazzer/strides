@@ -255,10 +255,56 @@ export async function createMoveNetDetector(
   await tf.setBackend('webgl')
   await tf.ready()
 
-  const rawDetector = await poseDetection.createDetector(
+  // The single-pose and multi-pose detectors are created EAGERLY, in parallel, both awaited
+  // before this function's returned promise resolves -- `usePoseDetector.ts` already gates
+  // auto-analyze on that promise, the same treatment the single-pose model has always gotten.
+  // This was previously lazy (create `multiPoseDetector` on first acquisition call) on the theory
+  // that its cost should only be paid by a run that actually reaches an acquisition moment. That
+  // reasoning was wrong: acquisition ALWAYS runs on the first call of every single run (no prior
+  // anchor ever exists yet), so lazy creation was never actually deferring a rare cost -- it was
+  // relocating an unavoidable one to the worst possible place, a synchronous stall DURING
+  // real-time frame sampling (`sampleClip.ts` samples via `requestVideoFrameCallback` during
+  // literal 1x playback; every millisecond the fetch takes is a frame that never gets sampled).
+  // Measured on real GPU, 3 trials/clip: the park clip lost cadence/vertical-oscillation entirely
+  // (`null`, all 3 trials); the track clip had 1 of 3 trials collapse to 0 detected frames, the
+  // other two lost 12-32% of samples. The baseline (`personOfInterest.enabled: false`) was fine
+  // across all 6 trials -- this was exactly the risk design.md originally flagged as "a separate,
+  // larger question this fix does not attempt", confirmed catastrophic by the live-browser A/B,
+  // not theoretical. Eager creation moves this same unavoidable cost to a visible, bounded
+  // "loading detector" wait before analysis starts (no data loss) instead of a silent mid-clip
+  // stall. Running the two creations in parallel (not sequentially) keeps the total wait at
+  // roughly `max(singlePoseTime, multiPoseTime)`, not their sum.
+  //
+  // Skipped entirely when `personOfInterestConfig.enabled` is `false`: the kill-switch should
+  // kill this cost too, not just the runtime dispatch behavior -- there is no reason to pay for
+  // (or wait on) a model this detector instance will never invoke.
+  //
+  // A creation failure (e.g. the model asset fetch failed) is caught locally so it degrades to
+  // "multi-pose unavailable for this detector instance" rather than rejecting the whole
+  // `createMoveNetDetector` promise -- single-pose tracking must keep working even if the
+  // multi-pose model never loads (task 2.2's "never regress below baseline" guarantee, now
+  // enforced at construction time instead of per-call). Unlike the removed lazy accessor, there
+  // is no retry: this detector instance is cached and reused for the whole app lifetime
+  // (`usePoseDetector.ts`), and there is no natural "try again" moment once creation has already
+  // been paid for (or failed) up front for every run this instance will ever serve.
+  const rawDetectorPromise = poseDetection.createDetector(
     poseDetection.SupportedModels.MoveNet,
     { modelType: MOVENET_MODEL_TYPES[modelType] },
   )
+  const multiPoseDetectorPromise: Promise<Awaited<
+    ReturnType<typeof poseDetection.createDetector>
+  > | null> = personOfInterestConfig.enabled
+    ? poseDetection
+        .createDetector(poseDetection.SupportedModels.MoveNet, {
+          modelType: poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING,
+        })
+        .catch(() => null)
+    : Promise.resolve(null)
+
+  const [rawDetector, multiPoseDetector] = await Promise.all([
+    rawDetectorPromise,
+    multiPoseDetectorPromise,
+  ])
 
   const targetInputSize = MODEL_INPUT_RESOLUTION[modelType]
   const cropCanvas = document.createElement('canvas')
@@ -269,59 +315,6 @@ export async function createMoveNetDetector(
     throw new Error(
       'Failed to acquire a 2D canvas context for MoveNet crop-mode tracking',
     )
-  }
-
-  // The multi-pose acquisition/reacquisition detector: lazily created on first actual use
-  // (`getMultiPoseDetector`, below), not here -- its own model download/init cost should only be
-  // paid by a run that actually reaches an acquisition moment, not by every detector's cold
-  // start. Memoized for this detector instance's lifetime; same lazy-create/memoize shape as
-  // `scalePassDetector.ts`'s `getScalePassDetector`, but with per-RUN (not per-instance) failure
-  // caching -- see `multiPoseCreationFailedThisRun` -- since `getScalePassDetector` only ever
-  // needs per-instance memoization (it isn't invoked from inside a tight per-frame sampling loop
-  // the way this is).
-  let multiPoseDetector: Awaited<
-    ReturnType<typeof poseDetection.createDetector>
-  > | null = null
-  let multiPoseDetectorPromise: ReturnType<
-    typeof poseDetection.createDetector
-  > | null = null
-
-  // Set once creation has failed for the current run, so a whole clip's worth of remaining
-  // frames don't each re-attempt (and re-await) the same doomed model fetch -- reset alongside
-  // the rest of this run's tracking state on new-run detection, below. NOTE: whether the
-  // multi-pose model's cold-start fetch should be kicked off *before* frame sampling begins,
-  // rather than on the first acquisition call mid-sampling-loop, is a separate, larger question
-  // this fix does not attempt -- see the review discussion this change responds to.
-  let multiPoseCreationFailedThisRun = false
-
-  async function getMultiPoseDetector(): Promise<Awaited<
-    ReturnType<typeof poseDetection.createDetector>
-  > | null> {
-    if (multiPoseDetector) return multiPoseDetector
-    if (multiPoseCreationFailedThisRun) return null
-    if (!multiPoseDetectorPromise) {
-      multiPoseDetectorPromise = poseDetection.createDetector(
-        poseDetection.SupportedModels.MoveNet,
-        {
-          modelType: poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING,
-        },
-      )
-    }
-    const attempted = multiPoseDetectorPromise
-    try {
-      const created = await attempted
-      multiPoseDetector = created
-      return created
-    } catch {
-      // Creation failed (e.g. the model asset fetch failed) -- cache the failure for the rest of
-      // this run (see `multiPoseCreationFailedThisRun`'s doc) rather than retrying every frame,
-      // and forget the pending promise so a *future* run gets a clean retry. Only forget OUR
-      // attempt: a concurrent caller may already have installed a fresh one.
-      if (multiPoseDetectorPromise === attempted)
-        multiPoseDetectorPromise = null
-      multiPoseCreationFailedThisRun = true
-      return null
-    }
   }
 
   // Per-instance tracking state. `lastBoundingBox` is the seam between calls: non-null means "a
@@ -462,7 +455,6 @@ export async function createMoveNetDetector(
       ) {
         clearAnchor()
         personOfInterestSuspended = false
-        multiPoseCreationFailedThisRun = false
         previousRawDetectorUsage = 'fullFrame'
         rawDetector.reset()
       }
@@ -533,16 +525,26 @@ export async function createMoveNetDetector(
         !personOfInterestSuspended &&
         dispatchReason !== null
 
-      const multiPoseDet = dispatchMultiPose
-        ? await getMultiPoseDetector()
-        : null
+      // `multiPoseDetector` is a fixed, resolved reference set once at `createMoveNetDetector`
+      // construction time (eager, parallel creation -- see the doc comment there) -- reading it
+      // here is a synchronous property lookup, not an `await`, so unlike the rest of this
+      // function's `await`-adjacent state there is no reentrancy concern for this specific read:
+      // no other call could have started since `myGeneration = ++generation` above, because
+      // nothing has yielded control yet.
+      const multiPoseDet = dispatchMultiPose ? multiPoseDetector : null
 
       // From here on, `boxForFraming` -- not live `lastBoundingBox` -- decides crop-vs-full-frame
       // for THIS call, so a call that started with one anchor snapshot never crops against a
-      // *different*, newer anchor a concurrent call may have installed while we awaited detector
-      // creation above (review item #3).
+      // *different*, newer anchor a concurrent call may have installed before this call's own
+      // later `await`s resolve (review item #3).
       let boxForFraming = giveUpBoxAtStart
       if (dispatchMultiPose && multiPoseDet === null) {
+        // The multi-pose detector was never successfully created for this detector instance (its
+        // eager, parallel creation at construction time failed -- see `createMoveNetDetector`'s
+        // doc comment; this is now a fixed fact for this instance's whole lifetime, not a
+        // per-call possibility, since there is no retry). Fall back to the ordinary single-pose
+        // path below rather than surfacing a hard error (task 2.2), never regressing below this
+        // backend's pre-existing baseline.
         dispatchMultiPose = false
         if (dispatchReason === 'reverification') {
           // A periodic check that couldn't even start must be an equally strict no-op as an
@@ -552,23 +554,13 @@ export async function createMoveNetDetector(
           // continues exactly as if this call had never attempted a check at all. Only the
           // interval resets, so the next attempt waits a full interval rather than retrying every
           // subsequent call.
-          if (myGeneration === generation) {
-            callsSinceLastVerification = 0
-          }
+          callsSinceLastVerification = 0
         } else {
-          // Multi-pose detector creation failed during acquisition/reacquisition -- fall back to
-          // the ordinary single-pose full-frame call below rather than surfacing a hard error
-          // (task 2.2), never regressing below this backend's pre-existing baseline. An anchor
-          // that was merely stale (not missing) is dropped too: without a multi-pose pass to
-          // re-disambiguate it, cropping around a no-longer-trustworthy box is worse than falling
-          // back to full-frame. Guarded by the same reentrancy check the rest of this function
-          // uses after an `await`: a newer call that already ran to completion while this one
-          // awaited `getMultiPoseDetector()` may have seeded a perfectly good, fresh anchor,
-          // which this stale call must not clobber.
+          // Acquisition/reacquisition: an anchor that was merely stale (not missing) is dropped
+          // too -- without a multi-pose pass to re-disambiguate it, cropping around a
+          // no-longer-trustworthy box is worse than falling back to full-frame.
           boxForFraming = null
-          if (myGeneration === generation) {
-            clearAnchor()
-          }
+          clearAnchor()
         }
       }
 
@@ -857,14 +849,13 @@ export async function createMoveNetDetector(
       return frame
     },
     dispose(): void {
+      // Both detectors are fully created (or definitively failed to create) by the time
+      // `createMoveNetDetector`'s promise resolves and a caller can get a `PoseDetector` handle
+      // to call `dispose()` on at all -- eager, parallel creation (see `createMoveNetDetector`'s
+      // doc comment) means there is no longer an "in-flight creation" case for `dispose()` to
+      // special-case.
       rawDetector.dispose()
-      if (multiPoseDetector) {
-        multiPoseDetector.dispose()
-      } else if (multiPoseDetectorPromise) {
-        multiPoseDetectorPromise
-          .then((created) => created.dispose())
-          .catch(() => {})
-      }
+      multiPoseDetector?.dispose()
     },
   }
 }
