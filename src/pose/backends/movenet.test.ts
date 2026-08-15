@@ -1065,6 +1065,42 @@ describe('person-of-interest acquisition/reacquisition', () => {
       // retried into eventually working.
       expect(multiPoseEstimatePoses).not.toHaveBeenCalled()
     })
+
+    it('disposes an already-created multi-pose detector if single-pose creation subsequently fails, instead of leaking it', async () => {
+      let rejectRawDetector!: (err: Error) => void
+      createDetectorMock.mockImplementation(
+        async (_model: unknown, config?: { modelType?: string }) => {
+          if (
+            config?.modelType ===
+            poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING
+          ) {
+            return {
+              estimatePoses: multiPoseEstimatePoses,
+              dispose: multiPoseDispose,
+              reset: multiPoseReset,
+            }
+          }
+          return new Promise<never>((_resolve, reject) => {
+            rejectRawDetector = reject
+          })
+        },
+      )
+
+      const creation = createMoveNetDetector()
+
+      // Both detector creations are kicked off in parallel, so there's no `await` point to hook
+      // in the test -- drain enough microtask ticks for the multi-pose branch's own promise chain
+      // (the mock's async function, then its `.catch`) to fully settle before failing the
+      // single-pose one. This reproduces the exact ordering the fix targets: the multi-pose
+      // detector already exists by the time single-pose creation rejects.
+      for (let i = 0; i < 10; i += 1) {
+        await Promise.resolve()
+      }
+      rejectRawDetector(new Error('single-pose model load failed'))
+
+      await expect(creation).rejects.toThrow('single-pose model load failed')
+      expect(multiPoseDispose).toHaveBeenCalledTimes(1)
+    })
   })
 
   describe('reacquisition', () => {

@@ -279,9 +279,9 @@ export async function createMoveNetDetector(
   // kill this cost too, not just the runtime dispatch behavior -- there is no reason to pay for
   // (or wait on) a model this detector instance will never invoke.
   //
-  // A creation failure (e.g. the model asset fetch failed) is caught locally so it degrades to
-  // "multi-pose unavailable for this detector instance" rather than rejecting the whole
-  // `createMoveNetDetector` promise -- single-pose tracking must keep working even if the
+  // A multi-pose creation failure (e.g. the model asset fetch failed) is caught locally so it
+  // degrades to "multi-pose unavailable for this detector instance" rather than rejecting the
+  // whole `createMoveNetDetector` promise -- single-pose tracking must keep working even if the
   // multi-pose model never loads (task 2.2's "never regress below baseline" guarantee, now
   // enforced at construction time instead of per-call). Unlike the removed lazy accessor, there
   // is no retry: this detector instance is cached and reused for the whole app lifetime
@@ -301,10 +301,24 @@ export async function createMoveNetDetector(
         .catch(() => null)
     : Promise.resolve(null)
 
-  const [rawDetector, multiPoseDetector] = await Promise.all([
-    rawDetectorPromise,
-    multiPoseDetectorPromise,
-  ])
+  // Both fetches stay in flight together (still parallel -- `multiPoseDetectorPromise` was
+  // already kicked off above, before this `await`), but the SINGLE-pose promise's own rejection
+  // is NOT caught: if it fails, this whole function must still reject (there is no baseline to
+  // fall back to without a working single-pose detector). The one thing this awaits-in-sequence
+  // shape adds over a plain `Promise.all` is disposal: if the multi-pose fetch has ALREADY
+  // resolved successfully by the time the single-pose one rejects, that multi-pose detector would
+  // otherwise never be reachable by anything (this function is about to throw, so its caller never
+  // gets a `PoseDetector` handle to call `dispose()` on) and would leak its WebGL tensors for the
+  // page lifetime. `.then((d) => d?.dispose())` is a no-op if the multi-pose fetch itself failed
+  // or was skipped (resolves `null`).
+  let rawDetector: Awaited<typeof rawDetectorPromise>
+  try {
+    rawDetector = await rawDetectorPromise
+  } catch (err) {
+    void multiPoseDetectorPromise.then((created) => created?.dispose())
+    throw err
+  }
+  const multiPoseDetector = await multiPoseDetectorPromise
 
   const targetInputSize = MODEL_INPUT_RESOLUTION[modelType]
   const cropCanvas = document.createElement('canvas')
