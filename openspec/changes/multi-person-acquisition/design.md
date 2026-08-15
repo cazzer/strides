@@ -401,6 +401,47 @@ supersedes only the CREATION-TIMING half of the original acquisition/reacquisiti
 per-inference-call multi-pose accuracy/latency question the original Risks entry raised is still
 open and still needs task 10's A/B, unrelated to this fix.
 
+## Live-browser A/B results (2026-08-15)
+
+Real GPU (`ANGLE Metal Renderer: Apple M4 Pro`, not SwiftShader), Playwright, both existing demo
+clips, 3 trials per arm. Two runs: (1) `personOfInterest.enabled: false` baseline, measured once
+(unaffected by every subsequent commit in this change, since the disabled path is untouched); (2)
+`personOfInterest.enabled: true` measured twice — once at the lazy-creation commit (`1487db7`,
+found the catastrophic regression that led to the eager-creation fix) and once at the fixed
+commit (`457fa6e`, current). Numbers below are the fixed-commit run against the same baseline.
+
+| | track, baseline (false) | track, fixed (true) | park, baseline (false) | park, fixed (true) |
+|---|---|---|---|---|
+| totalSamples | 221 / 221 / 221 | 211 / 213 / 213 | 81 / 81 / 81 | 60 / 61 / 61 |
+| detectedFrames | 76 / 76 / 75 | 63 / 64 / 64 | 81 / 81 / 81 | 60 / 61 / 61 |
+| view confidence | 0.761–0.778 | 0.755–0.782 | 0.070–0.103 | 0.017–0.117 |
+| cadence value | 93.6 / 94.8 / 93.6 | 91.2 / 92.4 (×2) | 180 / 180 / 181.2 | 176.4 (all 3) |
+| cadence tier | T1 (High), all 3 | T1 (High), all 3 | T2 (Medium), all 3 | 2× T2, 1× T1 |
+| verticalOscillation | 0.170–0.184 | 0.162–0.174 | 0.232–0.237 | 0.223–0.231 |
+
+**This is not "no meaningful regression" — it is a real, moderate, measured cost that the catastrophic
+pre-fix failure was masking the shape of.** Detected-frame count and total-sample count both drop
+under `enabled: true`: track loses ~16% of detected frames and ~4% of samples; park loses ~25% of
+both (park's sample and detected-frame counts track together, meaning detection quality among what
+gets sampled stays high — the cost is fewer real-time frames processed at all during the clip's fixed
+wall-clock duration, not more failed detections). Metric *values* stay close (cadence within ~2-3%,
+verticalOscillation within ~3-5%) and confidence *tiers* mostly hold (track stays T1 both ways; park
+is T2 at baseline and T2-or-better after, never degrading). The mechanism is the acquisition dispatch
+on frame 1 of every run plus periodic re-verification every `REVERIFICATION_INTERVAL_FRAMES` calls —
+both do real inference work that competes with `sampleClip.ts`'s real-time sampling loop for
+wall-clock budget, exactly the cost class the Risks section above already names, now quantified.
+
+This was NOT isolated into settle-window-only vs. re-verification-only contributions (task 10.4's
+full ask) — `POST_ACQUISITION_SETTLE_FRAMES`/`REVERIFICATION_INTERVAL_FRAMES` have no runtime
+override point (Migration Plan, above), so isolating them would require a temporary code patch this
+pass didn't make. The number above is the combined, real, ship-relevant cost.
+
+**Default-on/off call**: ship default-**on**, per the Migration Plan's pre-registered rule (this is
+a correctness fix for a live-confirmed bug, not a pure optimization) — confidence tiers hold and the
+catastrophic failure mode is closed. The throughput cost above is real and should be weighed by
+whoever makes the final ship call, not treated as zero. Task 10.3 (validating against the actual
+reported multi-person bug clip) remains open — no such clip exists in this repo or environment yet.
+
 ## Open Questions
 
 - Exact scoring constants (proximity-fallback distance multiple, any minimum IoU floor) — decided

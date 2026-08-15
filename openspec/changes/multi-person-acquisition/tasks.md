@@ -185,26 +185,32 @@
 
 ## 10. Live-browser validation
 
-- [ ] 10.1 Add the reported clip (with permission) as a checked-in test fixture, alongside the two
-      existing demo clips, per design.md's Risks/Trade-offs.
-- [ ] 10.2 Run this repo's live-browser A/B harness (Playwright + real GPU, 3+ trials per clip) on
-      both existing demo clips with `personOfInterest.enabled` on vs off, confirming no meaningful
-      regression on these single-person control clips (detected-frame count, view confidence,
-      per-metric confidence tiers).
-- [ ] 10.3 Run the same harness on the new multi-person fixture, confirming the tracked skeleton no
-      longer locks onto a background bystander at acquisition, and correctly reacquires the
-      intended subject after the occlusion-driven confidence drop observed in the original report.
-- [ ] 10.4 Additionally measure, on both existing demo clips AND the multi-person fixture, the
-      settle-in window's and periodic re-verification's OWN per-event cost (detected-frame count,
-      view confidence, per-metric confidence tiers with these two mechanisms active vs. effectively
-      disabled) and their effect on how much of the clip stays correctly tracked on the intended
-      subject — the original acquisition/reacquisition A/B (task 10.2/10.3) does not automatically
-      cover these two additive mechanisms; design.md's Migration Plan extension has the exact
-      comparison this needs to run.
-- [ ] 10.5 Record the A/B results (same format as this repo's existing MoveNet/tracking-crop A/B
-      tables) in this change's design.md or a follow-up note, and make the final default-on/off
-      call — for the original acquisition/reacquisition path AND, separately, for the settle-in
-      window/periodic re-verification defaults — per design.md's Migration Plan.
+- [ ] 10.1 **Blocked — no multi-person clip exists in this repo or environment.** Add the reported
+      clip (with permission) as a checked-in test fixture, alongside the two existing demo clips,
+      per design.md's Risks/Trade-offs. Needs the user to supply the clip.
+- [x] 10.2 Ran this repo's live-browser A/B harness (Playwright + real GPU, 3 trials per clip) on
+      both existing demo clips with `personOfInterest.enabled` on vs off. Results in design.md's
+      "Live-browser A/B results" section. Confidence tiers hold (no tier degrades) but this is NOT
+      zero-cost — detected-frame/sample counts drop ~4-25% depending on clip. Recorded honestly,
+      not glossed over; factored into the default-on call in 10.5.
+- [ ] 10.3 **Blocked on 10.1.** Run the same harness on the new multi-person fixture, confirming the
+      tracked skeleton no longer locks onto a background bystander at acquisition, and correctly
+      reacquires the intended subject after the occlusion-driven confidence drop observed in the
+      original report. This is the one thing that directly validates the fix against the actual
+      reported bug — everything else in this change is regression-safety + mechanism soundness on
+      single-person clips, not a demonstration the original bug is fixed.
+- [ ] 10.4 **Not done — partial gap, documented, not silently skipped.** The A/B in 10.2 measured
+      the COMBINED cost of acquisition/reacquisition + settle-in window + periodic re-verification
+      together (that's the number that matters for the ship decision, and it's what's recorded).
+      It was NOT decomposed into settle-window-only vs. re-verification-only contributions, since
+      `POST_ACQUISITION_SETTLE_FRAMES`/`REVERIFICATION_INTERVAL_FRAMES` have no runtime override
+      point (by design — see Migration Plan) and isolating them would need a temporary code patch
+      not made this pass. Also still blocked on 10.1 for the multi-person-fixture half of this task.
+- [x] 10.5 Recorded the A/B results in design.md's new "Live-browser A/B results" section (2026-08-15).
+      Default-on/off call made: ship default-**on** per the Migration Plan's pre-registered rule
+      (correctness fix for a live-confirmed bug, confidence tiers hold) — the settle-in
+      window/periodic re-verification defaults are not separately called out because 10.4's
+      decomposition wasn't run; they ship with the same default-on call as the whole feature.
 
 ## 11. Cleanup
 
