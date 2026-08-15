@@ -237,8 +237,13 @@
 
 ## 11. Cleanup
 
-- [ ] 11.1 Update `CLAUDE.md`'s pose-detection/backlog sections to reflect the shipped
+- [x] 11.1 Update `CLAUDE.md`'s pose-detection/backlog sections to reflect the shipped
       acquisition/reacquisition/settle-in-window/periodic-re-verification behavior, following this
-      repo's existing documentation pattern for backend changes.
+      repo's existing documentation pattern for backend changes. Added a new Backlog entry citing
+      the 2026-08-15 live-browser A/B cost (detected-frame/sample drops of ~16-25%, confidence
+      tiers holding) from design.md's "Live-browser A/B results" section, and the e2e
+      (`e2e/multiPersonAcquisition.spec.ts` + `e2e/fixtures/multiperson-track.mp4`) validation gap
+      — the dispatch mechanism is confirmed on real footage, but the actual bystander-preference
+      fix is not, since no trial observed 2 simultaneous confident candidates.
 - [ ] 11.2 Run `openspec archive multi-person-acquisition --yes` once shipped and verified, folding
       this delta into `openspec/specs/pose-detection/spec.md`.
