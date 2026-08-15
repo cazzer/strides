@@ -24,7 +24,14 @@ export interface TrackingCropConfig {
   paddingMultiplier: number
   /** Floor on the crop side length, in source-video pixels. */
   minCropSidePx: number
-  /** Consecutive not-usable crop-mode frames before falling back to full-frame detection. */
+  /**
+   * Consecutive not-usable frames before falling back to full-frame detection. As of
+   * `multi-person-acquisition`, this counts every not-usable steady-state call (crop-mode or
+   * full-frame -- see `movenet.ts`'s `registerTrackingLoss`), not just crop-mode ones, and also
+   * gates the multi-pose reacquisition trigger (`PersonOfInterestConfig`) -- one shared threshold
+   * for both concerns, not two independently-tunable ones (design.md's "One shared loss
+   * threshold, not two").
+   */
   reacquisitionLossThreshold: number
 }
 

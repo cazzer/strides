@@ -1,10 +1,13 @@
 import type { PoseDetectorConfig } from './detector'
 import { DEFAULT_TRACKING_CROP_CONFIG } from './backends/trackingCropConfig'
 import type { TrackingCropConfig } from './backends/trackingCropConfig'
+import { DEFAULT_PERSON_OF_INTEREST_CONFIG } from './backends/personOfInterestConfig'
+import type { PersonOfInterestConfig } from './backends/personOfInterestConfig'
 
 export const DEFAULT_POSE_DETECTOR_CONFIG: PoseDetectorConfig = {
   backend: 'movenet',
   trackingCrop: DEFAULT_TRACKING_CROP_CONFIG,
+  personOfInterest: DEFAULT_PERSON_OF_INTEREST_CONFIG,
 }
 
 declare global {
@@ -17,7 +20,10 @@ declare global {
      * pattern as `samplingRobustnessConfig`'s override.
      */
     __STRIDES_POSE_BACKEND_OVERRIDE__?: Partial<
-      Omit<PoseDetectorConfig, 'trackingCrop'> & { trackingCrop: Partial<TrackingCropConfig> }
+      Omit<PoseDetectorConfig, 'trackingCrop' | 'personOfInterest'> & {
+        trackingCrop: Partial<TrackingCropConfig>
+        personOfInterest: Partial<PersonOfInterestConfig>
+      }
     >
   }
 }
@@ -25,8 +31,8 @@ declare global {
 /**
  * Resolves the detector config an app instance should use: the default (`movenet`, default
  * tracking-crop config), shallow-merged with the development-only `window` override if one is
- * present (`trackingCrop` merged one level deep, the same nested-shallow-merge shape
- * `resolveSamplingRobustnessConfig` uses for its own nested `robustness` field).
+ * present (`trackingCrop`/`personOfInterest` each merged one level deep, the same nested-shallow-
+ * merge shape `resolveSamplingRobustnessConfig` uses for its own nested `robustness` field).
  */
 export function resolvePoseDetectorConfig(): PoseDetectorConfig {
   const override = import.meta.env.DEV
@@ -41,6 +47,10 @@ export function resolvePoseDetectorConfig(): PoseDetectorConfig {
     trackingCrop: {
       ...DEFAULT_TRACKING_CROP_CONFIG,
       ...override.trackingCrop,
+    },
+    personOfInterest: {
+      ...DEFAULT_PERSON_OF_INTEREST_CONFIG,
+      ...override.personOfInterest,
     },
   }
 }

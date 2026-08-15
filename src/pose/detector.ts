@@ -1,12 +1,14 @@
 import { createMoveNetDetector } from './backends/movenet'
 import type { MoveNetModelType } from './backends/movenet'
 import type { TrackingCropConfig } from './backends/trackingCropConfig'
+import type { PersonOfInterestConfig } from './backends/personOfInterestConfig'
 import { createBlazePoseDetector } from './backends/blazepose'
 import { createPoseNetDetector } from './backends/posenet'
 import { createMediaPipePoseLandmarkerDetector } from './backends/mediapipePoseLandmarker'
 import type { PoseFrame } from './types'
 
-export type PoseBackendId = 'movenet' | 'blazepose' | 'posenet' | 'mediapipePoseLandmarker'
+export type PoseBackendId =
+  'movenet' | 'blazepose' | 'posenet' | 'mediapipePoseLandmarker'
 
 export interface PoseDetectorConfig {
   backend: PoseBackendId
@@ -14,6 +16,8 @@ export interface PoseDetectorConfig {
   movenetModelType?: MoveNetModelType
   /** Only meaningful when backend: 'movenet'. Defaults to DEFAULT_TRACKING_CROP_CONFIG. */
   trackingCrop?: TrackingCropConfig
+  /** Only meaningful when backend: 'movenet'. Defaults to DEFAULT_PERSON_OF_INTEREST_CONFIG. */
+  personOfInterest?: PersonOfInterestConfig
 }
 
 /**
@@ -49,11 +53,24 @@ export function videoFrameSource(
   video: HTMLVideoElement,
   timestampSec: number = video.currentTime,
 ): PoseFrameSource {
-  return { image: video, timestampSec, width: video.videoWidth, height: video.videoHeight }
+  return {
+    image: video,
+    timestampSec,
+    width: video.videoWidth,
+    height: video.videoHeight,
+  }
 }
 
-const backends: Record<PoseBackendId, (config: PoseDetectorConfig) => Promise<PoseDetector>> = {
-  movenet: (config) => createMoveNetDetector(config.movenetModelType, config.trackingCrop),
+const backends: Record<
+  PoseBackendId,
+  (config: PoseDetectorConfig) => Promise<PoseDetector>
+> = {
+  movenet: (config) =>
+    createMoveNetDetector(
+      config.movenetModelType,
+      config.trackingCrop,
+      config.personOfInterest,
+    ),
   blazepose: () => createBlazePoseDetector(),
   posenet: () => createPoseNetDetector(),
   mediapipePoseLandmarker: () => createMediaPipePoseLandmarkerDetector(),

@@ -57,7 +57,9 @@ export function deriveBoundingBox(
   minConfidentKeypoints: number,
 ): BoundingBoxPx | null {
   const confident = keypoints.filter(
-    (k) => k.score >= minKeypointConfidence && !BBOX_EXCLUDED_KEYPOINT_NAMES.has(k.name),
+    (k) =>
+      k.score >= minKeypointConfidence &&
+      !BBOX_EXCLUDED_KEYPOINT_NAMES.has(k.name),
   )
   if (confident.length < minConfidentKeypoints) return null
 
@@ -73,6 +75,89 @@ export function deriveBoundingBox(
   }
 
   return { minX, minY, maxX, maxY }
+}
+
+/** `box`'s area in px^2 -- the acquisition heuristic's size term (design.md's "Person-of-interest
+ * scoring"). */
+export function bboxArea(box: BoundingBoxPx): number {
+  return (box.maxX - box.minX) * (box.maxY - box.minY)
+}
+
+/**
+ * Mean keypoint score across the same non-head/non-foot-excluded set `deriveBoundingBox` scores
+ * against (`BBOX_EXCLUDED_KEYPOINT_NAMES`) -- the acquisition heuristic's confidence term. Reads
+ * every non-excluded `COMMON_KEYPOINT_NAMES` entry, including ones a candidate never resolved
+ * (score 0 via `toPoseFrame`'s missing-keypoint default), so a candidate with fewer confidently
+ * detected joints scores lower even at an identical bbox size.
+ */
+export function meanConfidence(keypoints: Keypoint[]): number {
+  const eligible = keypoints.filter(
+    (k) => !BBOX_EXCLUDED_KEYPOINT_NAMES.has(k.name),
+  )
+  if (eligible.length === 0) return 0
+  return eligible.reduce((sum, k) => sum + k.score, 0) / eligible.length
+}
+
+/** Acquisition heuristic score: bbox area weighted by mean keypoint confidence (design.md's
+ * "Person-of-interest scoring" -- acquisition case). Highest score wins. */
+export function computeAcquisitionScore(
+  box: BoundingBoxPx,
+  keypoints: Keypoint[],
+): number {
+  return bboxArea(box) * meanConfidence(keypoints)
+}
+
+/** Intersection-over-union of two bounding boxes, 0 when they don't overlap at all. */
+export function computeBoundingBoxIoU(
+  a: BoundingBoxPx,
+  b: BoundingBoxPx,
+): number {
+  const intersectWidth = Math.max(
+    0,
+    Math.min(a.maxX, b.maxX) - Math.max(a.minX, b.minX),
+  )
+  const intersectHeight = Math.max(
+    0,
+    Math.min(a.maxY, b.maxY) - Math.max(a.minY, b.minY),
+  )
+  const intersectionArea = intersectWidth * intersectHeight
+  if (intersectionArea === 0) return 0
+
+  const unionArea = bboxArea(a) + bboxArea(b) - intersectionArea
+  return unionArea === 0 ? 0 : intersectionArea / unionArea
+}
+
+/** Euclidean distance between two bounding boxes' centers, in px. */
+export function boundingBoxCenterDistance(
+  a: BoundingBoxPx,
+  b: BoundingBoxPx,
+): number {
+  const aCenterX = (a.minX + a.maxX) / 2
+  const aCenterY = (a.minY + a.maxY) / 2
+  const bCenterX = (b.minX + b.maxX) / 2
+  const bCenterY = (b.minY + b.maxY) / 2
+  return Math.hypot(aCenterX - bCenterX, aCenterY - bCenterY)
+}
+
+/**
+ * Whether `candidate`'s center sits within `distanceMultiple * reference`'s own side
+ * (`max(width, height)`) of `reference`'s center -- the reacquisition heuristic's proximity
+ * fallback for when every candidate has zero IoU with the last known box (design.md's
+ * "Person-of-interest scoring").
+ */
+export function isWithinProximityThreshold(
+  candidate: BoundingBoxPx,
+  reference: BoundingBoxPx,
+  distanceMultiple: number,
+): boolean {
+  const referenceSide = Math.max(
+    reference.maxX - reference.minX,
+    reference.maxY - reference.minY,
+  )
+  return (
+    boundingBoxCenterDistance(candidate, reference) <=
+    distanceMultiple * referenceSide
+  )
 }
 
 /**
