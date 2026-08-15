@@ -439,8 +439,24 @@ pass didn't make. The number above is the combined, real, ship-relevant cost.
 **Default-on/off call**: ship default-**on**, per the Migration Plan's pre-registered rule (this is
 a correctness fix for a live-confirmed bug, not a pure optimization) — confidence tiers hold and the
 catastrophic failure mode is closed. The throughput cost above is real and should be weighed by
-whoever makes the final ship call, not treated as zero. Task 10.3 (validating against the actual
-reported multi-person bug clip) remains open — no such clip exists in this repo or environment yet.
+whoever makes the final ship call, not treated as zero.
+
+**Multi-person fixture (2026-08-15, task 10.1/10.3)**: user supplied a real clip, added e2e-only
+(not UI-wired, per instruction) at `e2e/fixtures/multiperson-track.mp4`, exercised by the new
+`e2e/multiPersonAcquisition.spec.ts` (`npm run test:e2e` — this repo's first Playwright e2e
+suite, separate from the mocked `npm test` unit suite). 3 trials, real GPU, `personOfInterest.
+enabled: true`. The dispatch mechanism fires correctly and identically across all 3 trials — ~30
+acquisition attempts before the runner is confidently detected (~t=1.52s), then two periodic
+re-verification dispatches (~t=2.5s, ~t=3.3s). But candidate count never exceeded 1 in any of the
+~33 sampled dispatch calls — MULTIPOSE_LIGHTNING never registered two simultaneously-confident
+poses in these particular runs, even though a keyframe spot-check confirms the clip genuinely has
+a second, near-field person (a walker) in frame alongside the runner for most of the clip, not
+just a distant background crowd. **This does not confirm the fix against the actual reported
+bug** — it confirms the fixture reliably exercises the acquisition/re-verification code paths
+against real footage, which is a narrower, still-useful claim. Whether the tracked skeleton
+actually favors the correct subject over a bystander remains unvalidated; more trials (frame
+sampling varies run-to-run under this repo's documented GPU-timing determinism caveat) or a clip
+where the second person is detected as confidently as the first would be needed to close this.
 
 ## Open Questions
 

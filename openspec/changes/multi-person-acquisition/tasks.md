@@ -185,27 +185,50 @@
 
 ## 10. Live-browser validation
 
-- [ ] 10.1 **Blocked — no multi-person clip exists in this repo or environment.** Add the reported
-      clip (with permission) as a checked-in test fixture, alongside the two existing demo clips,
-      per design.md's Risks/Trade-offs. Needs the user to supply the clip.
+- [x] 10.1 User supplied a real clip ("occasionally was detected as multi person"), added as
+      `e2e/fixtures/multiperson-track.mp4` (1080p H.264, transcoded from the original 4K HEVC
+      source; 233/233 frames independently confirmed decodable, no container-metadata lie per
+      CLAUDE.md's documented gotcha). Per explicit user instruction, this is e2e-test-only, NOT
+      wired into the UI — no third demo button, `DemoVideoButton.tsx`/`VideoInputPanel.tsx`
+      untouched. See `e2e/multiPersonAcquisition.spec.ts` and the new `npm run test:e2e` /
+      `playwright.config.ts` (new `@playwright/test` devDependency, pinned to the same `1.62.1`
+      already used for `playwright`) — this repo had no e2e infrastructure before this task.
 - [x] 10.2 Ran this repo's live-browser A/B harness (Playwright + real GPU, 3 trials per clip) on
       both existing demo clips with `personOfInterest.enabled` on vs off. Results in design.md's
       "Live-browser A/B results" section. Confidence tiers hold (no tier degrades) but this is NOT
       zero-cost — detected-frame/sample counts drop ~4-25% depending on clip. Recorded honestly,
       not glossed over; factored into the default-on call in 10.5.
-- [ ] 10.3 **Blocked on 10.1.** Run the same harness on the new multi-person fixture, confirming the
-      tracked skeleton no longer locks onto a background bystander at acquisition, and correctly
-      reacquires the intended subject after the occlusion-driven confidence drop observed in the
-      original report. This is the one thing that directly validates the fix against the actual
-      reported bug — everything else in this change is regression-safety + mechanism soundness on
-      single-person clips, not a demonstration the original bug is fixed.
+- [x] 10.3 **Partially validated — precise about what was and wasn't confirmed, per instruction not
+      to overclaim.** Ran the multi-person fixture through 3 trials (real GPU, `personOfInterest.
+      enabled: true`), instrumented with a temporary dev-only probe (reverted after use, per
+      CLAUDE.md's experimental-probe convention — `git diff` on `movenet.ts` is clean) logging
+      every multi-pose dispatch's `dispatchReason`/candidate count. Findings, both confirmed
+      identically across all 3 trials: (1) the dispatch MECHANISM fires correctly on this clip —
+      ~30 acquisition attempts before the subject is confidently detected around t≈1.52s, then two
+      periodic re-verification dispatches (~t≈2.5s, ~t≈3.3s); (2) candidate count never exceeded
+      1 in any of the ~33 dispatch calls sampled across the 3 trials — MULTIPOSE_LIGHTNING never
+      registered two people as simultaneously-confident poses in these particular runs. A keyframe
+      spot-check (`ffmpeg -ss` extraction at 8 timestamps across the clip, per CLAUDE.md's
+      keyframe-review method) confirms the clip genuinely has a second, near-field person (a
+      walker in a white shirt) visible alongside the tracked runner for most of the clip's
+      duration, not just a distant background crowd — so the scene itself is unambiguously
+      multi-person, but the specific frames MULTIPOSE_LIGHTNING sampled in these 3 trials didn't
+      catch a moment where it confidently detected both people at once. This does NOT confirm "the
+      tracked skeleton no longer locks onto a background bystander" — that would need either more
+      trials (GPU/frame-timing jitter means different frames get sampled run-to-run, per this
+      repo's documented determinism caveat) or a clip where the second person is detected as
+      confidently as the primary subject. What IS confirmed: the fixture reliably exercises the
+      acquisition + periodic-re-verification code paths end-to-end against real, non-synthetic
+      footage, and the automated `e2e/multiPersonAcquisition.spec.ts` test (checked in, repeatable
+      via `npm run test:e2e`) asserts on this — analysis completes and produces detected frames.
 - [ ] 10.4 **Not done — partial gap, documented, not silently skipped.** The A/B in 10.2 measured
       the COMBINED cost of acquisition/reacquisition + settle-in window + periodic re-verification
       together (that's the number that matters for the ship decision, and it's what's recorded).
       It was NOT decomposed into settle-window-only vs. re-verification-only contributions, since
       `POST_ACQUISITION_SETTLE_FRAMES`/`REVERIFICATION_INTERVAL_FRAMES` have no runtime override
       point (by design — see Migration Plan) and isolating them would need a temporary code patch
-      not made this pass. Also still blocked on 10.1 for the multi-person-fixture half of this task.
+      not made this pass. The multi-person-fixture half of this task (10.1 is now done) is also
+      not run — same decomposition gap applies there too.
 - [x] 10.5 Recorded the A/B results in design.md's new "Live-browser A/B results" section (2026-08-15).
       Default-on/off call made: ship default-**on** per the Migration Plan's pre-registered rule
       (correctness fix for a live-confirmed bug, confidence tiers hold) — the settle-in
