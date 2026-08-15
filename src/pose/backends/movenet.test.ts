@@ -44,7 +44,11 @@ import { MOVENET_RAW_KEYPOINTS } from './__fixtures__/movenet-keypoints.fixture'
 import { COMMON_KEYPOINT_NAMES } from '../types'
 import { DEFAULT_TRACKING_CROP_CONFIG } from './trackingCropConfig'
 import type { TrackingCropConfig } from './trackingCropConfig'
-import { DEFAULT_PERSON_OF_INTEREST_CONFIG } from './personOfInterestConfig'
+import {
+  DEFAULT_PERSON_OF_INTEREST_CONFIG,
+  POST_ACQUISITION_SETTLE_FRAMES,
+  REVERIFICATION_INTERVAL_FRAMES,
+} from './personOfInterestConfig'
 import type { PersonOfInterestConfig } from './personOfInterestConfig'
 import { stubCanvas2DContext } from '../../test/canvasTestUtils'
 import type { FakeCanvasRenderingContext2D } from '../../test/canvasTestUtils'
@@ -767,9 +771,19 @@ describe('createMoveNetDetector', () => {
 })
 
 describe('person-of-interest acquisition/reacquisition', () => {
-  /** Seeds an anchor via a single-candidate acquisition call, then trips the shared reacquisition
+  /**
+   * Seeds an anchor via a single-candidate acquisition call, then trips the shared reacquisition
    * loss threshold via that many not-usable steady-state calls -- the next call after this helper
-   * returns is a reacquisition-shaped moment. */
+   * returns is a reacquisition-shaped moment.
+   *
+   * The successful acquisition engages a settle-in window (`POST_ACQUISITION_SETTLE_FRAMES`),
+   * which forces the first few of these not-usable calls into crop mode even though this helper
+   * uses the default (crop-disabled) `trackingCropConfig` -- that's real, correct
+   * `rawDetector.reset()` traffic (one transition into forced crop mode, one back out once the
+   * window expires), not something tests exercising this helper should have to account for. Clear
+   * it here so callers that check `reset` counts are checking "since seeding", not "since the
+   * detector was constructed".
+   */
   async function detectorWithSeededAnchor() {
     const detector = await createMoveNetDetector()
     multiPoseEstimatePoses.mockResolvedValueOnce([
@@ -786,6 +800,7 @@ describe('person-of-interest acquisition/reacquisition', () => {
       await detector.estimatePose(videoFrameSource(makeVideo(i + 1, 1280, 720)))
     }
 
+    reset.mockClear()
     return detector
   }
 
@@ -1364,6 +1379,338 @@ describe('person-of-interest acquisition/reacquisition', () => {
       ])
       await detector.estimatePose(videoFrameSource(makeVideo(2, 1280, 720)))
       expect(reset).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('settle-in window', () => {
+    it('forces the next POST_ACQUISITION_SETTLE_FRAMES calls into crop mode after a successful acquisition, even with tracking-crop disabled', async () => {
+      const detector = await createMoveNetDetector()
+
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(0, 1280, 720)))
+
+      for (let i = 0; i < POST_ACQUISITION_SETTLE_FRAMES; i += 1) {
+        estimatePoses.mockResolvedValueOnce([
+          { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+        ])
+        await detector.estimatePose(
+          videoFrameSource(makeVideo(i + 1, 1280, 720)),
+        )
+        expect(
+          estimatePoses.mock.calls[estimatePoses.mock.calls.length - 1],
+        ).toHaveLength(3)
+      }
+
+      // The window has expired -- the next call runs full-frame again (tracking-crop is
+      // disabled, so nothing else keeps forcing crop mode).
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(
+        videoFrameSource(
+          makeVideo(POST_ACQUISITION_SETTLE_FRAMES + 1, 1280, 720),
+        ),
+      )
+      expect(
+        estimatePoses.mock.calls[estimatePoses.mock.calls.length - 1],
+      ).toHaveLength(1)
+    })
+
+    it('also engages after a successful reacquisition', async () => {
+      const detector = await detectorWithSeededAnchor()
+
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_MOVED_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(100, 1280, 720)))
+
+      for (let i = 0; i < POST_ACQUISITION_SETTLE_FRAMES; i += 1) {
+        estimatePoses.mockResolvedValueOnce([
+          { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+        ])
+        await detector.estimatePose(
+          videoFrameSource(makeVideo(101 + i, 1280, 720)),
+        )
+        expect(
+          estimatePoses.mock.calls[estimatePoses.mock.calls.length - 1],
+        ).toHaveLength(3)
+      }
+
+      estimatePoses.mockResolvedValueOnce([])
+      await detector.estimatePose(videoFrameSource(makeVideo(200, 1280, 720)))
+      expect(
+        estimatePoses.mock.calls[estimatePoses.mock.calls.length - 1],
+      ).toHaveLength(1)
+    })
+
+    it('is a no-op when tracking-crop is already continuously enabled', async () => {
+      const detector = await createMoveNetDetector(undefined, CROP_ON)
+
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(0, 1280, 720)))
+      expect(reset).toHaveBeenCalledTimes(0) // acquisition itself: no rawDetector call at all
+
+      // The first steady-state call already engages crop mode via `trackingCropConfig.enabled`
+      // -- this is the one genuine full-frame(never-invoked)->crop transition.
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(1, 1280, 720)))
+      expect(reset).toHaveBeenCalledTimes(1)
+      expect(
+        estimatePoses.mock.calls[estimatePoses.mock.calls.length - 1],
+      ).toHaveLength(3)
+
+      // Run well past the settle-in window's own budget while steady-state crop-mode tracking
+      // continues -- no extra resets, still crop mode throughout, entirely explained by
+      // `trackingCropConfig.enabled` alone; the settle window has nothing extra to force.
+      for (let i = 0; i < POST_ACQUISITION_SETTLE_FRAMES + 2; i += 1) {
+        estimatePoses.mockResolvedValueOnce([
+          { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+        ])
+        await detector.estimatePose(
+          videoFrameSource(makeVideo(2 + i, 1280, 720)),
+        )
+        expect(
+          estimatePoses.mock.calls[estimatePoses.mock.calls.length - 1],
+        ).toHaveLength(3)
+      }
+      expect(reset).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('periodic re-verification', () => {
+    /** Seeds an anchor via acquisition, then runs exactly REVERIFICATION_INTERVAL_FRAMES
+     * successful steady-state crop-mode calls -- the next call after this helper returns is due
+     * for periodic re-verification. Uses `CROP_ON` so every steady-state call (including the
+     * ones the settle-in window would otherwise force) is uniformly crop-mode, avoiding the need
+     * to track which of these setup calls fall inside vs. outside that window. */
+    async function detectorDueForReverification() {
+      const detector = await createMoveNetDetector(undefined, CROP_ON)
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(0, 1280, 720)))
+
+      for (let i = 0; i < REVERIFICATION_INTERVAL_FRAMES; i += 1) {
+        estimatePoses.mockResolvedValueOnce([
+          { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+        ])
+        await detector.estimatePose(
+          videoFrameSource(makeVideo(i + 1, 1280, 720)),
+        )
+      }
+
+      reset.mockClear()
+      return detector
+    }
+
+    it('triggers a multi-pose call after REVERIFICATION_INTERVAL_FRAMES steady-state calls, instead of an ordinary one', async () => {
+      const detector = await detectorDueForReverification()
+      expect(multiPoseEstimatePoses).toHaveBeenCalledTimes(1) // just the seed so far
+
+      const estimatePosesCallsBefore = estimatePoses.mock.calls.length
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_MOVED_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      const frame = await detector.estimatePose(
+        videoFrameSource(
+          makeVideo(REVERIFICATION_INTERVAL_FRAMES + 1, 1280, 720),
+        ),
+      )
+
+      expect(frame).not.toBeNull()
+      expect(multiPoseEstimatePoses).toHaveBeenCalledTimes(2)
+      expect(estimatePoses).toHaveBeenCalledTimes(estimatePosesCallsBefore) // no ordinary call issued instead
+    })
+
+    it('a continuous match resets the interval and does not retrigger on the very next call', async () => {
+      const detector = await detectorDueForReverification()
+
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_MOVED_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      const verified = await detector.estimatePose(
+        videoFrameSource(
+          makeVideo(REVERIFICATION_INTERVAL_FRAMES + 1, 1280, 720),
+        ),
+      )
+      expect(
+        verified?.keypoints.find((k) => k.name === 'left_shoulder')?.x,
+      ).toBe(115)
+
+      const multiPoseCallsBefore = multiPoseEstimatePoses.mock.calls.length
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(
+        videoFrameSource(
+          makeVideo(REVERIFICATION_INTERVAL_FRAMES + 2, 1280, 720),
+        ),
+      )
+      expect(multiPoseEstimatePoses).toHaveBeenCalledTimes(multiPoseCallsBefore)
+    })
+
+    it('a non-continuous match resets rawDetector, re-seeds the anchor, and starts a settle-in window even with tracking-crop disabled', async () => {
+      const detector = await createMoveNetDetector()
+
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(0, 1280, 720)))
+
+      // Keep the steady-state anchor small (matching SMALL_DISTANT_CANDIDATE_KEYPOINTS's scale,
+      // not MOVENET_RAW_KEYPOINTS's much larger one) so FAR_SMALL/LARGE below stay outside its
+      // proximity threshold, exactly as already calibrated for the acquisition/reacquisition
+      // "falls back to the acquisition heuristic" tests above.
+      for (let i = 0; i < REVERIFICATION_INTERVAL_FRAMES; i += 1) {
+        estimatePoses.mockResolvedValueOnce([
+          { keypoints: SMALL_DISTANT_CANDIDATE_KEYPOINTS, score: 0.9 },
+        ])
+        await detector.estimatePose(
+          videoFrameSource(makeVideo(i + 1, 1280, 720)),
+        )
+      }
+      const resetCountBefore = reset.mock.calls.length
+
+      // Both candidates are far from the current anchor -- falls through to the acquisition
+      // heuristic, a genuine identity switch caught by periodic re-verification rather than a
+      // confidence drop.
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        { keypoints: FAR_SMALL_CANDIDATE_KEYPOINTS, score: 0.9 },
+        { keypoints: LARGE_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      const corrected = await detector.estimatePose(
+        videoFrameSource(
+          makeVideo(REVERIFICATION_INTERVAL_FRAMES + 1, 1280, 720),
+        ),
+      )
+      expect(
+        corrected?.keypoints.find((k) => k.name === 'left_shoulder')?.x,
+      ).toBe(600)
+      expect(reset.mock.calls.length).toBe(resetCountBefore + 1)
+
+      // Settle-in window engaged despite tracking-crop being disabled -- the next call is forced
+      // into crop mode around the newly-selected anchor.
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(
+        videoFrameSource(
+          makeVideo(REVERIFICATION_INTERVAL_FRAMES + 2, 1280, 720),
+        ),
+      )
+      expect(
+        estimatePoses.mock.calls[estimatePoses.mock.calls.length - 1],
+      ).toHaveLength(3)
+    })
+
+    it('an empty periodic check is a strict no-op: does not touch the anchor and does not retrigger every subsequent call', async () => {
+      const detector = await detectorDueForReverification()
+
+      multiPoseEstimatePoses.mockResolvedValueOnce([])
+      const emptyCheck = await detector.estimatePose(
+        videoFrameSource(
+          makeVideo(REVERIFICATION_INTERVAL_FRAMES + 1, 1280, 720),
+        ),
+      )
+      expect(emptyCheck).toBeNull()
+
+      const multiPoseCallsBefore = multiPoseEstimatePoses.mock.calls.length
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+      ])
+      const next = await detector.estimatePose(
+        videoFrameSource(
+          makeVideo(REVERIFICATION_INTERVAL_FRAMES + 2, 1280, 720),
+        ),
+      )
+      expect(next).not.toBeNull()
+      expect(multiPoseEstimatePoses).toHaveBeenCalledTimes(multiPoseCallsBefore) // no new multi-pose call
+      expect(
+        estimatePoses.mock.calls[estimatePoses.mock.calls.length - 1],
+      ).toHaveLength(3) // ordinary crop-mode tracking, unaffected by the failed check
+    })
+
+    it('raw candidates but none usable during a periodic check is also a strict no-op', async () => {
+      const detector = await detectorDueForReverification()
+
+      multiPoseEstimatePoses.mockResolvedValueOnce([
+        {
+          keypoints: [{ name: 'left_shoulder', x: 10, y: 10, score: 0.9 }],
+          score: 0.4,
+        },
+      ])
+      const frame = await detector.estimatePose(
+        videoFrameSource(
+          makeVideo(REVERIFICATION_INTERVAL_FRAMES + 1, 1280, 720),
+        ),
+      )
+      expect(frame).not.toBeNull() // still returns a frame (the invariant), just not a trustworthy anchor
+
+      const multiPoseCallsBefore = multiPoseEstimatePoses.mock.calls.length
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(
+        videoFrameSource(
+          makeVideo(REVERIFICATION_INTERVAL_FRAMES + 2, 1280, 720),
+        ),
+      )
+      expect(multiPoseEstimatePoses).toHaveBeenCalledTimes(multiPoseCallsBefore)
+    })
+
+    it('multi-pose detector creation failure during a periodic check does not clear the anchor', async () => {
+      createDetectorMock.mockImplementation(
+        async (_model: unknown, config?: { modelType?: string }) => {
+          if (
+            config?.modelType ===
+            poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING
+          ) {
+            throw new Error('model load failed')
+          }
+          return { estimatePoses, dispose, reset }
+        },
+      )
+      const detector = await createMoveNetDetector(undefined, CROP_ON)
+
+      // Acquisition itself fails to get a multi-pose detector -- falls back to the ordinary
+      // single-pose call (task 2.2), which succeeds and seeds the anchor normally. The failure is
+      // cached for the rest of this run (`multiPoseCreationFailedThisRun`).
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: MOVENET_RAW_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(0, 1280, 720)))
+
+      for (let i = 0; i < REVERIFICATION_INTERVAL_FRAMES; i += 1) {
+        estimatePoses.mockResolvedValueOnce([
+          { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+        ])
+        await detector.estimatePose(
+          videoFrameSource(makeVideo(i + 1, 1280, 720)),
+        )
+      }
+
+      // Periodic re-verification is due, but the cached creation failure means no multi-pose
+      // call is even attempted -- must fall through using the EXISTING anchor/framing unchanged,
+      // not the acquisition/reacquisition creation-failure path's `clearAnchor()`.
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: CROP_SPACE_CONFIDENT_KEYPOINTS, score: 0.9 },
+      ])
+      const frame = await detector.estimatePose(
+        videoFrameSource(
+          makeVideo(REVERIFICATION_INTERVAL_FRAMES + 1, 1280, 720),
+        ),
+      )
+
+      expect(frame).not.toBeNull()
+      expect(
+        estimatePoses.mock.calls[estimatePoses.mock.calls.length - 1],
+      ).toHaveLength(3) // still crop mode -- anchor preserved, not cleared
     })
   })
 

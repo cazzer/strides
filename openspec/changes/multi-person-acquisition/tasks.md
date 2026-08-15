@@ -76,25 +76,96 @@
       higher-scoring-by-area-alone candidate; zero-IoU proximity fallback; no-match-falls-back-to
       -acquisition).
 
-## 7. Live-browser validation
+## 7. Continuity config additions
 
-- [ ] 7.1 Add the reported clip (with permission) as a checked-in test fixture, alongside the two
+- [x] 7.1 Add `POST_ACQUISITION_SETTLE_FRAMES` (first-guess default `3`) as a new named constant
+      in `personOfInterestConfig.ts`, same convention as `REACQUISITION_PROXIMITY_DISTANCE_MULTIPLE`
+      (bare module constant, not part of `PersonOfInterestConfig`, not independently overridable
+      via `window.__STRIDES_POSE_BACKEND_OVERRIDE__`), documented as tuned-by-A/B, not final.
+- [x] 7.2 Add `REVERIFICATION_INTERVAL_FRAMES` (first-guess default `45`) as a new named constant,
+      same convention and same tuned-by-A/B documentation.
+
+## 8. Settle-in window
+
+- [x] 8.1 Add closure state tracking how many of the next calls should be forced into crop mode
+      (e.g. `settleFramesRemaining`), reset to `POST_ACQUISITION_SETTLE_FRAMES` whenever a
+      multi-pose acquisition, reacquisition, or periodic re-verification event selects a usable
+      candidate; cleared alongside the rest of anchor state by `clearAnchor()`/new-run detection.
+- [x] 8.2 Extend the crop-vs-full-frame framing decision to
+      `usingCrop = !dispatchMultiPose && boxForFraming !== null && (trackingCropConfig.enabled ||
+      withinSettleWindow)`, reusing the existing `computeCropRect`/`cropCanvas`/crop-call code
+      path as-is — no new crop-geometry logic. Snapshot the settle-window state synchronously
+      before any `await`, matching the existing `anchorBoxAtStart` reentrancy-safety pattern (NEW-1/
+      NEW-2), so a stale call's framing decision can't be corrupted by a newer call's progress.
+- [x] 8.3 Decrement the remaining-settle-frames counter once per ordinary (non-multi-pose-dispatch)
+      call, floored at zero, so the window naturally expires after `POST_ACQUISITION_SETTLE_FRAMES`
+      calls with no intervening re-trigger; confirm this is a true no-op (no observable behavior
+      change) whenever `trackingCropConfig.enabled` is already `true`.
+
+## 9. Periodic re-verification
+
+- [x] 9.1 Add closure state counting calls since the last (re)acquisition or re-verification event
+      (e.g. `callsSinceLastVerification`), incremented once per ordinary steady-state call
+      (multi-pose-dispatch calls don't count), reset to `0` by any successful multi-pose dispatch
+      of any kind and by new-run detection.
+- [x] 9.2 Add a third multi-pose dispatch trigger/reason alongside acquisition
+      (`effectiveAnchorMissing`) and confidence-triggered reacquisition (`effectiveAnchorStale`):
+      periodic re-verification, due when a confident, non-stale anchor's
+      `callsSinceLastVerification >= REVERIFICATION_INTERVAL_FRAMES`. Dispatch reuses the exact
+      same `selectByReacquisitionHeuristic`/`pickBestCandidate` call already built for
+      confidence-triggered reacquisition (scored by continuity against the current anchor) — no
+      new selection logic.
+- [x] 9.3 On a usable (continuous or non-continuous) periodic result: reset
+      `callsSinceLastVerification`, update the anchor, start a settle-in window (task 8), and — for
+      a non-continuous result specifically — apply the identical NEW-1/NEW-2 treatment a
+      non-continuous confidence-triggered reacquisition already gets (`rawDetector.reset()`,
+      `anchorWasReacquired` treated as a fresh acquisition, not "already reacquired once").
+- [x] 9.4 On an empty or not-usable periodic result: strict no-op on every anchor/give-up-budget
+      counter (`consecutiveLowConfidence`, `consecutiveEmptyReacquisitions`, `anchorWasReacquired`,
+      `personOfInterestSuspended`, `lastBoundingBox`) — only reset
+      `callsSinceLastVerification` (so the next attempt waits a full interval rather than retrying
+      every subsequent call, which would silently turn "periodic" into "continuous" multi-pose
+      dispatch). Multi-pose detector creation failure during a periodic attempt must be an
+      equally strict no-op (fall through using the EXISTING anchor/framing unchanged, not the
+      acquisition/reacquisition creation-failure path's `clearAnchor()`) — a periodic check failing
+      to even start must never be allowed to degrade already-working steady-state tracking.
+- [x] 9.5 Update/extend the kill-switch and equivalence unit tests: `personOfInterest.enabled:
+      false` still issues zero settle-in/re-verification multi-pose calls (already guaranteed by
+      the existing kill-switch tests, since `dispatchMultiPose` ANDs with `personOfInterestConfig
+      .enabled` regardless of `dispatchReason`); the reset-timing tests account for the settle
+      window's crop-mode calls and the new dispatch reason; added unit tests for the settle-in
+      window's trigger/duration/no-op-when-crop-already-enabled behavior and for periodic
+      re-verification's trigger/continuity-reset/non-continuous-correction/strict-no-op-on-empty/
+      strict-no-op-on-not-usable/strict-no-op-on-creation-failure behavior, mirroring this file's
+      existing test rigor and style.
+
+## 10. Live-browser validation
+
+- [ ] 10.1 Add the reported clip (with permission) as a checked-in test fixture, alongside the two
       existing demo clips, per design.md's Risks/Trade-offs.
-- [ ] 7.2 Run this repo's live-browser A/B harness (Playwright + real GPU, 3+ trials per clip) on
+- [ ] 10.2 Run this repo's live-browser A/B harness (Playwright + real GPU, 3+ trials per clip) on
       both existing demo clips with `personOfInterest.enabled` on vs off, confirming no meaningful
       regression on these single-person control clips (detected-frame count, view confidence,
       per-metric confidence tiers).
-- [ ] 7.3 Run the same harness on the new multi-person fixture, confirming the tracked skeleton no
+- [ ] 10.3 Run the same harness on the new multi-person fixture, confirming the tracked skeleton no
       longer locks onto a background bystander at acquisition, and correctly reacquires the
       intended subject after the occlusion-driven confidence drop observed in the original report.
-- [ ] 7.4 Record the A/B results (same format as this repo's existing MoveNet/tracking-crop A/B
+- [ ] 10.4 Additionally measure, on both existing demo clips AND the multi-person fixture, the
+      settle-in window's and periodic re-verification's OWN per-event cost (detected-frame count,
+      view confidence, per-metric confidence tiers with these two mechanisms active vs. effectively
+      disabled) and their effect on how much of the clip stays correctly tracked on the intended
+      subject — the original acquisition/reacquisition A/B (task 10.2/10.3) does not automatically
+      cover these two additive mechanisms; design.md's Migration Plan extension has the exact
+      comparison this needs to run.
+- [ ] 10.5 Record the A/B results (same format as this repo's existing MoveNet/tracking-crop A/B
       tables) in this change's design.md or a follow-up note, and make the final default-on/off
-      call per design.md's Migration Plan.
+      call — for the original acquisition/reacquisition path AND, separately, for the settle-in
+      window/periodic re-verification defaults — per design.md's Migration Plan.
 
-## 8. Cleanup
+## 11. Cleanup
 
-- [ ] 8.1 Update `CLAUDE.md`'s pose-detection/backlog sections to reflect the shipped
-      acquisition/reacquisition behavior, following this repo's existing documentation pattern
-      for backend changes.
-- [ ] 8.2 Run `openspec archive multi-person-acquisition --yes` once shipped and verified, folding
+- [ ] 11.1 Update `CLAUDE.md`'s pose-detection/backlog sections to reflect the shipped
+      acquisition/reacquisition/settle-in-window/periodic-re-verification behavior, following this
+      repo's existing documentation pattern for backend changes.
+- [ ] 11.2 Run `openspec archive multi-person-acquisition --yes` once shipped and verified, folding
       this delta into `openspec/specs/pose-detection/spec.md`.
