@@ -25,12 +25,14 @@ vi.mock('./backends/posenet', () => ({
 }))
 
 vi.mock('./backends/mediapipePoseLandmarker', () => ({
-  createMediaPipePoseLandmarkerDetector: createMediaPipePoseLandmarkerDetectorMock,
+  createMediaPipePoseLandmarkerDetector:
+    createMediaPipePoseLandmarkerDetectorMock,
 }))
 
 import { createDetector } from './detector'
 import type { PoseDetector } from './detector'
 import { DEFAULT_TRACKING_CROP_CONFIG } from './backends/trackingCropConfig'
+import { DEFAULT_PERSON_OF_INTEREST_CONFIG } from './backends/personOfInterestConfig'
 
 beforeEach(() => {
   createMoveNetDetectorMock.mockReset()
@@ -61,7 +63,11 @@ describe('createDetector', () => {
 
     await createDetector({ backend: 'movenet', movenetModelType: 'thunder' })
 
-    expect(createMoveNetDetectorMock).toHaveBeenCalledWith('thunder', undefined)
+    expect(createMoveNetDetectorMock).toHaveBeenCalledWith(
+      'thunder',
+      undefined,
+      undefined,
+    )
   })
 
   it('defaults to the movenet backend when no config is given', async () => {
@@ -109,7 +115,9 @@ describe('createDetector', () => {
     }
     createMediaPipePoseLandmarkerDetectorMock.mockResolvedValue(fakeDetector)
 
-    const detector = await createDetector({ backend: 'mediapipePoseLandmarker' })
+    const detector = await createDetector({
+      backend: 'mediapipePoseLandmarker',
+    })
 
     expect(detector).toBe(fakeDetector)
     expect(createMediaPipePoseLandmarkerDetectorMock).toHaveBeenCalledTimes(1)
@@ -134,7 +142,11 @@ describe('createDetector', () => {
 
     await createDetector({ backend: 'movenet', trackingCrop })
 
-    expect(createMoveNetDetectorMock).toHaveBeenCalledWith(undefined, trackingCrop)
+    expect(createMoveNetDetectorMock).toHaveBeenCalledWith(
+      undefined,
+      trackingCrop,
+      undefined,
+    )
   })
 
   it('passes both movenetModelType and trackingCrop through to createMoveNetDetector', async () => {
@@ -144,8 +156,35 @@ describe('createDetector', () => {
     })
     const trackingCrop = { ...DEFAULT_TRACKING_CROP_CONFIG, enabled: false }
 
-    await createDetector({ backend: 'movenet', movenetModelType: 'thunder', trackingCrop })
+    await createDetector({
+      backend: 'movenet',
+      movenetModelType: 'thunder',
+      trackingCrop,
+    })
 
-    expect(createMoveNetDetectorMock).toHaveBeenCalledWith('thunder', trackingCrop)
+    expect(createMoveNetDetectorMock).toHaveBeenCalledWith(
+      'thunder',
+      trackingCrop,
+      undefined,
+    )
+  })
+
+  it('passes personOfInterest through to createMoveNetDetector', async () => {
+    createMoveNetDetectorMock.mockResolvedValue({
+      estimatePose: vi.fn(),
+      dispose: vi.fn(),
+    })
+    const personOfInterest = {
+      ...DEFAULT_PERSON_OF_INTEREST_CONFIG,
+      enabled: false,
+    }
+
+    await createDetector({ backend: 'movenet', personOfInterest })
+
+    expect(createMoveNetDetectorMock).toHaveBeenCalledWith(
+      undefined,
+      undefined,
+      personOfInterest,
+    )
   })
 })

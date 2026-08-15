@@ -4,6 +4,7 @@ import {
   resolvePoseDetectorConfig,
 } from './poseBackendConfig'
 import { DEFAULT_TRACKING_CROP_CONFIG } from './backends/trackingCropConfig'
+import { DEFAULT_PERSON_OF_INTEREST_CONFIG } from './backends/personOfInterestConfig'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -11,10 +12,11 @@ afterEach(() => {
 })
 
 describe('DEFAULT_POSE_DETECTOR_CONFIG', () => {
-  it('defaults to the movenet backend with the default tracking-crop config', () => {
+  it('defaults to the movenet backend with the default tracking-crop and person-of-interest config', () => {
     expect(DEFAULT_POSE_DETECTOR_CONFIG).toEqual({
       backend: 'movenet',
       trackingCrop: DEFAULT_TRACKING_CROP_CONFIG,
+      personOfInterest: DEFAULT_PERSON_OF_INTEREST_CONFIG,
     })
   })
 })
@@ -30,6 +32,7 @@ describe('resolvePoseDetectorConfig', () => {
     expect(resolvePoseDetectorConfig()).toEqual({
       backend: 'blazepose',
       trackingCrop: DEFAULT_TRACKING_CROP_CONFIG,
+      personOfInterest: DEFAULT_PERSON_OF_INTEREST_CONFIG,
     })
   })
 
@@ -60,7 +63,31 @@ describe('resolvePoseDetectorConfig', () => {
 
   it('ignores a trackingCrop override outside a dev build', () => {
     vi.stubEnv('DEV', false)
-    window.__STRIDES_POSE_BACKEND_OVERRIDE__ = { trackingCrop: { enabled: false } }
+    window.__STRIDES_POSE_BACKEND_OVERRIDE__ = {
+      trackingCrop: { enabled: false },
+    }
+
+    expect(resolvePoseDetectorConfig()).toEqual(DEFAULT_POSE_DETECTOR_CONFIG)
+  })
+
+  it('shallow-merges a partial personOfInterest override over the default, in a dev build', () => {
+    window.__STRIDES_POSE_BACKEND_OVERRIDE__ = {
+      personOfInterest: { enabled: false },
+    }
+
+    const resolved = resolvePoseDetectorConfig()
+
+    expect(resolved.personOfInterest).toEqual({
+      ...DEFAULT_PERSON_OF_INTEREST_CONFIG,
+      enabled: false,
+    })
+  })
+
+  it('ignores a personOfInterest override outside a dev build', () => {
+    vi.stubEnv('DEV', false)
+    window.__STRIDES_POSE_BACKEND_OVERRIDE__ = {
+      personOfInterest: { enabled: false },
+    }
 
     expect(resolvePoseDetectorConfig()).toEqual(DEFAULT_POSE_DETECTOR_CONFIG)
   })

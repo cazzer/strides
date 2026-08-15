@@ -1,9 +1,47 @@
 import { describe, expect, it } from 'vitest'
-import { computeCropRect, deriveBoundingBox } from './movenetCrop'
+import {
+  bboxArea,
+  boundingBoxCenterDistance,
+  computeAcquisitionScore,
+  computeBoundingBoxIoU,
+  computeCropRect,
+  deriveBoundingBox,
+  isWithinProximityThreshold,
+  meanConfidence,
+} from './movenetCrop'
+import type { BoundingBoxPx } from './movenetCrop'
+import { COMMON_KEYPOINT_NAMES } from '../types'
 import type { Keypoint } from '../types'
 
-function kp(name: Keypoint['name'], x: number, y: number, score: number): Keypoint {
+function kp(
+  name: Keypoint['name'],
+  x: number,
+  y: number,
+  score: number,
+): Keypoint {
   return { name, x, y, score }
+}
+
+/** A full 19-entry COMMON_KEYPOINT_NAMES set (matching `toPoseFrame`'s output shape), every
+ * non-bbox-excluded joint confident at `score`, every excluded/unset one at 0. */
+function fullKeypointSet(score: number): Keypoint[] {
+  const present = new Set([
+    'left_shoulder',
+    'right_shoulder',
+    'left_elbow',
+    'right_elbow',
+    'left_wrist',
+    'right_wrist',
+    'left_hip',
+    'right_hip',
+    'left_knee',
+    'right_knee',
+    'left_ankle',
+    'right_ankle',
+  ])
+  return COMMON_KEYPOINT_NAMES.map((name) =>
+    kp(name, 0, 0, present.has(name) ? score : 0),
+  )
 }
 
 describe('deriveBoundingBox', () => {
@@ -174,5 +212,89 @@ describe('computeCropRect', () => {
     expect(rect.y).toBeGreaterThanOrEqual(0)
     expect(rect.x + rect.side).toBeLessThanOrEqual(1920)
     expect(rect.y + rect.side).toBeLessThanOrEqual(1080)
+  })
+})
+
+describe('bboxArea', () => {
+  it('computes width x height', () => {
+    const box: BoundingBoxPx = { minX: 10, minY: 20, maxX: 60, maxY: 120 }
+
+    expect(bboxArea(box)).toBe(50 * 100)
+  })
+})
+
+describe('meanConfidence', () => {
+  it('averages score across the non-excluded 12-point set, ignoring excluded head/foot points', () => {
+    const keypoints = fullKeypointSet(0.8).map((k) =>
+      k.name === 'nose' ? { ...k, score: 0.99 } : k,
+    )
+
+    expect(meanConfidence(keypoints)).toBeCloseTo(0.8)
+  })
+
+  it('counts a missing (zero-score) non-excluded keypoint toward the average', () => {
+    const keypoints = fullKeypointSet(0.9).map((k) =>
+      k.name === 'left_wrist' ? { ...k, score: 0 } : k,
+    )
+
+    // 11 points at 0.9, 1 point at 0 -> (11 * 0.9) / 12
+    expect(meanConfidence(keypoints)).toBeCloseTo((11 * 0.9) / 12)
+  })
+})
+
+describe('computeAcquisitionScore', () => {
+  it('multiplies bbox area by mean confidence', () => {
+    const box: BoundingBoxPx = { minX: 0, minY: 0, maxX: 10, maxY: 10 } // area 100
+    const keypoints = fullKeypointSet(0.5)
+
+    expect(computeAcquisitionScore(box, keypoints)).toBeCloseTo(100 * 0.5)
+  })
+})
+
+describe('computeBoundingBoxIoU', () => {
+  it('returns 1 for identical boxes', () => {
+    const box: BoundingBoxPx = { minX: 0, minY: 0, maxX: 100, maxY: 100 }
+
+    expect(computeBoundingBoxIoU(box, box)).toBe(1)
+  })
+
+  it('returns 0 for disjoint boxes', () => {
+    const a: BoundingBoxPx = { minX: 0, minY: 0, maxX: 10, maxY: 10 }
+    const b: BoundingBoxPx = { minX: 100, minY: 100, maxX: 110, maxY: 110 }
+
+    expect(computeBoundingBoxIoU(a, b)).toBe(0)
+  })
+
+  it('computes intersection-over-union for partially overlapping boxes', () => {
+    const a: BoundingBoxPx = { minX: 0, minY: 0, maxX: 10, maxY: 10 } // area 100
+    const b: BoundingBoxPx = { minX: 5, minY: 5, maxX: 15, maxY: 15 } // area 100
+    // Intersection: [5,10]x[5,10] = 25. Union: 100 + 100 - 25 = 175.
+
+    expect(computeBoundingBoxIoU(a, b)).toBeCloseTo(25 / 175)
+  })
+})
+
+describe('boundingBoxCenterDistance', () => {
+  it('computes the euclidean distance between two box centers', () => {
+    const a: BoundingBoxPx = { minX: 0, minY: 0, maxX: 10, maxY: 10 } // center (5, 5)
+    const b: BoundingBoxPx = { minX: 20, minY: 40, maxX: 30, maxY: 50 } // center (25, 45)
+
+    expect(boundingBoxCenterDistance(a, b)).toBeCloseTo(Math.hypot(20, 40))
+  })
+})
+
+describe('isWithinProximityThreshold', () => {
+  it('is true when the candidate center sits within distanceMultiple x reference side', () => {
+    const reference: BoundingBoxPx = { minX: 0, minY: 0, maxX: 100, maxY: 50 } // side 100
+    const candidate: BoundingBoxPx = { minX: 150, minY: 0, maxX: 250, maxY: 50 } // center shifted 150px
+
+    expect(isWithinProximityThreshold(candidate, reference, 2)).toBe(true)
+  })
+
+  it('is false when the candidate center sits beyond distanceMultiple x reference side', () => {
+    const reference: BoundingBoxPx = { minX: 0, minY: 0, maxX: 100, maxY: 50 } // side 100
+    const candidate: BoundingBoxPx = { minX: 300, minY: 0, maxX: 400, maxY: 50 } // center shifted 350px
+
+    expect(isWithinProximityThreshold(candidate, reference, 2)).toBe(false)
   })
 })

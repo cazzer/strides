@@ -7,7 +7,15 @@
  * than each config plane growing its own separate `window` global.
  */
 export interface TrackingCropConfig {
-  /** Total kill-switch: `false` bypasses all tracking state, always calling the full-frame path. */
+  /**
+   * `false` bypasses the cropped-canvas optimization: no crop canvas is ever built, every call
+   * runs the full-frame single-pose path. As of `multi-person-acquisition`, this alone is no
+   * longer a total kill-switch on all tracking state -- `lastBoundingBox`/loss-counting/etc. are
+   * unconditional (see `PersonOfInterestConfig` and `movenet.ts`'s "Unify anchor-tracking state")
+   * so the multi-pose acquisition/reacquisition path still runs. The true byte-identical-to-
+   * pre-change kill switch is `trackingCrop.enabled: false` AND `personOfInterest.enabled: false`
+   * together.
+   */
   enabled: boolean
   /**
    * Per-keypoint score gate (over the bbox-eligible `COMMON_KEYPOINT_NAMES` — head points are
@@ -24,7 +32,14 @@ export interface TrackingCropConfig {
   paddingMultiplier: number
   /** Floor on the crop side length, in source-video pixels. */
   minCropSidePx: number
-  /** Consecutive not-usable crop-mode frames before falling back to full-frame detection. */
+  /**
+   * Consecutive not-usable frames before falling back to full-frame detection. As of
+   * `multi-person-acquisition`, this counts every not-usable steady-state call (crop-mode or
+   * full-frame -- see `movenet.ts`'s `registerTrackingLoss`), not just crop-mode ones, and also
+   * gates the multi-pose reacquisition trigger (`PersonOfInterestConfig`) -- one shared threshold
+   * for both concerns, not two independently-tunable ones (design.md's "One shared loss
+   * threshold, not two").
+   */
   reacquisitionLossThreshold: number
 }
 

@@ -514,6 +514,61 @@ different problem (upstream resize before *any* detection) that remains unbuilt.
 tables: `openspec/changes/archive/*movenet-tracking-crop/design.md` "Revival note". Enable for
 experiments via `{ trackingCrop: { enabled: true } }` in the backend override.
 
+Person-of-interest (multi-pose acquisition/reacquisition) shipped 2026-08-15 on
+`openspec/changes/multi-person-acquisition/` (branch `claude/detection-pipeline-person-id-xh63ni`,
+not yet merged to this branch/main as of this writing) — the MoveNet backend gains a
+person-of-interest concept it previously lacked entirely. `SINGLEPOSE_LIGHTNING`/
+`SINGLEPOSE_THUNDER` have no way to tell people apart; live testing (real browser, headless
+Chromium) found the tracked skeleton could lock onto a background bystander instead of the
+runner (full repro: proposal.md's "Why"). Fix: a `MULTIPOSE_LIGHTNING` pass, run only at
+acquisition (no prior anchor for the run) and reacquisition (anchor confidence dropped below
+`reacquisitionLossThreshold`), scored by bbox-area×confidence on acquisition and
+IoU/proximity-continuity on reacquisition — plus two additive mechanisms so a correct
+acquisition/reacquisition moment actually keeps sticking, not just wins once: a bounded
+settle-in window (`POST_ACQUISITION_SETTLE_FRAMES`, default 3 calls) that forces crop-mode
+framing around the just-selected/reconfirmed anchor independent of
+`trackingCropConfig.enabled`, and periodic re-verification (`REVERIFICATION_INTERVAL_FRAMES`,
+default 45 calls) that re-runs multi-pose selection even when confidence hasn't dropped, to
+catch MoveNet's own saliency smoothly drifting onto a different person without ever tripping the
+confidence-based reacquisition trigger. Ships **`personOfInterest.enabled: true` by default**
+(`src/pose/backends/personOfInterestConfig.ts`) — unlike tracking-crop above, this is a
+correctness fix for a live-confirmed bug rather than a pure optimization, so the pre-registered
+ship rule was "confidence tiers hold → default on," the inverse of tracking-crop's "any median
+tier degrades → default off." Config override: the same
+`window.__STRIDES_POSE_BACKEND_OVERRIDE__`'s `personOfInterest` field.
+
+**Measured cost — real, not free.** 2026-08-15 live-browser A/B (both demo clips, 3 trials/arm,
+real GPU, `enabled: true` vs. `false`): confidence tiers hold (track stays T1 both ways; park is
+T2 at baseline and T2-or-better after, never degrading) and metric values stay close (cadence
+within ~2-3%, verticalOscillation within ~3-5%), but detected-frame/total-sample counts drop —
+track loses ~16% of detected frames (~4% of samples), park loses ~25% of both. Mechanism: the
+acquisition dispatch on frame 1 of every run, plus periodic re-verification, both do real
+inference work that competes with `sampleClip.ts`'s real-time sampling loop for wall-clock
+budget. As of this writing this has not been decomposed into settle-window-only vs.
+re-verification-only contributions — `POST_ACQUISITION_SETTLE_FRAMES`/
+`REVERIFICATION_INTERVAL_FRAMES` have no runtime override point by design, so isolating them
+would need a temporary code patch not made in this A/B; the number above is the combined,
+ship-relevant cost. Full table: `openspec/changes/multi-person-acquisition/design.md`'s
+"Live-browser A/B results" section.
+
+**Validation gap — the actual reported bug is not yet confirmed fixed on real footage.** This
+change also added this repo's first e2e/Playwright test infrastructure
+(`e2e/multiPersonAcquisition.spec.ts`, run via `npm run test:e2e`, separate from the mocked
+`npm test` Vitest unit suite) against a real multi-person clip (`e2e/fixtures/multiperson-track.mp4`,
+e2e-only, not UI-wired). 3 trials, real GPU: the multi-pose dispatch mechanism fires correctly
+and identically every trial — roughly 30 acquisition attempts before the runner is confidently
+detected (~t=1.52s), then two periodic re-verification dispatches — and a keyframe spot-check
+confirms the clip genuinely has a second, near-field person (a walker) in frame alongside the
+runner for most of the clip, not just a distant background crowd. But candidate count never
+exceeded 1 across ~33 sampled dispatch calls in any of the 3 trials — `MULTIPOSE_LIGHTNING` never
+registered two simultaneously-confident poses in these particular runs. So "the tracked skeleton
+correctly favors the right person over a bystander" is confirmed only on synthetic unit-test
+fixtures, not yet on real footage — closing this needs either more trials (this repo's documented
+GPU/frame-timing determinism caveat means different frames get sampled run-to-run) or a clip
+where the second person is detected as confidently as the first. What IS confirmed on real
+footage: the fixture reliably exercises the acquisition + periodic-re-verification code paths
+end-to-end. Full description: same design.md section, "Multi-person fixture" paragraph.
+
 Also flagged, not yet scoped: the eval harness/comparison tooling itself (multi-trial, labeled,
 diffable) that would actually drive variants through these config planes hasn't been built —
 this doc covers how to do it by hand, not a scripted harness.
