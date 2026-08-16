@@ -371,15 +371,14 @@ describe('useVideoAnalysis', () => {
     expect(sampleClipMock).toHaveBeenCalledTimes(1)
   })
 
-  it('never calls canUseSequentialDecode under the default config — the sequential path is unreachable without an explicit opt-in', async () => {
-    // Regression guard for the repair round's must-fix #1: SequentialSamplingConfig.enabled
-    // defaults to false, and the probe-kickoff effect is supposed to skip calling
-    // canUseSequentialDecode ENTIRELY in that case (not call it and ignore the result) — a config-
-    // value-only test (samplingRobustnessConfig.test.ts's "ships disabled by default") can't catch
-    // a future edit that inverts the enabled ? ... : ... ternary, relaxes either
-    // `sequentialDecodeSupported === true` check, or flips the default, since none of those would
-    // fail a snapshot of the default object. This does: any of those edits would make this mock
-    // get called, failing the assertion below.
+  it('calls canUseSequentialDecode under the default config — the sequential path is reachable without an explicit opt-in', async () => {
+    // Regression guard, updated 2026-08-16 when SequentialSamplingConfig.enabled's default
+    // flipped to true: the probe-kickoff effect is supposed to call canUseSequentialDecode
+    // whenever a blob is present, under the DEFAULT config, with no override at all. A config-
+    // value-only test (samplingRobustnessConfig.test.ts's "ships enabled by default") can't catch
+    // a future edit that inverts the enabled ? ... : ... ternary or silently flips the default
+    // back, since neither would fail a snapshot of the default object. This does: either edit
+    // would make this mock go uncalled, failing the assertion below.
     //
     // sourceBlob is deliberately a real, non-null Blob (not the default null) -- with a null
     // sourceBlob, sampleClipAdaptive.ts's own dispatch would use the playback path regardless of
@@ -401,11 +400,37 @@ describe('useVideoAnalysis', () => {
       expect(['done', 'failed', 'skipped']).toContain(result.current.scalePass.status),
     )
 
+    // Called once per pass (primary + scale pass) since each keys its probe-kickoff effect off
+    // the same [metadata, sourceBlob] dependency pair independently.
+    expect(canUseSequentialDecodeMock).toHaveBeenCalled()
+    // The mock resolves false (this suite's default, matching real jsdom behavior — no
+    // VideoDecoder global), so despite the probe running, both passes still fall back to the
+    // playback dispatch, i.e. sampleClip -- never sampleClipSequential.
+    expect(sampleClipMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('never calls canUseSequentialDecode when the sequential path is explicitly disabled via override', async () => {
+    // The inverse guard: enabled: false must still fully suppress the probe, same as it did
+    // when that was the default — disabling remains a real, working escape hatch.
+    window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = {
+      sequentialSampling: { enabled: false },
+    }
+    const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+    sampleClipMock.mockImplementation(() => ({
+      promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+      handle: makeFakeHandle(),
+    }))
+
+    const videoSource = makeVideoSource({ sourceBlob })
+    const detector = makeFakeDetector()
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+    await waitFor(() =>
+      expect(['done', 'failed', 'skipped']).toContain(result.current.scalePass.status),
+    )
+
     expect(canUseSequentialDecodeMock).not.toHaveBeenCalled()
-    // And the corollary: every sample the mocked sampler actually received came through the
-    // playback dispatch, i.e. sampleClip -- never sampleClipSequential (mocked away entirely at
-    // the ./sampleClip module boundary shared by both call sites, so if the sequential path had
-    // engaged, sampleClipMock would have been called fewer times than the two real passes below).
     expect(sampleClipMock).toHaveBeenCalledTimes(2)
   })
 

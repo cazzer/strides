@@ -8,15 +8,18 @@
 export interface SequentialSamplingConfig {
   /**
    * Master switch for the whole WebCodecs sequential-decode path (`sampleClipAdaptive.ts`'s
-   * dispatch, gated in `useVideoAnalysis.ts`). Default **`false`** — same "ship the new pipeline
-   * plane off by default" precedent as `ScalePassConfig`/tracking-crop (see this repo's
-   * CLAUDE.md), and for the same kind of reason: a pre-registered live A/B (design.md's D7)
-   * measured the sequential path taking `view` detection confidence to 0 on 3/3 trials of one of
-   * only two reference clips — a real, measured regression, not a hypothetical one. Off means the
-   * feasibility probe (`webCodecsSupport.ts`) never even runs — `sampleClipAdaptive.ts` always
-   * dispatches to the existing, proven `<video>`-playback path (`sampleClip.ts`), unchanged from
-   * before this plane existed. Flip via the dev-only `__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__`
-   * window override (see `samplingRobustnessConfig.ts`) to A/B it.
+   * dispatch, gated in `useVideoAnalysis.ts`). Default **`true`** as of 2026-08-16 — deliberately
+   * accepts a known, unresolved regression: a pre-registered live A/B (design.md's D7) measured
+   * the sequential path taking `view` detection confidence to 0 on 3/3 trials of one of only two
+   * reference clips (side-view/MoveNet), and VO-cm anchors reading 8-14% low on both clips. Root
+   * cause not isolated — working theory is MoveNet detecting worse on WebCodecs canvas-drawn
+   * `VideoFrame`s than on natively-played `<video>` frames for that specific clip; ruled out:
+   * rendering bug, non-determinism, `video.play()` GPU contention. See design.md D7 before
+   * trusting confidence/VO-cm values on side-view MoveNet runs. `false` restores the previous
+   * default (`<video>`-playback path, `sampleClip.ts`, real-time sampling, the
+   * device/run-to-run nondeterminism this plane exists to fix). Flip via the dev-only
+   * `__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__` window override (see
+   * `samplingRobustnessConfig.ts`).
    */
   enabled: boolean
   /** Target decoded-frame sampling rate in frames/sec. `null` means "every decoded frame" —
