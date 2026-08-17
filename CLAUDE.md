@@ -175,24 +175,43 @@ node scripts/ab-person-selection.mjs \
 # equivalently: npm run ab:person-selection -- --arm 'off={}' ...
 ```
 
+- **Needs Node >=22.18** (or >=22.6 with `--experimental-strip-types`): it imports
+  `playwright.config.ts` directly rather than duplicating the launch args, which relies on native
+  type stripping. `package.json` only declares `>=20.19.0`; on an older Node the driver fails with
+  a message naming this, not a bare `ERR_UNKNOWN_FILE_EXTENSION`.
 - **An arm is `--arm <label>=<json>`**, repeatable, where `<json>` is a partial
   `SamplingRobustnessConfig` assigned to `window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__`
   via `addInitScript`. `{}` is an untouched baseline. That is the only config plane exposed — the
-  backend and scale-pass globals still need hand-driving.
+  backend and scale-pass globals still need hand-driving. Keys are validated at parse time
+  **including one level down**, because the app ignores keys it doesn't recognise: a typo like
+  `{personSelection:{enable:true}}` would otherwise merge into nothing and yield an arm identical
+  to baseline, reading in the report as a real "no effect".
 - **Clips**: `demo1` (side-view track, fetched live from Pexels — needs network), `demo2`
   (`park-approach.mp4`, local and fast), `multiperson` (`e2e/fixtures/multiperson-track.mp4`, via
   the Upload tab). Default: all three.
-- Reads `playwright.config.ts` for the launch args, baseURL and dev-server command, and **reuses a
-  server already listening on that port** — pass `--port <n>` when another worktree might be
-  serving a different checkout on 5173, or you will A/B somebody else's code without noticing.
+- Reads `playwright.config.ts` for the launch args, baseURL and dev-server command, and **refuses
+  to run against a dev server it did not start** — stop it, pass `--port <n>`, or pass
+  `--reuse-server` once you have confirmed the running one serves THIS checkout. Not pedantry:
+  arms differ only by a `window` global, so a foreign checkout answers both arms and yields a
+  plausible delta from code nobody is reviewing — and when the arm is a code change behind a flag,
+  the foreign checkout lacks the code entirely, both arms collapse to old-code-plus-a-flag, and
+  the output reads as a clean "no effect". That is a manufactured false negative for the exact
+  hypothesis under test, and worktrees routinely leave a server on 5173.
 - Prints the `WEBGL_debug_renderer_info` renderer string once per invocation and **refuses to run**
   on SwiftShader/software rendering rather than quietly producing unrepresentative numbers.
-- Captures `sampling.*`, the whole `personSelection` block including `segments[0]`, `view`, and
-  every metric's `value`/`confidence`. Progress goes to stderr and the report to stdout, with a
-  fixed field order and no timestamps, so `> before.txt` / `> after.txt` compare with `diff`.
+- Captures `sampling.*`, `view.*`, every metric's `value`/`confidence`, and the whole
+  `personSelection` block (`segments[0]` included) **flattened from whatever keys are present**
+  rather than an enumerated list, so a ticket adding a diagnostic doesn't have to edit the harness
+  measuring it. Progress goes to stderr and the report to stdout, with a fixed field order, no
+  timestamps, and a header stamping baseURL + whether the server was this run's + the commit — so
+  `> before.txt` / `> after.txt` compare with `diff` and a provenance mismatch shows up on line 2.
+  Verified: two same-version single-trial runs diff on exactly one line, `elapsedMs`.
   `--json <path>` also writes one record per (clip, arm) carrying every raw per-trial value.
-- Trial-major ordering (every arm runs before the next trial starts), so no single arm collects
-  all the cold-start runs. A failed trial is recorded and the matrix continues.
+- One throwaway navigation warms the server before the matrix — vite's on-demand transform and
+  dep pre-bundling of the tfjs/MediaPipe graph is server-side and paid once, so without it
+  whichever (clip, arm) went first absorbs all of it and reads systematically wide in the range
+  column. Trial-major ordering after that, and a failed trial is recorded while the matrix
+  continues.
 
 **Known issues — two of the four registered backends are broken (2026-08-11).** MoveNet is the
 only `@tensorflow-models/pose-detection` model in this installed version (`2.1.3`) confirmed
