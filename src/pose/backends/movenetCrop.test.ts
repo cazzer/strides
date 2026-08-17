@@ -6,6 +6,9 @@ import {
   computeBoundingBoxIoU,
   computeCropRect,
   deriveBoundingBox,
+  isBoundingBoxAreaRatioWithin,
+  isBoundingBoxContinuous,
+  isWithinCenterSpeedBound,
   isWithinProximityThreshold,
   meanConfidence,
 } from './movenetCrop'
@@ -296,5 +299,164 @@ describe('isWithinProximityThreshold', () => {
     const candidate: BoundingBoxPx = { minX: 300, minY: 0, maxX: 400, maxY: 50 } // center shifted 350px
 
     expect(isWithinProximityThreshold(candidate, reference, 2)).toBe(false)
+  })
+})
+
+describe('isWithinCenterSpeedBound', () => {
+  // side 100, center (50, 25)
+  const reference: BoundingBoxPx = { minX: 0, minY: 0, maxX: 100, maxY: 50 }
+
+  it('scales the allowed displacement with elapsed time', () => {
+    // 250px of center displacement: allowed at 3 sides/s over 1s (300px), not over 0.5s (150px).
+    const candidate: BoundingBoxPx = { minX: 250, minY: 0, maxX: 350, maxY: 50 }
+
+    expect(isWithinCenterSpeedBound(candidate, reference, 3, 1)).toBe(true)
+    expect(isWithinCenterSpeedBound(candidate, reference, 3, 0.5)).toBe(false)
+  })
+
+  it('uses the reference box\'s longer dimension as its side, so the bound scales with subject distance', () => {
+    // Same 250px displacement, but a reference twice as tall -- side 200, so 3 sides/s over 0.5s
+    // allows 300px and the same candidate now passes.
+    const tall: BoundingBoxPx = { minX: 0, minY: 0, maxX: 100, maxY: 200 }
+    const candidate: BoundingBoxPx = { minX: 250, minY: 75, maxX: 350, maxY: 275 }
+
+    expect(isWithinCenterSpeedBound(candidate, tall, 3, 0.5)).toBe(true)
+  })
+
+  it('returns false for a non-positive or non-finite elapsed time rather than dividing by it', () => {
+    const candidate: BoundingBoxPx = { minX: 1, minY: 0, maxX: 101, maxY: 50 }
+
+    // Even a near-identical candidate: with no usable gap there is no meaningful speed to bound,
+    // so the caller falls back on its IoU test instead of this one.
+    expect(isWithinCenterSpeedBound(candidate, reference, 3, 0)).toBe(false)
+    expect(isWithinCenterSpeedBound(candidate, reference, 3, -1)).toBe(false)
+    expect(isWithinCenterSpeedBound(candidate, reference, 3, NaN)).toBe(false)
+    expect(isWithinCenterSpeedBound(candidate, reference, 3, Infinity)).toBe(
+      false,
+    )
+  })
+})
+
+describe('isBoundingBoxAreaRatioWithin', () => {
+  // area 10000
+  const reference: BoundingBoxPx = { minX: 0, minY: 0, maxX: 100, maxY: 100 }
+
+  it('is symmetric: passes a candidate up to maxRatio larger OR smaller', () => {
+    const larger: BoundingBoxPx = { minX: 0, minY: 0, maxX: 100, maxY: 250 } // 2.5x
+    const smaller: BoundingBoxPx = { minX: 0, minY: 0, maxX: 100, maxY: 40 } // 0.4x
+
+    expect(isBoundingBoxAreaRatioWithin(larger, reference, 3)).toBe(true)
+    expect(isBoundingBoxAreaRatioWithin(smaller, reference, 3)).toBe(true)
+  })
+
+  it('rejects beyond maxRatio in either direction', () => {
+    const muchLarger: BoundingBoxPx = { minX: 0, minY: 0, maxX: 100, maxY: 400 } // 4x
+    // The reported failure's shape: a distant bystander roughly a third the subject's height.
+    const muchSmaller: BoundingBoxPx = { minX: 0, minY: 0, maxX: 34, maxY: 34 } // ~0.12x
+
+    expect(isBoundingBoxAreaRatioWithin(muchLarger, reference, 3)).toBe(false)
+    expect(isBoundingBoxAreaRatioWithin(muchSmaller, reference, 3)).toBe(false)
+  })
+
+  it('returns false for a zero-area reference rather than dividing by zero', () => {
+    const degenerate: BoundingBoxPx = { minX: 10, minY: 10, maxX: 10, maxY: 90 }
+
+    expect(isBoundingBoxAreaRatioWithin(reference, degenerate, 3)).toBe(false)
+  })
+})
+
+describe('isBoundingBoxContinuous', () => {
+  // side 100, center (50, 50), area 10000
+  const reference: BoundingBoxPx = { minX: 0, minY: 0, maxX: 100, maxY: 100 }
+  const bounds = { maxCenterSpeedSidesPerSecond: 3, maxAreaRatio: 3 }
+
+  it('accepts an overlapping candidate of similar scale', () => {
+    const candidate: BoundingBoxPx = { minX: 20, minY: 10, maxX: 130, maxY: 105 }
+
+    expect(isBoundingBoxContinuous(candidate, reference, 0.05, bounds)).toBe(
+      true,
+    )
+  })
+
+  it('accepts a non-overlapping candidate reachable within the speed bound', () => {
+    // 250px of center displacement at 3 sides/s over 1s (300px allowed), zero IoU.
+    const candidate: BoundingBoxPx = { minX: 250, minY: 0, maxX: 350, maxY: 100 }
+
+    expect(computeBoundingBoxIoU(candidate, reference)).toBe(0)
+    expect(isBoundingBoxContinuous(candidate, reference, 1, bounds)).toBe(true)
+    expect(isBoundingBoxContinuous(candidate, reference, 0.5, bounds)).toBe(
+      false,
+    )
+  })
+
+  it('rejects on scale alone even when the boxes overlap completely', () => {
+    // Fully contained (IoU > 0, position continuity passes trivially), but ~1/16 the area.
+    const candidate: BoundingBoxPx = { minX: 40, minY: 40, maxX: 65, maxY: 65 }
+
+    expect(computeBoundingBoxIoU(candidate, reference)).toBeGreaterThan(0)
+    expect(isBoundingBoxContinuous(candidate, reference, 0.05, bounds)).toBe(
+      false,
+    )
+  })
+
+  it('falls back on IoU when the elapsed time is unusable, rather than rejecting outright', () => {
+    const candidate: BoundingBoxPx = { minX: 5, minY: 5, maxX: 105, maxY: 105 }
+
+    // The speed term is unavailable at elapsed 0, but the boxes overlap, so position holds.
+    expect(isWithinCenterSpeedBound(candidate, reference, 3, 0)).toBe(false)
+    expect(isBoundingBoxContinuous(candidate, reference, 0, bounds)).toBe(true)
+  })
+
+  it('is exactly position-AND-scale, with position being IoU-OR-speed', () => {
+    // An exhaustive truth-table check against the two primitives it composes -- this function is
+    // shared by the online anchor gate and the offline person-selection stage, so its composition
+    // must not quietly drift into extra guard logic.
+    const candidates: BoundingBoxPx[] = [
+      { minX: 5, minY: 5, maxX: 105, maxY: 105 }, // overlapping, same scale
+      { minX: 250, minY: 0, maxX: 350, maxY: 100 }, // far, same scale
+      { minX: 40, minY: 40, maxX: 65, maxY: 65 }, // overlapping, tiny
+      { minX: 900, minY: 900, maxX: 925, maxY: 925 }, // far and tiny
+      { minX: 0, minY: 0, maxX: 400, maxY: 400 }, // overlapping, huge
+    ]
+
+    for (const candidate of candidates) {
+      for (const elapsed of [0, 0.05, 0.5, 1]) {
+        const expected =
+          (computeBoundingBoxIoU(candidate, reference) > 0 ||
+            isWithinCenterSpeedBound(
+              candidate,
+              reference,
+              bounds.maxCenterSpeedSidesPerSecond,
+              elapsed,
+            )) &&
+          isBoundingBoxAreaRatioWithin(
+            candidate,
+            reference,
+            bounds.maxAreaRatio,
+          )
+
+        expect(isBoundingBoxContinuous(candidate, reference, elapsed, bounds)).toBe(
+          expected,
+        )
+      }
+    }
+  })
+
+  it('honors the bounds it is given, not any built-in default', () => {
+    // ~3.6x the reference's area: rejected at maxAreaRatio 3, accepted at the offline stage's 4.
+    const candidate: BoundingBoxPx = { minX: 0, minY: 0, maxX: 190, maxY: 190 }
+
+    expect(
+      isBoundingBoxContinuous(candidate, reference, 0.05, {
+        ...bounds,
+        maxAreaRatio: 3,
+      }),
+    ).toBe(false)
+    expect(
+      isBoundingBoxContinuous(candidate, reference, 0.05, {
+        ...bounds,
+        maxAreaRatio: 4,
+      }),
+    ).toBe(true)
   })
 })

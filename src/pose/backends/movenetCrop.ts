@@ -161,6 +161,107 @@ export function isWithinProximityThreshold(
 }
 
 /**
+ * Steady-state position continuity: whether `candidate`'s center could plausibly have reached its
+ * position from `reference`'s in `elapsedSeconds`, at no more than `sidesPerSecond` multiples of
+ * `reference`'s own side (`max(width, height)`) per second.
+ *
+ * Expressed as a SPEED rather than a flat distance multiple (the shape
+ * `isWithinProximityThreshold` uses) because this is judged per call, and this pipeline's
+ * inter-call spacing is not fixed — the playback sampler samples whatever the detector keeps up
+ * with, the sequential sampler has its own density knob, and one slow frame stretches the gap
+ * arbitrarily. A flat multiple would be too tight at low sample rates and useless at high ones.
+ *
+ * A non-positive or non-finite `elapsedSeconds` returns `false`: a zero/negative/unknown gap makes
+ * the bound degenerate, and this is the wrong place to adjudicate a timestamp anomaly. The caller
+ * treats that as "the speed term is unavailable", not as a rejection — its IoU test still passes
+ * on its own.
+ */
+export function isWithinCenterSpeedBound(
+  candidate: BoundingBoxPx,
+  reference: BoundingBoxPx,
+  sidesPerSecond: number,
+  elapsedSeconds: number,
+): boolean {
+  if (!Number.isFinite(elapsedSeconds) || elapsedSeconds <= 0) return false
+
+  const referenceSide = Math.max(
+    reference.maxX - reference.minX,
+    reference.maxY - reference.minY,
+  )
+  return (
+    boundingBoxCenterDistance(candidate, reference) <=
+    sidesPerSecond * referenceSide * elapsedSeconds
+  )
+}
+
+/**
+ * Steady-state scale continuity: whether `candidate`'s area is within a factor of `maxRatio` of
+ * `reference`'s, in either direction. Catches the failure position continuity structurally can't
+ * — a different person at a very different distance from the camera, standing close enough to the
+ * tracked subject in image space to pass every proximity test (design.md's "The gate has two
+ * independent tests").
+ *
+ * A zero-area reference returns `false` rather than dividing by zero: there is no meaningful
+ * scale to be continuous with, so the conservative answer is "not established".
+ */
+export function isBoundingBoxAreaRatioWithin(
+  candidate: BoundingBoxPx,
+  reference: BoundingBoxPx,
+  maxRatio: number,
+): boolean {
+  const referenceArea = bboxArea(reference)
+  if (referenceArea <= 0) return false
+
+  const ratio = bboxArea(candidate) / referenceArea
+  return ratio >= 1 / maxRatio && ratio <= maxRatio
+}
+
+/** The two thresholds `isBoundingBoxContinuous` needs. Structurally a subset of
+ * `ContinuityGateConfig` (which adds its own `enabled` flag) and of
+ * `RetroactivePersonSelectionConfig`, so either can be passed straight in — the shape is declared
+ * here, in the module that owns the geometry, rather than importing either consumer's config type
+ * (which would point this leaf module back up at its callers). */
+export interface BoundingBoxContinuityBounds {
+  maxCenterSpeedSidesPerSecond: number
+  maxAreaRatio: number
+}
+
+/**
+ * Whether `candidate` could plausibly be the same person as `reference`, `elapsedSeconds` later:
+ * position continuity (any bbox overlap at all, OR a center displacement within the speed bound)
+ * AND scale continuity (area ratio inside the symmetric band). Purely the composition of the two
+ * geometric tests — it holds no opinion about whether continuity should be *consulted*, which is
+ * each caller's own business (the online gate has its own `enabled`/no-anchor/suspended early
+ * returns; the retroactive selector applies its area floor before ever asking).
+ *
+ * Shared by the online anchor gate (`movenet.ts`'s `isContinuousWithAnchor`) and the retroactive
+ * person-selection stage (`src/results/retroactivePersonSelection.ts`'s segmentation criterion) so
+ * "these two boxes are the same person" means exactly one thing in this codebase — the two answer
+ * the same geometric question about the same `deriveBoundingBox` output, just at different times
+ * (during the run vs. over the finished sample sequence) and with independently tuned bounds.
+ */
+export function isBoundingBoxContinuous(
+  candidate: BoundingBoxPx,
+  reference: BoundingBoxPx,
+  elapsedSeconds: number,
+  bounds: BoundingBoxContinuityBounds,
+): boolean {
+  const positionContinuous =
+    computeBoundingBoxIoU(candidate, reference) > 0 ||
+    isWithinCenterSpeedBound(
+      candidate,
+      reference,
+      bounds.maxCenterSpeedSidesPerSecond,
+      elapsedSeconds,
+    )
+
+  return (
+    positionContinuous &&
+    isBoundingBoxAreaRatioWithin(candidate, reference, bounds.maxAreaRatio)
+  )
+}
+
+/**
  * A padded, square crop rectangle (in source-video pixels) centered on `box`, clamped to stay
  * within `[0, frameWidth] × [0, frameHeight]` by shifting its position — never by shrinking its
  * side — so the returned side length is always exactly what the padding/floor/cap math produced.

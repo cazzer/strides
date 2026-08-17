@@ -6,13 +6,68 @@
  * `PoseDetectorConfig.personOfInterest`, so `window.__STRIDES_POSE_BACKEND_OVERRIDE__` stays the
  * single override surface.
  */
+/**
+ * The steady-state anchor continuity gate (`anchor-continuity-gate`). Nested under
+ * `PersonOfInterestConfig` rather than sitting as flat sibling fields so the gate can be switched
+ * off independently of the multi-pose dispatch it complements -- the two are separable arms in the
+ * live A/B this ships behind.
+ */
+export interface ContinuityGateConfig {
+  /**
+   * `false` restores the pre-gate behavior of the steady-state path: any usable detection becomes
+   * the anchor unconditionally. Multi-pose acquisition/reacquisition/re-verification still run.
+   */
+  enabled: boolean
+  /**
+   * Position bound, as multiples of the anchor's own side (`max(width, height)`) per SECOND -- see
+   * `isWithinCenterSpeedBound` for why this is a speed and not a flat distance multiple. Only ever
+   * consulted for a candidate whose box does not overlap the anchor at all; any non-zero IoU
+   * passes on its own.
+   */
+  maxCenterSpeedSidesPerSecond: number
+  /** Scale bound: the candidate/anchor bounding-box area ratio must lie in
+   * `[1 / maxAreaRatio, maxAreaRatio]`. */
+  maxAreaRatio: number
+}
+
 export interface PersonOfInterestConfig {
   /**
    * Total kill-switch: `false` bypasses the multi-pose acquisition/reacquisition path entirely,
    * reproducing this backend's pre-existing behavior (a plain single-pose call, byte-identical to
-   * before this capability existed) regardless of how many people are in frame.
+   * before this capability existed) regardless of how many people are in frame. Disables the
+   * continuity gate below along with everything else -- disabling the person-of-interest concept
+   * must disable every identity opinion it introduced, or the A/B baseline is not a baseline.
    */
   enabled: boolean
+  /** See `ContinuityGateConfig`. */
+  continuityGate: ContinuityGateConfig
+}
+
+/**
+ * `enabled: true` by default, for the same reason `DEFAULT_PERSON_OF_INTEREST_CONFIG` is: this
+ * closes a live-confirmed bug (a confidently-detected bystander permanently stealing the anchor,
+ * reproduced 2026-08-16 on a side-view park clip), not a speculative optimization.
+ *
+ * Both thresholds are FIRST-GUESS values in the same sense as `POST_ACQUISITION_SETTLE_FRAMES` --
+ * reasoned from clip geometry, to be tuned by the live A/B in
+ * `openspec/changes/anchor-continuity-gate/design.md`'s Migration Plan, not fixed here. They are
+ * config fields rather than module constants precisely so that A/B can move them without a code
+ * edit.
+ *
+ * `maxCenterSpeedSidesPerSecond: 3` -- a runner crossing a 1920px-wide frame in ~1.5s covers
+ * ~1280 px/s; against a ~700px bbox side that is ~1.8 sides/s, so 3 leaves roughly 1.7x headroom
+ * over the fastest motion this app is built to measure.
+ *
+ * `maxAreaRatio: 3` -- bbox area is genuinely noisy here, since `deriveBoundingBox` only spans
+ * keypoints clearing `minKeypointConfidence` and an arm or trailing leg dropping below that gate
+ * shrinks the box with no real change in the subject. A symmetric factor-of-three band absorbs
+ * that while still rejecting the observed steal by a wide margin (the reproduction clip's fence
+ * bystanders are roughly a third of the runner's on-screen height -- an area ratio near 1/9).
+ */
+export const DEFAULT_CONTINUITY_GATE_CONFIG: ContinuityGateConfig = {
+  enabled: true,
+  maxCenterSpeedSidesPerSecond: 3,
+  maxAreaRatio: 3,
 }
 
 /**
@@ -25,6 +80,7 @@ export interface PersonOfInterestConfig {
  */
 export const DEFAULT_PERSON_OF_INTEREST_CONFIG: PersonOfInterestConfig = {
   enabled: true,
+  continuityGate: DEFAULT_CONTINUITY_GATE_CONFIG,
 }
 
 /**

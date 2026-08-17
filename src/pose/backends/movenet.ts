@@ -11,6 +11,8 @@ import {
   computeCropRect,
   boundingBoxCenterDistance,
   deriveBoundingBox,
+  isBoundingBoxAreaRatioWithin,
+  isBoundingBoxContinuous,
   isWithinProximityThreshold,
 } from './movenetCrop'
 import type { BoundingBoxPx, CropRectPx } from './movenetCrop'
@@ -25,6 +27,31 @@ import {
 import type { PersonOfInterestConfig } from './personOfInterestConfig'
 
 export type MoveNetModelType = 'lightning' | 'thunder'
+
+/**
+ * Input resolution for the MULTIPOSE_LIGHTNING pass, overriding the library's default of 256.
+ *
+ * 256 does not work for this app's footage. Measured 2026-08-16 on
+ * `e2e/fixtures/multiperson-track.mp4` (1920x1080), 40 consecutive frames from t=1.4s, real GPU:
+ * at 256 the model returned ZERO detections on 25 of those 40 frames and never once returned two
+ * people, despite a near-field walker being visibly in frame alongside the runner throughout. At
+ * 448 it returns both on 37/40 and the runner's own pose score roughly doubles (0.27-0.33 ->
+ * 0.45-0.61), for roughly +33% latency (still only ~1.7x a single-pose call on identical input).
+ *
+ * This is the measured root cause of the validation gap recorded in CLAUDE.md -- "candidate count
+ * never exceeded 1 across ~33 sampled dispatch calls in any of the 3 trials". The multi-pose
+ * acquisition/reacquisition/re-verification machinery was never being fed a real multi-person
+ * candidate list; it was scoring an empty or single-entry one.
+ *
+ * The model card explains why the default is so low: MULTIPOSE_LIGHTNING was trained with "images
+ * with three or more people filtered out" and targets subjects "3ft ~ 6ft away from a device's
+ * webcam". A runner passing at 5-15m with bystanders behind them is out of that distribution, and
+ * needs the extra input resolution to resolve anyone at all.
+ *
+ * Must be a multiple of 32; the library's documented useful range is 128-512, higher being more
+ * accurate and slower.
+ */
+const MULTIPOSE_MAX_DIMENSION = 448
 
 const MOVENET_MODEL_TYPES: Record<MoveNetModelType, string> = {
   lightning: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
@@ -297,6 +324,7 @@ export async function createMoveNetDetector(
     ? poseDetection
         .createDetector(poseDetection.SupportedModels.MoveNet, {
           modelType: poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING,
+          multiPoseMaxDimension: MULTIPOSE_MAX_DIMENSION,
         })
         .catch(() => null)
     : Promise.resolve(null)
@@ -418,6 +446,47 @@ export async function createMoveNetDetector(
   }
 
   /**
+   * Steady-state anchor continuity gate (`anchor-continuity-gate`): may `derived` become the
+   * tracked person, given the anchor already in hand?
+   *
+   * Exists because the ordinary single-pose path used to install ANY usable detection as the
+   * anchor, unconditionally -- and that acceptance also zeroes `consecutiveLowConfidence`, the one
+   * counter whose threshold triggers reacquisition. A confidently detected WRONG person therefore
+   * reset the recovery trigger on every frame, making a stolen anchor permanent for the rest of
+   * the run (reproduced live 2026-08-16; see the change's proposal.md). The multi-pose path always
+   * scored continuity via `pickBestCandidate`; this closes the same hole on the path that handles
+   * the large majority of calls.
+   *
+   * Position AND scale must both hold. Position alone would not have caught the observed steal --
+   * the fence bystanders sit well within a couple of body-widths of the runner in source pixels --
+   * while their ~1/9 area ratio fails scale by a wide margin. The two tests catch different
+   * failure shapes (a jump across the frame vs. a jump in depth), so neither is redundant.
+   *
+   * Returns `true` (accept) whenever there is nothing to be continuous with: gate disabled, no
+   * anchor yet, or the run has already suspended person-of-interest disambiguation. The suspended
+   * case is redundant today -- every site that suspends also calls `clearAnchor()` -- and is
+   * checked explicitly so the two do not become silently coupled: re-imposing an identity
+   * constraint on a run that just gave up on identity could pin it in the suspended state, since
+   * the detection that clears suspension is the same one the gate would reject.
+   */
+  function isContinuousWithAnchor(
+    derived: BoundingBoxPx,
+    anchor: BoundingBoxPx | null,
+    elapsedSeconds: number,
+  ): boolean {
+    const gate = personOfInterestConfig.continuityGate
+    if (!gate.enabled || anchor === null || personOfInterestSuspended) {
+      return true
+    }
+
+    // The geometry itself lives in `isBoundingBoxContinuous` (movenetCrop.ts), shared verbatim
+    // with the retroactive person-selection stage's segmentation criterion. Only the three early
+    // returns above are this gate's own -- they decide WHETHER continuity is consulted, which the
+    // offline stage answers differently and must not inherit.
+    return isBoundingBoxContinuous(derived, anchor, elapsedSeconds, gate)
+  }
+
+  /**
    * Advances the settle-in-window and periodic-re-verification counters for one ordinary
    * (non-multi-pose-dispatch) call, regardless of whether it found a usable detection --
    * design.md's "Carry POI identity forward via a bounded settle-in window" and "Periodic
@@ -445,6 +514,14 @@ export async function createMoveNetDetector(
       // (`trackingCropConfig.enabled: false` alone) -- personOfInterest didn't exist yet, so its
       // disabled state is the "doesn't exist" state, and both together must reproduce that exact
       // pre-existing path (task 6.1's "byte-identical to pre-change behavior" guarantee).
+      //
+      // Deliberately NOT given the explicit timestamp argument the steady-state full-frame call
+      // below now passes (`anchor-continuity-gate`): this path performs no new-run check, so it
+      // never calls `rawDetector.reset()` between analysis runs, and handing MoveNet's one-euro
+      // filter a timestamp series that jumps backwards when a new clip starts is worse than
+      // leaving it off. Reproducing pre-capability behavior exactly includes reproducing how it
+      // got a timestamp: implicitly, and only when the image source itself carried one. The
+      // default configuration never reaches this path.
       if (!trackingCropConfig.enabled && !personOfInterestConfig.enabled) {
         const poses = await rawDetector.estimatePoses(source.image)
         if (poses.length === 0) return null
@@ -667,7 +744,61 @@ export async function createMoveNetDetector(
             giveUpBoxAtStart,
           )
 
-          if (usable) {
+          // A periodic re-verification check runs against a HEALTHY anchor -- confidence hasn't
+          // dropped, nothing has been lost. Its whole job is to notice that saliency has drifted
+          // onto someone else. But `pickBestCandidate`'s continuity test is IoU/proximity only,
+          // with no scale term at all, so a candidate that overlaps the anchor scores
+          // `continuous: true` no matter how differently sized it is -- and then replaces the
+          // anchor with its own box.
+          //
+          // Measured live (2026-08-16, reproduction clip, both crop arms, every trial): a
+          // re-verification check returning a SINGLE 6 164 px^2 candidate replaced a healthy
+          // 37 465 px^2 anchor on the strength of overlap alone -- a 6x scale collapse onto a
+          // partial/adjacent detection. That shrunken anchor is then what the steady-state gate
+          // defends, so the next five genuine full-size detections of the actual subject were
+          // rejected for being discontinuous with it. The gate ended up guarding the wrong person
+          // against the right one.
+          //
+          // So the scale half of the steady-state gate applies here too -- but ONLY to a match
+          // that CLAIMS continuity. That distinction is the whole design:
+          //
+          //   - `continuous: true` means "this is the same person we were tracking". A candidate
+          //     6x the anchor's area is not plausibly the same person one frame later, so the
+          //     claim is simply wrong, and adopting its box corrupts the anchor. Rejected.
+          //   - `continuous: false` means the selection fell through to the acquisition heuristic:
+          //     an explicit "the tracked person is gone, here is the salient one now" switch. A
+          //     large scale change is EXPECTED there -- it is usually the whole reason the switch
+          //     is happening. Catching that drift is what periodic re-verification exists to do,
+          //     so gating it on scale would defeat the feature. Allowed, unchanged.
+          //
+          // A rejected claimed-continuous match is treated exactly like the existing "raw
+          // candidates but none usable" case: a strict no-op that leaves the anchor alone, resets
+          // only the interval, and falls through to the ordinary single-pose call for this frame.
+          //
+          // Deliberately NOT extended to 'reacquisition': that path runs against an anchor that is
+          // already stale after a real tracking loss, where the subject genuinely may have changed
+          // apparent size while they were missing. Every failure measured so far was a
+          // re-verification, so this stays targeted at what the evidence actually shows. See
+          // design.md's Open Questions.
+          const scaleContinuousEnough =
+            !personOfInterestConfig.continuityGate.enabled ||
+            dispatchReason !== 'reverification' ||
+            !continuous ||
+            lastBoundingBox === null ||
+            selected.box === null ||
+            isBoundingBoxAreaRatioWithin(
+              selected.box,
+              lastBoundingBox,
+              personOfInterestConfig.continuityGate.maxAreaRatio,
+            )
+
+          if (usable && !scaleContinuousEnough) {
+            if (isCurrent) {
+              callsSinceLastVerification = 0
+            }
+            dispatchMultiPose = false
+            cameFromFailedReverificationCheck = true
+          } else if (usable) {
             if (isCurrent) {
               lastBoundingBox = selected.box
               consecutiveLowConfidence = 0
@@ -763,11 +894,22 @@ export async function createMoveNetDetector(
       // `rawDetector` is reused across calls, so its own internal cropRegion/smoothing-filter
       // state (computed relative to whatever canvas we fed it on its LAST ACTUAL invocation)
       // would otherwise fight our externally-computed framing at the moment framing actually
-      // changes shape. Only that transition boundary needs it: for a same-size square canvas
-      // across consecutive crop-mode calls, `initCropRegion` (see design.md's Context) always
-      // resolves to full `[0,1]x[0,1]` coverage regardless of MoveNet's own stale `cropRegion`, so
-      // resetting on every steady-tracking call would only cost MoveNet's one-euro smoothing
-      // continuity for no correctness benefit. A call the acquisition/reacquisition/re-
+      // changes shape. Only that transition boundary gets a reset today.
+      //
+      // CORRECTION (`anchor-continuity-gate`): this comment used to justify NOT resetting during
+      // steady crop tracking by claiming `initCropRegion` "always resolves to full `[0,1]x[0,1]`
+      // coverage regardless of MoveNet's own stale `cropRegion`", making reset-vs-no-reset
+      // equivalent apart from smoothing continuity. That premise does not hold. On a SUCCESSFUL
+      // detection the library never calls `initCropRegion` -- it calls `determineCropRegion`,
+      // which returns a tight, torso-centered region (radius
+      // `max(1.9 * torsoHalfSpan, 1.2 * keypointHalfSpan)`), stores it on the detector, and runs
+      // it through `filterCropRegion` on the way. `initCropRegion` is reached only when that
+      // region would be degenerate, or after a reset. So the two feed materially different
+      // regions. The reset behavior is nonetheless left UNCHANGED here on purpose: revisiting it
+      // interacts with the full-frame smoothing this same change restores, and moving both at once
+      // would make that change's live A/B unreadable. See design.md's deferred items.
+      //
+      // A call the acquisition/reacquisition/re-
       // verification path intercepts entirely (`dispatchMultiPose` still `true` here) never
       // invokes `rawDetector` at all, so this comparison is SKIPPED for it entirely, not just
       // evaluated against a placeholder usage -- `rawDetectorUsage` computed for such a call would
@@ -794,6 +936,23 @@ export async function createMoveNetDetector(
       let cropRect: CropRectPx | null = null
       let poses: Awaited<ReturnType<typeof rawDetector.estimatePoses>>
 
+      // Shared by BOTH `estimatePoses` call sites below, deliberately as one expression: the
+      // library multiplies a caller-supplied timestamp by 1e3 to reach its internal microseconds,
+      // so this argument is MILLISECONDS, and two call sites disagreeing about that would be a
+      // silent, hard-to-see bug.
+      //
+      // Supplying it on the full-frame path is not cosmetic (`anchor-continuity-gate`): MoveNet
+      // ships a one-euro keypoint filter, on by default, that `estimateSinglePose` applies ONLY
+      // when a timestamp is present -- and `estimatePoses` derives one implicitly only when the
+      // image source exposes `currentTime`, i.e. only for an `HTMLVideoElement`. Since the
+      // sequential-decode sampler became the default it draws every frame into a reusable canvas,
+      // which has no `currentTime`, so the full-frame path silently ran unsmoothed on essentially
+      // every frame of a default run. Passing it explicitly makes smoothing independent of which
+      // sampler produced the frame, and restores what the video-element source used to give for
+      // free. Monotonicity is already handled upstream: the new-run check calls
+      // `rawDetector.reset()`, and within a run both samplers produce increasing timestamps.
+      const timestampMs = currentTime * 1000
+
       if (usingCrop) {
         cropRect = computeCropRect(
           boxForFraming as BoundingBoxPx,
@@ -816,10 +975,14 @@ export async function createMoveNetDetector(
         poses = await rawDetector.estimatePoses(
           cropCanvas,
           undefined,
-          currentTime * 1000,
+          timestampMs,
         )
       } else {
-        poses = await rawDetector.estimatePoses(source.image)
+        poses = await rawDetector.estimatePoses(
+          source.image,
+          undefined,
+          timestampMs,
+        )
       }
 
       const isCurrent = myGeneration === generation
@@ -844,7 +1007,16 @@ export async function createMoveNetDetector(
           trackingCropConfig.minKeypointConfidence,
           trackingCropConfig.minConfidentKeypoints,
         )
-        if (derived !== null) {
+        // Read BEFORE `commitCallProgress` below advances `lastSeenTime` to this call's own
+        // timestamp -- the gate's speed bound needs the gap since the PREVIOUS committed call.
+        // Both reads sit inside the `isCurrent` guard, so a stale overlapping call can neither be
+        // judged against, nor clobber, a newer call's anchor.
+        const elapsedSeconds =
+          lastSeenTime === null ? 0 : currentTime - lastSeenTime
+        if (
+          derived !== null &&
+          isContinuousWithAnchor(derived, lastBoundingBox, elapsedSeconds)
+        ) {
           lastBoundingBox = derived
           consecutiveLowConfidence = 0
           // An ordinary single-pose detection re-established a confident anchor on its own --
@@ -854,6 +1026,16 @@ export async function createMoveNetDetector(
           anchorWasReacquired = false
           consecutiveEmptyReacquisitions = 0
         } else {
+          // Two cases land here, deliberately treated alike: no usable detection at all, and a
+          // usable detection the continuity gate rejected. Both mean "this call did not confirm
+          // the tracked person", and both must let `consecutiveLowConfidence` climb toward
+          // `reacquisitionLossThreshold` rather than reset it -- reaching that threshold is what
+          // hands the next call to the multi-pose reacquisition path, which scores continuity
+          // across every simultaneously visible candidate rather than just the one the single-pose
+          // model's saliency happened to land on. This cannot deadlock: if reacquisition keeps
+          // reselecting the same wrong person, the existing give-up machinery clears the anchor
+          // and suspends disambiguation, after which the gate stops applying (see
+          // `isContinuousWithAnchor`) and the next detection installs freely.
           registerTrackingLoss()
         }
         advanceContinuityCounters(!cameFromFailedReverificationCheck)

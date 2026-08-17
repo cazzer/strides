@@ -4,7 +4,10 @@ import {
   resolvePoseDetectorConfig,
 } from './poseBackendConfig'
 import { DEFAULT_TRACKING_CROP_CONFIG } from './backends/trackingCropConfig'
-import { DEFAULT_PERSON_OF_INTEREST_CONFIG } from './backends/personOfInterestConfig'
+import {
+  DEFAULT_CONTINUITY_GATE_CONFIG,
+  DEFAULT_PERSON_OF_INTEREST_CONFIG,
+} from './backends/personOfInterestConfig'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -90,5 +93,46 @@ describe('resolvePoseDetectorConfig', () => {
     }
 
     expect(resolvePoseDetectorConfig()).toEqual(DEFAULT_POSE_DETECTOR_CONFIG)
+  })
+
+  it('merges a partial continuityGate override one level deeper, preserving its sibling fields', () => {
+    window.__STRIDES_POSE_BACKEND_OVERRIDE__ = {
+      personOfInterest: { continuityGate: { maxAreaRatio: 1.5 } },
+    }
+
+    const resolved = resolvePoseDetectorConfig()
+
+    expect(resolved.personOfInterest?.continuityGate).toEqual({
+      ...DEFAULT_CONTINUITY_GATE_CONFIG,
+      maxAreaRatio: 1.5,
+    })
+    // Without the extra merge level these would come back `undefined` rather than defaulted.
+    expect(resolved.personOfInterest?.continuityGate.enabled).toBe(
+      DEFAULT_CONTINUITY_GATE_CONFIG.enabled,
+    )
+    expect(
+      resolved.personOfInterest?.continuityGate.maxCenterSpeedSidesPerSecond,
+    ).toBe(DEFAULT_CONTINUITY_GATE_CONFIG.maxCenterSpeedSidesPerSecond)
+  })
+
+  it('keeps the default continuityGate when personOfInterest is overridden without it', () => {
+    window.__STRIDES_POSE_BACKEND_OVERRIDE__ = {
+      personOfInterest: { enabled: false },
+    }
+
+    expect(resolvePoseDetectorConfig().personOfInterest?.continuityGate).toEqual(
+      DEFAULT_CONTINUITY_GATE_CONFIG,
+    )
+  })
+
+  it('can disable the continuity gate while leaving multi-pose dispatch enabled', () => {
+    window.__STRIDES_POSE_BACKEND_OVERRIDE__ = {
+      personOfInterest: { continuityGate: { enabled: false } },
+    }
+
+    const resolved = resolvePoseDetectorConfig()
+
+    expect(resolved.personOfInterest?.enabled).toBe(true)
+    expect(resolved.personOfInterest?.continuityGate.enabled).toBe(false)
   })
 })
