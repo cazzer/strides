@@ -38,8 +38,11 @@ export const DEFAULT_SAMPLING_ROBUSTNESS_CONFIG: SamplingRobustnessConfig = {
   // `targetSamplesPerSecond: null` = every decoded frame, matching the playback path's existing
   // "sample whatever the detector can keep up with" behavior rather than imposing a fixed rate.
   sequentialSampling: { enabled: true, targetSamplesPerSecond: null },
-  // `enabled: false` — measured, working, and opt-in; see
-  // DEFAULT_RETROACTIVE_PERSON_SELECTION_CONFIG's doc for the live A/B that decided it.
+  // `enabled: true` — by explicit user decision (2026-08-16), OVERRIDING the pre-registered ship
+  // rule, which fired: the stage is not a no-op on the side-view track demo, where one collapsed
+  // detection splits the runner's own continuous track and strands its prefix. See
+  // DEFAULT_RETROACTIVE_PERSON_SELECTION_CONFIG's doc for what is knowingly accepted (issue #52's
+  // items 1-3) and the live A/B behind it.
   personSelection: DEFAULT_RETROACTIVE_PERSON_SELECTION_CONFIG,
 }
 

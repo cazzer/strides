@@ -1,56 +1,20 @@
-# sampling-robustness-config Specification
+## REMOVED Requirements
 
-## Purpose
-Makes the sampling/robustness plane (keypoint-confidence filtering, interpolation gap
-tolerance, detection error tolerance, per-frame detection timeout) a single, swappable
-configuration object actually threaded through analysis, with a development-only override point
-— so it can be iterated on and compared the same way the model and math planes already can.
-## Requirements
-### Requirement: An analysis run resolves and uses one sampling/robustness config
+### Requirement: Sampling/robustness plane is a single configuration object
+**Reason**: The default it pins down reversed rather than merely changed —
+`DEFAULT_RETROACTIVE_PERSON_SELECTION_CONFIG` ships `enabled: true`
+(`src/results/retroactivePersonSelection.ts`, asserted by `samplingRobustnessConfig.test.ts`), so
+"`personSelection.enabled: false`, meaning the selection stage is opt-in" and its
+"The person-selection stage is off unless asked for" scenario both state the opposite of shipped
+behavior. A scenario whose title asserts a reversed default cannot be corrected in place: a
+MODIFIED block may not drop or rename an existing scenario, so replacing the requirement under a
+name that says what the default now is, is the honest form of this correction.
+**Migration**: See the new "Sampling/robustness plane is a single configuration object with person
+selection on by default" requirement below. It carries the same bundling contract, the same three
+merge/default scenarios verbatim, and replaces only the off-by-default scenario with the
+enabled-by-default one.
 
-The system SHALL resolve one `SamplingRobustnessConfig` per analysis run and pass it into
-`applyRobustness` (as its `RobustnessConfig` argument), the adaptive sampler (as its
-`maxConsecutiveErrors`/`detectionTimeoutMs` options and, when the WebCodecs sequential-decode path
-is used, its `sequentialSampling` setting), and the retroactive person-selection stage (as its
-`personSelection` setting), rather than leaving any of those to their own internal default.
-
-#### Scenario: An analysis run without any override uses the default config
-
-- **WHEN** an analysis run starts with no development-only override present
-- **THEN** `applyRobustness`, the adaptive sampler, and the person-selection stage are all called
-  with values equal to `DEFAULT_SAMPLING_ROBUSTNESS_CONFIG`, producing output identical to today's
-  behavior
-
-#### Scenario: An analysis run with an override uses the overridden values
-
-- **WHEN** an analysis run starts with a development-only override present
-- **THEN** `applyRobustness`, the adaptive sampler, and the person-selection stage are all called
-  with the overridden values, not the defaults
-
-### Requirement: Config override is development-only and requires no UI
-
-The system SHALL allow overriding the active `SamplingRobustnessConfig` via a `window`-scoped
-global, read once per analysis run, only in development builds (`import.meta.env.DEV`) — never
-in a production build, and without any user-facing control (no button, no settings panel). This
-is a tooling seam for driving the app via browser automation across configuration variants, the
-same category of dev-only affordance as `analysisDiagnostics`'s console auto-log.
-
-#### Scenario: A development-build override set before analysis starts is honored
-
-- **WHEN** the override global is set (e.g. by a Playwright script, or manually in devtools)
-  before an analysis run starts, in a development build
-- **THEN** that run uses the overridden config
-
-#### Scenario: The override has no effect in a production build
-
-- **WHEN** the override global is set in a production build
-- **THEN** it is not read, and the run uses `DEFAULT_SAMPLING_ROBUSTNESS_CONFIG`
-
-#### Scenario: No override present is not an error
-
-- **WHEN** no override global is present at all, in either a development or production build
-- **THEN** the run proceeds normally using `DEFAULT_SAMPLING_ROBUSTNESS_CONFIG`, without warning
-  or throwing
+## ADDED Requirements
 
 ### Requirement: Sampling/robustness plane is a single configuration object with person selection on by default
 
@@ -100,4 +64,3 @@ winner's span, and primary/scale-pass selection divergence.
 - **WHEN** an analysis run resolves its config with no override touching `personSelection`
 - **THEN** the selection stage is enabled, and restoring the run's pre-stage behavior requires an
   explicit `{ personSelection: { enabled: false } }` override
-
