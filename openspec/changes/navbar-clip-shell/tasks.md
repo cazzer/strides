@@ -29,16 +29,42 @@
 
 ## 3. Restructure the shell (`strides-kyu.3`) — P0, land and verify **alone**
 
-- [ ] 3.1 Clips leave the page body; results become `<main>`'s content rather than one grid column.
-- [ ] 3.2 Clip video elements stay mounted and playable while hidden. Use a mechanism that keeps the
-      element **rendered** — not unmount, not `hidden`, not `display:none`, not `visibility:hidden`,
-      not a zero-size box (design.md D2's ranking).
-- [ ] 3.3 Zero loaded clips renders the full-page picker.
-- [ ] 3.4 **Live verification, before anything else lands on top**: Demo 1 and Demo 2 reach "Analysis
-      complete"; record `sampling.detectedFrames` before and after, on the same machine, real GPU.
-      Gate **G1** (design.md D8): a median drop beyond 10% means the hiding mechanism is wrong —
-      change the mechanism, do not accept the number.
-- [ ] 3.5 `npm test` and `tsc -b` clean.
+- [x] 3.1 Clips leave the page body; results become `<main>`'s content rather than one grid column.
+      `<main>` loses `lg:grid lg:grid-cols-2 lg:items-start lg:gap-8 lg:space-y-0`; the sticky clip
+      column and the results scroll-box both go. `EvidenceGallery`'s `lg:col-span-2` is left in
+      place as a no-op for `strides-kyu.7` to sweep with the rest of the header-offset debris.
+- [~] 3.2 Clip video elements stay mounted and playable while hidden. **Rung L0** shipped:
+      `fixed; top: 0; left: -200vw`, full size, `inert`, on the video host only.
+      `hidden={status === 'empty'}` on the `<video>` is untouched, and every surface a reader must
+      still act on — loading line, load-error alert and Try again, queued hint, Remove — stays in
+      the body and visible. **Partially met, and the shortfall is measured, not suspected**: the
+      element stays mounted, playable and decoding (G1a), but on the PLAYBACK sampling arm a
+      concealed element yields fewer samples on a throughput-limited clip. The whole ladder was
+      measured and every rung fails the ±10% gate, L0 least badly — full table and blast radius in
+      design.md D2's "Measured" section. Escalated rather than accepted or tuned away.
+- [x] 3.3 Zero loaded clips renders the full-page picker. `ClipPicker` extracted out of
+      `VideoInputPanel` as a pure, DOM-identical refactor first (so a selector break would bisect
+      to one commit), then rendered by the session on `!anyClipVideoReady` — the gate is
+      "no *loaded* clip", not `clipIds.length`, so the picker stays beside a failed clip's alert.
+- [x] 3.4 **Live verification, before anything else lands on top.** Real GPU
+      (`ANGLE Metal Renderer: Apple M4 Pro`), same machine, same session, baseline captured before
+      the first edit and re-measured paired at the end in a throwaway worktree at `ab5d185`.
+      **G1a PASS** — hidden vs. visible over a fixed 2 s window, Demo 1 51 vs. 50, Demo 2 116 vs.
+      118, `inert` moving neither. **G1b: PASS on the sequential arm, FAIL on the playback arm.**
+      `sampling.path` asserted `'sequential'`/`'playback'` per arm. Sequential: Demo 1 53 → 53,
+      Demo 2 99 → 99 (bit-identical). Playback: Demo 1 47 → 47, but **Demo 2 62 → 47 (−24%)**,
+      outside the ±10% gate, on every rung of the ladder. **G5 PASS** — Demo 1 7 images /
+      5 sections, Demo 2 5 / 4, per-metric breakdown matching CLAUDE.md cell-for-cell, zero
+      `extraction-failed`.
+- [ ] 3.7 **OPEN — the playback-arm regression.** The gate's own rule ("change the mechanism, do
+      not accept the number") was followed to exhaustion: all four rungs measured, none passes,
+      and concealment rather than any one technique is the cause. Needs an epic-level decision,
+      because the only mechanism the data points at — keep the element genuinely on screen while
+      its own analysis is in flight — changes what the reader sees during analysis.
+- [x] 3.5 `npm test` and `tsc -b` clean.
+- [x] 3.6 Decisions this ticket was asked to make, recorded in design.md's open-questions section:
+      the "Analyze"/"Analyze again" control does **not** move, and a clip has no presentation
+      surface at all until `strides-kyu.4`/`.5` — no stand-in thumbnail was built.
 
 ## 4. Clip strip with per-clip progress (`strides-kyu.4`)
 

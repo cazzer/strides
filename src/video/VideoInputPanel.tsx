@@ -64,6 +64,33 @@ export function VideoInputPanel({ videoSource, children }: VideoInputPanelProps)
             interaction-only and does not affect rendering or decode; measured, not assumed
             (`strides-kyu.3`'s G1a, hidden vs. visible, both demo clips, with and without it).
 
+        ⚠️ THIS RUNG DOES NOT FULLY SATISFY THE CONSTRAINT, and neither does any other one tried.
+        `strides-kyu.3` measured the whole pre-registered escalation ladder against the PLAYBACK
+        sampling arm on Demo 2 (portrait 4K, 59.94 fps — the only test clip whose sampling is
+        throughput-limited, and therefore the only one that can see this at all). Concealment
+        costs frames in proportion to HOW concealed the element is, and every rung fails the
+        pre-registered ±10% gate:
+
+          base (old layout, visible)                62 [57..63]
+          this layout, wrapper left `relative`      61 [56..63]   ← the restructure itself is free
+          this layout, `fixed` but ON SCREEN        63 [57..64]   ← `position: fixed` is free
+          L0  `fixed` off screen + `inert`          47 [46..57]   −24%   (shipped)
+          L3  1x1 `overflow:hidden` window          47 [40..59]   −24%
+          L2  `-z-20` behind an opaque backdrop     39 [37..47]   −37%
+          L1  `opacity-0` + `-z-10`                 34 [33..39]   −45%
+
+        So the cost is CONCEALMENT, not the positioning technique, and the ladder's ordering is
+        inverted — L0 is the best of the concealed options, not merely the first to try. Demo 1
+        (landscape 4K, 25 fps) is unaffected at every rung (47 → 47) because 40 ms per frame
+        leaves the sampler slack to absorb the added per-frame cost; Demo 2 has 16.7 ms and does
+        not. The default WebCodecs path is entirely unaffected on both clips (Demo 1 53 → 53,
+        Demo 2 99 → 99, bit-identical), because it reads `sourceBlob`'s bytes and never touches
+        this element — so the regression lands only on clips where `canUseSequentialDecode` says
+        no, i.e. webcam/WebM recordings, exactly the case D1's guard exists to protect.
+
+        This is reported, not resolved: picking a rung cannot fix a cost that every rung shares.
+        See the report on `strides-kyu.3` and design.md D2's "Measured" section.
+
         The `hidden` attribute below is a DIFFERENT lever with a different meaning and is
         deliberately left alone: it is correct while `status === 'empty'` (no clip, nothing to
         sample) and is precisely the mechanism this requirement forbids extending to a loaded
