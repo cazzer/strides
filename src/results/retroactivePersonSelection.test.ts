@@ -128,6 +128,9 @@ describe('selectRetroactivePersonOfInterest', () => {
       expect(diagnostics.detectedSamplesIn).toBe(5)
       expect(diagnostics.detectedSamplesOut).toBe(5)
       expect(diagnostics.separationRatio).toBeNull()
+      // Nothing was discontinuous in the first place, so splice tolerance never had anything to
+      // decline -- one segment here means "never cut", not "cut and healed".
+      expect(diagnostics.bridgedCuts).toBe(0)
 
       samples.forEach((sample, i) => {
         expect(sample).toBe(SMOOTH[i])
@@ -186,6 +189,11 @@ describe('selectRetroactivePersonOfInterest', () => {
 
       expect(diagnostics.status).toBe('selected')
       expect(diagnostics.segmentCount).toBe(3)
+      // The three spans stay separate under splice tolerance, and that is a stated fact rather
+      // than an inference from the count: both transitions fail the bridge on area ratio
+      // (179²/45² = 15.8 and 179²/59² = 9.2, against a bound of 4), so neither pair either side of
+      // a span boundary is continuous with the other.
+      expect(diagnostics.bridgedCuts).toBe(0)
       // The winner is the runner's span: ~90 frames of ~32,000 px².
       expect(diagnostics.segments[0].frameCount).toBe(90)
       expect(diagnostics.segments[0].medianAreaPx).toBeCloseTo(179 * 179, 5)
@@ -490,6 +498,97 @@ describe('selectRetroactivePersonOfInterest', () => {
     })
   })
 
+  describe('splice tolerance', () => {
+    // The measured Demo 1 wedge, scaled into this file's fixture space. On the real clip a
+    // collapsed 24,473 px² detection at t=4.32, displaced ~400px from where the runner actually
+    // is, sits between the runner's own 167,867 px² and 108,121 px² boxes and fails continuity
+    // against BOTH of them -- on POSITION against the first (IoU 0, ~12 sides/s against a 3
+    // sides/s bound) and on SCALE against the second (4.4 vs the bound of 4). It splits one
+    // person's continuous 55-frame track into 5 + 1 + 49 and the 5-frame prefix loses.
+    //
+    // Hand-checked here, against the default 1080p config:
+    //   (a,b): IoU 0, 588px of centre travel against a 96px budget, area ratio 7.1  -> both fail
+    //   (b,c): IoU 0, 542px against an 18px budget, area ratio 4.55                 -> both fail
+    //   (a,c): IoU 0.64, area ratio 1.5625, elapsed 0.12s                           -> continuous
+    const WEDGE: PoseSample[] = [
+      detected(0, 100, 100, 400),
+      detected(0.08, 800, 100, 150),
+      detected(0.12, 180, 100, 320),
+      detected(0.16, 200, 100, 320),
+    ]
+
+    it('does NOT cut at a collapsed detection when its neighbours are continuous with each other', () => {
+      const { samples: out, diagnostics } = select(WEDGE)
+
+      expect(diagnostics.segmentCount).toBe(1)
+      // ONE event, not two: declining the cut in front of the wedge also stops the cut behind it
+      // from ever being evaluated, because the wedge never becomes the reference.
+      expect(diagnostics.bridgedCuts).toBe(1)
+      expect(diagnostics.rejectedOtherSegment).toBe(0)
+      expect(diagnostics.rejectedBelowFloor).toBe(0)
+      expect(diagnostics.detectedSamplesOut).toBe(4)
+      // Bridge-and-keep: the offending frame stays in the segment and contributes its area.
+      expect(diagnostics.segments[0].frameCount).toBe(4)
+      out.forEach((sample, i) => {
+        expect(sample).toBe(WEDGE[i])
+      })
+    })
+
+    it('still cuts when the discontinuity survives removing the offending frame', () => {
+      // The negative control for the case above, so it is not vacuous. Same first two boxes, but
+      // the track really does jump: the last two sit across the frame, continuous with each other
+      // and with nothing else. `(a,c)` now fails on position, so the bridge is refused and the
+      // cuts stand.
+      const samples: PoseSample[] = [
+        detected(0, 100, 100, 400),
+        detected(0.08, 800, 100, 150),
+        detected(0.12, 1500, 600, 320),
+        detected(0.16, 1520, 600, 320),
+      ]
+
+      const { diagnostics } = select(samples)
+
+      expect(diagnostics.segmentCount).toBe(3)
+      expect(diagnostics.bridgedCuts).toBe(0)
+    })
+
+    it('two consecutive discontinuous detections still cut', () => {
+      // Bounds the tolerance to exactly one detection. The second and third boxes are continuous
+      // with each other but not with the first, so the bridge from the first over the second lands
+      // on a third frame that is just as discontinuous -- no bridge, and the pair forms its own
+      // segment rather than being swallowed.
+      const samples: PoseSample[] = [
+        detected(0, 100, 100, 400),
+        detected(0.08, 800, 100, 150),
+        detected(0.12, 810, 100, 150),
+        detected(0.16, 180, 100, 320),
+      ]
+
+      const { diagnostics } = select(samples)
+
+      expect(diagnostics.segmentCount).toBe(3)
+      expect(diagnostics.bridgedCuts).toBe(0)
+    })
+
+    it('does not bridge across a time gap, even when the geometry would allow it', () => {
+      // The wedge fixture's geometry exactly, with the last two frames pushed out past the 1.0s
+      // continuity-gap tolerance. `(a,c)` is still geometrically continuous (IoU 0.64, ratio
+      // 1.5625) -- only the elapsed time differs, and it is the term a geometry-only bridge would
+      // omit. See the 12-segment case in 'diagnostics reporting' for the same trap at scale.
+      const samples: PoseSample[] = [
+        detected(0, 100, 100, 400),
+        detected(0.08, 800, 100, 150),
+        detected(1.2, 180, 100, 320),
+        detected(1.24, 200, 100, 320),
+      ]
+
+      const { diagnostics } = select(samples)
+
+      expect(diagnostics.segmentCount).toBe(3)
+      expect(diagnostics.bridgedCuts).toBe(0)
+    })
+  })
+
   describe('never substitutes another person for a rejected one', () => {
     it('every survivor is its input by reference and every rejection is exactly a null frame', () => {
       const samples: PoseSample[] = [
@@ -537,6 +636,7 @@ describe('selectRetroactivePersonOfInterest', () => {
       expect(diagnostics.skipReason).toBe('disabled')
       expect(diagnostics.detectedSamplesOut).toBe(2)
       expect(diagnostics.segmentCount).toBe(0)
+      expect(diagnostics.bridgedCuts).toBe(0)
       expect(diagnostics.minBoundingBoxAreaPx).toBe(0)
     })
 
@@ -604,6 +704,12 @@ describe('selectRetroactivePersonOfInterest', () => {
       const { diagnostics } = select(samples)
 
       expect(diagnostics.segmentCount).toBe(12)
+      // The splice-tolerance landmine, asserted rather than left implicit: frames i-1 and i+1
+      // share parity here, so they sit at the SAME centre x with an area ratio of at most 2.25 --
+      // geometrically continuous with each other, inside the bound of 4, IoU 0.444. Only the 4s
+      // between them refuses the bridge. A bridge that checked geometry without re-applying
+      // maxContinuityGapSeconds would collapse this to ~6 segments and ~5 bridged cuts.
+      expect(diagnostics.bridgedCuts).toBe(0)
       expect(diagnostics.segments).toHaveLength(10)
       const areas = diagnostics.segments.map((s) => s.integratedAreaPx)
       expect([...areas].sort((a, b) => b - a)).toEqual(areas)
