@@ -124,8 +124,25 @@ export interface RetroactivePersonSelectionConfig {
  * leaving this bound's own meaning untouched — see `maxCenterSpeedSidesPerSecond` below for the
  * bound that did have to move, and design.md's D4 for why.
  *
- * `maxCenterSpeedSidesPerSecond: 3` — the same bound the online gate uses, for the same reason
- * (a runner crossing a 1920px frame in ~1.5s is ~1.8 sides/s against a ~700px box).
+ * `maxCenterSpeedSidesPerSecond: 4` vs. the online continuity gate's 3 — deliberately looser, for
+ * the SAME asymmetric-false-reject reason `maxAreaRatio` is (above), applied to the bound that had
+ * been left at parity. A runner crossing a 1920px frame in ~1.5s is ~1.8 sides/s against a ~700px
+ * box, so 3 was never a tight bound on real locomotion — what it is actually bounding here is
+ * intra-person CENTROID noise, and `deriveBoundingBox`'s confidence gate moves the centroid
+ * whenever limbs drop out, exactly as it moves the area. Both halves of the position test are
+ * perturbed by the same mechanism the area bound already got margin for.
+ *
+ * Sized by the measured Demo 1 wedge (design.md D4): the pair the splice-tolerance bridge must
+ * merge, t=4.24 against t=4.36, travels 273.2px against a 253.9px budget at 3 sides/s — it misses
+ * by 7.6%, and the boxes are disjoint in x by 0.49px so IoU is exactly 0 and cannot rescue it.
+ * **4 is chosen because it is the same 4/3 loosening `maxAreaRatio` already carries**, making the
+ * offline stage uniformly 4/3 more permissive than the online gate for one stated reason — NOT
+ * because it is the smallest value that clears that measurement. A value fitted to the shortfall
+ * (~3.3) would sit 2% above a single clip's failure point; 4 clears it by ~24%.
+ *
+ * This loosens the ADJACENT check as well as the bridge — `isContinuousPair` is deliberately one
+ * helper — so segmentation is uniformly more permissive, not just more forgiving of splices. The
+ * multi-person merge gate is what bounds that; see design.md D4 and the A/B tables.
  *
  * `maxContinuityGapSeconds: 1.0` — this pipeline's sampling gaps are tens of milliseconds; a
  * full second without a single usable detection is a different scene, not a stride.
@@ -136,7 +153,7 @@ export const DEFAULT_RETROACTIVE_PERSON_SELECTION_CONFIG: RetroactivePersonSelec
   minKeypointConfidence: 0.3,
   minConfidentKeypoints: 4,
   maxAreaRatio: 4,
-  maxCenterSpeedSidesPerSecond: 3,
+  maxCenterSpeedSidesPerSecond: 4,
   maxContinuityGapSeconds: 1.0,
 }
 

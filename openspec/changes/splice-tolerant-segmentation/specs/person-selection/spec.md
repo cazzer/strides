@@ -9,6 +9,12 @@ AND a bounding-box area ratio inside a symmetric band) — or whenever more than
 of seconds separates them, since across a long enough gap a speed bound permits any displacement
 at all and stops meaning anything.
 
+What is shared with the online anchor gate is the predicate's SHAPE, not its bounds. The system
+SHALL resolve the offline bounds independently of the online gate's, and they MAY be looser,
+because the two uses have asymmetric false-reject costs: online, a false reject skips one anchor
+update and the next frame gets another try, whereas here a false cut can strand every earlier
+frame in a losing segment.
+
 The system SHALL NOT cut at a surviving detection when the surviving detections immediately
 before and after it pass that same test — including its time-gap term — against each other. One
 collapsed detection is a measurement failure on a single frame, not evidence of a second subject,

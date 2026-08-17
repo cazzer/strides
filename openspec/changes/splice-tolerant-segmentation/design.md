@@ -105,6 +105,65 @@ with the winner; a bridged frame sits inside the winner's *evidenced interior* a
 box. If a metric ever moves implausibly and traces to t=4.32, bridge-and-null needs its own
 decision as a follow-up — not a mid-flight scope change here.
 
+## D4 — `maxCenterSpeedSidesPerSecond: 4` offline, versus the online gate's 3
+
+**Added after the first A/B measured the bridge rule as a complete no-op on Demo 1.** The rule was
+correct and fired nowhere; see "Measured A/B results (round 1)". This decision is what changed as a
+result, and it is a decision about the *bound*, not about the rule's shape.
+
+**The binding constraint was the bound, not the bridge.** The round-1 trace shows the bridge asking
+exactly the right question about exactly the right pair — t=4.24 against t=4.36, 0.12 s apart,
+inside the time-gap tolerance — and `isBoundingBoxContinuous` answering no:
+
+- the boxes are disjoint in x by **0.49 px**, so IoU is exactly **0** (the ticket's "IoU ≈ 0.13" is
+  wrong) and the overlap term cannot carry position;
+- the centre-speed term therefore has to carry it alone, and travels **273.2 px against a 253.9 px
+  budget** at 3 sides/s — short by **7.6%**;
+- the area ratio is **1.553**, comfortably inside the bound of 4, and is never consulted because
+  `positionContinuous && …` short-circuits first.
+
+D1 says the bridge "can only merge a pair the unmodified predicate already accepts". That is exactly
+what bites: the predicate does not accept this pair. No shape of splice tolerance reaches it.
+
+**Parity with the online gate was already deliberately broken, and this is the same break.** D7
+loosened `maxAreaRatio` to 4 against the online gate's 3 on an argument that applies verbatim to the
+speed bound — *"Online, a false reject skips ONE anchor update and the next frame gets another try.
+Here, a false cut can strand the rest of the clip in a losing segment."* A 7.6% miss stranding a
+5-frame prefix **is** that asymmetry. `maxCenterSpeedSidesPerSecond` is simply the one bound that
+never received the treatment its sibling did — an omission, not a considered decision.
+
+The mechanism is shared, too. D7's real justification for the area margin is that
+`deriveBoundingBox` hulls only CONFIDENCE-GATED keypoints, so a frame that drops limbs shrinks the
+box **and translates its centroid**. Those are the same event. Giving the area half margin for
+keypoint-dropout noise while holding the position half at online parity protects against one
+symptom of a single cause.
+
+**Why 4 and not 3.3.** 3.3 is the smallest value that clears the measured 273.2-vs-253.9 shortfall,
+which makes it a threshold fitted to one clip — the precise move round 1 refused to make. **4 is the
+same 4/3 loosening the area bound already carries**, so the offline stage becomes uniformly 4/3 more
+permissive than the online gate for one stated reason, and the two bounds read as one decision
+rather than two independently-tuned numbers. It also clears the measurement by ~24% rather than
+sitting 2% above a single clip's failure point, so it is not calibrated to Demo 1's particular
+geometry. 3 was never a tight bound on real locomotion in any case: a runner crossing a 1920 px
+frame in ~1.5 s is ~1.8 sides/s against a ~700 px box.
+
+**This loosens the ADJACENT check as well as the bridge, by construction.** `isContinuousPair` is
+deliberately one helper (D1), so segmentation as a whole becomes more permissive — not merely more
+forgiving of splices. That is intended, and it is the reason the **multi-person merge gate, not
+Demo 1, is the real test of this change**: do-not-ship condition 1 (winner `medianAreaPx` down >10%
+or `separationRatio` < 3) continues to outrank every accept condition, and `bridgedCuts` on the
+multi-person clip is watched alongside it, because R3's alternating-stream finding gets easier to
+trigger with a looser speed bound.
+
+**The online gate is not touched.** `personOfInterestConfig.ts` keeps `maxCenterSpeedSidesPerSecond:
+3`; the change is confined to `DEFAULT_RETROACTIVE_PERSON_SELECTION_CONFIG`.
+
+**No numeric bound appears in any spec**, so this needs no delta of its own — verified by grep over
+`openspec/specs/`. The `person-selection` requirement's body did describe continuity as "the SAME
+predicate the online anchor gate uses", which with two of three bounds now deliberately looser
+would read as a claim that the constants match; the already-MODIFIED requirement gains one
+paragraph separating the predicate's shared SHAPE from its independently-resolved BOUNDS.
+
 ## Gate amendment — the epic's headline criterion is a joint #54 + #57 outcome
 
 Recorded before measurement, not renegotiated after. `segmentCount === 1` on Demo 1 is **not
@@ -162,7 +221,12 @@ span had its own wedge. `medianAreaPx` is what discriminates "a wedge inside one
    only one boundary healed (D2).
 5. `detectedSamplesOut` decreases on any clip.
 
-## Measured A/B results (2026-08-16, real GPU)
+## Measured A/B results — ROUND 1 (2026-08-16, real GPU): bridge rule alone, bound still 3
+
+**Kept deliberately.** This is the evidence that the *bound*, not the bridge's shape, was the
+binding constraint on Demo 1 — the measurement D4 exists because of. Round 2 (the shipping
+configuration) is below it.
+
 
 `scripts/ab-person-selection.mjs`, 3 trials × 3 clips × 2 arms, `--port 5199` (5173 was held by the
 main checkout's dev server — the exact hazard #53's reuse refusal exists for). Renderer confirmed
