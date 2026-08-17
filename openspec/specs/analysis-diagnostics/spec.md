@@ -146,8 +146,9 @@ The system SHALL include a `personSelection` block in every `AnalysisDiagnostics
 unconditionally — including when the selection stage was disabled or skipped — carrying that
 stage's status, its typed skip reason (or null when it selected), the resolved absolute area
 floor, the pre-selection and post-selection detection counts, the counts rejected below the floor
-and rejected for belonging to another segment, the total segment count, the number of cuts the
-splice-tolerance rule declined, the ranked segment summaries, and the separation ratio. The block
+and rejected for belonging to another segment, the count nulled for lying outside the winning
+segment's evidenced interior, the total segment count, the number of cuts the splice-tolerance rule
+declined, the ranked segment summaries, and the separation ratio. The block
 SHALL be the value the selection stage produced, by reference, never a recomputation. Because
 `sampling.detectedFrames` reflects the post-selection sequence, the pre-selection count preserved
 here is what distinguishes "the detector found nothing" from "the detector found somebody else".
