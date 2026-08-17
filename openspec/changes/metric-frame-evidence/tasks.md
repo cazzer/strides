@@ -24,6 +24,15 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
 - [x] 0.10 Spec deltas for `form-heuristics`, `results-view`, `multi-clip-analysis`.
 - [x] 0.11 `openspec validate metric-frame-evidence --strict` passes.
 - [ ] 0.12 **Not archived here.** Archiving happens in §8, after live verification.
+- [x] 0.13 **Correction pass over `design.md`/`tasks.md`** (post-#61). Six corrections folded in,
+  each marked **[correction]** in place: D3 hard reject 1 is `cropDerivable` ("no seed keypoint
+  resolves"), D3's factor is `detectionFactor` counted per keypoint, D8 gains
+  `verticalOscillationCm`'s `IntegrationRun.frames` widening (and tasks §2.8's file is corrected),
+  D2 fixes the crop constants at `1.6` / `320`, D9 names the `[evidence-coverage]` line with a
+  schema and an owner, and D11/D1 settle base-versus-ghost for extreme pairs. Plus one
+  pre-registered risk recorded, not solved: the extreme role is structurally unreachable on a
+  bimodal distribution. **No `src/` change and no spec-delta change** — every correction was
+  additive prose over decisions the deltas do not name.
 
 ## 1. `MetricResult.exemplars` and the six event-sampled metrics (#61)
 
@@ -41,6 +50,11 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
   measured. And `resolutionFactor` counts per KEYPOINT rather than per resolved input, because
   `resolveMidpoint` reports `interpolated: true` for a one-sided pair even when that side was
   detected, which would drive a two-midpoint metric to a flat 0 on 17-22% of real frames.
+  **Both are now folded into design.md D3 as the stated contract** (shipped as `cropDerivable`
+  and `detectionFactor`), along with two decisions #61 made that D3 had left open and #62/#63 must
+  match: `pairQuality = min` of the two instants, and base = the instant furthest from the median
+  for an extreme pair / closest to it for a representative one (D11 wins over D1's `(base)` column).
+  **Import from `exemplars.ts`; do not re-derive any of this from the older prose.**
 - [x] 1.3 `kneeFlexion.ts`: stop dropping minima at `:141`; add `timestamp: extremum.timestamp` to
   the `FlexionPeak` literal at `:142`; emit peak-nearest-the-median paired with its adjacent
   same-leg extension minimum. Rank with `legInterpolated[side][frameIndex]` (`:111-113`, read `:158`).
@@ -87,12 +101,30 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
 - [ ] 2.4 `verticalOscillation.ts`: emit the bounce trough/peak pair for one cycle.
 - [ ] 2.5 `verticalOscillationCm.ts`: pair each fit with its producing `IntegrationRun` (which
   carries `timestamps`, `:41-47`) so `selectWeightedMedianFit`'s winner has attributable instants.
-  This is the awkward one — budget for it.
+  This is the awkward one — budget for it. **Widen `IntegrationRun` with a parallel
+  `frames: RobustPoseFrame[]`** (one entry per run sample, pushed in `buildRuns`'s existing loop
+  where `frame` is already the loop variable) — see 2.8.
 - [ ] 2.6 `verticalRatio.ts`: numerator exemplar from the same bounce fit.
 - [ ] 2.7 `cadence.ts`: **emit nothing** (design D7). Add a test asserting `cadence.exemplars` is
   absent, so a future contributor's "fix" fails loudly rather than shipping a borrowed picture.
-- [ ] 2.8 Per-instance signal for this family: the cheapest honest option is to stop discarding
-  `mid.interpolated` at `hipBounce.ts:83`. Do it only as far as the gate needs, and record it.
+- [ ] 2.8 Per-instance signal for this family. **Corrected — the original text ("stop discarding
+  `mid.interpolated` at `hipBounce.ts:83`") named the wrong mechanism and, for
+  `verticalOscillationCm`, the wrong file.** The shipped gate is FRAME-based: `cropDerivable(frame,
+  seed)` and `detectionFactor(frame, seed)` both read `frame.keypoints`, and `ExemplarInstant` is
+  `{ frame, seed, value? }`. So:
+  - **Pixel path (`verticalOscillation`, `verticalRatio`) — no change to `hipBounce.ts` at all.**
+    `analyzeBounceSignal`'s `hipY` is `frames.map(...)` and therefore index-parallel to `frames`,
+    and the D4 snap (`findNearestFrame`) hands back the frame object directly. A per-frame
+    `interpolated` flag is not needed and must not be added "for the gate".
+  - **Centimetre path — `verticalOscillationCm` does NOT go through `hipBounce.ts`.** It builds its
+    own series in `buildRuns` (`:78-96`) and drops `hipMid.interpolated` there; its own module doc
+    states `analyzeHipBounce`'s series is never read here. Give it 2.5's `frames` array. Do **not**
+    add `interpolated: boolean[]` instead — it can neither derive a crop nor be scored, and the
+    boolean it would carry is `resolveMidpoint`'s, which reads `true` for a one-sided pair even
+    when that side was detected (design D3's `detectionFactor` correction).
+  - Snap each instant against the frames the fitted samples came from: the winning run's `frames`
+    for the cm path, the metric's own `frames` for the pixel path.
+  - Reuse `pairQuality` (`min`) for the bounce pair and D11's base rule; do not invent a mean.
 - [ ] 2.9 Regression anchor: track clip VO_cm 4.78–4.79 cm (±0.005 across trials),
   `fit.frequencyHz × 60` == `cadence.value`. A >0.05 cm spread means something moved.
 - [ ] 2.10 `npm test`, `tsc -b`, `eslint` clean.
@@ -104,7 +136,8 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
   `interpolatedCount` is per-side/per-frame). Carry the median-amplitude index back from the
   caller's `median(...)` at `:149-150`.
 - [ ] 3.2 Emit up to one exemplar per side: wrist-high vs wrist-low of that side's median-amplitude
-  half-swing.
+  half-swing. Score both instants through `exemplars.ts`, combine with `pairQuality` (`min`), and
+  pick the base by D11's rule — do not hand-roll either.
 - [ ] 3.3 `strideLength.ts`: widen `StrideLengthResult` to keep each displacement's two footstrike
   instants (identity dies at `:151`). Safe — one production caller (`verticalRatio.ts:175`), no
   production object literals.
@@ -144,9 +177,15 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
   (`skeletonGeometry.ts:85-108`), **reused, not reimplemented**, plus the half-median-interval snap
   tolerance it does not provide (it clamps and never returns null for a non-empty array).
 - [ ] 5.3 Crop rect: `boundingBoxOfPoints` over the exemplar's own `cropKeypoints`, unioned across
-  both frames of a pair, then `computeCropRect` (`movenetCrop.ts:269`) for padding, squaring and
-  clamping. Do **not** reuse `deriveBoundingBox` — it excludes exactly the head/foot names this
-  table wants.
+  both frames of a pair, then `computeCropRect(box, w, h, EVIDENCE_CROP_PADDING_MULTIPLIER,
+  EVIDENCE_CROP_MIN_SIDE_PX)` (`movenetCrop.ts:269`) for padding, squaring and clamping. Do **not**
+  reuse `deriveBoundingBox` — it excludes exactly the head/foot names this table wants.
+  **The two constants are `1.6` and `320` (design D2), fixed there, not chosen here** — export them
+  from this module so tests and #68's report can name them. They are ONE pair for every metric:
+  per-metric framing already lives in D2's seed ∪ context table, and a second per-metric table
+  would vary apparent subject scale, which is the one thing D13 exists to hold constant. Note
+  `computeCropRect` applies the `min(frameWidth, frameHeight)` cap **last**, so the 320 floor can
+  never demand pixels a small source does not have.
 - [ ] 5.4 Context keypoints are strictly optional: a crop must be well-defined from the seed alone,
   and any unresolvable context point is omitted. Never anchor on a `(0,0)` MoveNet foot keypoint.
 - [ ] 5.5 Blend plan: base = `timestamp`, ghost = `pairedTimestamp`, `globalAlpha` 1.0 / 0.5.
@@ -157,10 +196,17 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
   honest single-instant semantics.
 - [ ] 5.8 **`metadata.durationSec` must not appear in this module at all.** A unit test on a
   metadata fixture with `durationSec: Infinity` produces a well-formed plan.
-- [ ] 5.9 Unit tests: crop rects at frame edges, missing/interpolated keypoints, single vs pair,
+- [ ] 5.9 Export the **pure** `summarizeEvidenceCoverage(...)` — plan(s) + `fusionSourceIndices` in,
+  the `[evidence-coverage]` payload out, exactly the schema in design D9. **Pure: no `console`, no
+  DOM** (§7.12 emits it). Numbers and enums only — no `ImageBitmap`, canvas, `Blob`, object URL or
+  data URI may be reachable from the payload, and no metric `value`/`confidence` (that is
+  `[analysis-diagnostics]`'s job and two sources of truth can disagree). Unit-test that it
+  `JSON.stringify`/`parse`s round-trip and that every `no-evidence` reason reaches it verbatim.
+- [ ] 5.10 Unit tests: crop rects at frame edges, missing/interpolated keypoints, single vs pair,
   the near-identical case, the gate threshold boundary, degenerate/unbounded keypoint sets, and a
-  4K-sized frame.
-- [ ] 5.10 `npm test`, `tsc -b`, `eslint` clean.
+  4K-sized frame. Include the degenerate single-point seed, which must land on the 320 px floor
+  rather than a zero-side rect.
+- [ ] 5.11 `npm test`, `tsc -b`, `eslint` clean.
 
 ## 6. Frame extractor — seek, crop, composite (#66)
 
@@ -210,7 +256,13 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
   keyboard-reachable.
 - [ ] 7.10 Tailwind v4 utilities only; BEM-ish class names are test hooks with no CSS behind them.
   **No new runtime dependencies.**
-- [ ] 7.11 `npm test`, `tsc -b`, `eslint`, `npm run build` clean.
+- [ ] 7.11 Emit the `[evidence-coverage]` line — `console.log('[evidence-coverage]',
+  JSON.stringify(summarizeEvidenceCoverage(...)))` from §5.9's pure summarizer, `import.meta.env.DEV`-
+  gated exactly as `useVideoAnalysis`'s two lines are. **Once per analysis run** (not once per
+  clip — clips are an array in the payload), and **after extraction has settled for every clip**,
+  so `'extraction-failed'` is a verdict rather than a pending state. This is #68's §8.6 observable;
+  without it that task has nothing to read. It must NOT ride on `[analysis-diagnostics]`.
+- [ ] 7.12 `npm test`, `tsc -b`, `eslint`, `npm run build` clean.
 
 ## 8. Live verification, then archive (#68)
 
@@ -228,14 +280,37 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
 - [ ] 8.5 **Look at the ghosts.** Save the composites and read them. Confirm a legible delta and the
   right body region per metric. An unreadable double-exposure is a finding to report.
 - [ ] 8.6 Report per-clip, per-metric coverage: which produced evidence, which were gated out, why.
-  A metric gated out on **every** clip is a finding — `MIN_EXEMPLAR_QUALITY` is pre-registered and
-  is not to be quietly tuned down to fix it.
+  Read it off the **`[evidence-coverage]`** console line (§5.9/§7.11), matched exclusively
+  (`startsWith('[evidence-coverage]')`), `JSON.parse`d — same pattern as the two
+  `[analysis-diagnostics]` lines. A metric gated out on **every** clip is a finding —
+  `MIN_EXEMPLAR_QUALITY` is pre-registered and is not to be quietly tuned down to fix it.
+- [ ] 8.6b **Measure the extreme-role risk first, before touching any number** (design D3, and the
+  Risks row). `overstriding` and `trunkLean` are the epic's only extreme-role metrics, and an
+  extreme instant needs `|v − median| ≥ 1.5·MAD` to clear `0.5` — which a tightly bimodal
+  per-instance distribution (max deviation **1.0 MAD**) and a clean sinusoid (**≈1.41**)
+  structurally cannot reach. Report, per clip and per metric: the per-instance `median`, `MAD`,
+  `sampleCount`, the max `|v − median|` **in MADs**, and whether `describeDistribution().usable`
+  was even true. If either metric emits nothing on every clip, **write that up as the finding** —
+  it says the typicality ramp and the outlier bound share one `3·MAD` scale and cannot both be
+  right for a bimodal metric, which is a design question for a follow-up ticket. Loosening
+  `MIN_EXEMPLAR_QUALITY` to make the symptom disappear is editing a criterion to match a result and
+  is explicitly out of bounds for this ticket.
 - [ ] 8.7 Confirm `[analysis-diagnostics]` still `JSON.parse`s and contains no image data or blob
   URLs. Match the prefix exclusively
-  (`startsWith('[analysis-diagnostics]') && !startsWith('[analysis-diagnostics:')`).
+  (`startsWith('[analysis-diagnostics]') && !startsWith('[analysis-diagnostics:')`). Confirm the
+  same of `[evidence-coverage]`: parses, and carries no `ImageBitmap`/canvas/`Blob`/object-URL/
+  data-URI value anywhere in the payload.
 - [ ] 8.8 Confirm no analysis wall-clock regression against a pre-change baseline on the same
   machine.
 - [ ] 8.9 `npm test`, `tsc -b`, `eslint`, `npm run build`, `npm run test:e2e` clean.
+- [ ] 8.9b **Fix the one delta sentence that contradicts shipped code, BEFORE archiving.**
+  `specs/form-heuristics/spec.md`'s first hard-reject condition still reads "any of the keypoints
+  defining its crop region is `'unrecoverable'` at that frame" — the pre-#61 rule, which
+  `exemplars.ts`'s `cropDerivable` violates and which already contradicts this change's own
+  `results-view` delta ("the **resolvable subset** of the exemplar's named keypoints"). Rewrite that
+  clause to "no keypoint defining its crop region resolves to a position at that frame". The block
+  is `## ADDED`, so this is an ordinary delta edit. Archiving it unfixed puts the wrong rule into
+  `openspec/specs/` as the authoritative contract. See design.md's spec-delta section.
 - [ ] 8.10 `openspec validate metric-frame-evidence --strict`, then
   `openspec archive metric-frame-evidence --yes`. **Promptly** — batched archiving has drifted
   `openspec/specs/` in this repo before.

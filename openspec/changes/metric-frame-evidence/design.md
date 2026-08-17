@@ -4,6 +4,16 @@ This document is the contract the eight sibling tickets of #59 implement against
 below was made once, here, so it is not re-litigated per-ticket. Where a research claim carried on
 #59/#60 turned out to be wrong, the corrected fact is stated inline and marked **[correction]**.
 
+The same marker now also covers a second and third source of correction, both later than the
+original draft, so the history of what changed stays legible rather than silently rewritten:
+
+- **corrections from #61's implementation.** #61 has shipped (`cdaee0d`) and `src/heuristics/exemplars.ts`
+  is the de-facto reference for the shared gate. Where #61 deliberately diverged from this document
+  because the rule as drafted contradicted another decision in it, the **shipped** rule is what is
+  stated below. #62/#63/#65 import from that file; they must not re-implement a superseded rule.
+- **corrections from a design review**, where a decision was missing outright rather than wrong —
+  a number a ticket would otherwise have had to invent, or an observable with no owner.
+
 ## Context
 
 `computeFormHeuristics` runs over a **presence-trimmed** frame array
@@ -54,6 +64,11 @@ quality gate (D3):
 | `footStrikePattern` | **single**, up to 2 | the strike whose offset ratio is nearest the median (then the next-nearest) | — | representative |
 | `stepWidth` | ghost pair (constructed) | one strike of the best adjacent **opposite-side** strike pair | the other strike of that pair | representative |
 | `stepWidthCm` | ghost pair (constructed) | same rule, over the centimetre offsets | same | representative |
+
+**[correction] — the `(base)` / `(ghost)` column headers above are naming, not the blend plan.**
+Which of a pair is actually drawn at full opacity is decided per run by **D11**'s rule (furthest
+from the metric's own median for an extreme pair, closest to it for a representative one), and on
+some clips that is instant **B**. Read the columns as "the instant this row is named after".
 
 ### Verification notes, per row
 
@@ -183,13 +198,63 @@ exists to prevent.
    demo clips are 4K). A rect that moves between the two frames would make the ghost read as two
    different shots rather than one runner at two instants.
 2. Pass that box to **`computeCropRect`** (`movenetCrop.ts:269`) with an evidence-specific padding
-   multiplier and minimum side. Do **not** write a second crop-rect function: `computeCropRect`
-   already produces a **square**, already clamps to `[0, frameWidth] × [0, frameHeight]` by shifting
-   rather than shrinking, and is already unit-tested. Reusing it delivers D13's single aspect ratio
-   for free.
+   multiplier and minimum side — **the two constants are fixed below, not left to #65**. Do **not**
+   write a second crop-rect function: `computeCropRect` already produces a **square**, already
+   clamps to `[0, frameWidth] × [0, frameHeight]` by shifting rather than shrinking, and is already
+   unit-tested. Reusing it delivers D13's single aspect ratio for free.
 3. Do **not** reuse `deriveBoundingBox` (`movenetCrop.ts:54`). It takes raw scored `Keypoint[]` and
    hard-excludes head and foot names via `BBOX_EXCLUDED_KEYPOINT_NAMES` — the opposite of what this
    table needs. A small pure `boundingBoxOfPoints(points)` local to `evidenceFrames.ts` is correct.
+
+### The two crop constants — **[correction]**, these were never specified and #65 cannot land without them
+
+```
+EVIDENCE_CROP_PADDING_MULTIPLIER = 1.6
+EVIDENCE_CROP_MIN_SIDE_PX        = 320
+```
+
+**One constant pair for every metric. Not a per-metric table.** The decision, not a hedge:
+
+- Per-metric framing **already exists**, one layer up — it is D2's seed ∪ context table. A foot
+  crop and a full-body crop differ because `footStrikePattern` seeds on ankle/knee(+heel/foot_index)
+  and `trunkLean` seeds on shoulders/hips/head, so the *box* differs by an order of magnitude before
+  any padding is applied. The multiplier is a **relative** enlargement of whatever box the metric's
+  own inputs produced, so it tracks the region automatically. A second per-metric table would
+  duplicate the first one's job in the one dimension D13 exists to hold constant — apparent subject
+  scale across the gallery — and would be taste with no evidence behind it, exactly the argument
+  D11 uses to refuse a per-metric opacity table.
+
+**Why 1.6, and why not the tracking crop's number.** **[correction]** the existing tracking-crop
+defaults are `paddingMultiplier: 1.75` / `minCropSidePx: 256`
+(`trackingCropConfig.ts`, `DEFAULT_TRACKING_CROP_CONFIG`) — **not** the 1.8 / 150 pair quoted in
+some notes, which come from the dynamic-valgus spike's experimental `deriveLegCropRect` on another
+branch and were never this repo's shipped defaults. Either way they are the wrong number to copy,
+because they buy something this crop does not need:
+
+- The tracking crop's padding is **slack for motion**. Its box is one frame old and the subject
+  moves before the next inference, so the multiplier has to cover that lag. The evidence crop's box
+  is the union across **both frames it will actually draw** (step 1), so the motion is already
+  inside the box; padding here buys *context* only.
+- `computeCropRect` squares by taking `max(boxWidth, boxHeight)`, so on the tall-thin box a human
+  produces the multiplier only controls the **long axis** margin — the short axis is already
+  massively widened by squaring alone (a 1:3 box becomes a square ≈4.8× its own width at 1.6). At
+  1.6 the long axis carries `(1.6 − 1)/2 = 30 %` of the box's own long dimension as margin at each
+  end: enough to place the body region in its body, not so much that the subject reads small at
+  gallery display size. 1.75 would push that to 37.5 % for no gain the ghost benefits from.
+
+**Why a 320 px floor.** The floor is a guard against a **degenerate box**, not a target:
+`side = max(boxW, boxH) × 1.6` is `0` for a seed that resolves to a single point — one hip with no
+resolvable context, or `kneeFlexion` at an instant where hip/knee/ankle nearly align. Without the
+floor that crop is empty. 320 native px is ~8 % of Demo 1's 3840 long edge and ~15 % of its 2160
+short edge, and it is chosen against the **viewer**, not the detector: a gallery image is on the
+order of 200–400 CSS px, so 320 native px survives a 2× DPR display without upscaling to mush,
+where the tracking crop's 256 only ever had to satisfy a 192 px model input. Note the floor is
+bounded above by the frame — `computeCropRect` applies `Math.min(..., min(frameWidth, frameHeight))`
+**last**, so on a small source (a 320×240 webcam clip) the cap wins at 240 and the floor can never
+demand pixels the source does not have.
+
+Both constants live in `evidenceFrames.ts` next to the code that passes them, exported so #65's
+tests and #68's report can name them.
 
 ### Where the table lives in code
 
@@ -226,13 +291,30 @@ consumers to `status`, and a score field on `ResolvedPoint` is an invitation to 
 
 Per candidate instant, `quality ∈ [0, 1]` is the product of exactly two factors:
 
-- **`resolutionFactor`** — the fraction of that instant's own metric-input points that resolved
-  `'detected'` rather than `'interpolated'`. Every metric already has these flags in scope
-  (`overstriding.ts:87`, `footStrikePattern.ts:137`, `stepWidth.ts:115-117`,
-  `stepWidthCm.ts:152-153`, `trunkLean.ts:84`, `kneeFlexion.ts:158` via
-  `legInterpolated[side][frameIndex]`). Interpolation **penalises**, it does not disqualify: a
-  strict "no interpolated input anywhere" rule empties the pool on real footage — CLAUDE.md records
-  17–22 % of track-clip frames resolving only one ear.
+- **`detectionFactor`** (**[correction]** — drafted here as `resolutionFactor`, "the fraction of
+  that instant's own metric-input **points** that resolved `'detected'`"; shipped in #61 as
+  `detectionFactor(frame, seed)` at `exemplars.ts:142`, **counting per KEYPOINT, not per resolved
+  input**). The shipped rule is the fraction of the instant's own crop-**seed keypoint names**
+  (D2) that `resolvePoint` returns non-null and non-`interpolated` for, read straight off
+  `frame.keypoints`.
+
+  The distinction is load-bearing and the draft version is a live bug, so it is recorded here
+  rather than left as an implementation detail. `resolveMidpoint` (`keypoints.ts:60-61`) returns
+  `interpolated: true` whenever it stood **one side in for a pair — even when that side was itself
+  `'detected'`**, by explicit design (its own doc comment says so). `trunkLean` resolves *two*
+  midpoints (`trunkLean.ts:156`, `:161`); on a frame where both pairs are one-sided, a
+  per-resolved-input reading is `0/2 = 0`, and the instant scores a flat zero however good the
+  underlying keypoints were. CLAUDE.md measures that condition — the "single-ear interpolation
+  tax" — at **17–22 % of frames on the track clip**, so the draft rule would gate the whole metric
+  out on real footage. Counting keypoints makes one missing side cost one point out of N
+  (`0.75` on a four-point torso seed, which is what #61's test pins), which is what
+  "interpolation **penalises**, it does not disqualify" was always supposed to mean.
+
+  Do not re-introduce the zero by "fixing" `detectionFactor` to read `ResolvedPoint.interpolated`
+  from the metric's own resolved inputs. The flags at `overstriding.ts:87`,
+  `footStrikePattern.ts:137`, `stepWidth.ts:115-117`, `stepWidthCm.ts:152-153`, `trunkLean.ts:84`
+  and `kneeFlexion.ts:158` remain correct for the *metric's own* `interpolatedFraction`; they are
+  the wrong input for this gate.
 - **`typicalityFactor`** — role-dependent, per D1:
   - *representative* instants: `1 − min(1, |v − median| / (3 · MAD))`
   - *extreme* instants: `min(1, |v − median| / (3 · MAD))`
@@ -249,8 +331,20 @@ This is why the gate cannot be "distance from median is bad" alone, which is wha
 
 ### Hard rejects (a score is never computed)
 
-1. Any of the instant's **seed** keypoints (D2) is `'unrecoverable'` at that frame — there is no
-   position to crop around.
+1. **[correction] — the shipped rule is `cropDerivable`: reject only when NO seed keypoint
+   resolves.** This was drafted as "any of the instant's **seed** keypoints (D2) is
+   `'unrecoverable'` at that frame", which contradicts D2 one section above: D2's crop rect is the
+   union of the **resolvable** seed ∪ context points, so a partially-resolvable seed still names a
+   position and still produces a well-defined crop. Worse, most seeds in D2's table are bilateral
+   pairs that `resolveMidpoint` resolves from a single side — so the drafted rule would discard
+   instants the metric *successfully measured* and whose crop is perfectly derivable. Shipped as
+   `cropDerivable(frame, seed)` (`exemplars.ts:126`): `seed.some((name) => resolvePoint(frame, name) !== null)`.
+
+   **The asymmetry that hid the bug**, worth naming so nobody "confirms" the old rule from these
+   two metrics: `stepWidth`/`stepWidthCm` resolve hip-mid through the **strict**
+   `resolveBilateralPair` (`stepWidth.ts:195`, `stepWidthCm.ts:227`), so a frame with an
+   unresolvable hip never becomes a candidate in the first place. For those two the old and new
+   rules coincide exactly, and no test over them can tell the two apart.
 2. **Outlier bound**, extreme instants only: `|v − median| > 3 · MAD`. A raw argmax that is a
    tracking glitch is rejected outright, not merely down-ranked. This is the guard that keeps
    `trunkLean`'s and `overstriding`'s ghosts from being two detector failures.
@@ -258,15 +352,63 @@ This is why the gate cannot be "distance from median is bad" alone, which is wha
    `Math.sign(sideHip.x − hipMid.x) || 1` fallback, where the `|| 1` silently invents a polarity.
 4. **Snap failure**: the instant does not resolve to a sampled frame within the snap tolerance (D8).
 
+### How a PAIR's quality aggregates — `min`, not mean
+
+**[correction] — this document scored *instants* and never said how a ghosted pair combines them.**
+#61 shipped `pairQuality(a, b) = Math.min(a, b)` (`exemplars.ts:190`); that is the rule, and
+#62/#63 must use the same helper rather than inventing a mean.
+
+Two reasons, and the second one is the interesting one:
+
+- A ghosted pair produces **one image**, and one unreadable half makes one unreadable image. An
+  average lets a strong instant carry a weak one over the threshold and ship exactly that.
+- On an **extreme** pair, `min` is also a **narrow-range filter**, and a wanted one. Both instants
+  of a `trunkLean`/`overstriding` pair are scored `'extreme'`, so both typicalities read
+  `|v − median| / (3·MAD)`. When the clip's range is narrow, *both* ends sit close to the median,
+  both typicalities are small, and the `min` gates the pair out — which is the correct outcome: a
+  runner whose lean never varies has no range to picture. This is the same instinct as D12's
+  near-identical demotion, one layer earlier and in value-space rather than pixel-space.
+
 ### Threshold, and what happens at zero survivors
 
 `MIN_EXEMPLAR_QUALITY = 0.5`, and at most `MAX_EXEMPLARS_PER_METRIC = 2` survivors are kept, ranked
-by `quality` descending.
+by `quality` descending. The comparison is `>=` (`exemplars.ts:258`), so a quality of exactly `0.5`
+is kept — which matters, because the no-usable-distribution fallback for an extreme instant lands
+on precisely that value.
 
 **0.5 is a judgment call, not a derived number** — stated plainly, in the same spirit as
 `presenceMinConsecutiveFrames`'s own doc ("a judgment-call threshold, not derived from real
 footage"). It is **pre-registered for measurement in #68**: report per-clip, per-metric coverage.
 A metric gated out on *every* clip is a finding to report, not a number to quietly tune down.
+
+#### A measured structural risk to the EXTREME role, pre-registered rather than tuned around
+
+**[correction] — surfaced by #61's implementation; recorded, deliberately not fixed.**
+`MIN_EXEMPLAR_QUALITY` was **not** touched in response to it, and must not be touched in #62/#63/#65
+either. The interaction is arithmetic, so it can be stated exactly:
+
+An extreme instant's typicality is `|v − median| / (3·MAD)`, so clearing `0.5` at a perfect
+`detectionFactor` needs `|v − median| ≥ 1.5 · MAD`. Whether any instant in a clip can reach that is
+a property of the metric's own distribution *shape*, not of the runner:
+
+| per-instance distribution | max deviation, in MADs | extreme instant can reach 0.5? |
+|---|---|---|
+| tightly bimodal (two clusters, e.g. left-foot vs right-foot strikes) | **1.0** | **never** |
+| clean sinusoid, uniformly sampled in phase | **≈1.41** | **never** |
+| uniform | 2.0 | yes |
+| Gaussian, n ≈ 20–60 | ≈3.7–4.4 | comfortably |
+
+`generateSyntheticGait` produces the bimodal case, and a *symmetric real gait* plausibly produces it
+too — which puts `overstriding` and `trunkLean`, the epic's only two extreme-role metrics, at
+structural risk of emitting **nothing on every clip**. The `usable === false` fallback does not
+rescue them: it scores an extreme instant `0.5` flat, which clears only when `detectionFactor` is
+exactly `1.0`.
+
+**#68 measures this before anyone touches a number** (§8.6). A metric gated out on every clip is a
+**finding** — it means the extreme role's ramp and the outlier bound are both keyed to the same
+`3·MAD` and cannot both be right for a bimodal metric, which is a design question, not a threshold
+question. Loosening `MIN_EXEMPLAR_QUALITY` to make the symptom go away would be editing a criterion
+to match a result.
 
 **Zero survivors:**
 
@@ -524,6 +666,51 @@ live: `IntegrationRun` is `{ hipY, timestamps, scales }` (`:41-47`). Carry the p
 fit the runs into `{ fit, run }` tuples and select over those — so the winner's instants are
 attributable to real frames. This is the awkward part of #62; budget for it.
 
+#### How this metric gets a `detectionFactor` — **[correction]**, decided here, was undefined
+
+**Widen `IntegrationRun` with a parallel `frames: RobustPoseFrame[]`** — one entry per run sample,
+index-parallel to `hipY`/`timestamps`/`scales`, pushed at `buildRuns`'s existing loop
+(`verticalOscillationCm.ts:58-76`) where `frame` is already the loop variable. One line, no new
+lookups, no second traversal.
+
+This matters because **`verticalOscillationCm` has no per-instance interpolated signal of its own,
+and the fix drafted for the rest of the family does not reach it.** Verified against source:
+
+- The metric builds its **own** series via `buildRuns` → `resolveMidpoint(frame, 'left_hip',
+  'right_hip')` (`:63`) and pushes only `hipMid.y`; the flag is dropped on that line.
+- Its module doc is explicit that `analyzeHipBounce`'s series is **never read** here — that second
+  call exists for coverage/interpolation bookkeeping only and "its own spectral `fit` field is
+  DELIBERATELY UNUSED". So there is no shared series to fix once.
+- **[correction] to tasks §2.8**, which named the fix as "stop discarding `mid.interpolated` at
+  `hipBounce.ts:83`". That file is the right one for `verticalOscillation`/`verticalRatio`/`cadence`
+  and the wrong one for `verticalOscillationCm`, which does not go through it.
+
+**Why `frames`, and not the obvious `interpolated: boolean[]`.** The obvious candidate does not fit
+the gate that actually shipped. `exemplars.ts` is **frame-based**: `cropDerivable(frame, seed)`
+(hard reject 1) and `detectionFactor(frame, seed)` both take a `RobustPoseFrame` and read
+`frame.keypoints` directly, and `ExemplarInstant` is `{ frame, seed, value? }`. A bare
+`interpolated: boolean[]` satisfies **neither** — it cannot derive a crop and cannot be scored —
+so it would force this one metric onto a bespoke second scoring path, which is the thing D3's
+"one implementation, imported by every metric" exists to prevent. Worse, it would encode the exact
+bug C2 above corrects: the boolean it would carry is `resolveMidpoint`'s, which reads `true` for a
+one-sided pair *even when that side was detected*.
+
+**The pixel path needs no widening at all.** `analyzeBounceSignal`'s `hipY` is built with
+`frames.map(...)` (`hipBounce.ts:79-87`) and is therefore **strictly index-parallel to `frames`**,
+nulls included — and its callers already hold `frames`. An instant derived from the fit's phase is
+snapped with `findNearestFrame` (D4), which returns the frame object itself. So
+`verticalOscillation`/`verticalRatio` reach `detectionFactor` with no change to `hipBounce.ts`
+whatsoever.
+
+**Snap target**: snap against the frame array the fitted samples came from — the winning run's
+`frames` for the centimetre path, the metric's own `frames` for the pixel path. A pixel-path snap
+that lands on a frame with no resolvable hip is then caught by hard reject 1 rather than silently
+cropping around nothing.
+
+Without this decision `verticalOscillationCm` would carry an **undefined** `detectionFactor`, and
+at `MIN_EXEMPLAR_QUALITY = 0.5` that is not a cosmetic gap — it silently decides whether the metric
+emits evidence at all.
+
 ---
 
 ## D9 — Exemplars stay out of `[analysis-diagnostics]`
@@ -550,6 +737,67 @@ the evidence pipeline** (a distinct prefix — and it must be matched exclusivel
 scale-pass line already forces on `[analysis-diagnostics]`), or from the rendered gallery. Never by
 widening the existing line.
 
+### The `[evidence-coverage]` line — **[correction]**, prefix, schema and owner were all unnamed
+
+Drafted as "a separate dev-only console line owned by the evidence pipeline" and then **required**
+by tasks §8.6, with no prefix, no schema and no module — so no ticket built it. Assigned here.
+
+**Prefix: `[evidence-coverage]`.** Matched exclusively —
+`text.startsWith('[evidence-coverage]')` — and no sub-prefixed sibling (`[evidence-coverage:…]`)
+may be added later without the harness learning the `!startsWith('[evidence-coverage:')` guard
+first. That is the whole lesson of `[analysis-diagnostics:scale-pass]` colliding with
+`[analysis-diagnostics]`, and it is cheaper to write the rule down now than to re-learn it.
+
+**Owner, split across two tickets so both halves are testable:**
+
+- **#65** exports the pure summarizer `summarizeEvidenceCoverage(...)` from `evidenceFrames.ts` —
+  plan in, payload out, no `console`, no DOM, unit-testable like the rest of that module.
+- **#67** emits it, once per analysis run, from `EvidenceGallery.tsx`, `import.meta.env.DEV`-gated
+  exactly as `useVideoAnalysis`'s two lines are, **after extraction has settled for every clip** so
+  `'extraction-failed'` is a verdict rather than a pending state. **One line per run**, not one per
+  clip — clips are an array inside the payload.
+
+**Payload** — `JSON.stringify` of:
+
+```ts
+{
+  clips: Array<{
+    clipIndex: number
+    frameCount: number            // that clip's robustFrames.length
+    metrics: Partial<Record<MetricId, {
+      status: 'planned' | 'no-evidence'
+      reason: 'not-emitted' | 'all-gated-out' | 'metric-excluded' | 'frames-unavailable'
+            | 'extraction-failed' | null      // null iff status === 'planned'
+      exemplars: Array<{
+        kind: MetricExemplarKind
+        side?: 'left' | 'right'
+        quality: number
+        timestamp: number
+        pairedTimestamp: number | null        // null on a single, or after a D12 demotion
+        demotedFromPair: boolean              // D12 fired
+        cropSidePx: number
+      }>
+    }>>
+  }>
+  sourceIndices: Partial<Record<MetricId, number>>   // fusionSourceIndices (D5), so N-clip
+                                                     // provenance is checkable without the UI
+}
+```
+
+Three constraints, all load-bearing:
+
+- **Nothing image-shaped, ever** — no `ImageBitmap`, no canvas, no `Blob`, no object URL, no data
+  URI. Numbers and enums only. This is epic constraint 4 applied to the new line rather than
+  assumed to be about the old one. A crop *rect side* is a number and is fine; a crop is not.
+- The line must `JSON.parse` cleanly on its own, with a fixed key order, so #68 can diff two runs.
+- **It reports the plan, never a value.** No metric `value`/`confidence` may appear here —
+  `[analysis-diagnostics]` already carries those, and duplicating them creates two sources of truth
+  that can disagree.
+
+`timestamp`/`pairedTimestamp` are on this line deliberately: they are the exact input §8.3's
+`ffmpeg -i clip -ss <t> -frames:v 1` ground-truthing and §8.4's PTS-offset measurement need, and
+without them #68 would have to read them off the DOM.
+
 ---
 
 ## D11 — Blend plan: which frame is base, and at what opacity
@@ -558,6 +806,23 @@ widening the existing line.
   directly corresponds to the reported value — for two symmetric extremes (`trunkLean`,
   `overstriding`) it is the more extreme one, because that is what the range is *about*. Fixing this
   in the type means the plan layer never has to re-derive which frame is which.
+
+  **[correction] — "more extreme" means furthest from the metric's own median, and THIS RULE WINS
+  over D1's `(base)` column header.** They agree in the common case and they diverge, so the
+  precedence has to be written down. D1's table labels its instant-A column `(base)` and fills it
+  with "max forward lean" and "most-overstriding strike" — read literally that is a *fixed* base per
+  metric. It is not: on a clip that spends most of itself leaning forward the **median** lean is
+  forward, so the **upright** frame is the one further from the median and becomes the base, while
+  D1's header still says the forward one is. #61 shipped D11's rule —
+  `forwardDistance >= uprightDistance ? mostForward : mostUpright` (`trunkLean.ts:88`), and the same
+  comparison at `overstriding.ts:88` — so D1's `(base)` column is to be read as "the instant this
+  row is named after", never as the blend's base. #63's `armSwingSymmetry` pair inherits the same
+  rule.
+
+  Note the **representative** metrics take the mirrored form of the same rule — base is the instant
+  *closest* to the median (`stepWidth.ts:83-86`) — which is the identical statement "base is the
+  instant the reported value is most directly about", read through that role's own definition of
+  good.
 - **Base at `globalAlpha = 1.0`, ghost drawn over it at `globalAlpha = 0.5`.** The composite is then
   `0.5·ghost + 0.5·base` — a symmetric 50/50 double exposure. On a static camera the background is
   identical in both frames and so reproduces exactly, while the two body positions each render at
@@ -613,6 +878,28 @@ cannot match. Nothing here *reverses* an existing requirement — every change i
 Avoiding MODIFIED blocks entirely is therefore both correct and the safest path through the
 archive-matching trap.
 
+### ⚠️ One delta sentence now contradicts shipped code — **[correction]**, flagged, NOT edited here
+
+`specs/form-heuristics/spec.md`, under *"Exemplar instants are ranked and gated by a per-instance
+quality score"*, still carries the pre-#61 hard reject 1 verbatim:
+
+> An instant SHALL be rejected outright, without a score, when: **any of the keypoints defining its
+> crop region is `'unrecoverable'` at that frame**; …
+
+That is the rule D3's first hard reject now corrects, and `exemplars.ts`'s shipped `cropDerivable`
+violates its plain reading. It also **already contradicts this change's own `results-view` delta**,
+which says crop rectangles are computed "from the **resolvable subset** of the exemplar's named
+keypoints" — the two deltas cannot both be satisfied by any implementation whose seed is ever
+partly unresolvable, which is most of them.
+
+**Deliberately not edited in this correction pass**, because a spec delta is a different kind of
+artifact from a design note and changing one is a decision for the ticket that owns it. It must be
+fixed **before §8.10 archives this change**, or the wrong rule lands in `openspec/specs/` as the
+authoritative contract. The fix is a one-clause rewrite of that first reject condition to *"no
+keypoint defining its crop region resolves to a position at that frame — there being no region to
+crop around"*; the block is `## ADDED`, so this is an ordinary edit to an unarchived delta, not a
+MODIFIED-block matching problem. The three scenarios under that requirement are unaffected.
+
 **Pre-existing spec drift noted, not fixed here:** results-view's tier requirement says "each of the
 **ten** `MetricId`s". There are **eleven** (`heuristics/types.ts:37-48`) — `stepWidthCm` was added
 without updating that count. Correcting it would require a MODIFIED block whose only content is a
@@ -633,6 +920,7 @@ one-line follow-up.
 | Widening `SpectralFitSuccess` perturbs the shared amplitude four metrics read | High | #62 is isolated for exactly this; assert `peakToPeakAmplitude` bit-identical, and hold the track-clip anchor (VO_cm 4.78–4.79 cm, `fit.frequencyHz × 60` == cadence) | #62 |
 | Evidence extraction regresses analysis wall-clock time | Medium | Extraction runs strictly after `phase: 'ready'`, never inside the sampling loop; measured against a pre-change baseline | #66 / #68 |
 | A metric is gated out on every clip and the gate is quietly loosened to fix it | Medium | `MIN_EXEMPLAR_QUALITY` is pre-registered; a universally-gated metric is a **reported finding**, not a tuning trigger | #68 |
+| **`overstriding`/`trunkLean` emit nothing on ANY clip** — the extreme role's ramp is structurally unreachable on a bimodal per-instance distribution | High for those two metrics — the epic's only extreme-role rows, and the ghost is their whole point | **Measure first (§8.6).** Clearing `0.5` needs `\|v − median\| ≥ 1.5·MAD`; a tight bimodal distribution tops out at **1.0 MAD** and a clean sinusoid at **≈1.41**, so neither can ever reach it. `generateSyntheticGait` is bimodal and a symmetric real gait plausibly is too. `MIN_EXEMPLAR_QUALITY` was **deliberately not touched** by #61 and is not to be touched to fix this — the finding is that the typicality ramp and the outlier bound share one `3·MAD` scale, which is a design question. Full arithmetic in D3 | #68 |
 
 ## Open questions
 
