@@ -69,11 +69,12 @@ export interface RetroactivePersonSelectionConfig {
  * The fix is a splice-tolerant segmentation rule (design.md follow-up 1), built in #54 — plus a
  * widened centre-speed bound, which is what actually unblocked it. See the update below. Of the
  * two open correctness items in design.md's Risks table, documented as prerequisites for
- * enabling, primary/scale-pass selection divergence is CLOSED (#56): the two passes' selected
- * subjects are now compared at matched timestamps before the graft, and a diverging scale pass
- * caveats its two centimetre metrics rather than silently attributing a bystander's numbers to
- * the runner (`src/results/scalePassSubjectAgreement.ts`). Boxless survival inside the winner's
- * span remains live rather than pending.
+ * enabling, BOTH are now closed: primary/scale-pass selection divergence (#56) — the two passes'
+ * selected subjects are compared at matched timestamps before the graft, and a diverging scale
+ * pass caveats its two centimetre metrics rather than silently attributing a bystander's numbers
+ * to the runner (`src/results/scalePassSubjectAgreement.ts`) — and boxless survival inside the
+ * winner's span (#55), narrowed to the winner's evidenced interior; see the UPDATE below for what
+ * that does and does not remove.
  *
  * UPDATE (2026-08-16, issue #54): the wedge above is FIXED, and the paragraph stands as the record
  * of what was accepted in the interim, not as current behaviour. Measured live (3 trials, real GPU,
@@ -106,8 +107,8 @@ export interface RetroactivePersonSelectionConfig {
  * left, and every one of them lies OUTSIDE the winner's span. Demo 1 keeps `segmentCount >= 2`
  * until #57's re-derived floor demotes them to `rejectedBelowFloor`, where D5 makes them harmless.
  *
- * UPDATE (2026-08-16, issue #55): the second of the two open correctness items named above —
- * boxless survival inside the winner's span — is CLOSED. A detection yielding no bounding box now
+ * UPDATE (2026-08-16, issue #55): boxless survival inside the winner's span — the second of the
+ * two correctness items named above — is CLOSED. A detection yielding no bounding box now
  * survives only inside the winner's evidenced interior (first through last surviving detection),
  * not anywhere in its partition span, and what the narrower window excludes is counted in
  * `rejectedOutsideEvidence`. The inversion that item described (a bystander nulled by the floor at

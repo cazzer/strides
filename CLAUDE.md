@@ -163,8 +163,10 @@ the scale-pass line will collide with it; the second is `startsWith('[analysis-d
   but is NOT a no-op on the Demo 1 side-view clip: one collapsed detection at t=4.32 wedges the
   runner's own continuous 55-frame track apart and strands 5 real frames. That cost, plus boxless
   survival inside the winner's span and primary/scale-pass selection divergence, is what was
-  knowingly accepted — issue #52's items 1-3, of which the wedge (#54) and the divergence (#56)
-  are now closed. Divergence is detected rather than accepted: the two passes' selected subjects
+  knowingly accepted — issue #52's items 1-3, **all three of which are now closed**: the wedge
+  (#54), boxless survival (#55, narrowed to the winner's evidenced interior — the inversion
+  survives by design *inside* that interior, see `retroactivePersonSelection.ts`), and the
+  divergence (#56). Divergence is detected rather than accepted: the two passes' selected subjects
   are compared at matched timestamps before the graft, and a diverging scale pass caveats its two
   centimetre metrics instead of silently attributing a bystander's numbers to the runner. Read
   `subjectAgreement` on the scale-pass console line, above. Turn it OFF (the non-default arm every A/B needs)
