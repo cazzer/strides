@@ -39,8 +39,9 @@ each clip's own progress visible on the clip it belongs to, and closes the recor
   it — focus-trapped, Escape-dismissible, focus restored to the originating entry.
 - **A header add-a-clip action** offering record *and* upload (and the demo clips), replacing the
   upload-only in-body block. One file-picker interaction still creates one clip per file.
-- **A poster concept on the video source** — the clip model has none today. Captured from an
-  already-decoded frame without seeking, held in memory only, released on removal/reset.
+- **A poster concept on the video source** — the clip model has none today. Decoded from the retained
+  source blob through a short-lived decoder the derivation owns, never the canonical element, held in
+  memory only, released on removal/reset.
 - **The header-height constant goes away.** `lg:top-[86px]`, `lg:max-h-[calc(100vh-86px)]`
   (`MultiClipVideoSession.tsx:182,203`) and `max-h-[calc(100vh-150px)]`
   (`VideoInputPanel.tsx:132`) are hardcoded and derived from nothing; a header that grows a clip

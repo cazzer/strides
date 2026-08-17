@@ -231,18 +231,31 @@ metadata`, exactly as `ClipSlot.tsx:96-104` gates it today.
 
 ---
 
-## D5 — The poster: capture what is already decoded, never seek
+## D5 — The poster: a decoder this derivation owns outright, never the canonical element
 
 The clip model has no poster. Adding one raises exactly one hard question: **where does the frame
 come from without disturbing the element?**
 
-- **Rejected: seek to a chosen instant (t=0, or a fraction of duration), draw, seek back.** Three
-  problems. It writes to an element that sampling, the scale pass, and the reader's own preview all
-  own at different times. Fraction-of-duration is unusable for webcam clips, which commonly report
+- **Rejected: seek the canonical element to a chosen instant, draw, seek back.** Three problems. It
+  writes to an element that sampling, the scale pass, and the reader's own preview all own at
+  different times. Fraction-of-duration is unusable for webcam clips, which commonly report
   `duration === Infinity` — the identical trap `results-view`'s evidence requirement already calls
   out. And "seek back" cannot restore a state the pipeline may have changed in between.
-- **Chosen: copy whatever frame the element has already decoded, once, at the earliest opportunity,
-  writing nothing.** In practice that is the clip's first frame, which is the natural poster anyway.
+- **Rejected: copy whatever frame the canonical element has already decoded, writing nothing.** This
+  was this design's original choice, and it was superseded by measurement — see the revision note
+  below. It avoids the write, but only by discipline, and it yields a bad picture: at `'ready'` the
+  decoded frame is frame 0, which on real footage is routinely a fade-in or black leader, and during
+  sampling it is whichever mid-analysis frame is current, which varies run to run given this repo's
+  documented frame-timing jitter.
+- **Chosen: decode from the retained `sourceBlob` through a separate, short-lived decoder the
+  derivation owns outright.** Every objection above dissolves: nothing else observes that decoder, so
+  it may be seeked freely; there is no state to restore; and the no-interference property becomes
+  **structural** rather than a discipline — the derivation never obtains a reference to the canonical
+  element, so the write is not merely forbidden, it is unreachable. `extractClipEvidence` already
+  establishes this pattern for the same reason.
+
+  The `duration === Infinity` trap still applies to a detached decoder and is handled by clamping:
+  a non-finite or non-positive duration yields timestamp `0` and no seek at all.
 
 **Timing detail that will bite an implementer who does not know it:** `useVideoSource` sets
 `status: 'ready'` from the `loadedmetadata` handler (`useVideoSource.ts:58,66`). `loadedmetadata`
@@ -252,6 +265,17 @@ and the strip must render a neutral placeholder in the gap. That is specced, not
 
 The poster is captured **once** and never refreshed. A poster that tracked playback would make the
 strip flicker and would couple the strip's render to the video's clock for no benefit.
+
+### Revision note (`strides-kyu.10`)
+
+This section originally chose the second option above. `strides-kyu.1` (this spec) and
+`strides-kyu.2` (the implementation) ran in **parallel**, so neither could see the other; the
+implementation independently chose the detached decoder and live-verified it, and the spec was
+amended to match rather than the other way round. The evidence that settled it, from a paired
+baseline arm on real GPU with the poster code genuinely stashed for the control: sampling identical
+at 99/99/0 on Demo 2, Demo 1 detecting 53 frames — matching CLAUDE.md's documented anchor exactly —
+and wall clock differing ~100 ms in **both** directions. The extra decoder costs nothing measurable,
+and buys a guarantee that does not depend on any future caller remembering the rule.
 
 Consistent with the rest of the codebase: no data URL, no blob, no object URL, no storage (the same
 rule extracted evidence images follow, `results-view` L688); released on removal and reset (the same

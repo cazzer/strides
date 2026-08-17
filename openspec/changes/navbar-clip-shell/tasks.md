@@ -15,17 +15,17 @@
 
 ## 2. Poster (`strides-kyu.2`) — independent of the restructure, land it first
 
-- [ ] 2.1 Extend the video source with a poster: captured once from an already-decoded frame, with
+- [x] 2.1 Extend the video source with a poster: decoded once via a derivation-owned decoder, with
       **no** write to `currentTime`/`paused`/`muted`/`loop` (design.md D5).
-- [ ] 2.2 Gate capture on a frame actually being available, not on `status === 'ready'` — that
+- [x] 2.2 Gate capture on a frame actually being available, not on `status === 'ready'` — that
       transition fires from `loadedmetadata` (`useVideoSource.ts:58,66`) and guarantees dimensions
       only. Expose `null` until then.
-- [ ] 2.3 Keep the sizing/aspect arithmetic canvas-free and pure; only the frame copy touches a
+- [x] 2.3 Keep the sizing/aspect arithmetic canvas-free and pure; only the frame copy touches a
       context (jsdom has no canvas — `src/test/canvasTestUtils.ts`).
-- [ ] 2.4 Release the poster on clip removal and on session reset, matching `sourceBlob`'s lifecycle.
-- [ ] 2.5 Unit tests: sizing math with no canvas; `null` before a frame exists; released on reset;
+- [x] 2.4 Release the poster on clip removal and on session reset, matching `sourceBlob`'s lifecycle.
+- [x] 2.5 Unit tests: sizing math with no canvas; `null` before a frame exists; released on reset;
       no data URL / blob / object URL produced.
-- [ ] 2.6 `npm test` and `tsc -b` clean.
+- [x] 2.6 `npm test` and `tsc -b` clean.
 
 ## 3. Restructure the shell (`strides-kyu.3`) — P0, land and verify **alone**
 
