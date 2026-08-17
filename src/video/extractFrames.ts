@@ -7,6 +7,8 @@ import type {
   MetricEvidencePlan,
 } from '../results/evidenceFrames'
 import { evidenceOutputSide } from '../results/evidenceFrames'
+import { planEvidenceAnnotations } from '../results/evidenceAnnotations'
+import { drawEvidenceAnnotation } from './drawEvidenceAnnotations'
 
 /**
  * The IMPURE half of evidence-frame extraction: take the plan `evidenceFrames.ts` produced and
@@ -341,7 +343,8 @@ async function drawInstant(
 
 /**
  * One planned image. The base is drawn first at full opacity and the ghost composited over it at
- * half, making the result a symmetric 50/50 double exposure of one runner at two instants.
+ * half, making the result a symmetric 50/50 double exposure of one runner at two instants. The
+ * annotation layer goes on last, over both.
  *
  * `null` on any failure, including a ghost that fails after its base already drew: a range or
  * cycle exemplar shorn of its second instant would read as a single still and assert something the
@@ -374,6 +377,18 @@ async function extractFrame(
     )
     if (!drawn) return null
   }
+
+  // Annotation strictly after the photographic layers, and computed from the SAME `side` those were
+  // drawn at — `planEvidenceAnnotations` recomputes it through `evidenceOutputSide` from the same
+  // cap, so the marks and the pixels are scaled by one number by construction (design D3).
+  //
+  // The context reaching this call is dirty: `drawInstant` left `ctx.globalAlpha` at the last
+  // instant's blend value, 0.5 on a ghosted pair. `drawEvidenceAnnotation` resets it explicitly and
+  // drives every mark from the op's own composed opacity; nothing here relies on the value above.
+  drawEvidenceAnnotation(
+    ctx,
+    planEvidenceAnnotations(item, options.maxOutputSidePx),
+  )
   return { plan: item, canvas }
 }
 
