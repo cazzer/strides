@@ -26,8 +26,8 @@ import { runClipAnalysisPipeline } from './runClipAnalysisPipeline'
 
 const FRAME_SIZE = { width: 1920, height: 1080 }
 
-// The person-selection stage ships opt-in (default `enabled: false`), so tests that exercise it
-// switch it on -- exactly the shape of the `window` override an eval harness sets.
+// The person-selection stage ships ON, so this pins the config these tests depend on rather than
+// switching anything -- exactly the shape of the `window` override an eval harness sets.
 const SELECTING = {
   ...DEFAULT_SAMPLING_ROBUSTNESS_CONFIG,
   personSelection: {
