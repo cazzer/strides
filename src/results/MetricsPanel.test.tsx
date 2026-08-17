@@ -1,9 +1,11 @@
 import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
+import { EVIDENCE_SECTION_ID_PREFIX } from './EvidenceGallery'
 import { MetricsPanel } from './MetricsPanel'
 import { SCALE_PASS_PROVENANCE_CAVEAT } from './scalePassGraft'
 import type {
   FormHeuristicsResult,
+  MetricId,
   MetricResult,
   TimeseriesPoint,
   VerticalOscillationCmResult,
@@ -684,5 +686,104 @@ describe('MetricsPanel', () => {
     expect(
       within(excludedSection).getByText('Not measurable for this clip.'),
     ).toBeInTheDocument()
+  })
+})
+
+describe('MetricsPanel — the evidence deep link', () => {
+  it('renders no link anywhere when the prop is omitted, which is every pre-gallery call site', () => {
+    const { container } = render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
+    expect(container.querySelectorAll('.metrics-panel__evidence-link')).toHaveLength(0)
+    expect(screen.queryByRole('link')).not.toBeInTheDocument()
+  })
+
+  it('links only the metrics the gallery says it has imagery for', () => {
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidenceMetrics={new Set<MetricId>(['trunkLean', 'kneeFlexion'])}
+      />,
+    )
+    expect(screen.getAllByRole('link')).toHaveLength(2)
+    expect(
+      screen.getByRole('link', { name: 'See evidence for Trunk lean' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('link', { name: 'See evidence for Knee flexion' }),
+    ).toBeInTheDocument()
+  })
+
+  it('points at that metric’s own gallery section, and is keyboard-reachable as a plain anchor', () => {
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidenceMetrics={new Set<MetricId>(['trunkLean'])}
+      />,
+    )
+    const link = screen.getByRole('link', { name: 'See evidence for Trunk lean' })
+    expect(link).toHaveAttribute('href', `#${EVIDENCE_SECTION_ID_PREFIX}trunkLean`)
+    // A real <a href> — focusable with no tabIndex of its own, and visibly labelled.
+    expect(link.tagName).toBe('A')
+    expect(link).toHaveTextContent('See evidence')
+  })
+
+  it('renders the link inside the metric’s own card, not somewhere else on the panel', () => {
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidenceMetrics={new Set<MetricId>(['trunkLean'])}
+      />,
+    )
+    const card = screen.getByRole('article', { name: 'Trunk lean' })
+    expect(within(card).getByRole('link', { name: /see evidence/i })).toBeInTheDocument()
+    const otherCard = screen.getByRole('article', { name: 'Overstriding' })
+    expect(within(otherCard).queryByRole('link')).not.toBeInTheDocument()
+  })
+
+  it('keeps a card without evidence byte-identical to the one it rendered before', () => {
+    const heuristics = makeHighConfidenceResult()
+    const before = render(<MetricsPanel heuristics={heuristics} />)
+    const withoutLink = screen
+      .getByRole('article', { name: 'Overstriding' })
+      .outerHTML
+    before.unmount()
+
+    render(
+      <MetricsPanel
+        heuristics={heuristics}
+        evidenceMetrics={new Set<MetricId>(['trunkLean'])}
+      />,
+    )
+    expect(screen.getByRole('article', { name: 'Overstriding' }).outerHTML).toBe(withoutLink)
+  })
+
+  it('keeps the vertical-oscillation chart when that card also gains a link', () => {
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidenceMetrics={new Set<MetricId>(['verticalOscillation'])}
+      />,
+    )
+    const card = screen.getByRole('article', { name: 'Vertical oscillation' })
+    expect(within(card).getByRole('img', { name: /vertical oscillation/i })).toBeInTheDocument()
+    expect(within(card).getByRole('link', { name: /see evidence/i })).toBeInTheDocument()
+  })
+
+  it('cannot link a tier-3 metric, which renders no card to hang a link on (design D10)', () => {
+    const heuristics = makeHighConfidenceResult()
+    heuristics.cadence = makeMetric({
+      metric: 'cadence',
+      value: null,
+      unit: 'stepsPerMinute',
+      confidence: 0,
+      caveat: 'Not measurable.',
+    })
+
+    render(
+      <MetricsPanel
+        heuristics={heuristics}
+        evidenceMetrics={new Set<MetricId>(['cadence'])}
+      />,
+    )
+    expect(screen.queryByRole('link')).not.toBeInTheDocument()
   })
 })

@@ -370,32 +370,72 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
 
 ## 7. Evidence gallery UI and per-card deep link (#67)
 
-- [ ] 7.1 New `src/results/EvidenceGallery.tsx`, mounted as a **third child of `<main>`
+- [x] 7.1 New `src/results/EvidenceGallery.tsx`, mounted as a **third child of `<main>`
   (`MultiClipVideoSession.tsx:155`) with `lg:col-span-2`** — a sibling of `ResultsView`, never a
   child. Without `lg:col-span-2` it lands in column 1 of row 2; the class is required.
-- [ ] 7.2 Do not use the export seam at `ResultsView.tsx:134-138` — reserved for the export ticket.
-- [ ] 7.3 Deep link on each metric card that has evidence, wired through `MetricCard`'s existing
+- [x] 7.2 Do not use the export seam at `ResultsView.tsx:134-138` — reserved for the export ticket.
+- [x] 7.3 Deep link on each metric card that has evidence, wired through `MetricCard`'s existing
   `chart?: ReactNode` slot by metric identity (`MetricsPanel.tsx:86-89`, `:140`, `:236-242`) — no
   new prop path. Only tier-1/tier-2 metrics can have one (design D10).
-- [ ] 7.4 Cards without evidence render exactly as today: no link, no placeholder, no layout shift.
-- [ ] 7.5 Captions name the metric, the side where applicable, and state that a ghost is the **same
+  **As built:** `MetricCard`'s prop surface is untouched — `cardSlot(chart, link)` composes both
+  into the existing slot and returns `undefined` when neither applies, so a card without evidence
+  renders byte-identical DOM (asserted). Which metrics HAVE evidence is not derivable from
+  `heuristics`, though: an emitted exemplar can still fail to resolve to a sampled frame or fail to
+  extract, so the answer only exists after extraction. The gallery therefore reports its settled
+  metric set upward (`onEvidenceMetricsChange`, the same report-up/fan-down shape `ClipSlot` uses),
+  `MultiClipVideoSession` holds it, and `ResultsView` gained one optional pass-through prop
+  (`evidenceMetrics`) to reach `MetricsPanel`. That is the only file outside this ticket's list that
+  changed; it stays presentational and calls no hook, so its documented contract (`:28-33`) holds.
+  The anchor id scheme is a single exported constant (`EVIDENCE_SECTION_ID_PREFIX`), so the link
+  and its target cannot drift.
+- [x] 7.4 Cards without evidence render exactly as today: no link, no placeholder, no layout shift.
+- [x] 7.5 Captions name the metric, the side where applicable, and state that a ghost is the **same
   runner at two instants** — a user must never read a ghost as two people.
-- [ ] 7.6 One aspect ratio across every metric (design D13).
-- [ ] 7.7 N clips: show which clip a section's evidence came from when N > 1, via
+- [x] 7.6 One aspect ratio across every metric (design D13).
+- [x] 7.7 N clips: show which clip a section's evidence came from when N > 1, via
   `fusionSourceIndices` — **never** by regexing the prose caveat at `fuseHeuristics.ts:9-11`.
-- [ ] 7.8 Extraction driven at most once per clip and torn down after; no detached video or canvas
+- [x] 7.8 Extraction driven at most once per clip and torn down after; no detached video or canvas
   retained after unmount, no leak across a clip reset.
-- [ ] 7.9 Responsive at narrow widths; images carry meaningful alt text; the deep link is
+  **As built:** a per-`clipId` cache keyed on the clip's own inputs (heuristics, frames, frame size
+  and `sourceBlob`, all by reference), so adding a second clip re-decodes only the new one; a clip
+  whose plan has zero planned items never opens a decoder at all. In-flight runs are invalidated by
+  a `runIdRef` bump, `useVideoAnalysis`'s idiom, and a superseded run's canvases are dropped rather
+  than parented. The teardown effect also clears the input signature — without that, React's
+  `StrictMode` mount → cleanup → mount cycle (the app mounts under it, `main.tsx`) invalidates the
+  first pass's extraction and then finds the signature unchanged on the second, skipping the re-run
+  and leaving the gallery reporting "pulling frames…" forever. There is a regression test.
+- [x] 7.9 Responsive at narrow widths; images carry meaningful alt text; the deep link is
   keyboard-reachable.
-- [ ] 7.10 Tailwind v4 utilities only; BEM-ish class names are test hooks with no CSS behind them.
+  **As built:** verified live at 390 px and 1440 px. Images are a fixed 224 px wide, centred and
+  wrapping, rather than a two-column grid — a metric may have one image or two, and a grid orphans
+  the single case in the left half of its card. Alt text lives on the host element (`role="img"`),
+  not on the adopted canvas: the canvas belongs to the extractor and writing to a prop is what
+  `react-hooks/immutability` exists to stop.
+- [x] 7.10 Tailwind v4 utilities only; BEM-ish class names are test hooks with no CSS behind them.
   **No new runtime dependencies.**
-- [ ] 7.11 Emit the `[evidence-coverage]` line — `console.log('[evidence-coverage]',
+- [x] 7.11 Emit the `[evidence-coverage]` line — `console.log('[evidence-coverage]',
   JSON.stringify(summarizeEvidenceCoverage(...)))` from §5.9's pure summarizer, `import.meta.env.DEV`-
   gated exactly as `useVideoAnalysis`'s two lines are. **Once per analysis run** (not once per
   clip — clips are an array in the payload), and **after extraction has settled for every clip**,
   so `'extraction-failed'` is a verdict rather than a pending state. This is #68's §8.6 observable;
   without it that task has nothing to read. It must NOT ride on `[analysis-diagnostics]`.
-- [ ] 7.12 `npm test`, `tsc -b`, `eslint`, `npm run build` clean.
+  **As built:** emitted from `EvidenceGallery.tsx`'s `emitCoverage`, once per settled run, on both
+  the extracted and nothing-to-extract paths. Confirmed live on Demo 2 (one line, parses, correct
+  schema) and confirmed absent from `vite build` output.
+- [x] 7.12 `npm test`, `tsc -b`, `eslint`, `npm run build` clean.
+
+**Live check run during this ticket, and a blocker it surfaced for #68.** Driven against Demo 2
+(headless Chromium, real GPU — `ANGLE Metal Renderer: Apple M4 Pro`). The gallery, the plan, the
+tier gate, the captions, the provenance line, the deep links and the coverage line all work end to
+end. But **every metric came back `'extraction-failed'`**, because
+`extractFrames.ts`'s `waitForPresentedFrame` never resolves: `requestVideoFrameCallback` does not
+fire after a *paused* seek in this Chromium, detached or attached to the document, headless or
+headed. Probed directly — `seeked` fires reliably, the API itself works during playback
+(`'presented'`), and `drawImage` after `seeked` alone already yields correct and *distinct* pixels
+at different timestamps (verified by pixel fingerprint, `differ: true`). So the seek-and-draw
+approach is sound and only the presentation wait is wrong. Not fixed here: `extractFrames.ts` is
+#66's file and out of this ticket's scope. Everything above was confirmed visually with that one
+wait temporarily relaxed locally, then reverted.
 
 ## 8. Live verification, then archive (#68)
 
