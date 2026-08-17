@@ -665,6 +665,167 @@ carries `skip_specs: true` — the sizing requirement drafted for it is **withdr
 measurement shows it is unsatisfiable on this repo's own footage and weakening it to fit would be
 editing a criterion to match a result.
 
+## Metric frame evidence — the gallery, measured live (2026-08-17, epic #59 / ticket #68)
+
+The results page now carries a **"What the analysis looked at"** gallery: for each metric the app
+re-pulls the frames it actually measured out of the clip after analysis and shows them, ghosting two
+instants into one image where the metric's meaning is a delta (`EvidenceGallery.tsx`,
+`evidenceFrames.ts` plans purely, `extractFrames.ts` produces pixels). Everything below was measured
+in headless Chromium on real GPU (`ANGLE Metal Renderer: Apple M4 Pro`, never SwiftShader), 3 trials
+per clip, across Demo 1, Demo 2 and `e2e/fixtures/multiperson-track.mp4`, plus one two-clip session.
+Full tables: `openspec/changes/archive/2026-08-17-metric-frame-evidence/design.md` **D14**.
+
+**A third dev-only console line, `[evidence-coverage]`.** Same contract as the two
+`[analysis-diagnostics]` lines — `import.meta.env.DEV`-gated, `JSON.parse`able, matched exclusively
+on `startsWith('[evidence-coverage]')`, and it carries **nothing image-shaped** (no canvas, `Blob`,
+object URL or data URI — verified by scanning 38 captured lines). It reports, per clip:
+`frameCount`, and per metric either `{status:'planned', exemplars:[{kind, side?, quality, timestamp,
+pairedTimestamp, demotedFromPair, cropSidePx}]}` or `{status:'no-evidence', reason}` where reason is
+`not-emitted | all-gated-out | metric-excluded | frames-unavailable | extraction-failed`. Plus
+`sourceIndices`, the per-metric winning clip index. `[analysis-diagnostics]` is untouched — same six
+top-level keys, ~5.6 kB, no exemplar data — and `vite build` output contains **zero** occurrences of
+any of these prefixes.
+
+**Take the LAST `[evidence-coverage]` line, not the first.** The design says "once per run"; that is
+not what happens. On a MoveNet-primary run the background MediaPipe scale pass grafts
+`verticalOscillationCm` into the fused heuristics *after* `phase: 'ready'`, which changes the
+gallery's input signature, correctly triggers a re-extraction, and emits a second line. Observed on
+Demo 1: line 1 has `verticalOscillationCm: metric-excluded`, line 2 has it `planned`. Whether a
+harness sees one line or two is a race against the scale pass.
+
+**Coverage, identical on every trial** (✅ = images produced; count is images, a ghosted pair being 1):
+
+| metric | Demo 1 | Demo 2 | multiperson |
+|---|---|---|---|
+| `verticalOscillation` | ✅ 1 | ✅ 1 | ✅ 1 |
+| `verticalRatio` | ✅ 2 | excluded | ✅ 2 |
+| `verticalOscillationCm` | ✅ 1 (post-graft) | ✅ 1 | ✅ 1 |
+| `trunkLean` | **`all-gated-out`** | excluded | ✅ 1 |
+| `overstriding` | **`all-gated-out`** | excluded | **`all-gated-out`** |
+| `cadence` | `not-emitted` by design | `not-emitted` | `not-emitted` |
+| `kneeFlexion` | ✅ 1 | excluded | ✅ 1 |
+| `armSwingSymmetry` | excluded | ✅ 2 | excluded |
+| `footStrikePattern` | ✅ 2 | excluded | ✅ 2 |
+| `stepWidth` | excluded | ✅ 1 | excluded |
+| `stepWidthCm` | excluded | excluded | excluded |
+| **totals** | **7 images / 5 sections** | **5 / 4** | **8 / 6** |
+
+`excluded` = `metric-excluded`, the tier-3 gate (the metric has no card, so there is nothing to hang
+evidence on) — not the exemplar gate. **Zero `extraction-failed` on any run.** `cadence` deliberately
+never emits (design D7). `stepWidthCm` produced nothing anywhere, for a reason outside this feature:
+it is tier-3 on all three clips.
+
+**The PTS drift is real and it is +2 frames on every MP4.** `sequentialSampling` defaults on, so most
+MP4s sample through WebCodecs, where `robustFrames[].timestamp` is raw `sample.cts / sample.timescale`
+(`mp4Demux.ts:174`) with **no edit-list adjustment**, while `HTMLVideoElement.currentTime` **is**
+adjusted. Ground-truthed by rebuilding each exemplar's exact crop from the source with
+`ffmpeg -vf "select='eq(n\,IDX)',crop=…,scale=…"` at a range of candidate frame indices (blended
+50/50 for a ghosted pair) and PSNR-comparing against the app's own canvas — the argmax names the
+frame actually drawn:
+
+| clip | `elst media_time` ÷ media timescale | measured | best PSNR vs runner-up |
+|---|---|---|---|
+| Demo 1 (25 fps) | 2 / 25 = **0.0800 s** | **+2 frames** | 40.8 vs 21.6 dB; 34.0 vs 20.3 dB |
+| Demo 2 (59.94 fps) | 2002 / 60000 = **0.033367 s** | **+2 frames** | four exemplars, +2 first in all |
+| multiperson (60 fps) | 512 / 15360 = **0.033333 s** | **+2 frames** | 17.5/15.3, 22.0/20.6, 16.4/15.2 dB |
+
+**Isolated to the WebCodecs domain, not to seeking.** The same Demo 1 clip under
+`{ sequentialSampling: { enabled: false } }` measures **exactly 0** — δ=0 wins at 35.7 dB and
+33.7 dB, ~15 dB clear. That path uses `requestVideoFrameCallback`'s `mediaTime`, already in
+`currentTime`'s domain.
+
+**`DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS` stays 0 — do not "fix" it by picking a number.** The correct
+value is per-clip (0.080 / 0.033367 / 0.033333 s on the three test clips) **and** per-sampler (must
+be exactly 0 for every WebM/webcam clip and every MP4 where `canUseSequentialDecode` says no).
+`EvidenceGallery` knows neither the edit list nor which sampler ran, so any single constant is wrong
+on two of three test clips and on every non-WebCodecs clip — strictly worse than 0. Follow-up **#69**
+carries the evidence and the two candidate fixes (plumb a per-clip offset using
+`containerTiming.ts`'s existing `elst` parser, or align the domains at the demuxer). Cost of leaving
+it: the pictured frame is 80 ms late on Demo 1 (~12% of a step cycle) and 33 ms on the 60 fps clips.
+
+**The extreme-role `1.5·MAD` risk fired — and only for `overstriding`.** An extreme instant's
+typicality is `|v − median| / (3·MAD)`, so clearing `MIN_EXEMPLAR_QUALITY = 0.5` needs
+`|v − median| ≥ 1.5·MAD`. Measured per-instance distributions (primary MoveNet pass, **bit-identical
+across all 3 trials on all 3 clips** — no spread to report, which is itself notable):
+
+| clip | metric | n | median | MAD | max dev (MADs) | ≥1.5 MAD | most: MADs / `detectionFactor` | least | pair quality |
+|---|---|---|---|---|---|---|---|---|---|
+| Demo 1 | `trunkLean` | 59 | 13.297° | 3.016° | 3.526 | 18 | 2.355 / **0** | 2.476 / 1 | **0.000** |
+| Demo 1 | `overstriding` | 7 | 0.2266 | 0.2403 | 3.354 | 2 | **1.010** / 1 | 2.207 / 1 | **0.337** |
+| Demo 2 | `trunkLean` | 99 | 3.002° | 1.414° | 3.108 | 14 | 2.148 / 1 | 2.412 / 1 | 0.716 |
+| Demo 2 | `overstriding` | 7 | −0.0435 | 0.0422 | 14.495 | 1 | 1.211 / 1 | **1.000** / 1 | **0.333** |
+| multiperson | `trunkLean` | 107 | 3.427° | 2.183° | 21.038 | 31 | 2.678 / 1 | 2.776 / 1 | **0.893** |
+| multiperson | `overstriding` | 11 | 0.0542 | 0.3993 | **1.389** | **0** | 1.389 / 1 | 1.366 / 1 | **0.455** |
+
+`describeDistribution().usable` was **true in every case** — the `<5 instances`/`MAD === 0` flat-0.5
+fallback never fired, so it explains nothing here.
+
+- **`overstriding` emits on no clip, always by the ramp** (0.333/0.337/0.455), never by
+  `detectionFactor` (1.0 everywhere) and never by the `3·MAD` hard reject. multiperson is the clean
+  proof: `maxDevMads = 1.389`, **zero** instants ≥1.5 MAD — unreachable at any `detectionFactor`.
+  Demo 2's `least` sits at exactly **1.000 MAD**, the textbook tightly-bimodal ceiling for a
+  left/right-alternating footstrike distribution. `MIN_EXEMPLAR_QUALITY` was **not** touched.
+- **`trunkLean` is NOT the same problem.** It reaches 0.716/0.893 where it renders and ships on the
+  multiperson clip. Its Demo 1 failure is `detectionFactor = 0` on the argmax instant (t = 4.28 s,
+  all four torso seed keypoints interpolated), while 18 other instants clear 1.5 MAD.
+- **Second defect, separable and cheaper to fix:** `buildExemplars` in both metrics takes the raw
+  argmax among outlier-bound survivors and *then* scores it, with no fallback to the next-most-extreme
+  instant. Coverage therefore hinges on one frame. Proof: the same Demo 1 clip under
+  `{ sequentialSampling: { enabled: false } }` samples a different set, the argmax lands on a
+  well-tracked frame, and `trunkLean` **emits at quality 0.664**. Both in follow-up **#70**.
+
+**Two ghosts are unreadable; most are good** (every image was pulled out of the DOM and looked at).
+Best: `verticalRatio`'s `stridePair` (two footstrikes, whole body, the stride gap *is* the picture),
+`stepWidth` on Demo 2, the `footStrikePattern` singles. Findings, reported not fixed (**#71**):
+- **`trunkLean` on multiperson is a whole-frame crop.** Its two extremes are 1.25 s apart, the runner
+  crosses the frame between them, `computeEvidenceCropRect` unions both torso boxes, squares, and
+  hits the `min(frameWidth, frameHeight)` cap → **side 1080 on a 1920×1080 clip**. The runner shows
+  twice, tiny, at opposite edges, in an image that is mostly fence and crowd. D12 demotes a pair
+  that is too *similar*; nothing guards a pair that is too *far apart*.
+- **`armSwingSymmetry` on Demo 2 includes a bystander, every trial.** The `EVIDENCE_CROP_MIN_SIDE_PX
+  = 320` floor inflates the small limb box until it swallows a man in a yellow shirt standing to the
+  right, who reads as a second body in an image whose caption insists "not two people". Systematic in
+  cause, clip-specific in particulars. **Do not just move the 320** — it came from display reasoning,
+  not from this clip.
+- **A bounce ghost reads as horizontal translation on a side view.** `verticalOscillation` on Demo 1
+  is two clearly-separated horizontal positions; the vertical delta is the smaller displacement. The
+  same exemplar on the front-approach Demo 2 reads well (two heads stacked vertically). Correct
+  frames, correct crop, camera-angle limit — recorded so nobody re-derives it as a crop bug.
+
+**N-clip provenance works.** Two-clip session (Demo 2 via the demo button, multiperson added through
+*Add another clip*): 8 sections, 11 images, and every rendered *"From clip N of 2."* caption matched
+`sourceIndices` one-for-one. `verticalOscillationCm` had a planned exemplar on both clips and
+correctly took the fusion winner's, not "any clip that has it."
+
+**No analysis wall-clock regression, and the gallery's own cost is after `ready`.** Same machine,
+same session, `goto` → "Analysis complete", 3 trials/arm, baseline `896f775` in a throwaway
+worktree: Demo 1 **5698 ms** [5539..5910] → **5747 ms** [5550..6290]; Demo 2 **3146 ms**
+[3072..3157] → **3020 ms** [3002..3086]. Noise, both directions. Extraction then adds 3.5–3.8 s
+(Demo 1), 3.5 s (Demo 2), 4.5 s (multiperson) between "Analysis complete" and a settled gallery,
+during which the results are already fully readable.
+
+**Regression anchor re-measured, and CLAUDE.md's own VO_cm number is stale.** The track clip now
+reports **VO_cm 4.4215 cm**, not the 4.78–4.79 recorded in the "MediaPipe metric calibration" section
+above. That is **not** #59's doing: `896f775` reproduces `4.421467928439415` cm, `fitHz 1.52`,
+`sinusoidR2 0.42451916621964814`, `sampleCount 57`, `spanSeconds 2.24`, `torsoMeters 0.5041`,
+`medianPixelsPerMeter 868.0` — **every digit identical** to this branch, Demo 2 likewise
+(10.4866 cm both sides). The 4.78–4.79 figure was measured 2026-08-12 with **MediaPipe as the
+PRIMARY backend**, before the background scale-pass graft path and before #54/#55's person selection;
+on today's default MoveNet-primary + grafted-scale-pass path the anchor is **4.4215 cm**. The
+cross-check the anchor really tests still holds exactly: `fit.frequencyHz × 60` = 91.2 ==
+`cadence.value` 91.2.
+
+**Probe recipes used, if this needs re-measuring.** Both were added, measured and reverted per the
+add-measure-revert cycle. (1) `[evidence-seek]`: one dev-only `console.log` in
+`extractFrames.ts`'s `drawInstant`, dumping `{planned, target, outcome, currentTime, opacity, crop,
+outputSide}` — note `video.currentTime` after a seek reports the *requested* target in Chromium, not
+the snapped frame, so it cannot answer "which frame" on its own; the ffmpeg/PSNR comparison is what
+does. (2) `[exemplar-mad]`: an `exemplarMadProbe.experimental.ts` called from `trunkLean.ts` and
+`overstriding.ts` right before `selectExemplars`, dumping the distribution plus the surviving
+argmax/argmin with their `devMads`/`typicality`/`detectionFactor`. Expect **two** `[exemplar-mad]`
+lines per metric per run — the primary pass and the MediaPipe scale pass both compute heuristics;
+the first occurrence is the primary.
+
 ## Backlog (assessed, not yet built)
 
 One more iteration plane was scoped but deferred as of 2026-08-11 — same "bundle into one

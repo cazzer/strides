@@ -878,7 +878,13 @@ cannot match. Nothing here *reverses* an existing requirement — every change i
 Avoiding MODIFIED blocks entirely is therefore both correct and the safest path through the
 archive-matching trap.
 
-### ⚠️ One delta sentence now contradicts shipped code — **[correction]**, flagged, NOT edited here
+### ✅ RESOLVED in `2526d64` — one delta sentence contradicted shipped code (was: flagged, not edited)
+
+The clause below now reads *"no keypoint defining its crop region resolves to a position at that
+frame"* in `specs/form-heuristics/spec.md:86`. Verified before archiving (§8.9b). The rest of this
+subsection is the original flag, kept for the record.
+
+#### The original flag
 
 `specs/form-heuristics/spec.md`, under *"Exemplar instants are ranked and gated by a per-instance
 quality score"*, still carries the pre-#61 hard reject 1 verbatim:
@@ -908,6 +914,195 @@ one-line follow-up.
 
 ---
 
+## D14 — What #68 actually measured (live, real GPU, 2026-08-17)
+
+Headless Chromium, `--headless=new --enable-gpu --ignore-gpu-blocklist`, renderer confirmed
+`ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)` on every invocation — never SwiftShader.
+Three clips: Demo 1 (3840×2160, 25 fps, 228 frames, Pexels), Demo 2 (`park-approach.mp4`,
+2160×3840, 59.94 fps, 99 frames), `e2e/fixtures/multiperson-track.mp4` (1920×1080, 60 fps, 233
+frames), plus one two-clip session (Demo 2 + multiperson) for the N-clip provenance path. Three
+trials per clip. Coverage, exemplar timestamps and quality read off `[evidence-coverage]`; the
+distribution numbers below came from a temporary `[exemplar-mad]` probe and a temporary
+`[evidence-seek]` probe (crop rect + resolved seek target), both added, measured and reverted.
+
+### R1 resolved — the PTS offset is **+2 frames on every clip**, and it is NOT a constant
+
+**Measured, not eyeballed.** Method: the `[evidence-seek]` probe dumped each exemplar's resolved
+crop rect; the same rect was then rebuilt from the source file with
+`ffmpeg -vf "select='eq(n\,IDX)',crop=…,scale=…"` at a range of candidate frame indices (and, for a
+ghosted exemplar, blended 50/50 to match `EVIDENCE_BASE_OPACITY`/`EVIDENCE_GHOST_OPACITY`), and each
+candidate was PSNR-compared against the app's own canvas. The argmax names the frame the app
+actually drew.
+
+| clip | `elst media_time` / media timescale | predicted offset | measured argmax | best PSNR vs runner-up |
+|---|---|---|---|---|
+| Demo 1 | 2 / 25 Hz = **0.0800 s** | +2 frames | **+2** | 40.8 dB vs 21.6 (single-frame `footStrike`) |
+| Demo 1 (2nd exemplar) | — | +2 frames | **+2** | 34.0 dB vs 20.3 |
+| Demo 2 | 2002 / 60000 Hz = **0.033367 s** | +2 frames | **+2** | 21.8/21.6, 24.0/23.7, 20.6/19.2, 21.0/20.1 (four ghosted exemplars) |
+| multiperson | 512 / 15360 Hz = **0.033333 s** | +2 frames | **+2** | 16.4/15.2, 15.5/13.7, 17.5/15.3, 22.0/20.6 |
+
+Every exemplar tested on all three clips lands on **+2 frames late**. The offset equals the clip's
+own `elst.media_time / mediaTimescale` exactly — read out of the container with `mp4box`, not
+inferred. In wall time that is **80 ms on Demo 1** and **33 ms on Demo 2 / multiperson** (~12 % and
+~5 % of a step cycle at those clips' cadences).
+
+**Cause isolated (§8.5).** Re-run with `{ sequentialSampling: { enabled: false } }` via
+`page.addInitScript`, same clip (Demo 1), same method: the measured offset is **exactly 0** —
+δ=0 wins at **35.7 dB and 33.7 dB**, ~15 dB clear of every neighbour. So the drift is entirely the
+WebCodecs raw-PTS domain (`mp4Demux.ts:174`, `sample.cts / sample.timescale`, no edit-list
+adjustment), not a general seek inaccuracy. R1's hypothesis is **confirmed**, on the nose.
+
+**`DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS` was NOT changed, and the reason is the measurement.**
+R1 pre-authorised "#66 adds a one-time per-clip calibration offset applied at seek time only."
+The hook exists (`extractFrames.ts`, `EvidenceExtractionOptions.seekOffsetSeconds`) and it stays at
+`0`, because the correct value is **not a constant**:
+
+- it is per clip — 0.080 s / 0.033367 s / 0.033333 s across three test clips, and it is whatever the
+  next clip's edit list says;
+- it must be exactly **0** for any clip sampled through `<video>` playback — every WebM/webcam blob,
+  and every MP4 where `canUseSequentialDecode` says no — because those timestamps are already
+  `mediaTime`, i.e. edit-list-adjusted.
+
+`EvidenceGallery` today knows neither fact: not the clip's edit list (nothing in the gallery's inputs
+carries it), and not which sampler ran (`sequentialDecodeSupported` is private state inside
+`useVideoAnalysis`). Wiring the hook correctly is therefore new plumbing across
+`mp4Demux`/`useVideoAnalysis`/`MultiClipVideoSession`/`EvidenceGallery` — a change with its own spec
+surface — not a calibration constant. Setting the existing constant to any single number would be
+**wrong on two of the three test clips and on every non-WebCodecs clip**, which is strictly worse
+than 0. Filed as a follow-up with this evidence; `containerTiming.ts`'s existing `elst` parser is the
+cheap source for the per-clip half.
+
+### R2 (`duration === Infinity`) — no live counter-evidence; still carried by type discipline
+
+No webcam clip was recorded in this pass, so R2 stays where #65 left it: `metadata.durationSec`
+appears nowhere in `evidenceFrames.ts`, and the unit test on an `Infinity` fixture is the guarantee.
+Not independently confirmed live.
+
+### The extreme-role risk **fired**, and it fired for two different reasons
+
+Per-instance distributions, primary (MoveNet) pass, **bit-identical across all three trials on all
+three clips** — no median/range spread to report, which is itself worth recording.
+
+| clip | metric | n | median | MAD | `usable` | max dev (MADs) | instants ≥1.5 MAD | most: MADs / `detectionFactor` | least: MADs / `detectionFactor` | pair quality | outcome |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Demo 1 | `trunkLean` | 59 | 13.297° | 3.016° | true | 3.526 | 18 | 2.355 / **0** | 2.476 / 1 | **0.000** | `all-gated-out` |
+| Demo 1 | `overstriding` | 7 | 0.2266 | 0.2403 | true | 3.354 | 2 | **1.010** / 1 | 2.207 / 1 | **0.337** | `all-gated-out` |
+| Demo 2 | `trunkLean` | 99 | 3.002° | 1.414° | true | 3.108 | 14 | 2.148 / 1 | 2.412 / 1 | 0.716 | `metric-excluded` (tier 3) |
+| Demo 2 | `overstriding` | 7 | −0.0435 | 0.0422 | true | 14.495 | 1 | 1.211 / 1 | **1.000** / 1 | **0.333** | `metric-excluded` (tier 3) |
+| multiperson | `trunkLean` | 107 | 3.427° | 2.183° | true | 21.038 | 31 | 2.678 / 1 | 2.776 / 1 | **0.893** | **`planned`** |
+| multiperson | `overstriding` | 11 | 0.0542 | 0.3993 | true | **1.389** | **0** | 1.389 / 1 | 1.366 / 1 | **0.455** | `all-gated-out` |
+
+`describeDistribution().usable` was **true in every single case** — the `<5 instances` / `MAD === 0`
+fallback never fired anywhere, so the flat-`0.5` path was never the explanation.
+
+**`overstriding` emitted nothing on any of the three clips.** Every failure is the typicality ramp
+(0.333 / 0.337 / 0.455, all short of `MIN_EXEMPLAR_QUALITY = 0.5`); `detectionFactor` was `1.0`
+everywhere and the `3·MAD` hard reject never removed the winner. The multiperson row is the clean
+structural proof D3 asked for: **`maxDevMads = 1.389` and `instantsAtOrAbove1p5Mad = 0`** — no
+instant in that distribution can clear `0.5` at *any* `detectionFactor`. Demo 2's `least` sits at
+**exactly 1.000 MAD**, D3's own textbook tightly-bimodal ceiling. **Verdict: for a footstrike-indexed
+extreme-role metric the `1.5·MAD` requirement is structurally wrong**, exactly as pre-registered.
+`MIN_EXEMPLAR_QUALITY` was **not** touched.
+
+**`trunkLean` is a different story and does NOT support the same conclusion.** It reaches the extreme
+role comfortably where it renders — typicalities 0.716 (Demo 2) and 0.893 (multiperson), and it
+ships on multiperson. Its Demo 1 failure is not the ramp at all: the most-forward surviving instant
+(t = 4.28 s, 2.355 MADs, ramp value 0.785) has **`detectionFactor` = 0** — all four torso seed
+keypoints interpolated at that frame — so `0 × 0.785 = 0` and `pairQuality`'s `min` takes the pair
+to zero, while **18 other instants on that clip clear 1.5 MAD**.
+
+That exposes a second, separable defect: `buildExemplars` in both `trunkLean.ts` and
+`overstriding.ts` takes the **raw argmax among outlier-bound survivors and then scores it**, with no
+fallback to the next-most-extreme instant. Coverage therefore hinges on one frame's detection
+status. Direct evidence: on the same Demo 1 clip under `{ sequentialSampling: { enabled: false } }`
+the sampled set differs, the argmax lands on a well-tracked frame, and `trunkLean` **emits at
+quality 0.664**. Both defects are filed as follow-ups; neither is fixed here.
+
+### Coverage, per clip (3 trials, identical every trial)
+
+| metric | Demo 1 | Demo 2 | multiperson |
+|---|---|---|---|
+| `verticalOscillation` | ✅ 1 | ✅ 1 | ✅ 1 |
+| `verticalRatio` | ✅ 2 | `metric-excluded` | ✅ 2 |
+| `verticalOscillationCm` | ✅ 1 (see race below) | ✅ 1 | ✅ 1 |
+| `trunkLean` | `all-gated-out` | `metric-excluded` | ✅ 1 |
+| `overstriding` | `all-gated-out` | `metric-excluded` | `all-gated-out` |
+| `cadence` | `not-emitted` (D7) | `not-emitted` | `not-emitted` |
+| `kneeFlexion` | ✅ 1 | `metric-excluded` | ✅ 1 |
+| `armSwingSymmetry` | `metric-excluded` | ✅ 2 | `metric-excluded` |
+| `footStrikePattern` | ✅ 2 | `metric-excluded` | ✅ 2 |
+| `stepWidth` | `metric-excluded` | ✅ 1 | `metric-excluded` |
+| `stepWidthCm` | `metric-excluded` | `metric-excluded` | `metric-excluded` |
+| **images / sections** | **7 / 5** | **5 / 4** | **8 / 6** |
+
+**Zero `extraction-failed` across every run.** `stepWidthCm` produced nothing on any clip, but for a
+reason outside this epic: it is tier-3 on all three (no MediaPipe scale on the primary pass, and the
+grafted value does not lift it into a rendered card here).
+
+**`[evidence-coverage]` can be emitted MORE THAN ONCE per run** — D9's "once per run" is not what
+happens. On a MoveNet-primary run the background MediaPipe scale pass grafts `verticalOscillationCm`
+into the fused heuristics *after* `phase: 'ready'`, which changes the gallery's input signature and
+correctly triggers a re-extraction and a second line. Observed on Demo 1: line 1 has
+`verticalOscillationCm: metric-excluded`, line 2 has it `planned`. **A harness must take the LAST
+line, not the first.**
+
+### N-clip provenance
+
+Two-clip session (Demo 2 loaded via the demo button, multiperson added through *Add another clip*):
+8 sections, 11 images, and every rendered *"From clip N of 2."* caption matched
+`[evidence-coverage]`'s `sourceIndices` one-for-one — clip 1 won `verticalOscillation`,
+`armSwingSymmetry`, `stepWidth`; clip 2 won `verticalRatio`, `verticalOscillationCm`, `trunkLean`,
+`kneeFlexion`, `footStrikePattern`. Deep links present for exactly those 8 metrics, none for the
+three with no evidence. `verticalOscillationCm` had a planned exemplar on *both* clips and correctly
+took clip 2's — evidence follows the fusion winner, not "any clip that has it."
+
+### Ghost legibility — read, not assumed
+
+Best: `verticalRatio`'s `stridePair` (both footstrikes crisp, whole body, the stride gap is the
+picture), `stepWidth` on Demo 2 (two plants, obvious lateral offset), `footStrikePattern` singles on
+multiperson and Demo 1's second one.
+
+Three findings, all reported rather than fixed:
+
+1. **`trunkLean` on multiperson is unreadable.** The two extreme instants are 1.25 s apart, the
+   runner crosses most of the frame between them, `computeEvidenceCropRect` unions both torso boxes,
+   squares, and hits the `min(frameWidth, frameHeight)` cap → **side 1080 on a 1920×1080 clip**, i.e.
+   the whole frame downscaled to 640. The runner appears twice, tiny, at opposite edges; the image is
+   mostly chain-link fence and a crowd. D12 demotes a pair that is too SIMILAR; nothing guards a pair
+   that is too FAR APART.
+2. **`armSwingSymmetry` on Demo 2 includes a background bystander.** Reproduced on every trial: the
+   320 px floor crop around the left shoulder/elbow/wrist pulls in a person in a yellow shirt
+   standing to the right, who reads as a second body in an image whose own caption insists "not two
+   people". Clip-specific in its particulars, systematic in its cause — `EVIDENCE_CROP_MIN_SIDE_PX`
+   inflates a small limb box until it swallows whatever is next to the subject. The right-side
+   exemplar on the same clip has no bystander but a weak arm delta.
+3. **A bounce ghost reads as horizontal translation on a side view.** `verticalOscillation` on Demo 1
+   shows the same runner at two clearly-separated horizontal positions; the vertical delta the metric
+   is about is the smaller of the two displacements. On the front-approach Demo 2 the same exemplar
+   reads well (two head positions stacked vertically). Correct frames, correct crop, camera-angle
+   legibility limit.
+
+Marginal but acceptable: Demo 1's first `footStrikePattern` crop puts the shoe in the bottom-right
+corner, half out — the 482 px crop is centred on the ankle keypoint, which sits ~150 px off the
+visible shoe on that small, motion-blurred instant.
+
+### Harness contract and cost
+
+- `[analysis-diagnostics]` still `JSON.parse`s cleanly on every run; top-level keys unchanged
+  (`sampling, personSelection, view, keypoints, metrics, verticalOscillationFit`), ~5.6 kB, and a
+  scan for `data:` / `blob:` / `ImageBitmap` / `base64` over 38 captured lines (both diagnostics
+  lines plus every coverage payload) found **nothing image-shaped**.
+- `vite build` output contains **zero** occurrences of `analysis-diagnostics`, `evidence-coverage`,
+  or either probe prefix.
+- **No analysis wall-clock regression.** Same machine, same session, `goto` → "Analysis complete",
+  3 trials/arm, baseline `896f775` in a throwaway worktree: Demo 1 **5698 ms** [5539..5910] baseline
+  vs **5747 ms** [5550..6290] on this branch; Demo 2 **3146 ms** [3072..3157] vs **3020 ms**
+  [3002..3086]. Within noise both ways. Extraction's own cost is **after** ready and is real:
+  3.5–3.8 s (Demo 1), 3.5 s (Demo 2), 4.5 s (multiperson) from "Analysis complete" to a settled
+  gallery, during which the results are already fully readable.
+
+---
+
 ## Risks
 
 | Risk | Impact | Mitigation | Owner |
@@ -921,6 +1116,19 @@ one-line follow-up.
 | Evidence extraction regresses analysis wall-clock time | Medium | Extraction runs strictly after `phase: 'ready'`, never inside the sampling loop; measured against a pre-change baseline | #66 / #68 |
 | A metric is gated out on every clip and the gate is quietly loosened to fix it | Medium | `MIN_EXEMPLAR_QUALITY` is pre-registered; a universally-gated metric is a **reported finding**, not a tuning trigger | #68 |
 | **`overstriding`/`trunkLean` emit nothing on ANY clip** — the extreme role's ramp is structurally unreachable on a bimodal per-instance distribution | High for those two metrics — the epic's only extreme-role rows, and the ghost is their whole point | **Measure first (§8.6).** Clearing `0.5` needs `\|v − median\| ≥ 1.5·MAD`; a tight bimodal distribution tops out at **1.0 MAD** and a clean sinusoid at **≈1.41**, so neither can ever reach it. `generateSyntheticGait` is bimodal and a symmetric real gait plausibly is too. `MIN_EXEMPLAR_QUALITY` was **deliberately not touched** by #61 and is not to be touched to fix this — the finding is that the typicality ramp and the outlier bound share one `3·MAD` scale, which is a design question. Full arithmetic in D3 | #68 |
+
+### Status after #68's live pass (full numbers in D14)
+
+| Risk | Outcome |
+|---|---|
+| PTS-vs-`currentTime` drift | **Confirmed and measured: +2 frames on all three clips**, equal to each clip's own `elst media_time / mediaTimescale` (0.080 / 0.033367 / 0.033333 s); **0** with `sequentialSampling` off, isolating the WebCodecs PTS domain. Hook left at `0` — the correct value is per-clip AND per-sampler, so no constant is right. Follow-up filed |
+| Near-identical ghost reads as a blurry mess | Not observed; the opposite failure was — `trunkLean`'s two extremes 1.25 s apart union into a whole-frame crop on the multiperson clip. Follow-up filed |
+| `trunkLean`/`overstriding` ghosts are two tracking glitches | Not observed; the `3·MAD` bound removed 1–8 instants per clip and never removed the eventual winner |
+| Mislabelled bounce caption | Not re-checked live beyond reading the captions; #62's direction test stands |
+| Grafted centimetre exemplars picture the wrong person | Not exercised — no diverged scale pass on any of the three clips |
+| Wall-clock regression | **None.** Demo 1 5698 → 5747 ms, Demo 2 3146 → 3020 ms (medians, 3 trials, vs `896f775`). Gallery adds 3.5–4.5 s strictly after ready |
+| A universally-gated metric gets quietly tuned | Did not happen. `overstriding` is gated out on all three clips and `MIN_EXEMPLAR_QUALITY` is untouched |
+| **The extreme role is structurally unreachable on a bimodal distribution** | **FIRED, for `overstriding`.** multiperson: `maxDevMads = 1.389`, zero instants ≥1.5 MAD — unreachable at any `detectionFactor`. Demo 2: `least` at exactly 1.000 MAD. Did **not** fire for `trunkLean`, which reaches 0.716/0.893 where it renders and fails on Demo 1 for an unrelated reason (`detectionFactor = 0` on the argmax instant). Follow-ups filed |
 
 ## Open questions
 

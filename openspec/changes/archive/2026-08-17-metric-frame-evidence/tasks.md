@@ -23,7 +23,7 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
 - [x] 0.9 `design.md` D6 — PTS drift and `duration === Infinity`, written as inherited criteria.
 - [x] 0.10 Spec deltas for `form-heuristics`, `results-view`, `multi-clip-analysis`.
 - [x] 0.11 `openspec validate metric-frame-evidence --strict` passes.
-- [ ] 0.12 **Not archived here.** Archiving happens in §8, after live verification.
+- [x] 0.12 **Not archived here.** Archiving happens in §8, after live verification.
 - [x] 0.13 **Correction pass over `design.md`/`tasks.md`** (post-#61). Six corrections folded in,
   each marked **[correction]** in place: D3 hard reject 1 is `cropDerivable` ("no seed keypoint
   resolves"), D3's factor is `detectionFactor` counted per keypoint, D8 gains
@@ -189,10 +189,21 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
     exemplar is dropped, exactly as D8 anticipates — measured on a gapped fixture where the
     centre-most cycle straddles the gap: the cm path (which snaps inside its own gapless run) still
     emits, the pixel path does not.
-- [ ] 2.9 Regression anchor: track clip VO_cm 4.78–4.79 cm (±0.005 across trials),
+- [x] 2.9 Regression anchor: track clip VO_cm 4.78–4.79 cm (±0.005 across trials),
   `fit.frequencyHz × 60` == `cadence.value`. A >0.05 cm spread means something moved.
-  **Outstanding — needs the live-browser harness, deferred to §8.** What was done instead, and why
-  it is meaningful but not a substitute: the anchor's PURPOSE is to catch a perturbed shared
+  **CLOSED in §8 (live, real GPU, 3 trials).** The cross-check holds exactly: `fit.frequencyHz
+  × 60` = `1.52 × 60` = **91.2** == `cadence.value` **91.2**, and the number is bit-identical
+  across all three trials (spread **0.000 cm**, well inside the ±0.005 tolerance).
+  **The absolute value is 4.4215 cm, not 4.78–4.79 — and that drift is NOT this change's.**
+  Re-measured at `896f775` in a throwaway worktree, same machine, same session: baseline reports
+  `4.421467928439415` cm, `fitHz 1.52`, `sinusoidR2 0.42451916621964814`, `sampleCount 57`,
+  `spanSeconds 2.24`, `torsoMeters 0.504143645953322`, `medianPixelsPerMeter 868.0221516689736`
+  — **every digit identical to this branch**. Demo 2 likewise (10.486597716761532 cm both sides).
+  So this change is a bit-identical no-op on the shared spectral primitive on real footage, which is
+  what the anchor exists to prove. CLAUDE.md's 4.78–4.79 figure was measured 2026-08-12 with
+  MediaPipe as the PRIMARY backend, before the background scale-pass graft path and before #54/#55's
+  person-selection work; it is stale against `main`, not moved by #59.
+  Prior evidence from #62, unchanged: the anchor's PURPOSE is to catch a perturbed shared
   primitive, and 2.1's key-by-key before/after comparison establishes that no field of any fit or
   any metric moved at all, on four clips and four metrics, including the `fit.frequencyHz × 60` vs
   `cadence.value` cross-check (both sides byte-identical to the pre-change tree). That bounds the
@@ -439,25 +450,25 @@ wait temporarily relaxed locally, then reverted.
 
 ## 8. Live verification, then archive (#68)
 
-- [ ] 8.1 Headless Chromium, real GPU (`--headless=new --enable-gpu --ignore-gpu-blocklist`).
+- [x] 8.1 Headless Chromium, real GPU (`--headless=new --enable-gpu --ignore-gpu-blocklist`).
   Confirm the renderer via `WEBGL_debug_renderer_info` and **abort** on SwiftShader.
-- [ ] 8.2 Run Demo 1 (3840×2160 landscape, network), Demo 2 (`park-approach.mp4`, 2160×3840
+- [x] 8.2 Run Demo 1 (3840×2160 landscape, network), Demo 2 (`park-approach.mp4`, 2160×3840
   portrait, local), and `e2e/fixtures/multiperson-track.mp4` for the N-clip provenance path.
   Multiple trials per clip; compare medians and ranges.
-- [ ] 8.3 **Ground-truth every extracted instant**: `ffmpeg -i clip -ss <t> -frames:v 1 -q:v 3` per
+- [x] 8.3 **Ground-truth every extracted instant**: `ffmpeg -i clip -ss <t> -frames:v 1 -q:v 3` per
   reported timestamp, read the PNGs, compare against the app's own crop.
-- [ ] 8.4 **Report the measured PTS offset per clip.** A "looks fine" without a number does not
+- [x] 8.4 **Report the measured PTS offset per clip.** A "looks fine" without a number does not
   close this. Cross-check by forcing `{ sequentialSampling: { enabled: false } }` via
   `page.addInitScript` and reporting whether the offset changes. If non-zero, §6.9's calibration
   lands and the finding is written into this design.md **before** archiving.
-- [ ] 8.5 **Look at the ghosts.** Save the composites and read them. Confirm a legible delta and the
+- [x] 8.5 **Look at the ghosts.** Save the composites and read them. Confirm a legible delta and the
   right body region per metric. An unreadable double-exposure is a finding to report.
-- [ ] 8.6 Report per-clip, per-metric coverage: which produced evidence, which were gated out, why.
+- [x] 8.6 Report per-clip, per-metric coverage: which produced evidence, which were gated out, why.
   Read it off the **`[evidence-coverage]`** console line (§5.9/§7.11), matched exclusively
   (`startsWith('[evidence-coverage]')`), `JSON.parse`d — same pattern as the two
   `[analysis-diagnostics]` lines. A metric gated out on **every** clip is a finding —
   `MIN_EXEMPLAR_QUALITY` is pre-registered and is not to be quietly tuned down to fix it.
-- [ ] 8.6b **Measure the extreme-role risk first, before touching any number** (design D3, and the
+- [x] 8.6b **Measure the extreme-role risk first, before touching any number** (design D3, and the
   Risks row). `overstriding` and `trunkLean` are the epic's only extreme-role metrics, and an
   extreme instant needs `|v − median| ≥ 1.5·MAD` to clear `0.5` — which a tightly bimodal
   per-instance distribution (max deviation **1.0 MAD**) and a clean sinusoid (**≈1.41**)
@@ -468,15 +479,15 @@ wait temporarily relaxed locally, then reverted.
   right for a bimodal metric, which is a design question for a follow-up ticket. Loosening
   `MIN_EXEMPLAR_QUALITY` to make the symptom disappear is editing a criterion to match a result and
   is explicitly out of bounds for this ticket.
-- [ ] 8.7 Confirm `[analysis-diagnostics]` still `JSON.parse`s and contains no image data or blob
+- [x] 8.7 Confirm `[analysis-diagnostics]` still `JSON.parse`s and contains no image data or blob
   URLs. Match the prefix exclusively
   (`startsWith('[analysis-diagnostics]') && !startsWith('[analysis-diagnostics:')`). Confirm the
   same of `[evidence-coverage]`: parses, and carries no `ImageBitmap`/canvas/`Blob`/object-URL/
   data-URI value anywhere in the payload.
-- [ ] 8.8 Confirm no analysis wall-clock regression against a pre-change baseline on the same
+- [x] 8.8 Confirm no analysis wall-clock regression against a pre-change baseline on the same
   machine.
-- [ ] 8.9 `npm test`, `tsc -b`, `eslint`, `npm run build`, `npm run test:e2e` clean.
-- [ ] 8.9b **Fix the one delta sentence that contradicts shipped code, BEFORE archiving.**
+- [x] 8.9 `npm test`, `tsc -b`, `eslint`, `npm run build`, `npm run test:e2e` clean.
+- [x] 8.9b **Fix the one delta sentence that contradicts shipped code, BEFORE archiving.**
   `specs/form-heuristics/spec.md`'s first hard-reject condition still reads "any of the keypoints
   defining its crop region is `'unrecoverable'` at that frame" — the pre-#61 rule, which
   `exemplars.ts`'s `cropDerivable` violates and which already contradicts this change's own
@@ -484,9 +495,9 @@ wait temporarily relaxed locally, then reverted.
   clause to "no keypoint defining its crop region resolves to a position at that frame". The block
   is `## ADDED`, so this is an ordinary delta edit. Archiving it unfixed puts the wrong rule into
   `openspec/specs/` as the authoritative contract. See design.md's spec-delta section.
-- [ ] 8.10 `openspec validate metric-frame-evidence --strict`, then
+- [x] 8.10 `openspec validate metric-frame-evidence --strict`, then
   `openspec archive metric-frame-evidence --yes`. **Promptly** — batched archiving has drifted
   `openspec/specs/` in this repo before.
-- [ ] 8.11 CLAUDE.md gains a section recording what was measured: per-clip coverage, the PTS offset
+- [x] 8.11 CLAUDE.md gains a section recording what was measured: per-clip coverage, the PTS offset
   finding, and any metric whose ghost was judged unreadable. Record negative results so nobody
   re-derives them.
