@@ -83,8 +83,9 @@ penalising it would gate out exactly the instant the exemplar exists to show. Wh
 distribution to judge against — a degenerate spread, or too few instances — the term SHALL fall back
 to a neutral value rather than assert a confidence the data cannot support.
 
-An instant SHALL be rejected outright, without a score, when: any of the keypoints defining its crop
-region is `'unrecoverable'` at that frame; or, for a range-showing exemplar, its value lies beyond a
+An instant SHALL be rejected outright, without a score, when: no keypoint defining its crop region
+resolves at that frame, leaving no position to crop around — a partly-resolvable region SHALL NOT be
+rejected, since the crop is derived from the resolvable subset; or, for a range-showing exemplar, its value lies beyond a
 robust outlier bound about the median — so that a tracking glitch can never be selected as an
 extreme; or the metric's own per-instance degenerate fallback fired at that instant; or the instant
 does not resolve to a sampled frame within a snapping tolerance derived from the clip's own sampling
