@@ -77,6 +77,40 @@ function missing(timestamp: number): PoseSample {
 }
 
 /**
+ * The two halves of the documented inversion, from one generator so they differ in exactly one
+ * thing. A small intruder at a fixed position, detected with `confidentKeypoints` points above the
+ * confidence gate: the first four are the corners of a `BELOW_FLOOR_SIDE`-wide square, and any
+ * extra sit on the top-left corner so they raise the count without widening the box.
+ *
+ * At 5 confident points `deriveBoundingBox` returns a box of `BELOW_FLOOR_SIDE²` px², which the
+ * area floor rejects. At 3 — one below `minConfidentKeypoints: 4` — it returns nothing at all, so
+ * the floor never sees it. Same intruder, same place, same instant; the only difference is how
+ * well it was detected.
+ */
+function intruder(timestamp: number, confidentKeypoints: number): PoseSample {
+  const x = 1500
+  const y = 700
+  const corners = [
+    [x, y],
+    [x + BELOW_FLOOR_SIDE, y],
+    [x, y + BELOW_FLOOR_SIDE],
+    [x + BELOW_FLOOR_SIDE, y + BELOW_FLOOR_SIDE],
+  ]
+  return {
+    timestamp,
+    frame: {
+      timestamp,
+      keypoints: COMMON_KEYPOINT_NAMES.map((name, i) => {
+        const corner = i < confidentKeypoints ? (corners[i] ?? [x, y]) : null
+        return corner
+          ? { name, x: corner[0], y: corner[1], score: 0.9 }
+          : { name, x, y, score: 0 }
+      }),
+    },
+  }
+}
+
+/**
  * A sample with enough confident keypoints to yield a box, but every one of them at NaN
  * coordinates. `deriveBoundingBox` leaves its `±Infinity` sentinels untouched (every `<`/`>`
  * against NaN is false), so the derived box is
@@ -670,6 +704,120 @@ describe('selectRetroactivePersonOfInterest', () => {
     })
   })
 
+  describe("boxless survival is bounded by the winner's box evidence", () => {
+    // One real track occupying the whole clip, so exactly ONE segment is formed and its partition
+    // span is every index. Its evidenced interior is [1, 3] -- the first and last surviving
+    // detection -- so index 0 is inside the segment's back-extended span but outside its evidence,
+    // and index 4 is inside its forward-extended span but outside its evidence.
+    const ONE_SEGMENT_WITH_TAILS = (trailing: PoseSample): PoseSample[] => [
+      boxless(0),
+      detected(0.05, 100, 100, 300),
+      boxless(0.1),
+      detected(0.15, 110, 100, 300),
+      trailing,
+    ]
+
+    it('nulls the SAME intruder whether or not it yielded a box -- the inversion is closed', () => {
+      // The documented inversion, as a paired fixture. Before this rule the second call kept the
+      // intruder: 200 px-ish of bystander at 5 confident keypoints was nulled by the area floor,
+      // while the identical bystander at 3 was waved through with `status: 'detected'` intact.
+      // Fewer confident points bought survival.
+      const wellDetected = select(ONE_SEGMENT_WITH_TAILS(intruder(0.2, 5)))
+      const poorlyDetected = select(ONE_SEGMENT_WITH_TAILS(intruder(0.2, 3)))
+
+      expect(wellDetected.samples[4]).toEqual({ timestamp: 0.2, frame: null })
+      expect(poorlyDetected.samples[4]).toEqual({ timestamp: 0.2, frame: null })
+
+      // ...and the two are still distinguishable in the diagnostics, because they were nulled for
+      // genuinely different reasons: one failed the floor, the other was never checked at all.
+      expect(wellDetected.diagnostics.rejectedBelowFloor).toBe(1)
+      expect(wellDetected.diagnostics.rejectedOutsideEvidence).toBe(1) // the leading boxless frame
+      expect(poorlyDetected.diagnostics.rejectedBelowFloor).toBe(0)
+      expect(poorlyDetected.diagnostics.rejectedOutsideEvidence).toBe(2)
+    })
+
+    it('keeps a boxless frame INSIDE the evidenced interior and nulls the ones outside it', () => {
+      const samples = ONE_SEGMENT_WITH_TAILS(boxless(0.2))
+
+      const { samples: out, diagnostics } = select(samples)
+
+      // One segment, so nothing lost its segment and the partition is untouched.
+      expect(diagnostics.segmentCount).toBe(1)
+      expect(diagnostics.rejectedOtherSegment).toBe(0)
+      expect(diagnostics.rejectedBelowFloor).toBe(0)
+
+      // Interior: rides along, by reference, exactly as before.
+      expect(out[2]).toBe(samples[2])
+      // Leading and trailing: inside the winner's partition span, outside its box evidence.
+      expect(out[0]).toEqual({ timestamp: 0, frame: null })
+      expect(out[4]).toEqual({ timestamp: 0.2, frame: null })
+      expect(diagnostics.rejectedOutsideEvidence).toBe(2)
+      expect(diagnostics.detectedSamplesOut).toBe(3)
+    })
+
+    it('a winner with one surviving detection has a single-index interior', () => {
+      const samples: PoseSample[] = [boxless(0), detected(0.05, 100, 100, 300), boxless(0.1)]
+
+      const { samples: out, diagnostics } = select(samples)
+
+      expect(diagnostics.segmentCount).toBe(1)
+      expect(out[1]).toBe(samples[1])
+      expect(out[0]).toEqual({ timestamp: 0, frame: null })
+      expect(out[2]).toEqual({ timestamp: 0.1, frame: null })
+      expect(diagnostics.rejectedOutsideEvidence).toBe(2)
+      expect(diagnostics.detectedSamplesOut).toBe(1)
+    })
+
+    it('a boxless frame in a LOSING segment stays a losing-segment rejection', () => {
+      // Bucket attribution is decided by the PARTITION and asked first, so nothing that was
+      // already being nulled changes bucket -- which is what makes `rejectedOutsideEvidence` a
+      // readable count of what this rule newly nulls rather than a reshuffling.
+      const samples: PoseSample[] = [
+        detected(0, 100, 100, 300),
+        detected(0.05, 105, 100, 300),
+        detected(0.1, 1500, 700, 60),
+        boxless(0.15),
+        detected(0.2, 1505, 700, 60),
+      ]
+
+      const { diagnostics } = select(samples)
+
+      expect(diagnostics.segmentCount).toBe(2)
+      expect(diagnostics.rejectedOtherSegment).toBe(3)
+      expect(diagnostics.rejectedOutsideEvidence).toBe(0)
+    })
+
+    it('never nulls a boxed detection inside the winner', () => {
+      // The structural guarantee behind the single uniform test: every surviving index inside the
+      // winner is inside the winner's own first/last by definition, so a boxed, above-floor
+      // detection cannot be reached by THIS rule. Scoped to the winner deliberately -- a boxed,
+      // above-floor detection in a LOSING segment is still nulled, as `rejectedOtherSegment`, and
+      // the case above pins that.
+      const samples: PoseSample[] = [
+        boxless(0),
+        detected(0.05, 100, 100, 300),
+        detected(0.1, 108, 100, 300),
+        detected(0.15, 116, 100, 300),
+        boxless(0.2),
+      ]
+
+      const { samples: out, diagnostics } = select(samples)
+
+      expect(diagnostics.detectedSamplesOut).toBeGreaterThanOrEqual(
+        diagnostics.segments[0].frameCount,
+      )
+      expect(out.slice(1, 4)).toEqual(samples.slice(1, 4))
+    })
+
+    it('reports zero outside-evidence rejections on a clip with no boxless frames', () => {
+      const { diagnostics } = select([
+        detected(0, 100, 100, 300),
+        detected(0.05, 105, 100, 300),
+      ])
+      expect(diagnostics.rejectedOutsideEvidence).toBe(0)
+    })
+  })
+
   describe('never substitutes another person for a rejected one', () => {
     it('every survivor is its input by reference and every rejection is exactly a null frame', () => {
       const samples: PoseSample[] = [
@@ -810,21 +958,31 @@ describe('selectRetroactivePersonOfInterest', () => {
       expect(diagnostics.separationRatio).toBeNull()
     })
 
-    it('detectedSamplesOut equals detectedSamplesIn minus both rejection counts', () => {
+    it('detectedSamplesOut equals detectedSamplesIn minus all three rejection counts', () => {
+      // A boxless frame in each of the three positions that can be rejected differently -- index 1
+      // is inside the winner but before its first surviving detection, index 6 is inside a losing
+      // segment -- so all three buckets are non-zero and the identity is exercised, not merely
+      // satisfied by two of the terms being 0.
       const samples: PoseSample[] = [
-        detected(0, 100, 100, 300),
-        detected(0.05, 100, 100, BELOW_FLOOR_SIDE),
-        detected(0.1, 105, 100, 300),
-        detected(0.15, 1500, 700, 60),
-        detected(0.2, 1500, 700, BELOW_FLOOR_SIDE),
+        boxless(0),
+        detected(0.05, 100, 100, 300),
+        detected(0.1, 100, 100, BELOW_FLOOR_SIDE),
+        detected(0.15, 105, 100, 300),
+        detected(0.2, 1500, 700, 60),
+        boxless(0.25),
+        detected(0.3, 1500, 700, BELOW_FLOOR_SIDE),
       ]
 
       const { samples: out, diagnostics } = select(samples)
 
+      expect(diagnostics.rejectedBelowFloor).toBeGreaterThan(0)
+      expect(diagnostics.rejectedOtherSegment).toBeGreaterThan(0)
+      expect(diagnostics.rejectedOutsideEvidence).toBeGreaterThan(0)
       expect(diagnostics.detectedSamplesOut).toBe(
         diagnostics.detectedSamplesIn -
           diagnostics.rejectedBelowFloor -
-          diagnostics.rejectedOtherSegment,
+          diagnostics.rejectedOtherSegment -
+          diagnostics.rejectedOutsideEvidence,
       )
       expect(out.filter((s) => s.frame !== null)).toHaveLength(diagnostics.detectedSamplesOut)
     })

@@ -370,6 +370,7 @@ describe('runClipAnalysisPipeline', () => {
         detectedSamplesOut: 5,
         rejectedBelowFloor: 0,
         rejectedOtherSegment: 0,
+        rejectedOutsideEvidence: 0,
         segmentCount: 0,
         bridgedCuts: 0,
         segments: [],
