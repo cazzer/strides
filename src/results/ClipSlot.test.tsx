@@ -172,5 +172,8 @@ describe('ClipSlot', () => {
     expect(session.clipId).toBe('a')
     expect(session.analysis.phase).toBe('idle')
     expect(session.videoSource.status).toBe('empty')
+    // The poster is part of the reported session from the first render, `null` until there are
+    // bytes to decode — `MultiClipVideoSession` diffs the field, so it has to always be present.
+    expect(session.poster).toBeNull()
   })
 })

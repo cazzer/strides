@@ -3,6 +3,7 @@ import type { RefObject } from 'react'
 import type { MetricId } from '../heuristics/types'
 import type { PoseDetector } from '../pose/detector'
 import { FileUpload } from '../video/FileUpload'
+import { releaseClipPoster } from '../video/posterFrame'
 import { ClipSlot } from './ClipSlot'
 import type { ClipPendingLoad } from './ClipSlot'
 import { EvidenceGallery } from './EvidenceGallery'
@@ -59,7 +60,11 @@ function sameClipSession(previous: ClipSession | undefined, next: ClipSession): 
     previous.analysis.scalePass.status === next.analysis.scalePass.status &&
     previous.analysis.scalePass.diagnostics === next.analysis.scalePass.diagnostics &&
     previous.analysis.scalePass.error === next.analysis.scalePass.error &&
-    previous.analysis.scalePass.reason === next.analysis.scalePass.reason
+    previous.analysis.scalePass.reason === next.analysis.scalePass.reason &&
+    // A poster arrives asynchronously, long after the fields above have stopped moving — leaving it
+    // out would make its arrival invisible to this comparison and `setClipStates` would keep
+    // returning the previous state, so the poster would never reach anything that renders it.
+    previous.poster === next.poster
   )
 }
 
@@ -114,6 +119,16 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
       // for the clip that happens to be active right now.
       clipStates[id]?.analysis.reset()
 
+      // Frees the poster's pixels in this same tick, for the same reason `reset()` is called here
+      // rather than left to the slot's unmount: the ordering of React's cleanup pass is not a
+      // contract to lean on. `releaseClipPoster` is idempotent, so the slot's own cleanup calling
+      // it again on unmount is a no-op, not a double free.
+      //
+      // Guarded by the same condition `setClipIds` applies below: refusing to drop the last
+      // remaining clip leaves that slot MOUNTED and still reporting the poster it holds, and
+      // releasing a poster something is about to render again is the one way this could be wrong.
+      if (clipIds.length > 1) releaseClipPoster(clipStates[id]?.poster)
+
       setClipIds((prev) => (prev.length <= 1 ? prev : prev.filter((existing) => existing !== id)))
       setPendingLoads((prev) => {
         if (!(id in prev)) return prev
@@ -128,7 +143,7 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
         return next
       })
     },
-    [clipStates],
+    [clipIds, clipStates],
   )
 
   // Only clips whose ClipSlot has reported at least once — briefly excludes a just-mounted clip
@@ -167,13 +182,17 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
   }, [clips])
 
   const handleChooseDifferentVideo = useCallback(() => {
+    // Every clip in the session is going away, so every poster is too. Same posture as
+    // `removeClip`: released here and again by each slot's own cleanup, idempotently.
+    for (const session of Object.values(clipStates)) releaseClipPoster(session.poster)
+
     setClipIds([makeClipId()])
     setPendingLoads({})
     setClipStates({})
     setActiveClipIndex(0)
     setReportedEvidenceMetrics(NO_EVIDENCE_METRICS)
     headingRef.current?.focus()
-  }, [headingRef])
+  }, [clipStates, headingRef])
 
   return (
     <main className="mx-auto max-w-6xl px-4 sm:px-6 py-10 space-y-8 lg:grid lg:grid-cols-2 lg:items-start lg:gap-8 lg:space-y-0">
