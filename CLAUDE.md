@@ -90,8 +90,10 @@ In development builds only, `useVideoAnalysis` auto-logs TWO console lines per r
    the detector found but the selection stage attributed to somebody else counts as *missing*
    there. `personSelection.detectedSamplesIn` preserves the pre-selection count — compare the two
    to tell "the detector found nothing" from "the detector found somebody else". The stage ships
-   **off** by default, in which case the two are always equal and this line reads exactly as it did
-   before the stage existed. `personSelection` itself is ALWAYS present (unlike `scaleCalibration`):
+   **on** by default, so expect the two to DIVERGE — by 13-16 detected frames on the side-view demo
+   clip. They are equal only under a `{ personSelection: { enabled: false } }` override, in which
+   case this line reads exactly as it did before the stage existed. `personSelection` itself is
+   ALWAYS present (unlike `scaleCalibration`):
    `{ status: 'selected'|'skipped', skipReason, minBoundingBoxAreaPx, totalSamples,
    detectedSamplesIn, detectedSamplesOut, rejectedBelowFloor, rejectedOtherSegment, segmentCount,
    segments (ranked by integrated area DESC, capped at 10, `[0]` is the winner), separationRatio }`
@@ -120,11 +122,14 @@ the scale-pass line will collide with it; the second is `startsWith('[analysis-d
   minKeypointConfidence, minConfidentKeypoints, maxAreaRatio, maxCenterSpeedSidesPerSecond,
   maxContinuityGapSeconds }`, the retroactive person-of-interest stage (issue #51 Stage 1) that
   segments the sampled sequence at continuity breaks and keeps only the highest integrated-bbox-area
-  segment. **Ships `enabled: false`** — it works (picks the runner over two bystander spans by
+  segment. **Ships `enabled: true`** — by explicit user decision (2026-08-16), OVERRIDING the
+  pre-registered ship rule, which fired. It works (picks the runner over two bystander spans by
   39-46x on `e2e/fixtures/multiperson-track.mp4`, and flips `trunkLean` there from -2.9° to +4.3°)
   but is NOT a no-op on the Demo 1 side-view clip: one collapsed detection at t=4.32 wedges the
-  runner's own continuous 55-frame track apart and strands 5 real frames. Turn it on with
-  `{ personSelection: { enabled: true } }`. Full A/B tables and the root cause:
+  runner's own continuous 55-frame track apart and strands 5 real frames. That cost, plus boxless
+  survival inside the winner's span and primary/scale-pass selection divergence, is what was
+  knowingly accepted — issue #52's items 1-3. Turn it OFF (the non-default arm every A/B needs)
+  with `{ personSelection: { enabled: false } }`. Full A/B tables and the root cause:
   `openspec/changes/retroactive-person-selection/design.md`. Note this stage has NO `window` global
   of its own — it rides on this one.
 - `window.__STRIDES_POSE_BACKEND_OVERRIDE__` — partial `PoseDetectorConfig`
@@ -272,16 +277,14 @@ across all 3 trials this session — not yet confirmed whether that holds in gen
 coincidental to this clip/environment. For a real before/after comparison, run a few trials per
 variant and compare medians/ranges, not single runs.
 
-**Environment gotcha — no local Playwright install, and its cached browser binary is
-version-mismatched (2026-08-12).** This repo has no `playwright` devDependency. Driver scripts
-written here fail to resolve the import; run them from a sibling project that has `playwright`
-installed instead (`node script.mjs` with `cwd` in that project), or `npm i -D playwright`
-here if a persistent local install is preferred. Separately, `chromium.launch()`'s default
-version-pinned browser lookup can fail if the only cached binaries under
-`~/Library/Caches/ms-playwright/` don't match the installed `playwright` package's expected
-revision (`Executable doesn't exist at .../chromium_headless_shell-<rev>/...`). Bypass by
-pointing `executablePath` directly at a cached full-Chromium binary instead of `headless_shell`,
-e.g. `~/Library/Caches/ms-playwright/chromium-<rev>/chrome-mac-arm64/Google Chrome for
+**Environment gotcha — the cached browser binary can be version-mismatched.** `playwright` is a
+devDependency here (since `06d9f72`), so driver scripts written in this repo resolve the import and
+run in place. But `chromium.launch()`'s default version-pinned browser lookup can fail if the only
+cached binaries under `~/Library/Caches/ms-playwright/` don't match the installed `playwright`
+package's expected revision (`Executable doesn't exist at
+.../chromium_headless_shell-<rev>/...`). Bypass by pointing `executablePath` directly at a cached
+full-Chromium binary instead of `headless_shell`, e.g.
+`~/Library/Caches/ms-playwright/chromium-<rev>/chrome-mac-arm64/Google Chrome for
 Testing.app/Contents/MacOS/Google Chrome for Testing` — `ls
 ~/Library/Caches/ms-playwright/` to see what's actually cached on the machine first. Still pass
 `args: ['--headless=new', '--enable-gpu', '--ignore-gpu-blocklist']`, same as above.

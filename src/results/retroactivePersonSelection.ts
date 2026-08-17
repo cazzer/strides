@@ -91,8 +91,8 @@ export interface RetroactivePersonSelectionConfig {
  * area swing with a simultaneous ~400px centroid jump across two consecutive frames of one person.
  * Extra margin here is cheap, but it is not sufficient — see design.md's D7: that wedge's first
  * cut is a POSITION failure (IoU 0, ~12 sides/s against a 3 sides/s bound) that no value of this
- * bound can heal, which is why the stage ships off pending a splice-tolerant segmentation rule
- * rather than a wider ratio.
+ * bound can heal, which is why the real fix is a splice-tolerant segmentation rule rather than a
+ * wider ratio — a follow-up the stage now ships ahead of rather than waiting on.
  *
  * `maxCenterSpeedSidesPerSecond: 3` — the same bound the online gate uses, for the same reason
  * (a runner crossing a 1920px frame in ~1.5s is ~1.8 sides/s against a ~700px box).
