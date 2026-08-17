@@ -31,6 +31,12 @@ and last surviving detection, the span it has actual box evidence for — and SH
 everywhere else, including inside the winning segment's partition span but beyond either end of
 that interval.
 
+This bounds the asymmetry rather than removing it. WITHIN the evidenced interior an unverifiable
+detection is still kept unchecked, so an intruder there is still nulled when it yields a box the
+area floor rejects and still kept when it yields none at all. That residue is deliberate: the
+interval is the only bound available that the segmentation bounds do not already answer, and a
+second proximity threshold governing the same question would cost more than the residue it removes.
+
 Nulling stays total. Every frame outside the winning segment is nulled exactly as before, and the
 partition still decides which segment a frame belongs to, so the property that every sample belongs
 to exactly one segment is untouched. Only the survival of an unverifiable frame narrows.

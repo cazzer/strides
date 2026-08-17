@@ -108,8 +108,14 @@ export interface RetroactivePersonSelectionConfig {
  * survives only inside the winner's evidenced interior (first through last surviving detection),
  * not anywhere in its partition span, and what the narrower window excludes is counted in
  * `rejectedOutsideEvidence`. The inversion that item described (a bystander nulled by the floor at
- * 5 confident keypoints but KEPT at 3) no longer holds. Primary/scale-pass selection divergence
- * (#56) is still open and still live.
+ * 5 confident keypoints but KEPT at 3) no longer holds OUTSIDE that interior. Inside it the
+ * asymmetry SURVIVES BY DESIGN: a boxless frame between the winner's first and last surviving
+ * detection is still kept unchecked, so a sub-floor intruder there is nulled at 5 confident
+ * keypoints and kept at 3, exactly as before. Measured, not hypothetical — 4 such frames rode
+ * through on the multi-person clip in this change's own A/B. D1 rejected a proximity bound rather
+ * than a narrower interval: a second, untunable radius governing the same question the
+ * segmentation bounds already answer is worse than the residue it would remove.
+ * Primary/scale-pass selection divergence (#56) is still open and still live.
  *
  * `minBoundingBoxAreaFraction: 2e-4` — 415 px² at 1080p, 1659 px² at 4K. Derived as roughly the
  * geometric mean of the largest measured garbage detection on the repro clip (183 px²) and the

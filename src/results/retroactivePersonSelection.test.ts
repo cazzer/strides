@@ -787,10 +787,12 @@ describe('selectRetroactivePersonOfInterest', () => {
       expect(diagnostics.rejectedOutsideEvidence).toBe(0)
     })
 
-    it('never nulls a frame that has box evidence, however far from the winner it sits', () => {
+    it('never nulls a boxed detection inside the winner', () => {
       // The structural guarantee behind the single uniform test: every surviving index inside the
       // winner is inside the winner's own first/last by definition, so a boxed, above-floor
-      // detection cannot be reached by this rule.
+      // detection cannot be reached by THIS rule. Scoped to the winner deliberately -- a boxed,
+      // above-floor detection in a LOSING segment is still nulled, as `rejectedOtherSegment`, and
+      // the case above pins that.
       const samples: PoseSample[] = [
         boxless(0),
         detected(0.05, 100, 100, 300),

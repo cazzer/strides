@@ -224,6 +224,17 @@ previous 56–58 spread was entirely unverified frames.
 its boxless frames sit *inside* the winner's evidenced interior and were kept. Demo 1's 3–5 all sit
 outside it and were nulled. Demo 2 has no boxless frames at all, so there was nothing to decide.
 
+**Read the same four frames the other way round, because both readings are true.** Those four are
+also four live instances of the **residual inversion**: the asymmetry is closed OUTSIDE the
+evidenced interior and survives INSIDE it by design. A boxless frame between the winner's first and
+last surviving detection is still kept unchecked, so a sub-floor intruder there is still nulled at
+5 confident keypoints and still kept at 3. This measurement is the first evidence that the residue
+is non-empty on real footage — 4 frames on one clip — rather than a theoretical corner. D1 rejected
+a proximity bound rather than a narrower interval, and that judgement stands: a second, untunable
+radius governing the same question the segmentation bounds already answer would be worse than the
+residue it removes. But the residue is real, it is bounded by the winner's own evidence rather than
+by nothing, and it is not zero.
+
 ### Metrics — nothing moved, anywhere
 
 Every one of the nine metrics' `value` and `confidence` is **identical between arms on all three
@@ -270,5 +281,16 @@ fully-accounted effect and a provably empty blast radius.
 The 3–5 Demo 1 frames were nulled because they lie outside the winner's box evidence, not because
 anyone confirmed they show a different person. No keyframe review was done, and none of these three
 clips contains the motivating case in its sharpest form — a bystander that yields a box at 5
-confident keypoints and none at 3, in the same span. That inversion is closed by construction and
-pinned by a paired unit fixture; it is not separately confirmed on real footage here.
+confident keypoints and none at 3, in the same span. That inversion is closed by construction
+outside the evidenced interior, pinned by a paired unit fixture, and not separately confirmed on
+real footage here.
+
+**And the trade runs both ways, so state both.** Some of those 3–5 frames are quite likely the
+runner mid-occlusion — a frame where limbs drop below the confidence gate at the clip's edges is at
+least as easily a partly-hidden subject as an intruder — and they are now discarded. This change
+does not distinguish the two cases and cannot: a boxless frame carries no evidence either way,
+which is the whole premise. What it buys is that an unverifiable frame can no longer ride an
+arbitrary distance from any evidence at all on the strength of a partition boundary. What it costs
+is those frames when they were genuinely the subject. On these three clips the cost was measured at
+zero metric movement, which is why it is a good trade here — not because the frames were shown to
+be somebody else.
