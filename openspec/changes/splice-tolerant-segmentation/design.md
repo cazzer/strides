@@ -352,6 +352,95 @@ both checks through `isContinuousPair`.
 `54-before.txt` / `54-after.txt` and their `--json` companions, scratchpad-only (measurement
 artifacts, not committed).
 
+## Measured A/B results — ROUND 2 (2026-08-16, real GPU): the shipping configuration
+
+Bridge rule **plus** D4's `maxCenterSpeedSidesPerSecond: 4`. Same harness, same port 5199, same
+renderer (`ANGLE Metal Renderer: Apple M4 Pro`), server started by the run, 3 trials × 3 clips ×
+2 arms. Baseline arm is **stage-on at the merge base** (`main`, neither change present), so the
+comparison isolates bridge rule + widened bound *together*. Same in-place single-file swap as
+round 1, with the same provenance caveat; the baseline reproduced round 1's before-numbers exactly
+on every field of all three clips, which independently validates the swap method.
+
+| field | Demo 1 base | Demo 1 R2 | Demo 2 base | Demo 2 R2 | multi base | multi R2 |
+|---|---|---|---|---|---|---|
+| `bridgedCuts` | — | **1** | — | **0** | — | **4** |
+| `segmentCount` | 5 [5..6] | **3 [3..4]** | 1 | 1 | 8 | **2** |
+| `rejectedOtherSegment` | 13 [13..16] | **7 [7..10]** | 0 | 0 | 52 | **47** |
+| `rejectedBelowFloor` | 0 | 0 | 0 | 0 | 30 | 30 |
+| `detectedSamplesOut` | 52 [50..52] | **58 [56..58]** | 99 | 99 | 122 | **127** |
+| `sampling.detectedFrames` | 52 [50..52] | **58 [56..58]** | 99 | 99 | 122 | **127** |
+| `separationRatio` | 16.149 | **2375.0** | null | null | 45.749 | **33.541** |
+| `segments[0].startTimestamp` | 4.36 | **0.08** | 0.0334 | 0.0334 | 1.75 | 1.75 |
+| `segments[0].endTimestamp` | 7.16 [6.32..7.16] | 7.16 [6.32..7.16] | 1.6683 | 1.6683 | 3.8167 | **3.90** |
+| `segments[0].frameCount` | 47 | **53** | 99 | 99 | 119 | **123** |
+| `segments[0].medianAreaPx` | 515,680 | **491,133** | 134,081 | 134,081 | 31,937 | **31,670** |
+
+### Demo 1: the wedge is healed
+
+Probed segment structure under the shipping config — the winner is now ONE segment:
+
+| segment | span | frames |
+|---|---|---|
+| **winner** | **[0.08, 6.32]** | **53** |
+| phantom | [7.20, 8.32] | 3 |
+| phantom | [8.36, 9.16] | 1 |
+| phantom | [6.36, 7.16] | 1 |
+
+Against round 1's 5 + 1 + 47 partition: the 5-frame prefix, the wedge frame at t=4.32, and the
+47-frame tail are now one track. **One** `bridgedCuts` event removed **both** boundaries — the D2
+non-advance mechanic doing exactly what it was designed for, and the first time it has been
+exercised on real footage. Every remaining segment is a phantom detection on a visibly empty frame,
+and **all three start after the winner's span ends** (6.36, 7.20, 8.36 > 6.32).
+
+`medianAreaPx` falling 515,680 → 491,133 (−4.8%) is the merged track's true median: the winner now
+includes the prefix frames, where the runner is further from camera, plus the collapsed wedge box.
+`separationRatio` 16 → 2375 is the winner absorbing every real detection while the runner-up is a
+3-frame phantom.
+
+### Verdict against the pre-registered criteria
+
+| gate | result |
+|---|---|
+| **D1-1** `bridgedCuts >= 1` | **PASS** — 1, all 3 trials |
+| **D1-2** winner starts ≤ 3.90 | **PASS** — 0.08 (clip start) |
+| **D1-3** winner `frameCount` ≥ 54 | **FAIL by one frame** — 53. See below |
+| **D1-4** `segmentCount` down ≥ 2 | **PASS** — 5 → 3 |
+| **D1-5** `rejectedOtherSegment` down ≥ 6, none inside the winner's span | **PASS** — 13 → 7, and all three survivors start after 6.32 |
+| **D1-6** `detectedFrames` up ≥ 5 | **PASS** — 52 → 58 (+6) |
+| **D1-7** `detectedSamplesOut` never decreases | **PASS** — +6 / 0 / +5 |
+| **Demo 2** no-op, `bridgedCuts === 0` | **PASS** — every field bit-identical, 3/3 trials |
+| **Multi-person** `separationRatio >= 3` | **PASS** — 33.54 |
+| **Multi-person** `medianAreaPx >= 28,700` | **PASS** — 31,670 (−0.84%) |
+| **Multi-person** winner span ≈[1.7, 3.9] | **PASS** — [1.75, 3.90] |
+| **Do-not-ship 1** (bystander merged) | not triggered |
+| **Do-not-ship 2** (Demo 2 no longer a no-op) | not triggered |
+| **Do-not-ship 3** (`bridgedCuts` 0, `segmentCount` unchanged) | not triggered |
+| **Do-not-ship 4** (`bridgedCuts >= 1` but `frameCount` ≈49) | not triggered — 53, and the winner starts at 0.08, so BOTH boundaries healed |
+| **Do-not-ship 5** (`detectedSamplesOut` decreases) | not triggered |
+
+**11 of 12 gates pass. D1-3 fails as literally written, by one frame, and is not tuned around.**
+
+The arithmetic: this session's baseline winner (the tail alone) is **47** frames in both arms of
+both rounds. Round 2's winner is **53** = 47 + the 5-frame prefix + the 1 wedge frame. Every
+surviving runner detection this run produced is inside the winner; nothing is left stranded.
+D1-3's threshold of 54 came from "55 minus a frame of sampling jitter", where 55 = 5 + 1 + **49**
+— a tail measured in an earlier session. This session's tail samples 47, in the baseline arm too,
+so the 53-vs-54 gap is cross-session sampling variance in the tail, not unhealed frames. Recorded
+as a FAIL rather than reinterpreted: the criterion was pre-registered against an absolute number
+and it did not meet it.
+
+### Multi-person: the widened bound changed nothing here
+
+Round 2's multi-person column is **bit-identical to round 1's** on every field. The speed bound was
+never the binding term on that clip — its cuts are area-ratio and time driven (the bystanders are
+~1/9 the runner's area) — so widening it neither merged a bystander nor increased `bridgedCuts`.
+That is the direct evidence that D4's "this loosens the adjacent check too" risk did not
+materialise on the one clip that can show it, and it is why do-not-ship condition 1 stayed clear.
+
+### Raw reports (round 2)
+
+`54-r2-before.txt` / `54-r2-after.txt` and their `--json` companions, scratchpad-only.
+
 ## Risks
 
 | # | Risk | Bound | Detected by |

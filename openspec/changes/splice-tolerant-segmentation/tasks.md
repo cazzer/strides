@@ -64,12 +64,33 @@
 - [x] 5.1 `openspec validate splice-tolerant-segmentation --strict`
 - [x] 5.2 `npm test`, `npm run build`, `npm run lint` — all green.
 - [x] 5.3 3-trial A/B on all three clips via `scripts/ab-person-selection.mjs`, against the
-  pre-registered criteria in design.md, results recorded there as a table. **Done — and Demo 1
-  FAILED every one of its six substantive criteria.** Do-not-ship condition 3 fired; the cause was
-  re-traced with a temporary probe (since reverted) and no threshold was tuned. Demo 2 is a proven
-  no-op; the multi-person fixture passes every gate including the bystander-merge gate that
-  outranks the rest.
-- [ ] 5.4 **Do not archive.** The change is correct and useful but does not close #52's blocker.
-  Needs a human decision on whether to widen `maxCenterSpeedSidesPerSecond` from 3 to ~3.3 — which
-  would break the deliberate parity with the online anchor gate and is exactly the tuning D1 and
-  do-not-ship 3 forbid this change from doing on its own.
+  pre-registered criteria in design.md, results recorded there as tables. **Run twice.** Round 1
+  (bridge rule alone) failed every substantive Demo 1 criterion — do-not-ship 3 fired, the cause
+  was re-traced with a temporary probe (since reverted) and no threshold was tuned. Round 2 (with
+  D4's widened bound) passes 11 of 12 gates; D1-3 fails by one frame and is recorded as a failure.
+  Both tables are kept in design.md — round 1 is the evidence for D4.
+
+## 6. Widened centre-speed bound (D4)
+
+- [x] 6.1 Merge `main` (picks up #53 and #58); resolve the `maxAreaRatio` doc-comment conflict so
+  #58's corrected "ships on" wording survives.
+- [x] 6.2 `maxCenterSpeedSidesPerSecond: 3` → `4` in `DEFAULT_RETROACTIVE_PERSON_SELECTION_CONFIG`
+  only. `personOfInterestConfig.ts` keeps 3 — the online gate is untouched.
+- [x] 6.3 Record it as **D4** in design.md: the measured 7.6% shortfall and IoU-0 finding, D7's
+  asymmetric-false-reject argument never having been applied to this bound, why 4 and not 3.3, and
+  that it loosens the adjacent check too. Mirror the `maxAreaRatio: 4` doc comment's style.
+- [x] 6.4 Spec delta: **no numeric bound appears in any spec** (verified by grep over
+  `openspec/specs/`), so no delta was required for the value. The already-MODIFIED
+  `person-selection` requirement gains one paragraph separating the predicate's shared SHAPE from
+  its independently-resolved BOUNDS, since its body called continuity "the SAME predicate the
+  online anchor gate uses".
+- [x] 6.5 Re-correct the doc comments round 1 had corrected the other way — the wedge is now
+  measured as healed, and the round-1 trace is kept as D4's evidence base.
+
+## 7. Still open
+
+- [ ] 7.1 **Do not archive.** Demo 1 reaches `segmentCount` 3–4, not 1 — the remaining three
+  segments are phantom detections that #57's re-derived area floor demotes. Closing #52's headline
+  criterion is still the joint #54 + #57 outcome recorded in the gate amendment.
+- [ ] 7.2 D1-3's one-frame miss is reported, not tuned around; it needs a human call on whether the
+  criterion or the result is what should move.

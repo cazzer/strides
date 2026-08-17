@@ -66,38 +66,42 @@ export interface RetroactivePersonSelectionConfig {
  *
  * Revert with `enabled: false` here, or per-run via
  * `window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = { personSelection: { enabled: false } }`.
- * The proposed fix was a splice-tolerant segmentation rule (design.md follow-up 1) — built in #54,
- * and measured NOT to heal this particular case; see the update below. The two open correctness
- * items in design.md's Risks table
+ * The fix is a splice-tolerant segmentation rule (design.md follow-up 1), built in #54 — plus a
+ * widened centre-speed bound, which is what actually unblocked it. See the update below. The two
+ * open correctness items in design.md's Risks table
  * (boxless survival inside the winner's span, primary/scale-pass selection divergence) were
  * documented as prerequisites for enabling and are now live rather than pending.
  *
- * UPDATE (2026-08-16, issue #54): follow-up 1 has landed — the cut loop below now declines a cut
- * when the surviving detections either side of the offending one are continuous with each other —
- * but it does NOT fix the Demo 1 case described above, and the paragraph above therefore stands in
- * full, not as history. Measured live (3 trials, real GPU): Demo 1 is bit-identical with and
- * without the rule, `bridgedCuts: 0`, still `segmentCount` 5-6 and still 13-16 detected frames lost.
+ * UPDATE (2026-08-16, issue #54): the wedge above is FIXED, and the paragraph stands as the record
+ * of what was accepted in the interim, not as current behaviour. Measured live (3 trials, real GPU,
+ * vs. the same clip at the previous default): the runner's track is now ONE segment spanning
+ * [0.08, 6.32] with 53 detections — the 5-frame prefix, the wedge frame, and the 47-frame tail all
+ * merged — where before the winner was the 47-frame tail alone starting at t=4.36. `segmentCount`
+ * 5-6 -> 3-4, `rejectedOtherSegment` 13-16 -> 7-10, detected frames 52 -> 58, `bridgedCuts: 1`.
  *
- * Why, traced frame by frame rather than assumed: the bridge asks exactly the intended question
- * about exactly the intended pair — t=4.24 (167,867 px² at (574,849)) against t=4.36 (108,121 px²
- * at (824,738)), 0.12s apart, inside the time-gap tolerance — and `isBoundingBoxContinuous` says
- * NO. Those two boxes are disjoint in x by 0.49 px, so IoU is exactly 0 (issue #54's premise of
- * "IoU ~= 0.13" is wrong), and the centre-speed term then has to carry position alone: 273.2 px of
- * travel against a 253.9 px budget, short by 7.6%. The area ratio (1.553) passes and never gets
- * consulted. Reaching this pair needs `maxCenterSpeedSidesPerSecond` ~3.3 instead of 3 — a change
- * to what continuity MEANS, which is deliberately out of this rule's scope and would break parity
- * with the online anchor gate. Left as a human decision, not tuned in.
+ * It took TWO changes, and the order matters for anyone re-deriving this. The bridge rule alone was
+ * measured to be a complete no-op here (`bridgedCuts: 0`, every field bit-identical). Traced frame
+ * by frame: the bridge asked exactly the intended question about exactly the intended pair — t=4.24
+ * (167,867 px² at (574,849)) against t=4.36 (108,121 px² at (824,738)), 0.12s apart, inside the
+ * time-gap tolerance — and `isBoundingBoxContinuous` said NO. Those two boxes are disjoint in x by
+ * 0.49 px, so IoU is exactly 0 (issue #54's premise of "IoU ~= 0.13" is WRONG), and the centre-speed
+ * term then had to carry position alone: 273.2 px of travel against a 253.9 px budget at 3 sides/s,
+ * short by 7.6%. The area ratio (1.553) passes and is never consulted, because
+ * `positionContinuous && …` short-circuits first. So the binding constraint was the BOUND, not the
+ * rule's shape — hence `maxCenterSpeedSidesPerSecond: 4` below and design.md's D4. Keep that
+ * measurement: it is the whole evidence base for the bound, and re-deriving it costs a live run.
  *
- * The rule is not idle: on `e2e/fixtures/multiperson-track.mp4` it fires 4 times, takes
- * `segmentCount` 8 -> 2 and the winner 119 -> 123 frames, without merging a bystander (winner
- * `medianAreaPx` moves 0.84%, `separationRatio` stays 33.5). It is a proven no-op on both demo
- * clips.
+ * The rule earns its keep independently of Demo 1: on `e2e/fixtures/multiperson-track.mp4` it fires
+ * 4 times, takes `segmentCount` 8 -> 2 and the winner 119 -> 123 frames, without merging a
+ * bystander (winner `medianAreaPx` moves 0.84%, `separationRatio` stays 33.5). Demo 2 stays a
+ * bit-identical no-op under both changes.
  *
- * Note also that even with the wedge healed, Demo 1's `segmentCount` 1 / zero-rejection condition
- * is a JOINT #54 + #57 outcome: five phantom detections of 2,279-8,432 px² clear the 4K area floor
- * of 1,659 px² and fail the ratio bound at ~19.9x — a transition the bridge cannot merge and should
- * not. Demo 1 keeps `segmentCount >= 2` until #57's re-derived floor demotes those to
- * `rejectedBelowFloor`, where D5 makes them harmless.
+ * Note that Demo 1's `segmentCount` 1 / zero-rejection condition is STILL not met (it measures 3-4
+ * with 7-10 rejections), and remains a JOINT #54 + #57 outcome: five phantom detections of
+ * 2,279-8,432 px² clear the 4K area floor of 1,659 px² and fail the ratio bound at ~19.9x — a
+ * transition the bridge cannot merge and should not. Those three phantom segments are all that is
+ * left, and every one of them lies OUTSIDE the winner's span. Demo 1 keeps `segmentCount >= 2`
+ * until #57's re-derived floor demotes them to `rejectedBelowFloor`, where D5 makes them harmless.
  *
  * `minBoundingBoxAreaFraction: 2e-4` — 415 px² at 1080p, 1659 px² at 4K. Derived as roughly the
  * geometric mean of the largest measured garbage detection on the repro clip (183 px²) and the

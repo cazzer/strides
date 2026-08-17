@@ -49,29 +49,40 @@ the fix belongs in the offline stage's cut loop, not in the shared predicate.
   observable, a healed clip and a clip that never had a wedge both just report a smaller
   `segmentCount` — indistinguishable from any other tuning effect, which makes the A/B unreadable.
 
-## Measured outcome — the Demo 1 goal is NOT met
+## Measured outcome — the wedge is healed, and it took two changes
 
-Recorded here rather than only in design.md, because it changes what this proposal delivers.
-3 trials × 3 clips × 2 arms, real GPU, 2026-08-16:
+3 trials × 3 clips × 2 arms, real GPU, 2026-08-16, measured twice.
 
-- **Demo 1 is bit-identical with and without the rule** (`bridgedCuts: 0`, `segmentCount` still 5–6,
-  still 13–16 detected frames lost). Do-not-ship condition 3 fired; per its own instruction the
-  cause was re-traced and **nothing was tuned**.
-- **The premise is refuted on one half.** The ticket asserts the wedge's neighbours "overlap at
-  IoU≈0.13 with an area ratio of ~1.55". Measured: area ratio 1.553 (correct, and passing), but
-  **IoU is exactly 0** — the boxes are disjoint in x by 0.49 px — and the centre-speed fallback is
-  short by **7.6%** (273.2 px travelled against a 253.9 px budget). The predicate correctly rejects
-  the pair, so the bridge correctly declines. Reaching it means changing what continuity *means*,
-  which this change deliberately does not do.
-- **It does work, on real footage, elsewhere**: on the multi-person fixture it fires 4 times, takes
-  `segmentCount` 8 → 2 and the winner 119 → 123 frames, with no bystander merged (winner
-  `medianAreaPx` −0.84%, `separationRatio` 33.5).
-- **Proven no-op on both demo clips** — `bridgedCuts: 0` is the tightest available evidence that the
-  new path never executed.
+**Round 1 (bridge rule alone) was a complete no-op on Demo 1** — `bridgedCuts: 0`, every field
+bit-identical. Do-not-ship condition 3 fired; per its own instruction the cause was re-traced and
+nothing was tuned. The trace refuted the ticket's premise on one half: the wedge's neighbours have
+an area ratio of **1.553** (as claimed, and passing) but an IoU of **exactly 0**, not ≈0.13 — the
+boxes are disjoint in x by 0.49 px — and the centre-speed fallback then misses by **7.6%**
+(273.2 px travelled against a 253.9 px budget at 3 sides/s). **The binding constraint was the
+bound, not the rule's shape.**
 
-So this lands a correct, tested, measurably-useful rule that **does not close #52's blocker**.
-Whether to widen `maxCenterSpeedSidesPerSecond` (3 → ~3.3, breaking parity with the online anchor
-gate) is a decision this change does not take.
+**Round 2 adds D4** (`maxCenterSpeedSidesPerSecond` 3 → 4 offline, the same 4/3 loosening
+`maxAreaRatio` already carries against the online gate) and the wedge heals:
+
+- Demo 1's winner becomes **one segment spanning [0.08, 6.32] with 53 detections** — the 5-frame
+  prefix, the wedge frame, and the 47-frame tail merged by a **single** bridge event, both
+  boundaries removed at once. Was the 47-frame tail alone starting at 4.36.
+- `segmentCount` 5–6 → **3–4**, `rejectedOtherSegment` 13–16 → **7–10**, detected frames 52 → **58**.
+  Every remaining segment is a phantom on a visibly empty frame, and all three lie **outside** the
+  winner's span.
+- **Demo 2 stays a bit-identical no-op** under both changes (`bridgedCuts: 0`) — the real risk of
+  widening a bound that also governs the adjacent check.
+- **No bystander merged**: multi-person is bit-identical between rounds (winner `medianAreaPx`
+  −0.84%, `separationRatio` 33.5, span [1.75, 3.90]), so the widened bound was never the binding
+  term there.
+
+**11 of 12 pre-registered gates pass. D1-3 (winner `frameCount` ≥ 54) fails by one frame at 53**,
+recorded as a failure rather than reinterpreted. Its threshold derived from a 49-frame tail measured
+in an earlier session; this session's tail is 47 in *both* arms, and 47 + 5 + 1 = 53, so every
+surviving runner detection is inside the winner and the gap is cross-session sampling variance.
+
+Demo 1 still does not reach `segmentCount === 1` with zero rejections — that remains the joint
+**#54 + #57** outcome recorded in the gate amendment below.
 
 ## Impact
 
