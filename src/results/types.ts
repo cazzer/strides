@@ -1,6 +1,7 @@
 import type { FormHeuristicsResult } from '../heuristics/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { AnalysisDiagnostics } from './analysisDiagnostics'
+import type { SubjectAgreement } from './scalePassSubjectAgreement'
 
 export type AnalysisPhase = 'idle' | 'sampling' | 'processing' | 'ready' | 'error'
 
@@ -26,6 +27,9 @@ export interface ScalePassState {
   reason?: ScalePassSkipReason
   /** What went wrong. Set only when status is 'failed'. */
   error?: string
+  /** How the pass's own selected subject compared with the primary pass's (#56). Set only when
+   * status is 'done' — the check runs at the graft, so no earlier status can carry a verdict. */
+  subjectAgreement?: SubjectAgreement
   /** The scale pass's own diagnostics (its `scaleCalibration` is the grafted metric's
    * `calibration` by reference). Set only when status is 'done' — the primary run's
    * `diagnostics` field never reflects the scale pass. */

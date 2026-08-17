@@ -65,3 +65,48 @@ export function graftScalePassResult(
     stepWidthCm: withProvenance(scale.stepWidthCm),
   }
 }
+
+/**
+ * Appended after the provenance sentence when the two passes' independently selected subjects are
+ * judged to have diverged (#56, `scalePassSubjectAgreement.ts`). Reads correctly in sequence —
+ * "…From a second look at the same clip. This second look may have measured a different person
+ * than the other metrics." — reuses the "second look" phrasing every other scale-pass surface
+ * uses, names no backend, and is honest under uncertainty in both directions ("may have").
+ * Asserted verbatim by unit tests and surfaced verbatim in the UI; do not reword without updating
+ * both.
+ */
+export const SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT =
+  'This second look may have measured a different person than the other metrics.'
+
+/**
+ * Appends the divergence sentence to the two scale-pass-sourced metrics' caveats and nothing else,
+ * composing OVER an already-grafted result so the sentence lands after provenance rather than
+ * before it.
+ *
+ * Split from `graftScalePassResult` rather than folded into it (as a third parameter, say) so that
+ * function's stated contract — unconditional, gated entirely by its caller — stays literally true,
+ * and so the graft's own tests keep exercising the graft alone. The caller composes the two.
+ *
+ * Divergence caveats the grafted numbers; it never withholds or alters them. Suppression would
+ * mean shipping an unvalidated metric-removal path on a signal that has never fired on real
+ * footage — see the change's design.md D2 for why the asymmetry decides it.
+ */
+export function withSubjectDivergenceCaveat(
+  result: FormHeuristicsResult,
+): FormHeuristicsResult {
+  return {
+    ...result,
+    verticalOscillationCm: {
+      ...result.verticalOscillationCm,
+      caveat: [result.verticalOscillationCm.caveat, SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT]
+        .filter(Boolean)
+        .join(' '),
+    },
+    stepWidthCm: {
+      ...result.stepWidthCm,
+      caveat: [result.stepWidthCm.caveat, SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT]
+        .filter(Boolean)
+        .join(' '),
+    },
+  }
+}

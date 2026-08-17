@@ -67,10 +67,13 @@ export interface RetroactivePersonSelectionConfig {
  * Revert with `enabled: false` here, or per-run via
  * `window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = { personSelection: { enabled: false } }`.
  * The fix is a splice-tolerant segmentation rule (design.md follow-up 1), built in #54 — plus a
- * widened centre-speed bound, which is what actually unblocked it. See the update below. The two
- * open correctness items in design.md's Risks table
- * (boxless survival inside the winner's span, primary/scale-pass selection divergence) were
- * documented as prerequisites for enabling and are now live rather than pending.
+ * widened centre-speed bound, which is what actually unblocked it. See the update below. Of the
+ * two open correctness items in design.md's Risks table, documented as prerequisites for
+ * enabling, primary/scale-pass selection divergence is CLOSED (#56): the two passes' selected
+ * subjects are now compared at matched timestamps before the graft, and a diverging scale pass
+ * caveats its two centimetre metrics rather than silently attributing a bystander's numbers to
+ * the runner (`src/results/scalePassSubjectAgreement.ts`). Boxless survival inside the winner's
+ * span remains live rather than pending.
  *
  * UPDATE (2026-08-16, issue #54): the wedge above is FIXED, and the paragraph stands as the record
  * of what was accepted in the interim, not as current behaviour. Measured live (3 trials, real GPU,

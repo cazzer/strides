@@ -110,10 +110,20 @@ In development builds only, `useVideoAnalysis` auto-logs TWO console lines per r
    `separationRatio` on multi-person footage.
 2. `[analysis-diagnostics:scale-pass] {...}` when the background MediaPipe scale pass reaches a
    terminal status — `{ status: 'done'|'failed'|'skipped', reason?: 'disabled'|'primary-scale',
-   error?: string, diagnostics?: AnalysisDiagnostics }`. `diagnostics` (the scale pass's own
-   full object, `scaleCalibration` included) rides along only on `'done'`. On the default
-   MoveNet primary this line arrives roughly one clip-replay after "Analysis complete" (the pass
-   replays the clip in real time); wait for it separately.
+   error?: string, subjectAgreement?: SubjectAgreement, diagnostics?: AnalysisDiagnostics }`.
+   `diagnostics` (the scale pass's own full object, `scaleCalibration` included) rides along only
+   on `'done'`. On the default MoveNet primary this line arrives roughly one clip-replay after
+   "Analysis complete" (the pass replays the clip in real time); wait for it separately.
+
+   **`subjectAgreement`** (#56, `src/results/scalePassSubjectAgreement.ts`) is the sole observable
+   for the primary/scale-pass divergence check, present on `'done'` only:
+   `{ status: 'agreed'|'diverged'|'no-opinion', reason: 'primary-not-selected'|
+   'scale-not-selected'|'too-few-comparable-instants'|null, comparedInstants, agreeingInstants }`.
+   The two counts are the point — `agreeingInstants / comparedInstants` is the MARGIN, and a
+   verdict landing anywhere near 0.5 means the winner may be half runner and half bystander
+   (#52 items 4/5), not that the check is working. Expect ~1.0 on all three test clips. A
+   permanently `'no-opinion'` reading is not silence: it names which side never selected a
+   subject.
 
 Capture both via `page.on('console', ...)`. **Match the first line's prefix exclusively** —
 `text.startsWith('[analysis-diagnostics]') && !text.startsWith('[analysis-diagnostics:')` — or
@@ -138,7 +148,11 @@ the scale-pass line will collide with it; the second is `startsWith('[analysis-d
   but is NOT a no-op on the Demo 1 side-view clip: one collapsed detection at t=4.32 wedges the
   runner's own continuous 55-frame track apart and strands 5 real frames. That cost, plus boxless
   survival inside the winner's span and primary/scale-pass selection divergence, is what was
-  knowingly accepted — issue #52's items 1-3. Turn it OFF (the non-default arm every A/B needs)
+  knowingly accepted — issue #52's items 1-3, of which the wedge (#54) and the divergence (#56)
+  are now closed. Divergence is detected rather than accepted: the two passes' selected subjects
+  are compared at matched timestamps before the graft, and a diverging scale pass caveats its two
+  centimetre metrics instead of silently attributing a bystander's numbers to the runner. Read
+  `subjectAgreement` on the scale-pass console line, above. Turn it OFF (the non-default arm every A/B needs)
   with `{ personSelection: { enabled: false } }`. Full A/B tables and the root cause:
   `openspec/changes/retroactive-person-selection/design.md`. Note this stage has NO `window` global
   of its own — it rides on this one.

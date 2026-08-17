@@ -10,7 +10,10 @@ import type {
 import type { SampleClipHandle } from './sampleClip'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 import { DEFAULT_SAMPLING_ROBUSTNESS_CONFIG } from './samplingRobustnessConfig'
-import { SCALE_PASS_PROVENANCE_CAVEAT } from './scalePassGraft'
+import {
+  SCALE_PASS_PROVENANCE_CAVEAT,
+  SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT,
+} from './scalePassGraft'
 
 const {
   sampleClipMock,
@@ -1142,6 +1145,170 @@ describe('useVideoAnalysis', () => {
       expect(scalePayload.diagnostics.scaleCalibration.verticalOscillationCm).toBe(4.79)
 
       logSpy.mockRestore()
+    })
+
+    describe('subject-agreement check (#56)', () => {
+      // Both passes must actually reach `personSelection.status: 'selected'` for the check to
+      // form an opinion at all, which the default fixtures deliberately do not (see
+      // `mockBothPassesResolving`). These build real detections instead: a 100x200 box, far above
+      // the 61.44 px² floor at 640x480, held steady across 12 samples so segmentation produces
+      // one segment.
+      function boxedPoseFrame(timestamp: number, minX: number) {
+        const corners: Record<string, [number, number]> = {
+          left_shoulder: [minX, 100],
+          right_shoulder: [minX + 100, 100],
+          left_hip: [minX, 300],
+          right_hip: [minX + 100, 300],
+        }
+        return {
+          timestamp,
+          keypoints: COMMON_KEYPOINT_NAMES.map((name) => {
+            const [x, y] = corners[name] ?? [minX + 50, 200]
+            return { name, x, y, score: 0.9 }
+          }),
+        }
+      }
+
+      function boxedSamples(minX: number) {
+        return Array.from({ length: 12 }, (_, i) => ({
+          timestamp: i * 0.1,
+          frame: boxedPoseFrame(i * 0.1, minX),
+        }))
+      }
+
+      function boxedRobustFrames(minX: number): RobustPoseFrame[] {
+        return boxedSamples(minX).map((sample) => ({
+          timestamp: sample.timestamp,
+          keypoints: sample.frame.keypoints.map((k) => ({ ...k, status: 'detected' as const })),
+          source: 'detected' as const,
+          pixelsPerMeter: null,
+        }))
+      }
+
+      function mockBothPassesWithBoxes(primaryMinX: number, scaleMinX: number) {
+        sampleClipMock
+          .mockImplementationOnce(() => ({
+            promise: Promise.resolve(boxedSamples(primaryMinX)),
+            handle: makeFakeHandle(),
+          }))
+          .mockImplementationOnce(() => ({
+            promise: Promise.resolve(boxedSamples(scaleMinX)),
+            handle: makeFakeHandle(),
+          }))
+        applyRobustnessMock
+          .mockReturnValueOnce(boxedRobustFrames(primaryMinX))
+          .mockReturnValueOnce(boxedRobustFrames(scaleMinX))
+        computeFormHeuristicsMock
+          .mockReturnValueOnce(FAKE_HEURISTICS)
+          .mockReturnValueOnce(FAKE_SCALE_HEURISTICS)
+      }
+
+      it('grafts silently when both passes selected the same subject', async () => {
+        mockBothPassesWithBoxes(100, 100)
+
+        const videoSource = makeVideoSource()
+        const detector = makeFakeDetector()
+        const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+        await waitFor(() => expect(result.current.scalePass.status).toBe('done'))
+
+        expect(result.current.scalePass.subjectAgreement).toEqual({
+          status: 'agreed',
+          reason: null,
+          comparedInstants: 12,
+          agreeingInstants: 12,
+        })
+        // Byte-identical to what the graft alone produces: provenance and nothing more.
+        expect(result.current.heuristics?.verticalOscillationCm.caveat).toBe(
+          SCALE_PASS_PROVENANCE_CAVEAT,
+        )
+        expect(result.current.heuristics?.stepWidthCm.caveat).toBe(
+          SCALE_PASS_PROVENANCE_CAVEAT,
+        )
+      })
+
+      it('caveats both grafted metrics — and still completes the pass — on divergence', async () => {
+        // The scale pass's boxes sit 300px away at the same instants: no overlap, and at a zero
+        // elapsed gap the centre-speed term is unavailable, so every pair fails.
+        mockBothPassesWithBoxes(100, 400)
+
+        const videoSource = makeVideoSource()
+        const detector = makeFakeDetector()
+        const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+        await waitFor(() => expect(result.current.scalePass.status).toBe('done'))
+
+        expect(result.current.scalePass.subjectAgreement).toEqual({
+          status: 'diverged',
+          reason: null,
+          comparedInstants: 12,
+          agreeingInstants: 0,
+        })
+        expect(result.current.heuristics?.verticalOscillationCm.caveat).toBe(
+          `${SCALE_PASS_PROVENANCE_CAVEAT} ${SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT}`,
+        )
+        expect(result.current.heuristics?.stepWidthCm.caveat).toBe(
+          `${SCALE_PASS_PROVENANCE_CAVEAT} ${SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT}`,
+        )
+        // Divergence caveats the numbers; it never withholds them or fails the pass.
+        expect(result.current.heuristics?.verticalOscillationCm.value).toBe(4.79)
+        expect(result.current.heuristics?.stepWidthCm.value).toBe(8.2)
+        expect(result.current.heuristics?.trunkLean).toBe(FAKE_HEURISTICS.trunkLean)
+      })
+
+      it('has no opinion, and adds no sentence, when a pass selected nobody', async () => {
+        // The default fixture: one sample with no detection, so person selection skips with
+        // 'no-detections' on both sides and no identity was ever committed to compare.
+        mockBothPassesResolving()
+        computeFormHeuristicsMock
+          .mockReturnValueOnce(FAKE_HEURISTICS)
+          .mockReturnValueOnce(FAKE_SCALE_HEURISTICS)
+
+        const videoSource = makeVideoSource()
+        const detector = makeFakeDetector()
+        const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+        await waitFor(() => expect(result.current.scalePass.status).toBe('done'))
+
+        expect(result.current.scalePass.subjectAgreement).toEqual({
+          status: 'no-opinion',
+          reason: 'primary-not-selected',
+          comparedInstants: 0,
+          agreeingInstants: 0,
+        })
+        expect(result.current.heuristics?.verticalOscillationCm.caveat).toBe(
+          SCALE_PASS_PROVENANCE_CAVEAT,
+        )
+        expect(result.current.heuristics?.stepWidthCm.caveat).toBe(
+          SCALE_PASS_PROVENANCE_CAVEAT,
+        )
+      })
+
+      it('carries the verdict on the dev scale-pass console line', async () => {
+        const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+        mockBothPassesWithBoxes(100, 400)
+
+        const videoSource = makeVideoSource()
+        const detector = makeFakeDetector()
+        const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+        await waitFor(() => expect(result.current.scalePass.status).toBe('done'))
+
+        const scaleLine = logSpy.mock.calls.find(
+          (args) => args[0] === '[analysis-diagnostics:scale-pass]',
+        )
+        const payload = JSON.parse(scaleLine![1] as string)
+        // The MARGIN, not just the verdict — a bare boolean would leave a check that never fires
+        // and a check that fires by a hair indistinguishable in production diagnosis.
+        expect(payload.subjectAgreement).toEqual({
+          status: 'diverged',
+          reason: null,
+          comparedInstants: 12,
+          agreeingInstants: 0,
+        })
+
+        logSpy.mockRestore()
+      })
     })
   })
 })
