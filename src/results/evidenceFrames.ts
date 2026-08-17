@@ -16,8 +16,11 @@ import {
   MAX_EXEMPLARS_PER_METRIC,
   MIN_EXEMPLAR_QUALITY,
 } from '../heuristics/exemplars'
-import { resolvePoint } from '../heuristics/keypoints'
+import { resolveBilateralPair, resolvePoint } from '../heuristics/keypoints'
 import { median } from '../heuristics/mathUtils'
+import { estimateBodyScale } from '../heuristics/bodyScale'
+import { estimateTravelDirection } from '../heuristics/travelDirection'
+import { trimToPresenceWindow } from '../heuristics/presenceWindow'
 import { findNearestFrame } from './skeletonGeometry'
 import { metricTier } from './metricConfidence'
 
@@ -123,7 +126,48 @@ export interface EvidenceFrameSize {
   height: number
 }
 
-/** One frame of a plan: which instant to seek to, and at what opacity to draw it. */
+/**
+ * One keypoint an exemplar named, at one instant, in NATIVE VIDEO PIXELS — the same space
+ * `crop` is in, so `toEvidenceOutputSpace` is the single step between the two.
+ *
+ * Three-state by construction, not two: `resolvePoint` treats `'detected'` and `'interpolated'`
+ * alike as *resolvable* and only `'unrecoverable'` as absent, and collapsing that to
+ * resolvable/not would erase exactly the distinction an annotation exists to show — an
+ * interpolated joint is a position the pipeline INFERRED, and a thumbnail that draws it as
+ * confidently as a detected one overstates what was measured. The unrecoverable arm carries no
+ * coordinates at all, so a mark for it cannot be accidentally anchored at the origin: the type
+ * makes "drop the mark" the only reachable option.
+ */
+export type EvidenceKeypointPosition =
+  | {
+      name: KeypointName
+      status: 'detected' | 'interpolated'
+      x: number
+      y: number
+    }
+  | { name: KeypointName; status: 'unrecoverable' }
+
+/**
+ * Which screen-x direction counts as "outward" (away from the body's midline) for each side, at
+ * ONE instant. `stepWidth`/`stepWidthCm` multiply their raw `ankle.x - hipMid.x` by this to turn
+ * it into "landed on its own side" (+) versus "crossed over" (−) (`stepWidth.ts:222-224`), so a
+ * caliper drawn without it points the wrong way on exactly half of all clips.
+ *
+ * Per-INSTANT, never clip-wide: the metric recomputes it at every footstrike from that frame's
+ * own hips, and a runner's hips swap screen sides whenever the camera crosses them.
+ */
+export interface EvidenceOutwardSigns {
+  left: 1 | -1
+  right: 1 | -1
+}
+
+/** `0` is "indeterminate", not "no travel" — `estimateTravelDirection` returns it below a
+ * half-torso net displacement, and a mark whose orientation depends on it must then be drawn
+ * unoriented rather than guessed. */
+export type EvidenceTravelDirection = 1 | -1 | 0
+
+/** One frame of a plan: which instant to seek to, at what opacity to draw it, and everything an
+ * annotation of that instant needs. */
 export interface EvidenceInstantPlan {
   /**
    * Seconds on the clip's own media clock — the timestamp of the SAMPLED frame this instant
@@ -132,6 +176,21 @@ export interface EvidenceInstantPlan {
    */
   timestamp: number
   opacity: number
+  /**
+   * The exemplar's own named keypoints, resolved at THIS instant, in the exemplar's order and
+   * deduplicated. Both halves of a ghosted pair carry their own list, so an annotation of the
+   * base and an annotation of the ghost are independently drawable.
+   *
+   * Deliberately the exemplar's `cropKeypoints` and not the whole skeleton: the metric that
+   * measured the instant is the only layer that knows which points its measurement is about, and
+   * a tight crop drawn with all 21 points is mostly marks for joints outside the frame
+   * (design D5).
+   */
+  keypoints: EvidenceKeypointPosition[]
+  /** `null` when this frame's two hips do not both independently resolve, or resolve to the same
+   * x — the degenerate case `stepWidth` records and hard-rejects (`stepWidth.ts:230`). Guessing a
+   * side here would be a false statement about which way the runner's foot crossed. */
+  outwardSign: EvidenceOutwardSigns | null
 }
 
 /** One renderable image: a base frame, optionally a ghost composited over it, and the square crop
@@ -148,6 +207,18 @@ export interface EvidenceFramePlan {
   ghost: EvidenceInstantPlan | null
   /** Square, in native video pixels — the display size is the gallery's decision, not this one. */
   crop: CropRectPx
+  /**
+   * Which way the runner is travelling across the frame, clip-wide. `trunkLean` (`:171`),
+   * `overstriding` (`:177`), `footStrikePattern` (`:192`) and `strideLength` (`:182`) all
+   * multiply their raw screen-relative offset by it, so on a right-to-left runner the reported
+   * sign is the OPPOSITE of the on-screen one — an arrow or arc oriented from the picture alone
+   * would point the wrong way with nothing to catch it.
+   *
+   * Same value on every item of a clip. Duplicated per item rather than hung off
+   * `ClipEvidencePlan`, which is a total `Record<MetricId, …>` with no room for a sibling key,
+   * and duplication keeps the draw layer from needing a second lookup.
+   */
+  travelDirection: EvidenceTravelDirection
   /** The exemplar arrived as a pair and is planned as a single: its two instants were
    * indistinguishable, or the ghost could not be resolved to a sampled frame. */
   demotedFromPair: boolean
@@ -258,6 +329,125 @@ export function frameCropBox(
     .map((name) => resolvePoint(frame, name))
     .filter((point): point is NonNullable<typeof point> => point !== null)
   return boundingBoxOfPoints(points)
+}
+
+/**
+ * The exemplar's named keypoints resolved at one frame, in native video pixels — the annotation
+ * half of what `frameCropBox` does for the crop half, sharing `resolvePoint` so the two can never
+ * disagree about whether a point exists.
+ *
+ * Every named keypoint gets an entry, including the ones that did not resolve: "this metric never
+ * named that joint" and "it named it and the pipeline lost it" are different facts, and only the
+ * second one is worth telling a reader about. Duplicates are dropped so a name appearing twice in
+ * an exemplar's crop set (two same-side seeds unioned across a pair, say) cannot produce two marks
+ * stacked at one position.
+ */
+export function resolveInstantKeypoints(
+  frame: RobustPoseFrame,
+  names: KeypointName[],
+): EvidenceKeypointPosition[] {
+  return [...new Set(names)].map((name) => {
+    const point = resolvePoint(frame, name)
+    if (point === null) return { name, status: 'unrecoverable' as const }
+    return {
+      name,
+      status: point.interpolated ? ('interpolated' as const) : ('detected' as const),
+      x: point.x,
+      y: point.y,
+    }
+  })
+}
+
+/**
+ * `stepWidth`'s per-footstrike outward polarity, recomputed here from the frame's own hips —
+ * `stepWidth.ts:222-223` verbatim, not an approximation of it, including its STRICT bilateral
+ * gate (`resolveBilateralPair`, not the tolerant `resolveMidpoint`): a hip-mid that collapsed onto
+ * one side would make `sideHip.x - hipMid.x` identically zero and the sign meaningless, which is
+ * the exact bug that file was fixed for.
+ *
+ * `null` rather than the metric's `|| 1` fallback where the sign is zero. The metric needs a
+ * number to finish an arithmetic expression and records the frame as `degenerate` so the exemplar
+ * is rejected; a plan has no such obligation and an annotation must simply not claim a direction
+ * it cannot derive.
+ */
+export function resolveOutwardSigns(
+  frame: RobustPoseFrame,
+): EvidenceOutwardSigns | null {
+  const hips = resolveBilateralPair(frame, 'left_hip', 'right_hip')
+  if (hips === null) return null
+  const hipMidX = (hips.left.x + hips.right.x) / 2
+  // Each side is signed against the midline independently rather than one being negated from the
+  // other: exact antisymmetry holds in real arithmetic but a float midpoint need not sit exactly
+  // between its endpoints, and a derived sign that disagreed with a measured one would be worse
+  // than no sign.
+  const left = Math.sign(hips.left.x - hipMidX)
+  const right = Math.sign(hips.right.x - hipMidX)
+  if (left === 0 || right === 0) return null
+  return { left: left as 1 | -1, right: right as 1 | -1 }
+}
+
+/**
+ * The clip's direction of travel, computed the way the METRICS compute it and not merely the way
+ * that reads naturally here: over the presence-TRIMMED frames, with a body scale estimated from
+ * those same trimmed frames.
+ *
+ * This is load-bearing, not tidiness. The plan is handed the UNTRIMMED `robustFrames` while
+ * `runClipAnalysisPipeline.ts:59-60` hands `computeFormHeuristics` the output of
+ * `trimToPresenceWindow`, and the two arrays can disagree about the sign outright — not only near
+ * the indeterminate threshold. `estimateTravelDirection` reads the first and last frame where
+ * hip-mid resolves *at all*, while the presence trim also demands shoulder-mid and a minimum run
+ * length, so a frame outside the window (a bystander, or the subject with an occluded torso) can
+ * supply an endpoint the metric never saw and flip the sign with both readings well clear of the
+ * threshold. `evidenceFrames.test.ts` builds exactly that clip. Reproducing the metrics' own input
+ * removes the disagreement by construction instead of arguing it is rare.
+ *
+ * Both `trimToPresenceWindow` and `computeFormHeuristics` are called at their default
+ * `HeuristicsConfig` in that pipeline, which is why this needs no config of its own — if either
+ * call ever takes a non-default config, this one has to take the same one.
+ */
+export function evidenceTravelDirection(
+  frames: RobustPoseFrame[],
+): EvidenceTravelDirection {
+  const metricFrames = trimToPresenceWindow(frames)
+  const bodyScale = estimateBodyScale(metricFrames)
+  if (bodyScale === null) return 0
+  return estimateTravelDirection(metricFrames, bodyScale)
+}
+
+/**
+ * The side of the square canvas one crop is drawn into. Owned here rather than in the extractor
+ * so the pure layer can express the video→output transform below without importing the impure
+ * module; the cap arrives as an argument for the same reason (`EVIDENCE_OUTPUT_MAX_SIDE_PX` lives
+ * next to the drawing, and importing it here would be a cycle).
+ *
+ * The crop is never UPSCALED to reach the cap — `min` before `round`, so a small crop keeps its
+ * own size.
+ */
+export function evidenceOutputSide(
+  cropSide: number,
+  maxOutputSidePx: number,
+): number {
+  return Math.max(1, Math.round(Math.min(cropSide, maxOutputSidePx)))
+}
+
+/**
+ * Native video pixels → the output canvas's own coordinate space. The forward direction of
+ * `movenet.ts:86-95`'s `toVideoSpaceKeypoints`, and the algebra implicit in the nine-argument
+ * `drawImage` the extractor issues — written here, in the pure half, so annotation geometry is
+ * asserted by tests rather than by looking at a picture.
+ *
+ * **The scale is `outputSide / crop.side`, not `maxOutputSidePx / crop.side`.** The rounding is in
+ * the numerator only and `computeCropRect` returns a FLOAT side, so the scale is ≠ 1 even for a
+ * crop well under the cap. Assuming otherwise puts every mark a fraction of a pixel off on most
+ * clips and visibly off on some.
+ */
+export function toEvidenceOutputSpace(
+  point: { x: number; y: number },
+  crop: CropRectPx,
+  outputSide: number,
+): { x: number; y: number } {
+  const scale = outputSide / crop.side
+  return { x: (point.x - crop.x) * scale, y: (point.y - crop.y) * scale }
 }
 
 function unionBoxes(boxes: BoundingBoxPx[]): BoundingBoxPx | null {
@@ -383,6 +573,25 @@ export function isNearIdenticalPair(
 }
 
 /**
+ * One resolved frame → the instant the extractor seeks to and the annotation layer draws over.
+ * Everything positional is captured HERE, while the `RobustPoseFrame` is still in hand — the plan
+ * is the last place that holds it, and re-resolving downstream would either need the frames
+ * threaded into the impure extractor or a second snap that could land on a different frame.
+ */
+function instantPlan(
+  frame: RobustPoseFrame,
+  cropKeypoints: KeypointName[],
+  opacity: number,
+): EvidenceInstantPlan {
+  return {
+    timestamp: frame.timestamp,
+    opacity,
+    keypoints: resolveInstantKeypoints(frame, cropKeypoints),
+    outwardSign: resolveOutwardSigns(frame),
+  }
+}
+
+/**
  * One exemplar → one renderable plan, or `null` when it cannot be rendered honestly.
  *
  * A pair collapses to its base — demoted for a kind that still says something true from one frame,
@@ -390,6 +599,17 @@ export function isNearIdenticalPair(
  * the same frame, when the ghost frame has no resolvable crop keypoint (so there is no evidence
  * the measured region is even inside the crop at that instant), or when the two per-frame boxes
  * are near-identical.
+ *
+ * `travelDirection` is threaded in rather than derived per exemplar because it is a property of
+ * the CLIP: `planClipEvidence` computes it once and every item of every metric carries the same
+ * value. The default keeps this function independently callable — it is exported and unit-tested
+ * directly — and derives the identical number from the same frames.
+ *
+ * The parameter is a plain override, NOT a guarantee: passing an explicit value that disagrees
+ * with `evidenceTravelDirection(frames)` yields a plan whose sign contradicts its own frames, and
+ * nothing here rejects that. Every in-repo caller passes the derived value. If you are writing a
+ * new caller, pass the derived value or omit the argument — an inverted sign silently flips the
+ * direction of every caliper drawn from this plan, and no test downstream will catch it.
  */
 export function planExemplarFrames(
   metric: MetricId,
@@ -397,6 +617,7 @@ export function planExemplarFrames(
   frames: RobustPoseFrame[],
   frameSize: EvidenceFrameSize,
   toleranceSeconds: number,
+  travelDirection: EvidenceTravelDirection = evidenceTravelDirection(frames),
 ): EvidenceFramePlan | null {
   const resolved = resolveExemplarFrames(exemplar, frames, toleranceSeconds)
   if (resolved === null) return null
@@ -435,15 +656,17 @@ export function planExemplarFrames(
     ...(exemplar.side === undefined ? {} : { side: exemplar.side }),
     quality: exemplar.quality,
     label: exemplar.label,
-    base: {
-      timestamp: resolved.base.timestamp,
-      opacity: EVIDENCE_BASE_OPACITY,
-    },
+    base: instantPlan(
+      resolved.base,
+      exemplar.cropKeypoints,
+      EVIDENCE_BASE_OPACITY,
+    ),
     ghost:
       ghost === null
         ? null
-        : { timestamp: ghost.timestamp, opacity: EVIDENCE_GHOST_OPACITY },
+        : instantPlan(ghost, exemplar.cropKeypoints, EVIDENCE_GHOST_OPACITY),
     crop,
+    travelDirection,
     demotedFromPair: isPair && ghost === null,
   }
 }
@@ -463,6 +686,7 @@ export function planMetricEvidence(
   metric: MetricResult,
   frames: RobustPoseFrame[],
   frameSize: EvidenceFrameSize,
+  travelDirection: EvidenceTravelDirection = evidenceTravelDirection(frames),
 ): MetricEvidencePlan {
   // Evidence renders only for metrics that render a card. A tier-3 metric has no card to hang a
   // deep link on, and a picture explaining a number the app declined to report — or one the camera
@@ -490,6 +714,7 @@ export function planMetricEvidence(
         frames,
         frameSize,
         tolerance,
+        travelDirection,
       ),
     )
     .filter((item): item is EvidenceFramePlan => item !== null)
@@ -514,9 +739,12 @@ export function planClipEvidence(
     (entry): entry is [MetricId, FormHeuristicsResult[MetricId]] =>
       entry[0] !== 'view',
   )
+  // Once per clip, not once per metric: it costs three passes over every frame and eleven metrics
+  // asking the same question of the same array would get the same answer eleven times.
+  const travelDirection = evidenceTravelDirection(frames)
   const plan = {} as ClipEvidencePlan
   for (const [id, metric] of metricEntries) {
-    plan[id] = planMetricEvidence(metric, frames, frameSize)
+    plan[id] = planMetricEvidence(metric, frames, frameSize, travelDirection)
   }
   return plan
 }

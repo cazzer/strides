@@ -2,7 +2,9 @@ import { useCallback, useState } from 'react'
 import type { RefObject } from 'react'
 import type { MetricId } from '../heuristics/types'
 import type { PoseDetector } from '../pose/detector'
+import { ClipPicker } from '../video/ClipPicker'
 import { FileUpload } from '../video/FileUpload'
+import { releaseClipPoster } from '../video/posterFrame'
 import { ClipSlot } from './ClipSlot'
 import type { ClipPendingLoad } from './ClipSlot'
 import { EvidenceGallery } from './EvidenceGallery'
@@ -59,7 +61,11 @@ function sameClipSession(previous: ClipSession | undefined, next: ClipSession): 
     previous.analysis.scalePass.status === next.analysis.scalePass.status &&
     previous.analysis.scalePass.diagnostics === next.analysis.scalePass.diagnostics &&
     previous.analysis.scalePass.error === next.analysis.scalePass.error &&
-    previous.analysis.scalePass.reason === next.analysis.scalePass.reason
+    previous.analysis.scalePass.reason === next.analysis.scalePass.reason &&
+    // A poster arrives asynchronously, long after the fields above have stopped moving — leaving it
+    // out would make its arrival invisible to this comparison and `setClipStates` would keep
+    // returning the previous state, so the poster would never reach anything that renders it.
+    previous.poster === next.poster
   )
 }
 
@@ -71,7 +77,13 @@ function sameClipSession(previous: ClipSession | undefined, next: ClipSession): 
  * fused aggregate from `computeAggregateAnalysisState`.
  */
 export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSessionProps) {
-  const [clipIds, setClipIds] = useState<string[]>(() => [makeClipId()])
+  // Seeded EMPTY, and that is the whole point: a session with no clips is now representable, so
+  // the zero-clip state is genuinely "no clips" rather than "one slot whose videoSource.status is
+  // 'empty'". Every clip, the first one included, is now created by `addClip` and loaded through a
+  // `pendingLoad` — one clip-creation path instead of two. That also deletes a real bug: selecting
+  // three files from the old first slot's own picker called `load()` three times on ONE
+  // `useVideoSource` and produced a single clip, last file wins.
+  const [clipIds, setClipIds] = useState<string[]>([])
   const [pendingLoads, setPendingLoads] = useState<Record<string, ClipPendingLoad>>({})
   const [clipStates, setClipStates] = useState<Record<string, ClipSession>>({})
   const [activeClipIndex, setActiveClipIndex] = useState(0)
@@ -114,7 +126,17 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
       // for the clip that happens to be active right now.
       clipStates[id]?.analysis.reset()
 
-      setClipIds((prev) => (prev.length <= 1 ? prev : prev.filter((existing) => existing !== id)))
+      // Frees the poster's pixels in this same tick, for the same reason `reset()` is called here
+      // rather than left to the slot's unmount: the ordering of React's cleanup pass is not a
+      // contract to lean on. `releaseClipPoster` is idempotent, so the slot's own cleanup calling
+      // it again on unmount is a no-op, not a double free.
+      //
+      // Unguarded, unlike before: `setClipIds` below now really does drop the last remaining clip
+      // (a zero-clip session is representable), so there is no case left where this slot stays
+      // mounted and goes on rendering the poster being released.
+      releaseClipPoster(clipStates[id]?.poster)
+
+      setClipIds((prev) => prev.filter((existing) => existing !== id))
       setPendingLoads((prev) => {
         if (!(id in prev)) return prev
         const next = { ...prev }
@@ -163,65 +185,87 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
   const handleTryAgain = useCallback(() => {
     const errored = clips.find((c) => c.analysis.phase === 'error')
     errored?.analysis.reset()
-    errored?.videoSource.videoRef.current?.focus()
-  }, [clips])
+    // Focus lands on the page heading, not on the errored clip's `<video>`. That element is no
+    // longer in the page body — it is positioned off screen and marked `inert`, so focusing it
+    // would silently drop focus to `<body>` and strand a keyboard user. Same target
+    // `handleChooseDifferentVideo` uses, and for the same reason: it is the nearest thing that
+    // survives the alert unmounting underneath the button that was just clicked.
+    headingRef.current?.focus()
+  }, [clips, headingRef])
 
   const handleChooseDifferentVideo = useCallback(() => {
-    setClipIds([makeClipId()])
+    // Every clip in the session is going away, so every poster is too. Same posture as
+    // `removeClip`: released here and again by each slot's own cleanup, idempotently.
+    for (const session of Object.values(clipStates)) releaseClipPoster(session.poster)
+
+    setClipIds([])
     setPendingLoads({})
     setClipStates({})
     setActiveClipIndex(0)
     setReportedEvidenceMetrics(NO_EVIDENCE_METRICS)
     headingRef.current?.focus()
-  }, [headingRef])
+  }, [clipStates, headingRef])
 
   return (
-    <main className="mx-auto max-w-6xl px-4 sm:px-6 py-10 space-y-8 lg:grid lg:grid-cols-2 lg:items-start lg:gap-8 lg:space-y-0">
-      {/* Sticky video column — see App.tsx's prior version of this comment for the layout
-          rationale, unchanged by going multi-clip. */}
-      <div className="lg:sticky lg:top-[86px] space-y-6">
-        {clipIds.map((id) => (
-          <ClipSlot
-            key={id}
-            clipId={id}
-            pendingLoad={pendingLoads[id] ?? null}
-            detector={id === activeClipId ? detector : null}
-            onReport={handleReport}
-            onRemove={removeClip}
-            canRemove={clipIds.length > 1}
-          />
-        ))}
-        {anyClipVideoReady && (
-          <div className="space-y-2 border-t-2 border-black dark:border-white pt-4">
-            <p className="font-sans text-sm font-semibold uppercase tracking-wide">
-              Add another clip
-            </p>
-            <FileUpload onSelected={(file) => addClip(file)} />
-          </div>
-        )}
-      </div>
-      <div className="lg:max-h-[calc(100vh-86px)] lg:overflow-y-auto">
-        {anyClipVideoReady && (
-          <ResultsView
-            analysis={aggregate}
-            onTryAgain={handleTryAgain}
-            onChooseDifferentVideo={handleChooseDifferentVideo}
-            evidenceMetrics={evidenceMetrics}
-          />
-        )}
-      </div>
+    <main className="mx-auto max-w-6xl px-4 sm:px-6 py-10 space-y-8">
       {/*
-        The evidence gallery: a THIRD child of <main> and a sibling of ResultsView, never a child
-        of it. The grid is two-column with a height-capped, separately-scrolling right column, so
-        mounting it inside ResultsView would put the imagery at half page width inside a nested
-        scroll box; `lg:col-span-2` (on the gallery's own root) is what makes a third grid child
-        span both columns instead of landing in column 1 of row 2.
+        Every clip's slot, always mounted — but no longer a column of the page. A slot's `<video>`
+        is positioned off screen by `VideoInputPanel` (see the hard constraint there); what stays
+        in the body and visible is everything a reader still has to be able to act on: the
+        loading line, the load-error alert and its Try again, the queued hint, and Remove. Moving
+        the whole slot off screen would silently destroy the error surface `video-input`'s "Clear
+        error messages for permission and format failures" requires be visible, and the Remove
+        control — while keeping every unit test green, since jsdom sees the DOM and not the CSS.
+      */}
+      {clipIds.map((id) => (
+        <ClipSlot
+          key={id}
+          clipId={id}
+          pendingLoad={pendingLoads[id] ?? null}
+          detector={id === activeClipId ? detector : null}
+          onReport={handleReport}
+          onRemove={removeClip}
+        />
+      ))}
 
-        Everything it needs is already in scope here: `clips` (each carrying its own
-        `videoSource.sourceBlob`/`metadata` and its own non-null `analysis.robustFrames` — the
-        aggregate's are null by design, see `multiClipAnalysis.ts`) and the per-metric winning clip
-        index. It renders nothing until it has images, so the null-guard below is the mount gate,
-        not a visibility one.
+      {/*
+        The picker-vs-results gate is `anyClipVideoReady`, NOT `clipIds.length`: a clip that is
+        still loading, or that failed to load, is not a *loaded* clip, so the picker stays on the
+        page beside that clip's own error alert rather than leaving the reader with an error and
+        no way forward.
+      */}
+      {!anyClipVideoReady && (
+        <section className="space-y-4" aria-label="Add a clip">
+          <ClipPicker onSource={addClip} />
+        </section>
+      )}
+
+      {anyClipVideoReady && (
+        <ResultsView
+          analysis={aggregate}
+          onTryAgain={handleTryAgain}
+          onChooseDifferentVideo={handleChooseDifferentVideo}
+          evidenceMetrics={evidenceMetrics}
+        />
+      )}
+
+      {anyClipVideoReady && (
+        <div className="space-y-2 border-t-2 border-black dark:border-white pt-4">
+          <p className="font-sans text-sm font-semibold uppercase tracking-wide">
+            Add another clip
+          </p>
+          <FileUpload onSelected={(file) => addClip(file)} />
+        </div>
+      )}
+
+      {/*
+        The evidence gallery: a sibling of ResultsView, never a child of it — everything it needs
+        is already in scope here: `clips` (each carrying its own `videoSource.sourceBlob`/
+        `metadata` and its own non-null `analysis.robustFrames` — the aggregate's are null by
+        design, see `multiClipAnalysis.ts`) and the per-metric winning clip index. It renders
+        nothing until it has images, so the null-guard below is the mount gate, not a visibility
+        one. Its own root still carries `lg:col-span-2`, a no-op now that <main> is no longer a
+        grid; `strides-kyu.4` and the header-offset ticket clean up what the grid left behind.
       */}
       {sourceIndices !== null && (
         <EvidenceGallery

@@ -77,6 +77,7 @@ function makeClip(clipId: string, analysisOverrides: Partial<VideoAnalysisState>
     clipId,
     videoSource: makeVideoSource(),
     analysis: makeAnalysis(analysisOverrides),
+    poster: null,
   }
 }
 

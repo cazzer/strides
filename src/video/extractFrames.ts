@@ -6,6 +6,7 @@ import type {
   EvidenceUnavailableReason,
   MetricEvidencePlan,
 } from '../results/evidenceFrames'
+import { evidenceOutputSide } from '../results/evidenceFrames'
 
 /**
  * The IMPURE half of evidence-frame extraction: take the plan `evidenceFrames.ts` produced and
@@ -351,10 +352,9 @@ async function extractFrame(
   item: EvidenceFramePlan,
   options: ResolvedOptions,
 ): Promise<ExtractedEvidenceFrame | null> {
-  const side = Math.max(
-    1,
-    Math.round(Math.min(item.crop.side, options.maxOutputSidePx)),
-  )
+  // Shared with the pure layer rather than restated: annotation geometry has to land on the same
+  // canvas these pixels do, and `toEvidenceOutputSpace` scales by exactly this number.
+  const side = evidenceOutputSide(item.crop.side, options.maxOutputSidePx)
   const canvas = document.createElement('canvas')
   canvas.width = side
   canvas.height = side

@@ -146,6 +146,7 @@ function makeClip(clipId: string, heuristics: FormHeuristicsResult): ClipSession
       start: vi.fn(),
       reset: vi.fn(),
     },
+    poster: null,
   }
 }
 

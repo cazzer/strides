@@ -11,11 +11,13 @@ const {
   applyRobustnessMock,
   computeFormHeuristicsMock,
   getScalePassDetectorMock,
+  deriveClipPosterMock,
 } = vi.hoisted(() => ({
   sampleClipMock: vi.fn(),
   applyRobustnessMock: vi.fn(),
   computeFormHeuristicsMock: vi.fn(),
   getScalePassDetectorMock: vi.fn(),
+  deriveClipPosterMock: vi.fn(),
 }))
 
 vi.mock('./sampleClip', () => ({
@@ -26,7 +28,15 @@ vi.mock('./sampleClip', () => ({
 vi.mock('../pose/robustness/interpolate', () => ({ applyRobustness: applyRobustnessMock }))
 vi.mock('../heuristics/index', () => ({ computeFormHeuristics: computeFormHeuristicsMock }))
 vi.mock('../pose/scalePassDetector', () => ({ getScalePassDetector: getScalePassDetectorMock }))
+// Only the decode is mocked — jsdom decodes nothing, and `releaseClipPoster` must stay REAL, since
+// what the two release tests below check is that this component calls it on the right canvas at the
+// right moment. Mocking it would let them pass against a component that never released anything.
+vi.mock('../video/posterFrame', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../video/posterFrame')>()),
+  deriveClipPoster: deriveClipPosterMock,
+}))
 
+import type { ClipPoster } from '../video/posterFrame'
 import { MultiClipVideoSession } from './MultiClipVideoSession'
 
 function makeFakeDetector(): PoseDetector {
@@ -99,6 +109,63 @@ function canonicalVideos(): HTMLVideoElement[] {
   return Array.from(document.querySelectorAll('video[controls]'))
 }
 
+/**
+ * Chooses a file through whichever file input is currently on the page — the full-page
+ * `ClipPicker` while no clip is loaded, the "Add another clip" block once one is.
+ *
+ * The `await act(async () => {})` afterwards is load-bearing and its absence reads as a hang, not
+ * a failed assertion: every clip (the first one now included) is created by `addClip` and loaded
+ * through `pendingLoad`, whose `load()` is deferred one microtask (`ClipSlot.tsx`'s
+ * `queueMicrotask`), and `useVideoSource` attaches its `loadedmetadata` listener lazily *inside*
+ * `load()`. Marking a video ready before that microtask runs dispatches the event at nothing, and
+ * the clip never reaches `'ready'`.
+ */
+async function chooseFile(file: File) {
+  fireEvent.change(screen.getByLabelText(/choose a video file/i), { target: { files: [file] } })
+  await act(async () => {})
+}
+
+function makePoster(): ClipPoster {
+  const canvas = document.createElement('canvas')
+  canvas.width = 240
+  canvas.height = 135
+  return { canvas, width: 240, height: 135, timestamp: 0.8 }
+}
+
+/** Released == the backing store is gone. The recorded `width`/`height` deliberately survive. */
+function isReleased(poster: ClipPoster): boolean {
+  return poster.canvas.width === 0 && poster.canvas.height === 0
+}
+
+/**
+ * Hands each clip its own poster, keyed by the file it was loaded from rather than by call order,
+ * so an assertion naming "clip 1's poster" cannot be satisfied by whichever derivation happened to
+ * resolve first.
+ */
+function posterPerFile(): Map<string, ClipPoster> {
+  const byName = new Map<string, ClipPoster>()
+  deriveClipPosterMock.mockImplementation((blob: Blob) => {
+    const name = blob instanceof File ? blob.name : 'anonymous'
+    const poster = byName.get(name) ?? makePoster()
+    byName.set(name, poster)
+    return Promise.resolve(poster)
+  })
+  return byName
+}
+
+/**
+ * Waits until every loaded clip's poster has travelled the whole path this component owns:
+ * `useClipPoster` state -> `ClipSlot`'s report-up -> `sameClipSession` -> `clipStates`. Asserted on
+ * the count so a test cannot proceed against a session whose posters have not landed yet — a
+ * release assertion would then pass for having nothing to release.
+ */
+async function waitForPosters(count: number) {
+  await waitFor(() => expect(deriveClipPosterMock).toHaveBeenCalledTimes(count))
+  await act(async () => {
+    await Promise.resolve()
+  })
+}
+
 beforeEach(() => {
   sampleClipMock.mockReset()
   applyRobustnessMock.mockReset()
@@ -107,6 +174,8 @@ beforeEach(() => {
   applyRobustnessMock.mockReturnValue(FAKE_ROBUST_FRAMES)
   computeFormHeuristicsMock.mockReturnValue(FAKE_HEURISTICS)
   getScalePassDetectorMock.mockResolvedValue(makeFakeDetector())
+  deriveClipPosterMock.mockReset()
+  deriveClipPosterMock.mockResolvedValue(null)
   // Resolves every sampling call (primary or scale pass, either clip) immediately with one
   // null-frame sample -- with FAKE_HEURISTICS' calibration: null, every scale pass concludes
   // 'failed' ("measured no real-world scale"), a terminal status, same as
@@ -122,10 +191,18 @@ afterEach(() => {
 })
 
 describe('MultiClipVideoSession', () => {
-  it('renders exactly one clip slot initially', () => {
+  it('starts with zero clips and a full-page picker', () => {
     const headingRef = createRef<HTMLHeadingElement>()
     render(<MultiClipVideoSession detector={null} headingRef={headingRef} />)
-    expect(canonicalVideos()).toHaveLength(1)
+
+    // A genuinely empty session, not "one slot whose videoSource.status is 'empty'": there is no
+    // clip, so there is no video element to be empty.
+    expect(canonicalVideos()).toHaveLength(0)
+    // All four ways in are reachable: record (default tab), upload, and the two demo clips.
+    expect(screen.getByRole('button', { name: /start recording/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^upload$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /demo 1 \(side view\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /demo 2 \(front view\)/i })).toBeInTheDocument()
   })
 
   it('single clip (N=1): auto-starts and reaches Analysis complete once ready', async () => {
@@ -134,13 +211,53 @@ describe('MultiClipVideoSession', () => {
     render(<MultiClipVideoSession detector={detector} headingRef={headingRef} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
-    const file = new File(['x'], 'run.mp4', { type: 'video/mp4' })
-    fireEvent.change(screen.getByLabelText(/choose a video file/i), { target: { files: [file] } })
+    await chooseFile(new File(['x'], 'run.mp4', { type: 'video/mp4' }))
 
     markVideoReady(canonicalVideos()[0])
 
     await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
     expect(sampleClipMock).toHaveBeenCalled()
+  })
+
+  it('one source, one clip: selecting several files at once creates one clip per file', async () => {
+    const headingRef = createRef<HTMLHeadingElement>()
+    render(<MultiClipVideoSession detector={null} headingRef={headingRef} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
+      target: {
+        files: [
+          new File(['a'], 'run1.mp4', { type: 'video/mp4' }),
+          new File(['b'], 'run2.mp4', { type: 'video/mp4' }),
+          new File(['c'], 'run3.mp4', { type: 'video/mp4' }),
+        ],
+      },
+    })
+    await act(async () => {})
+
+    // The bug this deletes: the old first slot owned its own picker, so all three files went to
+    // ONE `useVideoSource` and produced a single clip, last file wins.
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(3))
+  })
+
+  it('the picker stays on the page while a clip is still loading, and is replaced once one is ready', async () => {
+    const headingRef = createRef<HTMLHeadingElement>()
+    render(<MultiClipVideoSession detector={null} headingRef={headingRef} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run.mp4', { type: 'video/mp4' }))
+
+    // 'loading' is not 'loaded': the gate is `anyClipVideoReady`, not `clipIds.length`, so a clip
+    // that never gets there leaves the reader a way forward rather than an empty page.
+    expect(canonicalVideos()).toHaveLength(1)
+    expect(screen.getByRole('button', { name: /demo 1 \(side view\)/i })).toBeInTheDocument()
+
+    markVideoReady(canonicalVideos()[0])
+
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /demo 1 \(side view\)/i })).not.toBeInTheDocument(),
+    )
+    expect(screen.getByText(/add another clip/i)).toBeInTheDocument()
   })
 
   it('serializes the shared detector: the second clip stays queued until the first clip fully finishes', async () => {
@@ -164,21 +281,15 @@ describe('MultiClipVideoSession', () => {
     const detector = makeFakeDetector()
     render(<MultiClipVideoSession detector={detector} headingRef={headingRef} />)
 
-    // Load clip 1 through its own picker -- its primary pass starts sampling and hangs.
+    // Load clip 1 through the full-page picker -- its primary pass starts sampling and hangs.
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
-    const file1 = new File(['x'], 'run1.mp4', { type: 'video/mp4' })
-    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
-      target: { files: [file1] },
-    })
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
     markVideoReady(canonicalVideos()[0])
     await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
 
     // Add clip 2 via the session-level "Add another clip" picker while clip 1 is still sampling.
     await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
-    const file2 = new File(['y'], 'run2.mp4', { type: 'video/mp4' })
-    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
-      target: { files: [file2] },
-    })
+    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
     markVideoReady(canonicalVideos()[1])
 
@@ -208,22 +319,16 @@ describe('MultiClipVideoSession', () => {
     await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
   })
 
-  it('removes a clip via its Remove button, keeping at least one slot', async () => {
+  it('removes clips one by one, and removing the last one returns to the picker', async () => {
     const headingRef = createRef<HTMLHeadingElement>()
     render(<MultiClipVideoSession detector={null} headingRef={headingRef} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
-    const file1 = new File(['x'], 'run1.mp4', { type: 'video/mp4' })
-    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
-      target: { files: [file1] },
-    })
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
     markVideoReady(canonicalVideos()[0])
     await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
 
-    const file2 = new File(['y'], 'run2.mp4', { type: 'video/mp4' })
-    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
-      target: { files: [file2] },
-    })
+    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
 
     const removeButtons = screen.getAllByRole('button', { name: /remove clip/i })
@@ -231,8 +336,81 @@ describe('MultiClipVideoSession', () => {
     fireEvent.click(removeButtons[0])
 
     await waitFor(() => expect(canonicalVideos()).toHaveLength(1))
-    // A lone remaining clip has nothing left to remove itself from.
-    expect(screen.queryByRole('button', { name: /remove clip/i })).not.toBeInTheDocument()
+    // The lone remaining clip is removable too -- the always-one-slot invariant is gone.
+    const lastRemove = screen.getByRole('button', { name: /remove clip/i })
+    fireEvent.click(lastRemove)
+
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(0))
+    expect(screen.getByRole('button', { name: /demo 1 \(side view\)/i })).toBeInTheDocument()
+  })
+
+  it('releases the removed clip’s poster in `removeClip` itself, and leaves the survivor’s alone', async () => {
+    const posters = posterPerFile()
+    const headingRef = createRef<HTMLHeadingElement>()
+    render(<MultiClipVideoSession detector={null} headingRef={headingRef} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
+
+    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
+    markVideoReady(canonicalVideos()[1])
+    await waitForPosters(2)
+
+    const removed = posters.get('run1.mp4')!
+    const survivor = posters.get('run2.mp4')!
+    expect(isReleased(removed)).toBe(false)
+
+    // Raw DOM `.click()`, deliberately NOT `fireEvent` — for the same reason as the mid-analysis
+    // teardown test below. `fireEvent` wraps the state update, the commit AND the passive-effect
+    // flush in `act()`, which would run the unmounting `ClipSlot`'s `useClipPoster` cleanup and
+    // release this poster for entirely different reasons. React processes the click's state update
+    // and commit synchronously either way, but passive effects are only *scheduled*. Asserting
+    // inside that gap is what makes this a test of `removeClip`'s own call and not of React's
+    // cleanup ordering — which both code comments at the release sites say they deliberately do
+    // NOT lean on.
+    screen.getAllByRole('button', { name: /remove clip/i })[0].click()
+
+    expect(isReleased(removed)).toBe(true)
+    // The clip that stayed keeps its pixels: this frees one poster, not the session's.
+    expect(isReleased(survivor)).toBe(false)
+
+    await act(async () => {})
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(1))
+    expect(isReleased(survivor)).toBe(false)
+  })
+
+  it('releases every clip’s poster in `handleChooseDifferentVideo` itself when the session resets', async () => {
+    const posters = posterPerFile()
+    const headingRef = createRef<HTMLHeadingElement>()
+    render(<MultiClipVideoSession detector={null} headingRef={headingRef} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
+
+    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
+    markVideoReady(canonicalVideos()[1])
+    await waitForPosters(2)
+
+    const all = [posters.get('run1.mp4')!, posters.get('run2.mp4')!]
+    expect(all.map(isReleased)).toEqual([false, false])
+
+    // Same raw-click reasoning as above: every slot is about to unmount, so a flushed passive pass
+    // would release all of these regardless of what this component did.
+    screen.getByRole('button', { name: /choose a different video/i }).click()
+
+    // EVERY clip, not just the active one — the session is going away whole.
+    expect(all.map(isReleased)).toEqual([true, true])
+
+    await act(async () => {})
+    // Back to a genuinely empty session, not one seeded slot.
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(0))
+    expect(screen.getByRole('button', { name: /demo 1 \(side view\)/i })).toBeInTheDocument()
   })
 
   it('removing the currently-ACTIVE, mid-analysis clip deterministically tears down its detector-holding pipeline before the next clip becomes active', async () => {
@@ -261,19 +439,13 @@ describe('MultiClipVideoSession', () => {
 
     // Load clip 1 -- its primary pass starts sampling and hangs, holding the shared detector.
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
-    const file1 = new File(['x'], 'run1.mp4', { type: 'video/mp4' })
-    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
-      target: { files: [file1] },
-    })
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
     markVideoReady(canonicalVideos()[0])
     await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
 
     // Add clip 2 while clip 1 is still mid-analysis -- it queues, waiting for the shared detector.
     await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
-    const file2 = new File(['y'], 'run2.mp4', { type: 'video/mp4' })
-    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
-      target: { files: [file2] },
-    })
+    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
     markVideoReady(canonicalVideos()[1])
     await waitFor(() =>
