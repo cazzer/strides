@@ -322,6 +322,7 @@ export function useVideoAnalysis(
           samples,
           samplingRobustnessConfig,
           usesSequentialDecode ? 'sequential' : 'playback',
+          { width: metadata.width, height: metadata.height },
         )
         if (runIdRef.current !== runId) return
         // Decide the background scale pass's fate at the moment the primary result exists
@@ -545,6 +546,7 @@ export function useVideoAnalysis(
             samples,
             samplingRobustnessConfig,
             usesSequentialDecode ? 'sequential' : 'playback',
+            { width: metadata.width, height: metadata.height },
           )
         // Graft rule: a pass that measured no real-world scale has nothing to graft — that is a
         // failed pass (named as such), never a silent no-op replacement of the primary metrics.

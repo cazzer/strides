@@ -3,7 +3,29 @@ import { computeAnalysisDiagnostics } from './analysisDiagnostics'
 import type { PoseSample } from '../pose/robustness/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { FormHeuristicsResult, MetricResult } from '../heuristics/types'
+import type { PersonSelectionDiagnostics } from './retroactivePersonSelection'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
+
+/** A "the stage did nothing" person-selection block — what every run on single-subject footage
+ * produces, and the shape this file's existing assertions were all written against implicitly. */
+function makePersonSelection(
+  overrides: Partial<PersonSelectionDiagnostics> = {},
+): PersonSelectionDiagnostics {
+  return {
+    status: 'skipped',
+    skipReason: 'no-detections',
+    minBoundingBoxAreaPx: 415,
+    totalSamples: 0,
+    detectedSamplesIn: 0,
+    detectedSamplesOut: 0,
+    rejectedBelowFloor: 0,
+    rejectedOtherSegment: 0,
+    segmentCount: 0,
+    segments: [],
+    separationRatio: null,
+    ...overrides,
+  }
+}
 
 function makeMetric(overrides: Partial<MetricResult> = {}): MetricResult {
   return {
@@ -106,7 +128,7 @@ describe('computeAnalysisDiagnostics', () => {
       makeRobustFrame({ left_ankle: 'interpolated' }),
       makeRobustFrame({ left_ankle: 'unrecoverable', right_ankle: 'unrecoverable' }),
     ]
-    const diagnostics = computeAnalysisDiagnostics([], frames, makeHeuristics(), 'playback')
+    const diagnostics = computeAnalysisDiagnostics([], frames, makeHeuristics(), 'playback', makePersonSelection())
 
     expect(diagnostics.keypoints.left_ankle).toEqual({
       detected: 1,
@@ -137,7 +159,7 @@ describe('computeAnalysisDiagnostics', () => {
         right_foot_index: 'unrecoverable',
       }),
     ]
-    const diagnostics = computeAnalysisDiagnostics([], frames, makeHeuristics(), 'playback')
+    const diagnostics = computeAnalysisDiagnostics([], frames, makeHeuristics(), 'playback', makePersonSelection())
 
     expect(Object.keys(diagnostics.keypoints)).toHaveLength(COMMON_KEYPOINT_NAMES.length)
     expect(Object.keys(diagnostics.keypoints).sort()).toEqual([...COMMON_KEYPOINT_NAMES].sort())
@@ -176,7 +198,7 @@ describe('computeAnalysisDiagnostics', () => {
 
   it('surfaces view diagnostics verbatim, not recomputed', () => {
     const heuristics = makeHeuristics()
-    const diagnostics = computeAnalysisDiagnostics([], [], heuristics, 'playback')
+    const diagnostics = computeAnalysisDiagnostics([], [], heuristics, 'playback', makePersonSelection())
     expect(diagnostics.view).toBe(heuristics.view)
   })
 
@@ -186,7 +208,7 @@ describe('computeAnalysisDiagnostics', () => {
       { timestamp: 1, frame: null },
       { timestamp: 2, frame: { keypoints: [], timestamp: 2 } },
     ]
-    const diagnostics = computeAnalysisDiagnostics(samples, [], makeHeuristics(), 'playback')
+    const diagnostics = computeAnalysisDiagnostics(samples, [], makeHeuristics(), 'playback', makePersonSelection())
     expect(diagnostics.sampling).toEqual({
       totalSamples: 3,
       detectedFrames: 2,
@@ -195,8 +217,75 @@ describe('computeAnalysisDiagnostics', () => {
     })
   })
 
+  it('surfaces the person-selection block by reference, verbatim', () => {
+    const personSelection = makePersonSelection({
+      status: 'selected',
+      skipReason: null,
+      totalSamples: 5,
+      detectedSamplesIn: 5,
+      detectedSamplesOut: 3,
+      rejectedBelowFloor: 1,
+      rejectedOtherSegment: 1,
+      segmentCount: 2,
+      separationRatio: 12.4,
+    })
+    const diagnostics = computeAnalysisDiagnostics(
+      [],
+      [],
+      makeHeuristics(),
+      'playback',
+      personSelection,
+    )
+    // By reference, not a restatement: the stage that made the decision is the only thing that
+    // knows it, and there must be exactly one copy of that answer.
+    expect(diagnostics.personSelection).toBe(personSelection)
+  })
+
+  it('always reports a person-selection block, including when the stage was disabled', () => {
+    const personSelection = makePersonSelection({ skipReason: 'disabled' })
+    const diagnostics = computeAnalysisDiagnostics(
+      [],
+      [],
+      makeHeuristics(),
+      'playback',
+      personSelection,
+    )
+    // Unlike `scaleCalibration`, this key is never absent -- "the stage did nothing" is the
+    // answer to a question a reader of these diagnostics actually has.
+    expect('personSelection' in diagnostics).toBe(true)
+    expect(diagnostics.personSelection.skipReason).toBe('disabled')
+  })
+
+  it('reports post-selection detected frames while the block preserves the pre-selection count', () => {
+    // `samples` here is what the pipeline hands over AFTER selection: two frames were attributed
+    // to somebody else and are already nulled.
+    const samples: PoseSample[] = [
+      { timestamp: 0, frame: { keypoints: [], timestamp: 0 } },
+      { timestamp: 1, frame: null },
+      { timestamp: 2, frame: null },
+    ]
+    const diagnostics = computeAnalysisDiagnostics(
+      samples,
+      [],
+      makeHeuristics(),
+      'playback',
+      makePersonSelection({
+        status: 'selected',
+        skipReason: null,
+        totalSamples: 3,
+        detectedSamplesIn: 3,
+        detectedSamplesOut: 1,
+        rejectedOtherSegment: 2,
+        segmentCount: 2,
+      }),
+    )
+
+    expect(diagnostics.sampling.detectedFrames).toBe(1)
+    expect(diagnostics.personSelection.detectedSamplesIn).toBe(3)
+  })
+
   it('reports the sampling path exactly as passed in, for the sequential-decode path too', () => {
-    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics(), 'sequential')
+    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics(), 'sequential', makePersonSelection())
     expect(diagnostics.sampling.path).toBe('sequential')
   })
 
@@ -210,7 +299,7 @@ describe('computeAnalysisDiagnostics', () => {
         caveat: 'No resolvable body-scale reference.',
       }),
     })
-    const diagnostics = computeAnalysisDiagnostics([], [], heuristics, 'playback')
+    const diagnostics = computeAnalysisDiagnostics([], [], heuristics, 'playback', makePersonSelection())
 
     expect(diagnostics.metrics.trunkLean).toEqual({
       value: null,
@@ -258,6 +347,7 @@ describe('computeAnalysisDiagnostics', () => {
       [],
       { ...heuristics, verticalOscillation: { ...heuristics.verticalOscillation, fit } },
       'playback',
+      makePersonSelection(),
     )
 
     expect(diagnostics.verticalOscillationFit).toBe(fit)
@@ -265,15 +355,15 @@ describe('computeAnalysisDiagnostics', () => {
 
   it('reports a null spectral fit when vertical oscillation produced no value', () => {
     // The metric's own invariant: no value means no fit, and the diagnostics must not invent one.
-    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics(), 'playback')
+    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics(), 'playback', makePersonSelection())
     expect(diagnostics.verticalOscillationFit).toBeNull()
   })
 
   it('handles empty samples and frames without throwing', () => {
     expect(() =>
-      computeAnalysisDiagnostics([], [], makeHeuristics(), 'playback'),
+      computeAnalysisDiagnostics([], [], makeHeuristics(), 'playback', makePersonSelection()),
     ).not.toThrow()
-    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics(), 'playback')
+    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics(), 'playback', makePersonSelection())
     expect(diagnostics.sampling).toEqual({
       totalSamples: 0,
       detectedFrames: 0,
@@ -292,7 +382,7 @@ describe('computeAnalysisDiagnostics', () => {
   // producer now, so these two tests assert the derivation directly off that field rather than
   // passing a calibration object in independently.
   it('omits scaleCalibration entirely when the metric carries no calibration', () => {
-    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics(), 'playback')
+    const diagnostics = computeAnalysisDiagnostics([], [], makeHeuristics(), 'playback', makePersonSelection())
 
     // `in`, not a null/undefined comparison: a MoveNet run has to serialize to exactly the JSON it
     // did before this key existed, so "absent" and "present but empty" are different outcomes.
@@ -336,7 +426,7 @@ describe('computeAnalysisDiagnostics', () => {
       },
     })
 
-    const diagnostics = computeAnalysisDiagnostics([], [], heuristics, 'playback')
+    const diagnostics = computeAnalysisDiagnostics([], [], heuristics, 'playback', makePersonSelection())
 
     // Reference identity, not merely deep equality -- the whole point of D1b is that no second
     // computation ever produces a structurally-equal-but-distinct object.

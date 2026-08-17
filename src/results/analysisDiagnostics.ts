@@ -2,6 +2,7 @@ import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 import type { KeypointName } from '../pose/types'
 import type { PoseSample } from '../pose/robustness/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
+import type { PersonSelectionDiagnostics } from './retroactivePersonSelection'
 import type {
   FormHeuristicsResult,
   MetricId,
@@ -29,6 +30,11 @@ export interface MetricDiagnostics {
 export interface AnalysisDiagnostics {
   sampling: {
     totalSamples: number
+    /** POST-retroactive-person-selection (since retroactive-person-selection): a frame this run
+     * detected but attributed to somebody other than the selected subject counts as missing here,
+     * because that is what the rest of the pipeline sees. The pre-selection count is preserved as
+     * `personSelection.detectedSamplesIn` — compare the two to tell "the detector found nothing"
+     * from "the detector found somebody else". */
     detectedFrames: number
     missingFrames: number
     /** Which sampler (`sampleClipAdaptive.ts`) actually produced these samples for this run —
@@ -38,6 +44,14 @@ export interface AnalysisDiagnostics {
      * (both paths produce plain `PoseSample[]`) reveals which path made them. */
     path: 'sequential' | 'playback'
   }
+  /**
+   * What the retroactive person-of-interest stage did to this run's samples — ALWAYS present,
+   * including when the stage was disabled or skipped, unlike `scaleCalibration` below. "This
+   * stage did nothing" is itself the answer to the question a reader has when they see a
+   * surprising `sampling.detectedFrames`, so its absence would be the one shape that makes the
+   * diagnostics harder to read rather than easier.
+   */
+  personSelection: PersonSelectionDiagnostics
   view: FormHeuristicsResult['view']
   keypoints: Record<KeypointName, KeypointResolutionStats>
   metrics: Record<MetricId, MetricDiagnostics>
@@ -86,12 +100,20 @@ function emptyKeypointStats(): Record<KeypointName, KeypointResolutionStats> {
  * unlike `scaleCalibration`, nothing in `samples`/`robustFrames`/`heuristics` reveals which
  * sampler produced them, so the caller (`useVideoAnalysis.ts`, which just decided that dispatch
  * via `sampleClipAdaptive.ts`) has to state it explicitly.
+ *
+ * `personSelection` (since retroactive-person-selection) is a required parameter for the same
+ * reason: `samples` here is the POST-selection sequence, so nothing in it distinguishes a frame
+ * the detector missed from a frame this run attributed to a different person. Only the stage that
+ * made that call knows, and it is a separate module that already ran by the time this is called.
+ * Passed in rather than recomputed — recomputing would be a second, independently-drifting answer
+ * to a question already answered.
  */
 export function computeAnalysisDiagnostics(
   samples: PoseSample[],
   robustFrames: RobustPoseFrame[],
   heuristics: FormHeuristicsResult,
   samplingPath: 'sequential' | 'playback',
+  personSelection: PersonSelectionDiagnostics,
 ): AnalysisDiagnostics {
   const detectedFrames = samples.filter((s) => s.frame !== null).length
 
@@ -125,6 +147,7 @@ export function computeAnalysisDiagnostics(
       missingFrames: samples.length - detectedFrames,
       path: samplingPath,
     },
+    personSelection,
     view: heuristics.view,
     keypoints,
     metrics,

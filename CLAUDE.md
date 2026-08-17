@@ -75,11 +75,22 @@ In development builds only, `useVideoAnalysis` auto-logs TWO console lines per r
 
 1. `[analysis-diagnostics] {...}` the moment a run reaches `phase: 'ready'` — a JSON object with
    per-keypoint detected/interpolated/unrecoverable counts, raw view-detection diagnostics,
-   sampling detected/missing counts, and every metric's `value`/`confidence`/`viewFit`/
-   `frameCoverage`/`caveat` in one place (`src/results/analysisDiagnostics.ts`). This line is
-   byte-identical to what it was before the background scale pass existed: PRIMARY pass only,
+   sampling detected/missing counts, a `personSelection` block (see below), and every metric's
+   `value`/`confidence`/`viewFit`/
+   `frameCoverage`/`caveat` in one place (`src/results/analysisDiagnostics.ts`). PRIMARY pass only,
    and `'scaleCalibration' in <payload>` discriminates the PRIMARY backend only (a
    MoveNet-primary run never has the key here, even after a successful scale pass).
+
+   **`sampling.detectedFrames` is POST-person-selection** (retroactive-person-selection): a frame
+   the detector found but the selection stage attributed to somebody else counts as *missing*
+   there. `personSelection.detectedSamplesIn` preserves the pre-selection count — compare the two
+   to tell "the detector found nothing" from "the detector found somebody else". The stage ships
+   **off** by default, in which case the two are always equal and this line reads exactly as it did
+   before the stage existed. `personSelection` itself is ALWAYS present (unlike `scaleCalibration`):
+   `{ status: 'selected'|'skipped', skipReason, minBoundingBoxAreaPx, totalSamples,
+   detectedSamplesIn, detectedSamplesOut, rejectedBelowFloor, rejectedOtherSegment, segmentCount,
+   segments (ranked by integrated area DESC, capped at 10, `[0]` is the winner), separationRatio }`
+   — `src/results/retroactivePersonSelection.ts`.
 2. `[analysis-diagnostics:scale-pass] {...}` when the background MediaPipe scale pass reaches a
    terminal status — `{ status: 'done'|'failed'|'skipped', reason?: 'disabled'|'primary-scale',
    error?: string, diagnostics?: AnalysisDiagnostics }`. `diagnostics` (the scale pass's own
@@ -96,7 +107,21 @@ the scale-pass line will collide with it; the second is `startsWith('[analysis-d
 **Config overrides for comparing pipeline variants**, dev-only, read once per run:
 - `window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__` — partial
   `SamplingRobustnessConfig` (`src/results/samplingRobustnessConfig.ts`): keypoint-confidence
-  filtering, interpolation gap tolerance, detection error tolerance, per-frame timeout.
+  filtering, interpolation gap tolerance, detection error tolerance, per-frame timeout, plus two
+  nested planes that merge one level deep the same way `robustness` does — `sequentialSampling`
+  (`{ enabled, targetSamplesPerSecond }`) and `personSelection`.
+  `personSelection` is `RetroactivePersonSelectionConfig`
+  (`src/results/retroactivePersonSelection.ts`): `{ enabled, minBoundingBoxAreaFraction,
+  minKeypointConfidence, minConfidentKeypoints, maxAreaRatio, maxCenterSpeedSidesPerSecond,
+  maxContinuityGapSeconds }`, the retroactive person-of-interest stage (issue #51 Stage 1) that
+  segments the sampled sequence at continuity breaks and keeps only the highest integrated-bbox-area
+  segment. **Ships `enabled: false`** — it works (picks the runner over two bystander spans by
+  39-46x on `e2e/fixtures/multiperson-track.mp4`, and flips `trunkLean` there from -2.9° to +4.3°)
+  but is NOT a no-op on the Demo 1 side-view clip: one collapsed detection at t=4.32 wedges the
+  runner's own continuous 55-frame track apart and strands 5 real frames. Turn it on with
+  `{ personSelection: { enabled: true } }`. Full A/B tables and the root cause:
+  `openspec/changes/retroactive-person-selection/design.md`. Note this stage has NO `window` global
+  of its own — it rides on this one.
 - `window.__STRIDES_POSE_BACKEND_OVERRIDE__` — partial `PoseDetectorConfig`
   (`src/pose/poseBackendConfig.ts`): `{ backend: 'movenet' | 'blazepose' | 'posenet' |
   'mediapipePoseLandmarker', movenetModelType?: 'lightning' | 'thunder', trackingCrop?:
