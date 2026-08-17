@@ -3,9 +3,16 @@ import type { HeuristicsConfig, MetricResult, View } from './types'
 import { analyzeHipBounce } from './hipBounce'
 import type { SpectralFitFailureReason } from './spectralFit'
 import { estimateStrideLength } from './strideLength'
-import type { StrideLengthFailureReason } from './strideLength'
+import type { StrideLengthFailureReason, StridePair } from './strideLength'
 import { buildBounceCycleExemplar, resolvedSpanCenter } from './bounceInstants'
-import { selectExemplars } from './exemplars'
+import {
+  cropKeypoints,
+  describeDistribution,
+  pairQuality,
+  scoreExemplarInstant,
+  selectExemplars,
+} from './exemplars'
+import type { MetricExemplar } from './types'
 import { computeMetricConfidence } from './confidence'
 import { clamp01 } from './mathUtils'
 import type { KeypointName } from '../pose/types'
@@ -31,8 +38,20 @@ const MIN_STRIDE_PAIRS = 3
 
 /** The points the NUMERATOR reads at an instant — hip-pinned, exactly as the numerator's own fit
  * is (see the hip-pinning section below). The denominator's stride pair is a separate exemplar
- * with a separate seed and is not this ticket's. */
+ * with a separate seed, below. */
 const BOUNCE_SEED_KEYPOINTS: KeypointName[] = ['left_hip', 'right_hip']
+
+/** The points the DENOMINATOR reads at each strike: `strideLength.ts` measures the hip midpoint's
+ * horizontal displacement between two same-side footstrikes, and that displacement IS the stride
+ * length this ratio divides by. Same two names as the numerator's seed, for a different reason —
+ * one reads their vertical motion, the other their horizontal. */
+const STRIDE_SEED_KEYPOINTS: KeypointName[] = ['left_hip', 'right_hip']
+
+/** Context for the stride pair (design D2). A stride is a HORIZONTAL displacement, so a crop
+ * spanning two hip midpoints one stride apart is a wide, featureless band; the ankles put the feet
+ * whose strikes bound the stride into the picture. Optional by contract — `cropKeypoints` drops
+ * whichever does not resolve. */
+const STRIDE_CONTEXT_KEYPOINTS: KeypointName[] = ['left_ankle', 'right_ankle']
 
 /** Sinusoid partial R² at or above which the shared hip-bounce fit is treated as fully
  * trustworthy — identical constant, identical reasoning, as `verticalOscillation.ts`'s and
@@ -82,6 +101,69 @@ function caveatForStrideLengthFailure(reason: StrideLengthFailureReason): string
     case 'no-usable-pairs':
       return 'Footstrikes were detected, but no consecutive same-side pair advanced in the direction of travel.'
   }
+}
+
+/**
+ * The DENOMINATOR's exemplar: the two same-side footstrike frames of the median stride pair — the
+ * pair that literally defines the stride length the ratio divides by.
+ *
+ * The selected pair is the one whose displacement sits closest to the median of them all, and that
+ * median is `strideLengthPx` itself (`describeDistribution` takes the same `median` over the same
+ * numbers `estimateStrideLength` already did) — so this is the stride the reported denominator is
+ * most directly about, not merely a stride that happened to track well.
+ *
+ * **Base is the FIRST strike**, design D1's instant A for this row. D11's rule cannot decide it:
+ * both instants bound ONE stride and therefore carry the identical value, its displacement. Reading
+ * the pair chronologically — the stride started here, ended there — is the honest fallback, the
+ * same one #62 took for the bounce pair.
+ */
+function buildStridePairExemplar(pairs: StridePair[]): MetricExemplar[] {
+  const distribution = describeDistribution(pairs.map((pair) => pair.displacementPx))
+
+  let selected: StridePair | null = null
+  let bestCost = Infinity
+  for (const pair of pairs) {
+    const cost = Math.abs(pair.displacementPx - distribution.median)
+    if (cost < bestCost) {
+      selected = pair
+      bestCost = cost
+    }
+  }
+  if (selected === null) return []
+
+  const instant = (frame: RobustPoseFrame) => ({
+    frame,
+    seed: STRIDE_SEED_KEYPOINTS,
+    value: selected.displacementPx,
+  })
+  const startQuality = scoreExemplarInstant(
+    instant(selected.startFrame),
+    'representative',
+    distribution,
+  )
+  const endQuality = scoreExemplarInstant(
+    instant(selected.endFrame),
+    'representative',
+    distribution,
+  )
+  if (startQuality === null || endQuality === null) return []
+
+  return [
+    {
+      kind: 'stridePair',
+      timestamp: selected.startFrame.timestamp,
+      pairedTimestamp: selected.endFrame.timestamp,
+      // Both instants are the SAME foot by construction — `estimateStrideLength` only ever pairs
+      // same-side consecutive strikes — so naming the side is right about both.
+      side: selected.side,
+      quality: pairQuality(startQuality, endQuality),
+      label: `One stride: consecutive ${selected.side}-foot strikes, ghosted together`,
+      cropKeypoints: cropKeypoints(STRIDE_SEED_KEYPOINTS, STRIDE_CONTEXT_KEYPOINTS, [
+        selected.startFrame,
+        selected.endFrame,
+      ]),
+    },
+  ]
 }
 
 /**
@@ -228,21 +310,29 @@ export function computeVerticalRatio(
     )
   }
 
-  // Numerator exemplar only. `maximumIs: 'lowest'` because `analyzeHipBounce` fits raw
+  // Numerator exemplar. `maximumIs: 'lowest'` because `analyzeHipBounce` fits raw
   // downward-positive image-y — see `bounceInstants.ts`'s module doc on the sign trap.
   const spanCenterSeconds = resolvedSpanCenter(frames, bounceSignal.hipY)
-  const exemplars =
+  const bounceExemplars =
     spanCenterSeconds === null
-      ? undefined
-      : selectExemplars(
-          buildBounceCycleExemplar({
-            fit,
-            frames,
-            spanCenterSeconds,
-            maximumIs: 'lowest',
-            seed: BOUNCE_SEED_KEYPOINTS,
-          }),
-        )
+      ? []
+      : buildBounceCycleExemplar({
+          fit,
+          frames,
+          spanCenterSeconds,
+          maximumIs: 'lowest',
+          seed: BOUNCE_SEED_KEYPOINTS,
+        })
+
+  // This is the one metric whose two exemplars answer different questions — how far the runner
+  // bounced, and how far one stride carried them. Both go through ONE `selectExemplars` call, not
+  // one each: `MAX_EXEMPLARS_PER_METRIC` is a per-metric budget, and gating the two halves
+  // separately would apply it twice. Exactly two candidates against a cap of two, so a numerator
+  // that clears the gate can never crowd out a denominator that also does.
+  const exemplars = selectExemplars([
+    ...bounceExemplars,
+    ...buildStridePairExemplar(stride.pairs),
+  ])
 
   return {
     metric: 'verticalRatio',

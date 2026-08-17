@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { estimateStrideLength } from './strideLength'
 import { detectFootstrikes } from './footstrikes'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
+import { median } from './mathUtils'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildFrame } from './__fixtures__/testFrames'
 import type { RobustPoseFrame } from '../pose/robustness/types'
@@ -85,6 +86,24 @@ function buildHandFrames(ankleY: number[]): RobustPoseFrame[] {
   })
 }
 
+/**
+ * The `StridePair`s a clean `normalAnkleTrace` clip should have produced, derived independently
+ * from `detectFootstrikes` rather than read back off the result under test — so the two
+ * whole-object assertions below keep doing real work now that `StrideLengthResult` carries its
+ * pairs. `buildHandFrames` flatlines the right ankle, so every candidate is a left-side one.
+ */
+function expectedCleanPairs(frames: RobustPoseFrame[]) {
+  const strikes = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG).filter(
+    (candidate) => candidate.side === 'left',
+  )
+  return strikes.slice(0, -1).map((strike, i) => ({
+    side: 'left' as const,
+    displacementPx: STRIDE_PX_PER_BLOCK,
+    startFrame: frames[strike.frameIndex],
+    endFrame: frames[strikes[i + 1].frameIndex],
+  }))
+}
+
 function blankHipPoint(frames: RobustPoseFrame[], indices: Set<number>) {
   return frames.map((frame, i) => {
     if (!indices.has(i)) return frame
@@ -113,6 +132,37 @@ describe('estimateStrideLength', () => {
     expect(result.strideLengthPx).toBeLessThan(EXPECTED_STRIDE_PX + ONE_FRAME_TRAVEL_TOLERANCE)
     expect(result.pairCount).toBeGreaterThanOrEqual(3)
     expect(result.candidatePairCount).toBe(result.pairCount)
+  })
+
+  it('returns each kept pair whole, and reports exactly those pairs', () => {
+    const frames = generateSyntheticGait(BASE_PARAMS)
+
+    const result = estimateStrideLength(frames, DEFAULT_HEURISTICS_CONFIG)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.pairs).toHaveLength(result.pairCount)
+    // The reported stride length is the median of exactly these pairs -- not of some other set the
+    // caller cannot see. `verticalRatio.ts` picks its denominator exemplar off this array, so the
+    // two must describe the same measurement.
+    expect(median(result.pairs.map((pair) => pair.displacementPx))).toBe(result.strideLengthPx)
+
+    const strikeTimestamps: Record<'left' | 'right', number[]> = { left: [], right: [] }
+    for (const candidate of detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)) {
+      strikeTimestamps[candidate.side].push(frames[candidate.frameIndex].timestamp)
+    }
+
+    for (const pair of result.pairs) {
+      expect(pair.displacementPx).toBeGreaterThan(0)
+      // Both endpoints are real, CONSECUTIVE same-side footstrike frames -- never re-paired across
+      // a dropped strike, which would span two strides and read as one.
+      const strikes = strikeTimestamps[pair.side]
+      const start = strikes.indexOf(pair.startFrame.timestamp)
+      expect(start).toBeGreaterThanOrEqual(0)
+      expect(strikes[start + 1]).toBe(pair.endFrame.timestamp)
+      expect(frames).toContain(pair.startFrame)
+      expect(frames).toContain(pair.endFrame)
+    }
   })
 
   it('parametric travelSpeedPxPerSec proves displacement is actually measured, not a fixture artifact', () => {
@@ -146,6 +196,7 @@ describe('estimateStrideLength', () => {
       strideLengthPx: STRIDE_PX_PER_BLOCK,
       pairCount: 6,
       candidatePairCount: 6,
+      pairs: expectedCleanPairs(clean),
     })
     // The missed footstrike costs one candidate pair (one fewer left-side footstrike total).
     expect(mergedResult.ok).toBe(true)
@@ -178,6 +229,7 @@ describe('estimateStrideLength', () => {
       strideLengthPx: STRIDE_PX_PER_BLOCK,
       pairCount: 6,
       candidatePairCount: 6,
+      pairs: expectedCleanPairs(clean),
     })
     expect(mutatedResult.ok).toBe(true)
     if (!mutatedResult.ok) return

@@ -199,3 +199,111 @@ describe('computeArmSwingSymmetry', () => {
     expect(result.caveat).not.toBeNull()
   })
 })
+
+/**
+ * Reads the exact series `computeSideSwing` reads — `wrist.y − shoulder.y` in image-y — at the
+ * frame carrying `timestamp`. Image-y grows downward, so a SMALLER value is the wrist higher on
+ * screen. The direction assertions below depend on this and on nothing else.
+ */
+function wristBelowShoulderPx(
+  frames: RobustPoseFrame[],
+  timestamp: number,
+  side: 'left' | 'right',
+): number {
+  const frame = frames.find((candidate) => candidate.timestamp === timestamp)!
+  const at = (name: string) => frame.keypoints.find((kp) => kp.name === name)!.y!
+  return at(`${side}_wrist`) - at(`${side}_shoulder`)
+}
+
+describe('computeArmSwingSymmetry — exemplars', () => {
+  const frames = buildArmSwingFrames({
+    ...BASE_PARAMS,
+    leftAmplitudePx: 40,
+    rightAmplitudePx: 24,
+  })
+
+  it('emits one pair per side — the comparison is what makes an asymmetry metric legible', () => {
+    const exemplars = computeArmSwingSymmetry(frames, 'front').exemplars!
+
+    expect(exemplars).toHaveLength(2)
+    expect(exemplars.map((exemplar) => exemplar.kind)).toEqual([
+      'armSwingCycle',
+      'armSwingCycle',
+    ])
+    // One per arm, never two of the same one.
+    expect([...exemplars.map((exemplar) => exemplar.side)].sort()).toEqual(['left', 'right'])
+    for (const exemplar of exemplars) {
+      expect(exemplar.quality).toBeGreaterThanOrEqual(0.5)
+      expect(frames.map((frame) => frame.timestamp)).toContain(exemplar.timestamp)
+      expect(frames.map((frame) => frame.timestamp)).toContain(exemplar.pairedTimestamp)
+    }
+  })
+
+  it('the base instant is the wrist HIGH frame, on both sides — the image-y sign trap', () => {
+    // `wrist.y − shoulder.y` grows downward, so the series MINIMUM is the wrist at its highest.
+    // Reading the extremum kind straight through would caption every one of these backwards while
+    // passing every other assertion in this file.
+    for (const exemplar of computeArmSwingSymmetry(frames, 'front').exemplars!) {
+      const side = exemplar.side!
+      expect(wristBelowShoulderPx(frames, exemplar.timestamp, side)).toBeLessThan(
+        wristBelowShoulderPx(frames, exemplar.pairedTimestamp!, side),
+      )
+    }
+  })
+
+  it('the pair spans that side’s full swing amplitude, not some smaller excursion', () => {
+    for (const exemplar of computeArmSwingSymmetry(frames, 'front').exemplars!) {
+      const side = exemplar.side!
+      const spanned =
+        wristBelowShoulderPx(frames, exemplar.pairedTimestamp!, side) -
+        wristBelowShoulderPx(frames, exemplar.timestamp, side)
+      // The fixture builds each side's peak-to-trough excursion as exactly `amplitudePx`; discrete
+      // 30fps sampling can only land at or just inside that.
+      const amplitudePx = side === 'left' ? 40 : 24
+      expect(spanned).toBeGreaterThan(amplitudePx * 0.9)
+      expect(spanned).toBeLessThanOrEqual(amplitudePx)
+    }
+  })
+
+  it('seeds the crop on that side’s own shoulder and wrist, dropping context that resolves nowhere', () => {
+    for (const exemplar of computeArmSwingSymmetry(frames, 'front').exemplars!) {
+      const side = exemplar.side!
+      // The elbow is context (design D2) and this fixture never resolves one, so it is omitted
+      // rather than anchoring the crop at a keypoint with no position.
+      expect(exemplar.cropKeypoints).toEqual([`${side}_shoulder`, `${side}_wrist`])
+    }
+  })
+
+  it('adds the elbow to the crop when it actually resolves', () => {
+    const withElbows = frames.map((frame) => ({
+      ...frame,
+      keypoints: frame.keypoints.map((kp) =>
+        kp.name === 'left_elbow' || kp.name === 'right_elbow'
+          ? { ...kp, x: 200, y: 300, score: 0.9, status: 'detected' as const }
+          : kp,
+      ),
+    }))
+
+    for (const exemplar of computeArmSwingSymmetry(withElbows, 'front').exemplars!) {
+      const side = exemplar.side!
+      expect(exemplar.cropKeypoints).toEqual([
+        `${side}_shoulder`,
+        `${side}_wrist`,
+        `${side}_elbow`,
+      ])
+    }
+  })
+
+  it('emits nothing when the metric reports no value', () => {
+    const flat = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 0,
+      rightAmplitudePx: 0,
+    })
+
+    const result = computeArmSwingSymmetry(flat, 'front')
+
+    expect(result.value).toBeNull()
+    expect(result.exemplars).toBeUndefined()
+  })
+})

@@ -204,22 +204,70 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
 
 ## 3. `armSwingSymmetry` and the stride denominator (#63)
 
-- [ ] 3.1 `armSwingSymmetry.ts`: widen `SideSwing` to keep each half-swing's extrema pair rather
+- [x] 3.1 `armSwingSymmetry.ts`: widen `SideSwing` to keep each half-swing's extrema pair rather
   than collapsing at `:90`, and add the per-extremum interpolated flag the gate needs (today's
   `interpolatedCount` is per-side/per-frame). Carry the median-amplitude index back from the
   caller's `median(...)` at `:149-150`.
-- [ ] 3.2 Emit up to one exemplar per side: wrist-high vs wrist-low of that side's median-amplitude
+  **Corrected the same way §2.8 was, and for the same reason — no interpolated flag was added.**
+  The shipped gate is FRAME-based (`cropDerivable(frame, seed)`/`detectionFactor(frame, seed)` both
+  read `frame.keypoints`, and `ExemplarInstant` is `{ frame, seed, value? }`), so a boolean could
+  neither derive a crop nor be scored. `amplitudesPx: number[]` became `halfSwings: HalfSwing[]`
+  — one record per confirmed swing carrying `amplitudePx` plus the two FRAMES — rather than a
+  parallel array beside it, which is the index-parallel hazard D1's `overstriding` note warns about.
+  The median-amplitude index does not travel back either: `describeDistribution(amplitudes).median`
+  IS the caller's `median(...)` over the same numbers, so the selection is made where the swings
+  live instead of threading an index through.
+  **The field NAMES are the sign trap's fix**: the series is `wrist.y − shoulder.y` in image-y,
+  which grows downward, so the series MINIMUM is the wrist HIGHEST on screen —
+  `wristHighFrame`/`wristLowFrame` rather than min/max, exactly as `bounceInstants.ts` names by body
+  position. **Verified load-bearing**: flipping the min/max assignment fails exactly two tests
+  ("the image-y sign trap", "spans that side's full swing amplitude") and nothing else.
+- [x] 3.2 Emit up to one exemplar per side: wrist-high vs wrist-low of that side's median-amplitude
   half-swing. Score both instants through `exemplars.ts`, combine with `pairQuality` (`min`), and
   pick the base by D11's rule — do not hand-roll either.
-- [ ] 3.3 `strideLength.ts`: widen `StrideLengthResult` to keep each displacement's two footstrike
+  Both sides go through ONE `selectExemplars` call, not one each: the budget is per-metric, and
+  gating each arm separately would apply the cap twice and could keep two pictures of one arm.
+  Each side is judged against its OWN amplitude distribution — the metric compares two per-side
+  medians, so a pooled spread would score a left swing on the very asymmetry the metric reports.
+  **D11's base rule does not resolve this pair either**, for the same reason #62 recorded for the
+  bounce pair: both instants belong to one half-swing and therefore carry the identical value, its
+  amplitude. D1's row names instant A as wrist-high, so BASE = wrist-high. Worth folding into a
+  future design correction pass alongside #62's note; not edited into design.md by this ticket.
+- [x] 3.3 `strideLength.ts`: widen `StrideLengthResult` to keep each displacement's two footstrike
   instants (identity dies at `:151`). Safe — one production caller (`verticalRatio.ts:175`), no
   production object literals.
-- [ ] 3.4 Update the two whole-object `toEqual`s at `strideLength.test.ts:144` and `:176` to the new
+  Re-verified at `e49692f` before widening: still exactly one production caller, no external object
+  literals, and `index.test.ts:158` reads fields rather than the whole object. Landed as a required
+  `pairs: StridePair[]` on the ok-branch (`{ side, displacementPx, startFrame, endFrame }`), frames
+  not indices — same D4 reasoning, and the same conclusion #62 reached for `IntegrationRun.frames`.
+- [x] 3.4 Update the two whole-object `toEqual`s at `strideLength.test.ts:144` and `:176` to the new
   shape — **updated, not deleted, not loosened to `toMatchObject`**.
-- [ ] 3.5 `verticalRatio.ts`: emit the median stride pair's two same-side footstrikes as the
+  Both still `toEqual` the whole object, and they now assert MORE than before: `pairs` is compared
+  against `expectedCleanPairs(...)`, derived independently from `detectFootstrikes` rather than read
+  back off the result under test, so per-pair side, displacement, order and both endpoint frames are
+  all pinned. Both edits are pure insertions — zero removed lines in that file.
+- [x] 3.5 `verticalRatio.ts`: emit the median stride pair's two same-side footstrikes as the
   denominator exemplar, `kind`-distinguished from the numerator exemplar.
-- [ ] 3.6 Prove `verticalRatio.value` and `armSwingSymmetry.value` are identical before/after.
-- [ ] 3.7 `npm test`, `tsc -b`, `eslint` clean.
+  Added as `kind: 'stridePair'` beside #62's untouched `'bounceCycle'` block. The two candidate
+  arrays are concatenated and passed through ONE `selectExemplars` call — `MAX_EXEMPLARS_PER_METRIC`
+  is a per-metric budget, and gating each half separately would apply it twice. Exactly two
+  candidates against a cap of two, so neither can crowd the other out; a live test asserts both
+  survive. Base is the FIRST strike (D1's instant A) — D11 cannot decide it, both instants bound one
+  stride and carry its single displacement value.
+- [x] 3.6 Prove `verticalRatio.value` and `armSwingSymmetry.value` are identical before/after.
+  Proved the way §2.1 did, with a temporary probe (added, measured, reverted). It dumped every field
+  of `computeFormHeuristics` plus `computeVerticalRatio`/`computeArmSwingSymmetry` at all three views
+  and `estimateStrideLength`'s raw result, over 5 synthetic-gait clips (side/front, 24–30fps,
+  150–185 spm, one scale-calibrated, one treadmill) and 4 arm-swing clips (symmetric, asymmetric,
+  fast, slow-short) — the gait fixture holds wrists static relative to the shoulder, so it never
+  exercises `armSwingSymmetry`'s value path and a separate fixture family was required. Flattened to
+  dotted paths and walked key-by-key with `Object.is`, `exemplars`/`pairs` excluded:
+  **4,134 keys, CHANGED 0, ADDED 0, REMOVED 0.**
+- [x] 3.7 `npm test`, `tsc -b`, `eslint` clean.
+  `tsc -b --force`: No errors found. `vitest run`: 912 passed, 0 failed (900 at `e49692f` + 12 new).
+  `eslint .`: No issues found. Three removed lines across every existing test file, all in
+  `verticalRatio.test.ts`'s numerator block, which asserted `exemplars` had length 1 — a test
+  asserting on the new field; it now selects by `kind` and asserts the same things.
 
 ## 4. Fusion provenance and clip plumbing (#64)
 

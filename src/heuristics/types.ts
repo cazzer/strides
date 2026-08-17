@@ -80,6 +80,14 @@ export type MetricExemplarKind =
    * (all three read the same shape of fit). `cadence` reads that fit too and deliberately emits
    * nothing: a rate is a property of a sequence, and these two stills depict an amplitude. */
   | 'bounceCycle'
+  /** One arm-swing half-cycle — the wrist at its highest and its lowest, on ONE side. Two of these
+   * (one per arm) is what makes `armSwingSymmetry` legible: the comparison IS the evidence. */
+  | 'armSwingCycle'
+  /** One stride — two consecutive same-side footstrikes, the interval whose hip-mid horizontal
+   * displacement is `verticalRatio`'s DENOMINATOR. Distinct from `'bounceCycle'`, which is that
+   * same metric's numerator: `verticalRatio` is the one metric whose two exemplars answer
+   * different questions, and this pair is the discriminator a caption reads. */
+  | 'stridePair'
 
 /**
  * One renderable piece of evidence for a metric: either a single instant, or a ghosted PAIR of
