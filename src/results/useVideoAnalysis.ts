@@ -6,6 +6,8 @@ import type { PoseSample } from '../pose/robustness/types'
 import type { SampleClipHandle } from './sampleClip'
 import { sampleClipAdaptive } from './sampleClipAdaptive'
 import { runClipAnalysisPipeline } from './runClipAnalysisPipeline'
+// TEMPORARY (issue #57) — revert with the `[bbox-trace]` log line below.
+import { traceBoundingBoxes } from './boundingBoxTrace.experimental'
 import { resolveSamplingRobustnessConfig } from './samplingRobustnessConfig'
 import { resolveScalePassConfig } from './scalePassConfig'
 import { graftScalePassResult } from './scalePassGraft'
@@ -311,6 +313,26 @@ export function useVideoAnalysis(
       if (runIdRef.current !== runId) return
 
       try {
+        // TEMPORARY probe (issue #57) — per-detection bbox trace with NO floor applied, so the
+        // area distribution the re-derived floor is measured against is independent of the value
+        // under test. Emitted here rather than inside `runClipAnalysisPipeline` (pure, shared with
+        // the background scale pass) so exactly one line lands per run and the PRIMARY pass alone
+        // is probed — the scale pass's own selection is #56's subject, not this ticket's.
+        // REVERT THIS with `git checkout -- src/results/useVideoAnalysis.ts` and delete
+        // `boundingBoxTrace.experimental.ts` once the measurement is recorded.
+        if (import.meta.env.DEV) {
+          console.log(
+            '[bbox-trace]',
+            JSON.stringify(
+              traceBoundingBoxes(
+                samples,
+                metadata.width,
+                metadata.height,
+                samplingRobustnessConfig.personSelection,
+              ),
+            ),
+          )
+        }
         // The synchronous sort → robustness → presence-trim → heuristics → diagnostics
         // pipeline, shared verbatim with the background scale pass below — see
         // runClipAnalysisPipeline.ts for what each step does and why. `computeFormHeuristics`

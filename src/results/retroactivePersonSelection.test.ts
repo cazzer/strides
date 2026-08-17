@@ -9,15 +9,28 @@ import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 
 const WIDTH_1080P = 1920
 const HEIGHT_1080P = 1080
-/** `2e-4 * 1920 * 1080` — the default floor at 1080p. */
+/** `2e-4 * 1920 * 1080` — the floor `CONFIG` below pins, at 1080p. TEST-LOCAL: this is no longer
+ * necessarily the shipped default's value, deliberately. See `CONFIG`. */
 const FLOOR_1080P = 414.72
 
-/** The shipped defaults. Spread rather than used directly so these cases keep asserting the
- * algorithm's behaviour even if the `enabled` default is flipped again — the kill switch's own
- * behaviour has its own test. */
+/** The shipped defaults, with the two fields these algorithm cases are sensitive to pinned rather
+ * than inherited — so a case keeps asserting the ALGORITHM's behaviour when a default moves.
+ *
+ * `enabled: true` because the kill switch's own behaviour has its own test.
+ *
+ * `minBoundingBoxAreaFraction: 2e-4` because a dozen fixtures below encode their above/below-floor
+ * status in a hardcoded box size, and inheriting the default made that status a live function of a
+ * number this suite is not measuring: `ABOVE_FLOOR_SIDE` (625 px²) flips below the floor at any
+ * fraction over 3.01e-4, the 60x60 bystanders (3,600 px²) at 1.736e-3, and the 12-segment
+ * alternating fixture's smallest box (1,600 px²) at 7.72e-4. #57's re-derived floor is above at
+ * least the first of those, so without this pin a default change would silently reclassify
+ * fixtures whose comments say what they mean — quietly changing what several cases test rather
+ * than failing. Pin the input; assert the algorithm. The DEFAULT's own value is pinned separately,
+ * by the tests that read `DEFAULT_RETROACTIVE_PERSON_SELECTION_CONFIG` directly. */
 const CONFIG: RetroactivePersonSelectionConfig = {
   ...DEFAULT_RETROACTIVE_PERSON_SELECTION_CONFIG,
   enabled: true,
+  minBoundingBoxAreaFraction: 2e-4,
 }
 
 /**
