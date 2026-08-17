@@ -78,9 +78,13 @@
 
 - [x] 5.1 `openspec validate restrict-boxless-survival --strict`
 - [x] 5.2 `npm test`, `npm run build`, `npm run lint` — all green.
-- [ ] 5.3 3-trial A/B on all three clips via `scripts/ab-person-selection.mjs --port 5199`, against
+- [x] 5.3 3-trial A/B on all three clips via `scripts/ab-person-selection.mjs --port 5199`, against
   the criteria pre-registered in design.md, results recorded there as tables. Numbers reported as
-  measured.
+  measured. **All 11 gates pass, no do-not-ship condition triggered.** Demo 1 fires the rule
+  (`rejectedOutsideEvidence` 3/5/5, `detectedSamplesOut` 58 -> 53, exactly the boxless budget) with
+  every segmentation/scoring field and every metric bit-identical; Demo 2 stays a bit-identical
+  no-op; multi-person keeps all four of its boxless frames because they sit inside the evidenced
+  interior.
 
 ## 6. Still open
 

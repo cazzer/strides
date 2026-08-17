@@ -156,6 +156,119 @@ fire on any available clip" — not as "verified live". The inversion it closes 
 (it is a correctness fix for a case these three clips may simply not contain), but a no-op
 measurement is not evidence that it works on footage that does contain it.
 
-## Measured A/B results
+## Measured A/B results (2026-08-16, real GPU)
 
-*(filled in after the run — see below)*
+`scripts/ab-person-selection.mjs`, 3 trials × 3 clips × 2 arms, `--port 5199` (5173 was held by
+another checkout's dev server — the exact hazard #53's reuse refusal exists for; both invocations
+started their own server, `serverProvenance: started by this run`). Renderer confirmed
+`ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)`, not SwiftShader. Both arms are stage-on with
+default config; they differ only in code.
+
+**Provenance caveat, stated plainly:** both reports stamp commit `564ae38`, because the base arm
+was produced by reverting `src/results/retroactivePersonSelection.ts` to `f665303`'s blob
+(`4c9a0ef9`, hash-verified before and after), running, and restoring it. That file is the only
+runtime file this change touches, so the swap is exact — but the commit line in the base report is
+not a valid provenance record; the file's git blob is the real discriminator.
+
+**Environment note:** `@playwright/test` was missing from the shared parent `node_modules` this
+worktree resolves against, so the driver failed at `loadPlaywrightConfig` with its Node-version
+message — a misleading error, since Node was 22.23.1 and the real cause was an unresolvable import.
+Fixed by `npm install` inside the worktree (gitignored, isolated, parent untouched). Worth knowing
+because the driver's error text names the wrong cause.
+
+Medians with `[min..max]` where trials differed.
+
+### Segmentation and scoring — untouched on every clip (H1)
+
+| field | demo1 base | demo1 after | demo2 base | demo2 after | multi base | multi after |
+|---|---|---|---|---|---|---|
+| `segmentCount` | 3 [3..4] | 3 [3..4] | 1 | 1 | 2 | 2 |
+| `bridgedCuts` | 1 | 1 | 0 | 0 | 4 | 4 |
+| `rejectedBelowFloor` | 0 | 0 | 0 | 0 | 30 | 30 |
+| `rejectedOtherSegment` | 7 [7..10] | 7 [7..10] | 0 | 0 | 47 | 47 |
+| `separationRatio` | 2375.04 [2374.07..2375.04] | 2375.04 [2374.07..2375.04] | null | null | 33.5408 | 33.5408 |
+| `segments[0].startTimestamp` | 0.08 | 0.08 | 0.033367 | 0.033367 | 1.75 | 1.75 |
+| `segments[0].endTimestamp` | 7.16 [6.32..7.16] | 7.16 [6.32..7.16] | 1.66833 | 1.66833 | 3.90 | 3.90 |
+| `segments[0].frameCount` | 53 | 53 | 99 | 99 | 123 | 123 |
+| `segments[0].integratedAreaPx` | 24,976,600 [24,966,400..] | 24,976,600 [24,966,400..] | 19,241,700 | 19,241,700 | 3,569,130 | 3,569,130 |
+| `segments[0].medianAreaPx` | 491,133 [491,133..492,789] | 491,133 [491,133..492,789] | 134,081 | 134,081 | 31,670.2 | 31,670.2 |
+
+Identical medians **and identical ranges**, every field, every clip. The change did not reach
+segmentation or scoring.
+
+### What the rule actually did
+
+| field | demo1 base | demo1 after | demo2 base | demo2 after | multi base | multi after |
+|---|---|---|---|---|---|---|
+| `detectedSamplesIn` | 65 [65..66] | 65 [65..66] | 99 | 99 | 204 | 204 |
+| `detectedSamplesOut` | **58 [56..58]** | **53** | 99 | 99 | 127 | 127 |
+| `sampling.detectedFrames` | **58 [56..58]** | **53** | 99 | 99 | 127 | 127 |
+| `rejectedOutsideEvidence` | — (absent) | **5 [3..5]** | — | **0** | — | **0** |
+| boxless budget (`out − segments[0].frameCount`, base) | 3 / 5 / 5 | — | 0 / 0 / 0 | — | 4 / 4 / 4 | — |
+
+Per trial, the identity is exact rather than approximate:
+
+| trial | base `out` | after `rejectedOutsideEvidence` | after `out` |
+|---|---|---|---|
+| demo1 #1 | 56 | 3 | 53 |
+| demo1 #2 | 58 | 5 | 53 |
+| demo1 #3 | 58 | 5 | 53 |
+
+`56 − 3 = 53`, `58 − 5 = 53`, twice — including the jittery trial 1, where the detector found one
+fewer frame. Demo 1's post-selection output is now pinned to `segments[0].frameCount`, with no
+range at all: **every frame that survives is a frame the winner has box evidence for.** The
+previous 56–58 spread was entirely unverified frames.
+
+**The rule discriminates; it does not blanket-null.** The multi-person clip has a boxless budget of
+4 (127 output frames against a 123-detection winner) and `rejectedOutsideEvidence: 0` — all four of
+its boxless frames sit *inside* the winner's evidenced interior and were kept. Demo 1's 3–5 all sit
+outside it and were nulled. Demo 2 has no boxless frames at all, so there was nothing to decide.
+
+### Metrics — nothing moved, anywhere
+
+Every one of the nine metrics' `value` and `confidence` is **identical between arms on all three
+clips**, medians and ranges alike (`armSwingSymmetry`, `cadence`, `footStrikePattern`,
+`kneeFlexion`, `overstriding`, `stepWidth`, `stepWidthCm`, `trunkLean`, `verticalOscillation`,
+`verticalOscillationCm`, `verticalRatio`). Worst median-confidence delta across the whole matrix:
+**0.0000**. `view.view`, `view.confidence` and `view.diagnostics.frameCoverage` are unchanged too.
+
+So Demo 1 gives up 5 detected frames and loses **nothing measurable** for them. The likely
+mechanism — not separately instrumented, so stated as the plausible reading rather than a finding —
+is that a boxless frame is by definition one whose keypoints mostly fail the same 0.3 confidence
+gate `applyRobustness` applies downstream, and these particular frames sit at the clip's temporal
+edges (outside the winner's first/last detection), which `trimToPresenceWindow` trims before any
+metric is computed. Either way, the coverage number moved and no metric did.
+
+### Verdict against the pre-registered criteria
+
+| gate | result |
+|---|---|
+| **H1** segmentation/scoring identical | **PASS** — medians and ranges, all 10 fields, all 3 clips |
+| **H2** `detectedSamplesOut >= segments[0].frameCount` | **PASS** — 9/9 trials (demo1 53≥53, demo2 99≥99, multi 127≥123) |
+| **H3** three-bucket identity + `detectedFrames == detectedSamplesOut` | **PASS** — 9/9 trials, exact |
+| **H4** `out(after) == out(base) − rejectedOutsideEvidence(after)` | **PASS** — exact per trial, not just at the median |
+| **H5** multi-person `separationRatio >= 3`, `medianAreaPx` within 10% | **PASS** — 33.5408 and 31,670.2, both **unchanged**, 0% drift |
+| **A1** Demo 1 keeps #54's healed winner | **PASS** — one winner at [0.08, …], 53 detections, `bridgedCuts` 1, `segmentCount` 3–4, all unchanged |
+| **A2** Demo 1 drop ≤ boxless budget | **PASS** — drop *equals* the budget exactly (3/5/5), the theoretical maximum |
+| **A3** Demo 2 no-op or explained | **PASS** — `rejectedOutsideEvidence: 0`, bit-identical on every captured field, 3/3 trials |
+| **A4** no metric becomes null | **PASS** — no metric changed at all |
+| **A5** no median confidence drops >0.10 | **PASS** — worst delta 0.0000 |
+| **Do-not-ship 1–5** | none triggered |
+
+**Demo 2 stayed a bit-identical no-op** — the single most likely surprise this A/B was run to
+catch did not occur, and the reason is measurable rather than lucky: that clip's winner is one
+segment covering all 99 samples with all 99 detections surviving, so it has no boxless frames for
+the rule to judge.
+
+**The expected-zero clause does not apply.** The rule fired live, on Demo 1, in all three trials.
+Its effect there is exactly what the design predicted and nothing else moved — which is the
+strongest form this measurement could have taken: a targeted change with a measured, bounded,
+fully-accounted effect and a provably empty blast radius.
+
+### What this does NOT establish
+
+The 3–5 Demo 1 frames were nulled because they lie outside the winner's box evidence, not because
+anyone confirmed they show a different person. No keyframe review was done, and none of these three
+clips contains the motivating case in its sharpest form — a bystander that yields a box at 5
+confident keypoints and none at 3, in the same span. That inversion is closed by construction and
+pinned by a paired unit fixture; it is not separately confirmed on real footage here.

@@ -90,8 +90,12 @@ In development builds only, `useVideoAnalysis` auto-logs TWO console lines per r
    the detector found but the selection stage attributed to somebody else counts as *missing*
    there. `personSelection.detectedSamplesIn` preserves the pre-selection count — compare the two
    to tell "the detector found nothing" from "the detector found somebody else". The stage ships
-   **on** by default, so expect the two to DIVERGE — by 13-16 detected frames on the side-view demo
-   clip. They are equal only under a `{ personSelection: { enabled: false } }` override, in which
+   **on** by default, so expect the two to DIVERGE — measured 2026-08-16 on Demo 1 (side view,
+   post-#54 and post-#55): 65-66 in, **53** out, so 12-13 frames, of which 7-10 are
+   `rejectedOtherSegment` and 3-5 `rejectedOutsideEvidence`. Since #55 the out figure equals
+   `segments[0].frameCount` exactly and carries no trial-to-trial range on that clip — every
+   surviving frame is one the winner has box evidence for.
+   They are equal only under a `{ personSelection: { enabled: false } }` override, in which
    case this line reads exactly as it did before the stage existed. `personSelection` itself is
    ALWAYS present (unlike `scaleCalibration`):
    `{ status: 'selected'|'skipped', skipReason, minBoundingBoxAreaPx, totalSamples,
