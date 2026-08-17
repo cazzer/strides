@@ -68,22 +68,22 @@
 
 ## 4. Clip strip with per-clip progress (`strides-kyu.4`)
 
-- [ ] 4.1 Render the strip in the header beside the wordmark, one entry per clip, in clip-session
+- [x] 4.1 Render the strip in the header beside the wordmark, one entry per clip, in clip-session
       order (the same order fusion's source index and the "Combined from clip N of TOTAL" copy use).
-- [ ] 4.2 Each entry renders that clip's poster, with a neutral placeholder while the poster is
+- [x] 4.2 Each entry renders that clip's poster, with a neutral placeholder while the poster is
       `null`.
-- [ ] 4.3 Per-clip progress read from that clip's own `VideoAnalysisState`
+- [x] 4.3 Per-clip progress read from that clip's own `VideoAnalysisState`
       (`MultiClipVideoSession.tsx:76`'s `clipStates`) — **not** from `computeAggregateAnalysisState`.
       No new state machine.
-- [ ] 4.4 Distinguish sampling / processing / ready / error / queued by more than colour. Derive
+- [x] 4.4 Distinguish sampling / processing / ready / error / queued by more than colour. Derive
       *queued* from the already-computed `activeClipId` (`MultiClipVideoSession.tsx:146-150`) — no
       new plumbing (design.md D3).
-- [ ] 4.5 Expose each entry's condition and progress to assistive technology as text, with **at most
+- [x] 4.5 Expose each entry's condition and progress to assistive technology as text, with **at most
       one** live region announcing clip progress for the whole session (design.md D3).
-- [ ] 4.6 Overflow by scrolling the strip, not by wrapping the header.
-- [ ] 4.7 Keep the session `role="status"` line and its scale-pass narration intact — "The centimetre
+- [x] 4.6 Overflow by scrolling the strip, not by wrapping the header.
+- [x] 4.7 Keep the session `role="status"` line and its scale-pass narration intact — "The centimetre
       card reflects scale-pass progress" still requires it (design.md D3).
-- [ ] 4.8 `npm test` and `tsc -b` clean.
+- [x] 4.8 `npm test` and `tsc -b` clean.
 
 ## 5. Clip preview modal (`strides-kyu.5`)
 
