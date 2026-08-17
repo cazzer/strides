@@ -392,6 +392,11 @@ export function EvidenceGallery({
   // to a superseded (or torn-down) run and is dropped along with its canvases. Same idiom as
   // `useVideoAnalysis`'s `runIdRef`.
   const runIdRef = useRef(0)
+  // The other half of superseding a run. `runIdRef` invalidates a stale RESULT; this abandons the
+  // stale WORK, which is a different thing and was the one missing: a superseded pass went on
+  // holding a 4K decoder — and opening one per remaining clip — for results already destined to be
+  // dropped on arrival.
+  const abortRef = useRef<AbortController | null>(null)
   const inputsRef = useRef<ClipEvidenceInputs[] | null>(null)
   // Per-clip, so adding a second clip re-extracts only the new one rather than re-decoding a 4K
   // clip that has not changed.
@@ -406,6 +411,12 @@ export function EvidenceGallery({
     if (sameInputList(inputsRef.current, inputs)) return
     inputsRef.current = inputs
     const runId = (runIdRef.current += 1)
+    // Reached only past the signature guard above, so this fires when a run is genuinely
+    // superseded — never on the every-render re-entry that guard exists to absorb. Putting it in
+    // this effect's CLEANUP would abort on every render instead, killing the live pass.
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     const run = inputs === null ? null : startRun(inputs, cacheRef.current, sourceIndices)
 
     setState(
@@ -413,7 +424,7 @@ export function EvidenceGallery({
     )
 
     if (run !== null && run.batch.length > 0) {
-      void extractSessionEvidence(run.batch).then((extracted) => {
+      void extractSessionEvidence(run.batch, { signal: controller.signal }).then((extracted) => {
         // A superseded run's canvases are simply dropped here — never parented, never cached.
         if (runIdRef.current !== runId) return
         setState(run.finish(extracted))
@@ -421,17 +432,25 @@ export function EvidenceGallery({
     }
   }, [clips, sourceIndices])
 
-  // Teardown. Invalidates any in-flight run — its canvases are dropped rather than parented — and
-  // forgets everything the gallery was holding, so nothing survives an unmount or a clip reset.
+  // Teardown. Invalidates any in-flight run — its canvases are dropped rather than parented — AND
+  // abandons it, so the detached decoder it is holding is released instead of outliving the
+  // component that asked for it. Then forgets everything the gallery was holding, so nothing
+  // survives an unmount or a clip reset.
   //
   // Resetting the input signature is what makes it correct under `StrictMode`, which the app
   // mounts under (`main.tsx`): React's dev-only mount → cleanup → mount cycle would otherwise
   // invalidate the first pass's extraction and then find the signature unchanged on the second,
-  // skip the re-run, and leave the gallery reporting "pulling frames…" forever.
+  // skip the re-run, and leave the gallery reporting "pulling frames…" forever. The abandoned
+  // first pass resolves promptly and the second queues behind it, so the two never overlap.
   useEffect(() => {
     const cache = cacheRef.current
+    // The ref OBJECT, not its value: the controller to abort is whichever one is current at
+    // cleanup time, not the one that existed at mount.
+    const abort = abortRef
     return () => {
       runIdRef.current += 1
+      abort.current?.abort()
+      abort.current = null
       inputsRef.current = null
       reportedRef.current = NO_METRICS
       cache.clear()

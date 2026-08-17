@@ -20,6 +20,15 @@ import { drawEvidenceAnnotation } from './drawEvidenceAnnotations'
  * downstream (output canvas size) and the ones that bound a hang (timeouts). If a change here
  * starts picking a timestamp or a rectangle, it belongs in `evidenceFrames.ts` instead.
  *
+ * **One detached decoder at a time, process-wide, and abandonable.** The ordering lives inside
+ * `extractClipEvidence` — the function that opens the decoder — on a module-level queue, exactly
+ * as `posterFrame.ts` puts it inside `deriveClipPoster`. A `for await` loop can only order the
+ * clips of ONE call, and the overlap that mattered was between SEPARATE calls: the gallery starts
+ * a fresh pass whenever its input signature changes, which it legitimately does mid-session when
+ * the background scale pass grafts `verticalOscillationCm` in. Three 4K decoders were measured
+ * open at once. Alongside it, `EvidenceExtractionOptions.signal` lets a caller abandon a pass
+ * whose result nobody will read, so a superseded pass drops its decoder instead of grinding on.
+ *
  * **Never the visible element.** `useVideoAnalysis` re-arms the canonical `<video>` with
  * `muted`/`loop`/`currentTime = 0`/`play()` the moment a run reaches `phase: 'ready'`, so the clip
  * is actively replaying behind the results while this runs. Seeking it would yank the user's
@@ -100,6 +109,21 @@ export interface EvidenceExtractionOptions {
   /** Backstop on the post-seek presentation grace period (see `FRAME_PRESENTATION_TIMEOUT_MS`).
    * Exhausting it is not a failure — the frame is drawn either way. */
   presentationTimeoutMs?: number
+  /**
+   * Abandons the pass. A pass whose result nobody will read — superseded by a later one, or torn
+   * down with the component that asked for it — must stop holding a 4K decoder rather than grind
+   * through the clips behind it, and this is how a caller says so.
+   *
+   * Abandonment is a VERDICT, never a rejection: an aborted clip resolves `'extraction-failed'`
+   * for every metric that planned images, the same shape a clip that could not be decoded gets.
+   * Nothing here throws, so a caller that never looks at the result cannot produce an unhandled
+   * rejection by walking away from one.
+   *
+   * Checked before a decoder is opened, again after the queue grants a turn, and once per planned
+   * image thereafter — so the worst-case latency between the abort and the decoder being released
+   * is one exemplar, itself bounded by `seekTimeoutMs`.
+   */
+  signal?: AbortSignal
 }
 
 /** One renderable image: the plan it came from, and the canvas its instants were composited into. */
@@ -286,6 +310,8 @@ interface ResolvedOptions {
   loadTimeoutMs: number
   seekTimeoutMs: number
   presentationTimeoutMs: number
+  /** Carried through unresolved — an absent signal means "never abandoned", not a default. */
+  signal: AbortSignal | undefined
 }
 
 function resolveOptions(options: EvidenceExtractionOptions): ResolvedOptions {
@@ -297,6 +323,7 @@ function resolveOptions(options: EvidenceExtractionOptions): ResolvedOptions {
     seekTimeoutMs: options.seekTimeoutMs ?? SEEK_TIMEOUT_MS,
     presentationTimeoutMs:
       options.presentationTimeoutMs ?? FRAME_PRESENTATION_TIMEOUT_MS,
+    signal: options.signal,
   }
 }
 
@@ -419,6 +446,11 @@ function extractionFailed(plan: ClipEvidencePlan): ClipEvidence {
  *
  * Metrics are extracted in the plan's own key order, and every metric that planned at least one
  * image but produced none reports `'extraction-failed'` rather than an empty list.
+ *
+ * An abandoned pass (`options.signal`) abandons the WHOLE clip at the next image boundary, rather
+ * than returning the images it happened to finish: a half-extracted clip reported as `'extracted'`
+ * would be a partial answer wearing a complete one's shape, and nothing downstream could tell the
+ * difference.
  */
 export async function extractPlannedFrames(
   video: HTMLVideoElement,
@@ -434,6 +466,9 @@ export async function extractPlannedFrames(
     }
     const items: ExtractedEvidenceFrame[] = []
     for (const item of entry.items) {
+      // Per IMAGE, not per clip: the point of abandoning is to stop holding a decoder, and a
+      // whole clip's plan is on the order of forty instants.
+      if (resolved.signal?.aborted) return extractionFailed(plan)
       const extracted = await extractFrame(video, item, resolved)
       if (extracted !== null) items.push(extracted)
     }
@@ -446,6 +481,12 @@ export async function extractPlannedFrames(
 }
 
 /**
+ * Tail of the process-wide evidence queue (see `extractClipEvidence`). Always settled or pending —
+ * never rejected, so one failed clip cannot wedge the queue for every clip behind it.
+ */
+let evidenceQueue: Promise<unknown> = Promise.resolve()
+
+/**
  * One clip, one detached decoder, torn down before returning.
  *
  * The object URL is minted from `sourceBlob` and revoked here. `useVideoSource` keeps its own
@@ -455,14 +496,17 @@ export async function extractPlannedFrames(
  * converge on `useVideoSource.load(blob)`; the remote demo URL is fetched to a blob and never
  * assigned to a `src`).
  */
-export async function extractClipEvidence(
-  input: ClipEvidenceInput,
-  options: EvidenceExtractionOptions = {},
+async function decodeClipEvidence(
+  sourceBlob: Blob,
+  plan: ClipEvidencePlan,
+  options: EvidenceExtractionOptions,
 ): Promise<ClipEvidence> {
-  if (input.sourceBlob === null) return extractionFailed(input.plan)
   const resolved = resolveOptions(options)
+  // Re-checked AFTER the queue has granted a turn, not only before the call joined it: a pass
+  // abandoned while it waited must not then go on to open the decoder it was queued for.
+  if (resolved.signal?.aborted) return extractionFailed(plan)
 
-  const url = URL.createObjectURL(input.sourceBlob)
+  const url = URL.createObjectURL(sourceBlob)
   const video = document.createElement('video')
   video.muted = true
   video.playsInline = true
@@ -472,8 +516,8 @@ export async function extractClipEvidence(
 
   try {
     const ready = await waitForDecodedData(video, resolved.loadTimeoutMs)
-    if (!ready) return extractionFailed(input.plan)
-    return await extractPlannedFrames(video, input.plan, options)
+    if (!ready) return extractionFailed(plan)
+    return await extractPlannedFrames(video, plan, options)
   } finally {
     // Drop the decoder before the URL: revoking first leaves the element holding a reference to a
     // now-unresolvable blob.
@@ -484,9 +528,53 @@ export async function extractClipEvidence(
 }
 
 /**
+ * One clip's evidence, **strictly after every extraction already asked for**.
+ *
+ * The wait is imposed here rather than asked of callers, and here specifically because this is the
+ * function that opens the decoder. `extractSessionEvidence`'s `for await` loop orders the clips of
+ * ONE call and can do no more — the gallery starts a whole new pass whenever its input signature
+ * changes, which it legitimately does mid-session when the background scale pass grafts
+ * `verticalOscillationCm` into the fused heuristics, and nothing ordered those passes against each
+ * other. Measured: three 4K decoders open at once on a four-clip session. Chaining onto a
+ * module-level tail makes "one detached decoder exists at a time" a property of this function
+ * instead of a convention every call site has to know about — the same posture, and the same 4K
+ * memory reason, as `deriveClipPoster`'s `posterQueue`.
+ *
+ * Nothing-to-do calls take no place in the queue: a clip with no bytes, and a pass already
+ * abandoned, both open no decoder, so making them wait behind one would be pure latency.
+ */
+export function extractClipEvidence(
+  input: ClipEvidenceInput,
+  options: EvidenceExtractionOptions = {},
+): Promise<ClipEvidence> {
+  const { sourceBlob, plan } = input
+  if (sourceBlob === null || options.signal?.aborted) {
+    return Promise.resolve(extractionFailed(plan))
+  }
+
+  const extraction = evidenceQueue.then(() =>
+    decodeClipEvidence(sourceBlob, plan, options),
+  )
+  // The tail swallows outcomes on purpose. `decodeClipEvidence` names a verdict rather than
+  // throwing on every failure it knows about, but an unforeseen throw must still not leave
+  // `evidenceQueue` rejected — every later clip chains off it, and they would all reject without
+  // ever decoding.
+  evidenceQueue = extraction.then(
+    () => undefined,
+    () => undefined,
+  )
+  return extraction
+}
+
+/**
  * Every clip in a session, strictly one at a time. Sequential by construction rather than by
  * caller convention: Demo 1 is 3840x2160 and Demo 2 is 2160x3840, so N concurrent detached
  * decoders is not an acceptable amount of memory to hold (design R3).
+ *
+ * It needs no serialization and no abandonment logic of its own — both live in
+ * `extractClipEvidence`, which this loop goes through like any other caller. Two overlapping calls
+ * to THIS function therefore interleave their clips one at a time rather than doubling up, which
+ * is the guarantee the loop alone could never give.
  */
 export async function extractSessionEvidence(
   clips: ClipEvidenceInput[],
