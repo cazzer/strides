@@ -1,32 +1,20 @@
-import { useRef } from 'react'
 import { usePoseDetector } from './pose/usePoseDetector'
 import { MultiClipVideoSession } from './results/MultiClipVideoSession'
 
+/**
+ * The whole page is one clip session, header included.
+ *
+ * The header used to live here, but the clip strip inside it hosts each clip's real, painting
+ * `<video>` while that clip is being analysed (`strides-kyu.13` — concealing it costs ~20-24% of
+ * the sampled frames on the playback path), and those elements are owned by the component that
+ * owns the clip list. Splitting the header off from the clips would mean either portalling into a
+ * target that is `null` on the first render, or positioning elements over separately-rendered
+ * entries — both of which fail silently by leaving the element concealed. So the header moved down
+ * with the clips, and what is left here is the one thing genuinely above the session: the shared
+ * pose detector.
+ */
 export function App() {
   const poseDetector = usePoseDetector()
 
-  // "Choose a different video" (now a whole-session reset) unmounts the results column and
-  // hides every video element, so the button's focus needs to land on something that survives
-  // the transition back to the picker — the page heading. Same fix already applied once for the
-  // single-clip flow (WebcamCapture, #4); MultiClipVideoSession now owns the reset logic but the
-  // heading itself stays here, in the header it belongs to.
-  const headingRef = useRef<HTMLHeadingElement>(null)
-
-  return (
-    <>
-      <header className="sticky top-0 z-10 border-b-2 border-black dark:border-white bg-white dark:bg-black px-4 sm:px-6 py-4">
-        <h1
-          ref={headingRef}
-          tabIndex={-1}
-          className="font-display text-2xl font-bold tracking-tight focus:outline-none"
-        >
-          Strides
-        </h1>
-        <p className="font-sans text-sm text-neutral-600 dark:text-neutral-400">
-          Browser-based running form analysis.
-        </p>
-      </header>
-      <MultiClipVideoSession detector={poseDetector.detector} headingRef={headingRef} />
-    </>
-  )
+  return <MultiClipVideoSession detector={poseDetector.detector} />
 }

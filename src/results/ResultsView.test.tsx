@@ -143,29 +143,30 @@ describe('ResultsView', () => {
     expect(analysis.start).toHaveBeenCalledTimes(1)
   })
 
-  it('shows a progress readout with percentage while sampling', () => {
-    renderResultsView({
-      analysis: makeAnalysis({ phase: 'sampling', progress: 0.42 }),
-    })
-    expect(screen.getByRole('status').textContent).toMatch(/42%/)
-  })
-
-  it('shows a processing readout while processing', () => {
-    renderResultsView({
-      analysis: makeAnalysis({ phase: 'processing', progress: 1 }),
-    })
-    expect(screen.getByRole('status').textContent).toMatch(/processing/i)
-  })
-
-  it('mentions the pause when analysis is paused mid-sampling', () => {
-    renderResultsView({
-      analysis: makeAnalysis({
-        phase: 'sampling',
-        progress: 0.2,
-        isPausedMidAnalysis: true,
-      }),
-    })
-    expect(screen.getByRole('status').textContent).toMatch(/paused/i)
+  // Per-clip progress MOVED to the header clip strip (`clipStripStatus.ts`, design.md D3): what
+  // this component could show was `computeAggregateAnalysisState`'s MEAN across clips, and a mean
+  // is exactly the wrong summary when only one clip holds the shared detector at a time. The three
+  // tests that used to assert `42%` / `Processing results…` / the paused suffix here now live
+  // against the strip. What this component must guarantee is the other half of that split:
+  it('renders no per-clip progress readout — that moved onto each clip strip entry', () => {
+    for (const analysis of [
+      makeAnalysis({ phase: 'sampling', progress: 0.42 }),
+      makeAnalysis({ phase: 'processing', progress: 1 }),
+      makeAnalysis({ phase: 'sampling', progress: 0.2, isPausedMidAnalysis: true }),
+    ]) {
+      const { unmount } = render(
+        <ResultsView
+          analysis={analysis}
+          onTryAgain={vi.fn()}
+          onChooseDifferentVideo={vi.fn()}
+        />,
+      )
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+      expect(screen.queryByText(/analyzing/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/processing results/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(/paused/i)).not.toBeInTheDocument()
+      unmount()
+    }
   })
 
   it('announces completion once ready', () => {

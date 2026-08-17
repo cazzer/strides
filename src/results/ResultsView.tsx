@@ -21,21 +21,14 @@ export interface ResultsViewProps {
   evidenceMetrics?: ReadonlySet<MetricId>
 }
 
-function progressLabel(
-  phase: VideoAnalysisState['phase'],
-  progress: number,
-): string {
-  if (phase === 'sampling') {
-    return `Analyzing… ${Math.round(progress * 100)}%`
-  }
-  return 'Processing results…'
-}
-
 /**
  * Presentational composition of the analysis controls and results — mirrors
  * `QualityWarningBanner`'s pattern of taking already-derived props and never calling hooks
- * itself. Renders the "Analyze" button, a progress readout while sampling/processing, and once
- * `phase === 'ready'`, the metrics panel (which itself renders the vertical-oscillation chart).
+ * itself. Renders the "Analyze" button, the session status line, and once `phase === 'ready'`,
+ * the metrics panel (which itself renders the vertical-oscillation chart).
+ *
+ * Per-clip sampling progress is NOT here — it moved onto each clip's own header strip entry
+ * (`clipStripStatus.ts`), because this component only ever saw the aggregate's mean across clips.
  */
 export function ResultsView({
   analysis,
@@ -43,8 +36,7 @@ export function ResultsView({
   onChooseDifferentVideo,
   evidenceMetrics,
 }: ResultsViewProps) {
-  const { phase, progress, isPausedMidAnalysis, heuristics, error, start } =
-    analysis
+  const { phase, heuristics, error, start } = analysis
   // A 'done' scale pass includes the measured-but-unfittable graft, where a grafted metric's
   // value is still null and the panel lists it as not measured — saying a metric "was added"
   // there would be false. Shared with the 'failed' branch: for the reader both outcomes are the
@@ -94,14 +86,20 @@ export function ResultsView({
         </button>
       </div>
 
-      {(phase === 'sampling' || phase === 'processing') && (
-        <p role="status">
-          {progressLabel(phase, progress)}
-          {isPausedMidAnalysis &&
-            ' — paused, resume playback to continue analyzing'}
-        </p>
-      )}
+      {/*
+        The per-clip progress readout that used to sit here is gone, MOVED rather than deleted: it
+        was rendered from `computeAggregateAnalysisState`'s MEAN progress across clips, which is
+        exactly the wrong summary — only one clip holds the shared detector at a time, so an
+        average hides which clip is actually working. Each clip now shows its own `phase`/`progress`
+        on its own header strip entry, carrying the identical strings (`Analyzing… 42%`,
+        `Processing results…`, and the paused suffix) on the clip they belong to. See
+        `clipStripStatus.ts` and design.md D3.
 
+        The `role="status"` line below is a SESSION fact and stays. "The centimetre card reflects
+        scale-pass progress" requires it be always-visible, and both `e2e/multiPersonAcquisition`
+        and `scripts/ab-person-selection.mjs` wait on its "Analysis complete." — which is also why
+        no strip entry is allowed to say those two words.
+      */}
       {phase === 'ready' && (
         <p role="status">
           Analysis complete.
