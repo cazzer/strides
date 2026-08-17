@@ -53,6 +53,7 @@ function selected(): PersonSelectionDiagnostics {
     detectedSamplesOut: 10,
     rejectedBelowFloor: 0,
     rejectedOtherSegment: 0,
+    rejectedOutsideEvidence: 0,
     segmentCount: 1,
     bridgedCuts: 0,
     segments: [],
