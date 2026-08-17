@@ -66,10 +66,42 @@ export interface RetroactivePersonSelectionConfig {
  *
  * Revert with `enabled: false` here, or per-run via
  * `window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = { personSelection: { enabled: false } }`.
- * The real fix is a splice-tolerant segmentation rule (design.md follow-up 1, confirmed against
- * the trace to heal this case); the two open correctness items in design.md's Risks table
+ * The fix is a splice-tolerant segmentation rule (design.md follow-up 1), built in #54 — plus a
+ * widened centre-speed bound, which is what actually unblocked it. See the update below. The two
+ * open correctness items in design.md's Risks table
  * (boxless survival inside the winner's span, primary/scale-pass selection divergence) were
  * documented as prerequisites for enabling and are now live rather than pending.
+ *
+ * UPDATE (2026-08-16, issue #54): the wedge above is FIXED, and the paragraph stands as the record
+ * of what was accepted in the interim, not as current behaviour. Measured live (3 trials, real GPU,
+ * vs. the same clip at the previous default): the runner's track is now ONE segment spanning
+ * [0.08, 6.32] with 53 detections — the 5-frame prefix, the wedge frame, and the 47-frame tail all
+ * merged — where before the winner was the 47-frame tail alone starting at t=4.36. `segmentCount`
+ * 5-6 -> 3-4, `rejectedOtherSegment` 13-16 -> 7-10, detected frames 52 -> 58, `bridgedCuts: 1`.
+ *
+ * It took TWO changes, and the order matters for anyone re-deriving this. The bridge rule alone was
+ * measured to be a complete no-op here (`bridgedCuts: 0`, every field bit-identical). Traced frame
+ * by frame: the bridge asked exactly the intended question about exactly the intended pair — t=4.24
+ * (167,867 px² at (574,849)) against t=4.36 (108,121 px² at (824,738)), 0.12s apart, inside the
+ * time-gap tolerance — and `isBoundingBoxContinuous` said NO. Those two boxes are disjoint in x by
+ * 0.49 px, so IoU is exactly 0 (issue #54's premise of "IoU ~= 0.13" is WRONG), and the centre-speed
+ * term then had to carry position alone: 273.2 px of travel against a 253.9 px budget at 3 sides/s,
+ * short by 7.6%. The area ratio (1.553) passes and is never consulted, because
+ * `positionContinuous && …` short-circuits first. So the binding constraint was the BOUND, not the
+ * rule's shape — hence `maxCenterSpeedSidesPerSecond: 4` below and design.md's D4. Keep that
+ * measurement: it is the whole evidence base for the bound, and re-deriving it costs a live run.
+ *
+ * The rule earns its keep independently of Demo 1: on `e2e/fixtures/multiperson-track.mp4` it fires
+ * 4 times, takes `segmentCount` 8 -> 2 and the winner 119 -> 123 frames, without merging a
+ * bystander (winner `medianAreaPx` moves 0.84%, `separationRatio` stays 33.5). Demo 2 stays a
+ * bit-identical no-op under both changes.
+ *
+ * Note that Demo 1's `segmentCount` 1 / zero-rejection condition is STILL not met (it measures 3-4
+ * with 7-10 rejections), and remains a JOINT #54 + #57 outcome: five phantom detections of
+ * 2,279-8,432 px² clear the 4K area floor of 1,659 px² and fail the ratio bound at ~19.9x — a
+ * transition the bridge cannot merge and should not. Those three phantom segments are all that is
+ * left, and every one of them lies OUTSIDE the winner's span. Demo 1 keeps `segmentCount >= 2`
+ * until #57's re-derived floor demotes them to `rejectedBelowFloor`, where D5 makes them harmless.
  *
  * `minBoundingBoxAreaFraction: 2e-4` — 415 px² at 1080p, 1659 px² at 4K. Derived as roughly the
  * geometric mean of the largest measured garbage detection on the repro clip (183 px²) and the
@@ -91,11 +123,30 @@ export interface RetroactivePersonSelectionConfig {
  * area swing with a simultaneous ~400px centroid jump across two consecutive frames of one person.
  * Extra margin here is cheap, but it is not sufficient — see design.md's D7: that wedge's first
  * cut is a POSITION failure (IoU 0, ~12 sides/s against a 3 sides/s bound) that no value of this
- * bound can heal, which is why the real fix is a splice-tolerant segmentation rule rather than a
- * wider ratio — a follow-up the stage now ships ahead of rather than waiting on.
+ * bound can heal, which is why the fix is a splice-tolerant segmentation rule (issue #54, the cut
+ * loop below) rather than a wider ratio. That rule changes WHICH PAIR continuity is asked about,
+ * leaving this bound's own meaning untouched — see `maxCenterSpeedSidesPerSecond` below for the
+ * bound that did have to move, and design.md's D4 for why.
  *
- * `maxCenterSpeedSidesPerSecond: 3` — the same bound the online gate uses, for the same reason
- * (a runner crossing a 1920px frame in ~1.5s is ~1.8 sides/s against a ~700px box).
+ * `maxCenterSpeedSidesPerSecond: 4` vs. the online continuity gate's 3 — deliberately looser, for
+ * the SAME asymmetric-false-reject reason `maxAreaRatio` is (above), applied to the bound that had
+ * been left at parity. A runner crossing a 1920px frame in ~1.5s is ~1.8 sides/s against a ~700px
+ * box, so 3 was never a tight bound on real locomotion — what it is actually bounding here is
+ * intra-person CENTROID noise, and `deriveBoundingBox`'s confidence gate moves the centroid
+ * whenever limbs drop out, exactly as it moves the area. Both halves of the position test are
+ * perturbed by the same mechanism the area bound already got margin for.
+ *
+ * Sized by the measured Demo 1 wedge (design.md D4): the pair the splice-tolerance bridge must
+ * merge, t=4.24 against t=4.36, travels 273.2px against a 253.9px budget at 3 sides/s — it misses
+ * by 7.6%, and the boxes are disjoint in x by 0.49px so IoU is exactly 0 and cannot rescue it.
+ * **4 is chosen because it is the same 4/3 loosening `maxAreaRatio` already carries**, making the
+ * offline stage uniformly 4/3 more permissive than the online gate for one stated reason — NOT
+ * because it is the smallest value that clears that measurement. A value fitted to the shortfall
+ * (~3.3) would sit 2% above a single clip's failure point; 4 clears it by ~24%.
+ *
+ * This loosens the ADJACENT check as well as the bridge — `isContinuousPair` is deliberately one
+ * helper — so segmentation is uniformly more permissive, not just more forgiving of splices. The
+ * multi-person merge gate is what bounds that; see design.md D4 and the A/B tables.
  *
  * `maxContinuityGapSeconds: 1.0` — this pipeline's sampling gaps are tens of milliseconds; a
  * full second without a single usable detection is a different scene, not a stride.
@@ -106,7 +157,7 @@ export const DEFAULT_RETROACTIVE_PERSON_SELECTION_CONFIG: RetroactivePersonSelec
   minKeypointConfidence: 0.3,
   minConfidentKeypoints: 4,
   maxAreaRatio: 4,
-  maxCenterSpeedSidesPerSecond: 3,
+  maxCenterSpeedSidesPerSecond: 4,
   maxContinuityGapSeconds: 1.0,
 }
 
@@ -155,6 +206,14 @@ export interface PersonSelectionDiagnostics {
    * here). */
   rejectedOtherSegment: number
   segmentCount: number
+  /** How many times a cut was DECLINED because the surviving detections either side of the
+   * offending one were continuous with each other. Counts bridge EVENTS, not boundaries: one event
+   * removes the boundary in front of the frame and prevents the one behind it from ever being
+   * evaluated, so the measured Demo 1 wedge reports 1, not 2. Non-zero on a clip that had no wedge
+   * means the rule is firing where it should not — this field exists so that a healed clip and a
+   * clip that never needed healing are distinguishable, which a smaller `segmentCount` alone
+   * cannot do. */
+  bridgedCuts: number
   /** Sorted by `integratedAreaPx` DESCENDING and capped at 10, so `segments[0]` is always the
    * winner. Capped because this is a console-logged dev diagnostic and a pathological clip could
    * otherwise produce hundreds of entries; `segmentCount` stays uncapped. */
@@ -194,6 +253,7 @@ function skipped(
       rejectedBelowFloor: 0,
       rejectedOtherSegment: 0,
       segmentCount: 0,
+      bridgedCuts: 0,
       segments: [],
       separationRatio: null,
     },
@@ -219,7 +279,14 @@ function skipped(
  *     a floor rejection is not evidence about anybody's continuity.
  *  3. Cut a segment boundary between consecutive SURVIVING detections whenever they fail
  *     `isBoundingBoxContinuous` (the online gate's own geometry) or are more than
- *     `maxContinuityGapSeconds` apart.
+ *     `maxContinuityGapSeconds` apart — EXCEPT when the surviving detections either side of the
+ *     offending one pass that same test (time-gap term included) against each other, in which case
+ *     the cut is declined and counted in `bridgedCuts`. One collapsed detection is a measurement
+ *     failure on a single frame, not evidence of a second subject, and cutting on it strands
+ *     everything before it in a losing segment. The tolerance spans exactly ONE detection, by
+ *     construction rather than by a counter: the reference does not advance across a bridged
+ *     frame, so the next comparison is against a reference already verified continuous with it.
+ *     Two consecutive failures still cut.
  *  4. Score each segment by INTEGRATED bounding-box area — area summed across its frames, which
  *     folds apparent size and duration into one number with no weights to tune. Highest wins.
  *  5. Null every frame outside the winner.
@@ -302,26 +369,76 @@ export function selectRetroactivePersonOfInterest(
     survivingAreaPx[i] = area
   }
 
+  // The one continuity question this stage asks, of whichever pair it is asking about. BOTH the
+  // adjacent check and the splice-tolerance bridge below go through here, deliberately: routing
+  // them through one function makes it structurally impossible to drop the
+  // `maxContinuityGapSeconds` term from the bridge pair, which is the edit that would let a bridge
+  // merge two detections separated only by time (geometry alone reads a same-position,
+  // similar-size pair 4 seconds apart as perfectly continuous).
+  //
+  // Parameters are CHRONOLOGICAL — `reference` is the earlier index, `candidate` the later — which
+  // is the inverse of `isBoundingBoxContinuous`'s own `(candidate, reference)` argument order.
+  // The relation is NOT symmetric: the speed bound normalises displacement by the REFERENCE's own
+  // side length, so swapping the pair can change the answer.
+  const isContinuousPair = (
+    referenceIndex: number,
+    candidateIndex: number,
+  ): boolean => {
+    const elapsedSeconds =
+      samples[candidateIndex].timestamp - samples[referenceIndex].timestamp
+    return (
+      elapsedSeconds <= config.maxContinuityGapSeconds &&
+      isBoundingBoxContinuous(
+        // Non-null by construction: both callers only ever pass surviving indices.
+        surviving[candidateIndex] as BoundingBoxPx,
+        surviving[referenceIndex] as BoundingBoxPx,
+        elapsedSeconds,
+        config,
+      )
+    )
+  }
+
+  /** The next surviving index strictly after `after`, or `-1` if there is none. Amortised O(n)
+   * across the whole loop: consecutive scans cover disjoint ranges, since a scan at `i` covers
+   * `(i, bridgeTarget]` and the next cannot begin before `bridgeTarget`. */
+  const nextSurvivingIndex = (after: number): number => {
+    for (let j = after + 1; j < samples.length; j += 1) {
+      if (surviving[j] !== null) return j
+    }
+    return -1
+  }
+
   const segmentStarts: number[] = []
+  let bridgedCuts = 0
   let previousIndex = -1
   for (let i = 0; i < samples.length; i += 1) {
-    const box = surviving[i]
-    if (box === null) continue
+    if (surviving[i] === null) continue
     if (previousIndex === -1) {
       segmentStarts.push(i)
-    } else {
-      const elapsedSeconds = samples[i].timestamp - samples[previousIndex].timestamp
-      const continuous =
-        elapsedSeconds <= config.maxContinuityGapSeconds &&
-        isBoundingBoxContinuous(
-          box,
-          // Non-null by construction: `previousIndex` only ever holds a surviving index.
-          surviving[previousIndex] as BoundingBoxPx,
-          elapsedSeconds,
-          config,
-        )
-      if (!continuous) segmentStarts.push(i)
+      previousIndex = i
+      continue
     }
+    if (isContinuousPair(previousIndex, i)) {
+      previousIndex = i
+      continue
+    }
+    // Splice tolerance: one collapsed detection is a measurement failure on a single frame, not
+    // evidence of a second subject. Ask the leave-one-out question — is the discontinuity still
+    // there with the suspect frame removed? — and decline the cut if it is not. This can only ever
+    // merge a pair the UNMODIFIED predicate already accepts, so it cannot admit a transition the
+    // adjacent check would have rejected.
+    const bridgeTarget = nextSurvivingIndex(i)
+    if (bridgeTarget !== -1 && isContinuousPair(previousIndex, bridgeTarget)) {
+      bridgedCuts += 1
+      // `previousIndex` deliberately NOT advanced: `i` must not become the reference, or the next
+      // iteration compares against the frame we just declined to cut on and cuts there instead —
+      // healing one boundary while re-stranding everything after it. Leaving the reference put
+      // also bounds the tolerance to exactly one detection with no counter: the next surviving
+      // frame is compared against a reference we have just verified it is continuous with, so it
+      // cannot bridge again. Two consecutive bad frames still cut.
+      continue
+    }
+    segmentStarts.push(i)
     previousIndex = i
   }
 
@@ -402,6 +519,7 @@ export function selectRetroactivePersonOfInterest(
       rejectedBelowFloor,
       rejectedOtherSegment,
       segmentCount: scored.length,
+      bridgedCuts,
       segments: ranked.slice(0, MAX_REPORTED_SEGMENTS).map((segment) => ({
         startTimestamp: segment.startTimestamp,
         endTimestamp: segment.endTimestamp,
