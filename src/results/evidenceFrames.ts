@@ -365,6 +365,22 @@ export function resolveInstantKeypoints(
  * one side would make `sideHip.x - hipMid.x` identically zero and the sign meaningless, which is
  * the exact bug that file was fixed for.
  *
+ * **"Verbatim" holds for the PRIMARY pass only — it is FALSE for the two GRAFTED metrics.**
+ * `stepWidthCm` and `verticalOscillationCm` arrive from the background MediaPipe scale pass
+ * (`scalePassGraft.ts:43-50`), which carries its exemplars' timestamps but NOT its
+ * `RobustPoseFrame[]`: "the only frames any consumer holds are the primary pass's". Every caller
+ * of this function passes a primary-pass (MoveNet) frame snapped to the grafted timestamp, so for
+ * those two metrics the polarity below is recomputed from a DIFFERENT detector's estimate of the
+ * same instant, not from the frame the metric measured. At a near-frontal step-width strike the
+ * two hips sit a few pixels apart and the two detectors can order them oppositely, so the sign
+ * here can be the inverse of the one `stepWidth.ts:222` used — which would label a crossover
+ * strike as landing on its own side, contradicting that file's own crossover caveat (`:273-277`).
+ *
+ * The annotation layer therefore refuses to orient any mark for a grafted metric — see
+ * `GRAFTED_METRICS` in `evidenceAnnotations.ts`, which is where that decision is recorded. This
+ * function keeps returning the value, because it is still the correct polarity for the frame it
+ * was handed; what is not correct is attributing it to a grafted metric's measurement.
+ *
  * `null` rather than the metric's `|| 1` fallback where the sign is zero. The metric needs a
  * number to finish an arithmetic expression and records the frame as `degenerate` so the exemplar
  * is rejected; a plan has no such obligation and an annotation must simply not claim a direction
