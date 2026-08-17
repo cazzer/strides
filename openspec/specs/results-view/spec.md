@@ -46,13 +46,22 @@ failures.
   run's promise rejects
 
 ### Requirement: Analysis pipeline ordering
-The system SHALL sort sampled frames by timestamp, then run `applyRobustness`, then
-`computeFormHeuristics`, in that order, before reporting `phase: 'ready'`.
+The system SHALL sort sampled frames by timestamp, then run the retroactive person-selection stage
+over the sorted samples, then run `applyRobustness` over that stage's output, then
+`computeFormHeuristics`, in that order, before reporting `phase: 'ready'`. The person-selection
+stage's output SHALL be what both `applyRobustness` and the diagnostics aggregation see, so the
+metrics, the overlay and the diagnostics all describe the same person.
 
 #### Scenario: Samples are sorted before robustness processing
 - **WHEN** sampling resolves with a set of samples not already in timestamp order (e.g. due to
   mid-analysis scrubbing)
 - **THEN** `applyRobustness` receives the samples sorted ascending by `timestamp`
+
+#### Scenario: Person selection runs between the sort and robustness
+- **WHEN** the sorted samples contain detections belonging to more than one person and the
+  selection stage is enabled
+- **THEN** `applyRobustness` receives the selected subject's samples, with every other sample's
+  frame replaced by `null`, and the diagnostics are computed from that same selected sequence
 
 #### Scenario: Heuristics are computed from the robustness output, not raw samples
 - **WHEN** the robustness pass produces `RobustPoseFrame[]`
@@ -264,7 +273,7 @@ a blank field.
 
 ### Requirement: Metrics panel readouts with measurability and confidence tiers
 
-The system SHALL display, for each of the nine `MetricId`s in `FormHeuristicsResult`, its value in
+The system SHALL display, for each of the ten `MetricId`s in `FormHeuristicsResult`, its value in
 plain language and a label naming the metric, partitioned into three tiers that determine how —
 and whether — a value renders at all, rather than a single uniform card style for every metric.
 Exclusion is reserved for metrics that are **structurally unmeasurable** — nothing was measured
@@ -382,53 +391,69 @@ The system SHALL, after an analysis run reaches `phase: 'ready'` on a primary pa
 no real-world scale, run one background sampling pass over the same video using a dedicated
 MediaPipe Pose Landmarker detector, compute form heuristics over that pass's frames through the
 identical sort → robustness → presence-trim → heuristics pipeline the primary pass uses, and —
-when the scale pass's `verticalOscillationCm.calibration` is non-null — replace ONLY the
-displayed result's `verticalOscillationCm` with the scale pass's, carrying its `calibration` by
-reference and appending a provenance sentence (stating in plain language that the number came
-from a second look at the same clip, naming no backend or model) to its caveat. Every
-other metric and the `view` result SHALL remain reference-identical to the primary pass's, and
-the primary run's `diagnostics` SHALL remain the primary pass's own. The pass SHALL be tracked
-as a status machine (`'idle' | 'pending' | 'running' | 'done' | 'failed' | 'skipped'`) on the
-analysis state; it SHALL be skipped (never started) when the primary result already carries a
-measured scale (`verticalOscillationCm.calibration !== null`) or when the scale-pass config's
-kill switch is off — the config being resolvable in development builds via a
-`window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__` override, defaulting to enabled. Any scale-pass
-failure — detector unavailable, playback or sampling failure, a wall-clock watchdog expiry of at
-least `max(30s, 3 × clip duration)`, or a completed pass that measured no scale — SHALL mark the
-pass `'failed'` and leave the primary result untouched. A `reset()` or a newly loaded clip SHALL
-stop an in-flight scale pass, and a superseded pass's late resolution SHALL never write state,
-under the same run-identity guard the primary run uses.
+when the scale pass's `verticalOscillationCm.calibration` is non-null — replace the displayed
+result's `verticalOscillationCm` AND `stepWidthCm` with the scale pass's own versions of each,
+carrying `verticalOscillationCm.calibration` by reference (`stepWidthCm` has no such calibration
+object to carry) and appending a shared provenance sentence (stating in plain language that the
+number came from a second look at the same clip, naming no backend or model) to each metric's own
+caveat. The two grafted metrics SHALL be independent of each other: a scale pass whose
+`verticalOscillationCm.calibration` is non-null but whose own `stepWidthCm` detected no
+footstrikes SHALL still graft `stepWidthCm`'s null value and its own caveat, plus provenance —
+never withholding a successfully-grafted `verticalOscillationCm` because the sibling metric came
+up empty, and never fabricating a `stepWidthCm` result the pass didn't itself produce. Every other
+metric and the `view` result SHALL remain reference-identical to the primary pass's, and the
+primary run's `diagnostics` SHALL remain the primary pass's own. The pass SHALL be tracked as a
+status machine (`'idle' | 'pending' | 'running' | 'done' | 'failed' | 'skipped'`) on the analysis
+state; it SHALL be skipped (never started) when the primary result already carries a measured
+scale (`verticalOscillationCm.calibration !== null` — the same underlying fact that gates
+`stepWidthCm` too, so this single check governs whether the pass runs at all for either metric) or
+when the scale-pass config's kill switch is off — the config being resolvable in development
+builds via a `window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__` override, defaulting to enabled. Any
+scale-pass failure — detector unavailable, playback or sampling failure, a wall-clock watchdog
+expiry of at least `max(30s, 3 × clip duration)`, or a completed pass that measured no scale —
+SHALL mark the pass `'failed'` and leave the primary result untouched. A `reset()` or a newly
+loaded clip SHALL stop an in-flight scale pass, and a superseded pass's late resolution SHALL
+never write state, under the same run-identity guard the primary run uses.
 
 #### Scenario: A completed scale pass grafts the centimetre metric and nothing else
 
 - **WHEN** the primary pass reaches `'ready'` with `verticalOscillationCm.calibration: null` and
   the background scale pass completes with a non-null `calibration`
-- **THEN** the displayed heuristics' `verticalOscillationCm` becomes the scale pass's (its
-  `calibration` by reference, its caveat ending with the provenance sentence), every other
-  metric and `view` remain reference-identical to the primary pass's, the run's `diagnostics`
-  remain the primary pass's, and the pass's status is `'done'` with the scale pass's own
-  diagnostics attached
+- **THEN** the displayed heuristics' `verticalOscillationCm` AND `stepWidthCm` both become the
+  scale pass's own (the former's `calibration` by reference, both caveats ending with the
+  provenance sentence), every other metric and `view` remain reference-identical to the primary
+  pass's, the run's `diagnostics` remain the primary pass's, and the pass's status is `'done'`
+  with the scale pass's own diagnostics attached
+
+#### Scenario: The two grafted metrics succeed or fail independently
+
+- **WHEN** the scale pass completes with a non-null `verticalOscillationCm.calibration` but its own
+  `stepWidthCm` detected no footstrikes (a null value with its own caveat)
+- **THEN** the displayed `verticalOscillationCm` grafts a non-null value with the provenance
+  sentence appended, AND the displayed `stepWidthCm` grafts a null value with its own
+  no-footstrikes caveat plus the provenance sentence — neither metric's outcome is suppressed or
+  altered by the other's
 
 #### Scenario: The pass is skipped when the primary pass already measured scale
 
 - **WHEN** the primary pass reaches `'ready'` with a non-null
   `verticalOscillationCm.calibration` (e.g. a mediapipe-primary dev override)
 - **THEN** no scale pass starts, its status is `'skipped'` with reason `'primary-scale'`, and
-  the displayed result is exactly the primary pass's
+  the displayed result is exactly the primary pass's for both metrics
 
 #### Scenario: The kill switch skips the pass
 
 - **WHEN** the resolved scale-pass config has `enabled: false` (in development, via
   `window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__`) and a run reaches `'ready'`
-- **THEN** no scale pass starts, its status is `'skipped'` with reason `'disabled'`, and the
-  centimetre metric renders exactly as it would without this capability
+- **THEN** no scale pass starts, its status is `'skipped'` with reason `'disabled'`, and both
+  centimetre metrics render exactly as they would without this capability
 
 #### Scenario: A failed scale pass leaves the primary result untouched
 
 - **WHEN** the scale pass fails — its detector cannot be created, its sampling rejects, its
   watchdog expires, or it completes without measuring any scale
 - **THEN** the pass's status is `'failed'`, and the displayed heuristics, diagnostics, and phase
-  are exactly what the primary pass produced
+  are exactly what the primary pass produced for both metrics
 
 #### Scenario: A measured-but-unfittable scale pass still grafts, with its reason
 
@@ -444,7 +469,8 @@ under the same run-identity guard the primary run uses.
   a scale pass is `'running'`
 - **THEN** the pass's sampling handle is stopped before the new run samples (a still-attached
   scale sampler must never run inference concurrently with a primary pass), and any late
-  resolution of its promise writes nothing — no graft, no status change on the new run's state
+  resolution of its promise writes nothing — no graft of either metric, no status change on the
+  new run's state
 
 #### Scenario: A user pause mid-pass fails the pass fast
 
@@ -456,54 +482,84 @@ under the same run-identity guard the primary run uses.
 
 ### Requirement: The centimetre card reflects scale-pass progress
 
-The system SHALL, while a scale pass is `'pending'` or `'running'` and `verticalOscillationCm`
-is excluded with a `null` value, render that metric's excluded entry with a hint, in plain
-language, that real-world scale is still being measured by a second look at the clip, in place
-of its availability caveat. When the pass concludes, the metric SHALL render through the
+The system SHALL, while a scale pass is `'pending'` or `'running'` and either `verticalOscillationCm`
+or `stepWidthCm` is excluded with a `null` value, render that metric's excluded entry with a hint,
+in plain language, that real-world scale is still being measured by a second look at the clip, in
+place of its availability caveat. When the pass concludes, each metric SHALL render through the
 existing confidence-tier rules with no scale-pass-specific card treatment: a grafted non-null
 value lands in whatever tier its own confidence puts it in (its caveat, including the
 provenance sentence, rendering per that tier's existing rules). After a `'failed'` pass, a
-null-valued entry SHALL say that a second look at the clip couldn't measure real-world scale
-(the availability caveat alone would imply the capability is absent when the app just ran it);
-after a `'skipped'` pass it SHALL fall back to the metric's own caveat verbatim, exactly as it
-renders today. The always-visible analysis status line (`role="status"`) SHALL narrate the pass
-— an in-progress sentence while `'pending'`/`'running'` and a one-sentence outcome on `'done'`
-or `'failed'`, each in plain language naming no backend, model, or detection machinery — since
-the excluded-list hint may sit below the fold and the status line is the panel's only
-screen-reader announcement path. The `'done'` outcome SHALL match whether the metric actually
-gained a value: a completed pass whose grafted metric still has a `null` value (the
-measured-but-unfittable graft) reads as couldn't-add, never as a metric having been added.
+null-valued entry for either metric SHALL say that a second look at the clip couldn't measure
+real-world scale (the availability caveat alone would imply the capability is absent when the app
+just ran it); after a `'skipped'` pass it SHALL fall back to the metric's own caveat verbatim,
+exactly as it renders today. The always-visible analysis status line (`role="status"`) SHALL
+narrate the pass — a count-agnostic in-progress sentence while `'pending'`/`'running'` (since how
+many of the two scale-pass-backed metrics will end up gaining a value isn't known until the pass
+concludes) and a one-sentence outcome on `'done'` or `'failed'`, each in plain language naming no
+backend, model, or detection machinery — since the excluded-list hint may sit below the fold and
+the status line is the panel's only screen-reader announcement path. The `'done'` outcome SHALL
+count how many of the two scale-pass-backed metrics actually gained a non-null value (`0`, `1`, or
+`2`) and pluralize its wording off that count — `0` reads as couldn't-add (never as a metric
+having been added), `1` reads as singular ("1 more metric"), `2` reads as plural ("2 more
+metrics") — never assuming a fixed count of exactly one.
 
 #### Scenario: The excluded entry hints at the in-flight pass
 
 - **WHEN** the scale pass is `'pending'` or `'running'` and `verticalOscillationCm.value` is
-  `null`
-- **THEN** the excluded section's entry for it shows the measuring-scale hint instead of the
-  availability caveat
+  `null`, or `stepWidthCm.value` is `null`
+- **THEN** the excluded section's entry for that metric shows the measuring-scale hint instead of
+  the availability caveat
 
 #### Scenario: A grafted value renders as an ordinary tiered card
 
-- **WHEN** the scale pass completes and grafts a non-null `verticalOscillationCm` (measured
-  values are never excluded for low confidence, per the exclude-only-unmeasurable-metrics rule)
-- **THEN** the metric renders as a card in its confidence tier, its note carrying the grafted
+- **WHEN** the scale pass completes and grafts a non-null `verticalOscillationCm` or `stepWidthCm`
+  value (measured values are never excluded for low confidence, per the
+  exclude-only-unmeasurable-metrics rule)
+- **THEN** that metric renders as a card in its confidence tier, its note carrying the grafted
   caveat with the provenance sentence — no new card state, styling, or tier is introduced
 
 #### Scenario: A failed pass says the attempt happened
 
-- **WHEN** the scale pass is `'failed'` and `verticalOscillationCm.value` is `null`
-- **THEN** the excluded entry says a second look at the clip couldn't measure real-world scale
-  — not the bare availability caveat, which would imply the capability was never exercised
+- **WHEN** the scale pass is `'failed'` and `verticalOscillationCm.value` is `null`, or
+  `stepWidthCm.value` is `null`
+- **THEN** that metric's excluded entry says a second look at the clip couldn't measure
+  real-world scale — not the bare availability caveat, which would imply the capability was never
+  exercised
 
 #### Scenario: A skipped pass falls back to the caveat
 
-- **WHEN** the scale pass is `'skipped'` and `verticalOscillationCm.value` is `null`
-- **THEN** the excluded entry shows the metric's own caveat verbatim, with no in-progress hint
+- **WHEN** the scale pass is `'skipped'` and a metric's `value` is `null`
+- **THEN** the excluded entry shows that metric's own caveat verbatim, with no in-progress hint
 
 #### Scenario: The status line narrates the pass
 
 - **WHEN** the analysis is `'ready'` and the scale pass is `'pending'`/`'running'`, then later
   `'done'` or `'failed'`
-- **THEN** the `role="status"` completion line appends an in-progress sentence while the pass
-  runs and a one-sentence outcome when it concludes — the `'done'` outcome matching whether the
-  grafted metric actually gained a value; a `'skipped'` pass appends nothing
+- **THEN** the `role="status"` completion line appends a count-agnostic in-progress sentence
+  while the pass runs, and on conclusion a one-sentence outcome that names how many of the two
+  scale-pass-backed metrics actually gained a value — singular wording at exactly one, plural
+  wording at two, the couldn't-add sentence at zero; a `'skipped'` pass appends nothing
+
+### Requirement: The step-width card renders as an absolute centimetre quantity, unavailable when scale wasn't measured
+
+The system SHALL render `stepWidthCm` with description text stating that its number is a real
+distance with no denominator, distinguishing it from every other metric on the panel except
+`verticalOscillationCm`. The card SHALL render its value in centimetres with one decimal place and
+no percent sign — the same formatting `verticalOscillationCm` uses, since both share the
+`'centimeters'` unit — and SHALL render as excluded, with its availability caveat, when its
+`value` is `null` rather than as an error or a blank field.
+
+#### Scenario: A resolved step-width value renders with one decimal place, no percent sign
+
+- **WHEN** `stepWidthCm.value` is a finite number, for example `8.2`
+- **THEN** the panel renders it as `"8.2 cm"` — one decimal place, a `cm` unit suffix, and no `%`
+  character
+
+#### Scenario: An unavailable step-width card reads as an availability statement, not an error
+
+- **WHEN** `stepWidthCm.value` is `null`
+- **THEN** the metric is excluded from the card grid, and its `caveat` text (saying in plain
+  language what would be needed) is surfaced verbatim in the excluded section, the same treatment
+  every other null-valued metric already receives — no distinct error styling or wording is
+  introduced for this metric specifically
 

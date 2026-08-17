@@ -95,6 +95,6 @@
 
 - [x] 8.1 Update CLAUDE.md's "Config overrides" for the `personSelection` key and "Reading results"
   for the `personSelection` diagnostics block and the `sampling.detectedFrames` semantic shift.
-- [ ] 8.2 Archive this change once shipped and verified — **after**
+- [x] 8.2 Archive this change once shipped and verified — **after**
   `add-webcodecs-sequential-sampling`, which modifies the same three requirements (see design.md's
   follow-up 4).

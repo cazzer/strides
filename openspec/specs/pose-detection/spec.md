@@ -9,7 +9,7 @@ overlay rendering) depends only on this abstraction's output, never on
 ### Requirement: Pose frame type contract
 The system SHALL define a `PoseFrame` type consisting of exactly a fixed-length, fixed-order
 array of keypoints (the subset common to MoveNet/COCO and BlazePose naming: shoulders, elbows,
-wrists, hips, knees, ankles, nose, and ears) and a video-relative timestamp, independent of any
+wrists, hips, knees, ankles, nose, and ears) and a media-relative timestamp, independent of any
 specific pose-estimation library's types. A `PoseFrame` MAY additionally carry optional per-frame
 metadata that only some backends can measure — currently `pixelsPerMeter`, a real-world scale
 factor. Such a field SHALL be omitted entirely (the key absent, never present with an
@@ -22,10 +22,13 @@ nothing produces exactly the same object it produced before the field existed.
   today), in that fixed order, never sparse
 
 #### Scenario: Timestamp reflects video playback position
-- **WHEN** a `PoseFrame` is produced for a given video frame
-- **THEN** its `timestamp` field equals the source `HTMLVideoElement`'s `currentTime`, not
-  wall-clock time, so it means the same thing for a live webcam stream and an uploaded file's
-  playback position
+- **WHEN** a `PoseFrame` is produced for a given frame
+- **THEN** its `timestamp` field is in seconds on the producing clip's own media clock, not
+  wall-clock time, so it means the same thing for a live webcam stream, an uploaded file's
+  playback position, and a WebCodecs-decoded frame alike — sourced from
+  `HTMLVideoElement.currentTime`/`requestVideoFrameCallback`'s `metadata.mediaTime` on the
+  `<video>`-playback sampling path, or from a decoded `VideoFrame.timestamp` (converted from
+  microseconds to seconds) on the WebCodecs sequential-decode sampling path
 
 #### Scenario: Optional metric scale is absent unless measured
 - **WHEN** a `PoseFrame` is produced by a backend that does not measure real-world scale (for
@@ -42,7 +45,13 @@ nothing produces exactly the same object it produced before the field existed.
 ### Requirement: Backend-agnostic detector abstraction
 The system SHALL expose a `createDetector` factory that selects a pose-detection backend via a
 single config parameter and returns a `PoseDetector` whose `estimatePose`/`dispose` methods are
-the only API downstream code depends on.
+the only API downstream code depends on. `estimatePose` SHALL take a `PoseFrameSource` — `{
+image: HTMLVideoElement | HTMLCanvasElement, timestampSec: number, width: number, height: number
+}` — rather than a concrete `HTMLVideoElement`, so that every backend can be driven by either the
+`<video>`-playback sampling path (`image` is the canonical video element) or the WebCodecs
+sequential-decode sampling path (`image` is a reusable off-screen canvas a decoded `VideoFrame`
+was drawn onto) through the identical call, with no backend branching on which path produced the
+frame.
 
 #### Scenario: Backend selected by config, not code branching
 - **WHEN** `createDetector({ backend: 'movenet' })` is called
@@ -52,6 +61,14 @@ the only API downstream code depends on.
 #### Scenario: Unknown backend rejected
 - **WHEN** `createDetector` is called with an unsupported `backend` value
 - **THEN** it throws synchronously with a clear error message before any async work begins
+
+#### Scenario: The same detector call handles a video element or an off-screen canvas identically
+- **WHEN** `estimatePose` is called with a `PoseFrameSource` whose `image` is the canonical
+  `<video>` element (the playback sampling path) or with a `PoseFrameSource` whose `image` is an
+  off-screen canvas a decoded `VideoFrame` was drawn onto (the sequential-decode sampling path)
+- **THEN** the same backend code path handles both, reading pixels from `source.image` and
+  metadata from `source.timestampSec`/`source.width`/`source.height` rather than from any
+  `HTMLVideoElement`-specific property, and produces a `PoseFrame` in the same shape either way
 
 ### Requirement: No-detection distinct from low-confidence detection
 The system SHALL distinguish "no person detected in frame" from "a person detected with
@@ -89,10 +106,14 @@ backend and maps its raw output into the common `PoseFrame` shape.
   resources
 
 ### Requirement: Common keypoint subset restricts backend surface
-The system SHALL restrict `PoseFrame.keypoints` to the subset common to MoveNet/COCO and
-BlazePose naming (`COMMON_KEYPOINT_NAMES`: shoulders, elbows, wrists, hips, knees, ankles, nose,
-left ear, right ear — 15 entries), via a shared mapping helper reused by every backend, so that a
-future BlazePose backend is a drop-in rather than a rewrite.
+The system SHALL restrict `PoseFrame.keypoints` to a fixed working keypoint set
+(`COMMON_KEYPOINT_NAMES`: shoulders, elbows, wrists, hips, knees, ankles, nose, left ear, right
+ear, left heel, right heel, left foot index, right foot index — 19 entries), via a shared mapping
+helper reused by every backend, so that a future BlazePose backend is a drop-in rather than a
+rewrite. Fifteen of these names are common to MoveNet/COCO and BlazePose naming; the four foot
+names (heel, foot index, each side) are BlazePose/MediaPipe-only — no COCO-based backend
+(MoveNet, PoseNet) can natively produce them, and the shared mapping helper's missing-keypoint
+default (below) is what lets those backends carry the widened set without special-casing it.
 
 #### Scenario: Non-subset raw keypoints are dropped
 - **WHEN** a backend's raw keypoint output includes names outside `COMMON_KEYPOINT_NAMES` (for
@@ -100,7 +121,8 @@ future BlazePose backend is a drop-in rather than a rewrite.
 - **THEN** the shared mapping helper omits them from the resulting `PoseFrame`
 
 #### Scenario: Missing subset keypoints default to zero score
-- **WHEN** a raw keypoint output is missing one of the names in `COMMON_KEYPOINT_NAMES`
+- **WHEN** a raw keypoint output is missing one of the names in `COMMON_KEYPOINT_NAMES` — for
+  example every MoveNet/PoseNet frame, for the four foot-only names
 - **THEN** the shared mapping helper fills that slot with `{ x: 0, y: 0, score: 0 }` rather than
   omitting it, preserving the fixed-length contract
 
@@ -134,7 +156,7 @@ from them would be identically zero.
 ### Requirement: MoveNet tracking-crop preprocessing
 
 The system SHALL, when tracking-crop is enabled and a prior call produced a usable detection
-(at least `minConfidentKeypoints` of the 15 `COMMON_KEYPOINT_NAMES` scoring at or above
+(at least `minConfidentKeypoints` of the 19 `COMMON_KEYPOINT_NAMES` scoring at or above
 `minKeypointConfidence`), run the next call's MoveNet inference against a padded, square crop of
 the source video centered on the prior detection's bounding box — drawn into a reusable
 off-screen canvas sized to the active model variant's own input resolution — remapping the
@@ -214,9 +236,19 @@ on a later, unrelated clip's opening frames.
 
 The system SHALL, for any segment where the CONTINUOUS whole-clip tracking-crop optimization has
 not engaged — including the entire clip when tracking-crop is disabled via configuration — call
-the underlying MoveNet detector's `estimatePoses` with the video element directly, with no crop
-canvas, no coordinate remapping, and no additional state tied to that optimization, so this
-segment's behavior is provably unchanged from the pre-existing full-frame-only implementation.
+the underlying MoveNet detector's `estimatePoses` with the video source directly, with no crop
+canvas and no coordinate remapping, so this segment's behavior is provably unchanged from the
+pre-existing full-frame-only implementation.
+
+That call SHALL supply the frame's own timestamp, in milliseconds, as `estimatePoses`' third
+argument, in the same units the crop-mode call site already uses. The underlying model applies
+its built-in per-keypoint temporal smoothing only when a timestamp is available, and derives one
+implicitly only when the image source exposes `currentTime` — so omitting it silently disables
+smoothing for any source that is not an `HTMLVideoElement`, including the reusable canvas the
+sequential-decode sampler draws into. Supplying it explicitly makes the full-frame path's
+smoothing behavior identical regardless of which sampler produced the frame, and matches what the
+video-element source produced implicitly before the sequential-decode sampler became the default.
+
 This guarantee covers the continuous cropped-canvas optimization only: it does NOT extend to (a)
 the multi-pose acquisition/reacquisition/re-verification path itself (see "Multi-pose acquisition
 on the first detection of a run", "Multi-pose reacquisition applies regardless of tracking-crop
@@ -227,13 +259,20 @@ successful one of those events (see "Settle-in window follows a successful multi
 event"), which is this capability's own mechanism and is likewise independent of
 `TrackingCropConfig.enabled`.
 
+The combined kill-switch path — tracking-crop disabled AND person-of-interest disabled — is
+exempt from the timestamp requirement above and SHALL continue to call `estimatePoses` with the
+image source as its only argument. That path performs no new-run reset of the underlying
+detector, so supplying timestamps there would hand the model's smoothing filter a non-monotonic
+series across separate analysis runs; it exists to reproduce pre-capability behavior exactly, and
+that includes deriving a timestamp only when the source itself carries one.
+
 #### Scenario: A clip where tracking never engages behaves identically to today
 
 - **WHEN** every call fails to produce a usable detection (or tracking-crop is configured
   disabled), AND no acquisition/reacquisition/re-verification event has ever succeeded (so no
   settle-in window is ever active)
-- **THEN** every such call is `estimatePoses(video)` with no other arguments, matching the MoveNet
-  backend's behavior before this capability existed
+- **THEN** every such call is `estimatePoses(videoSource, undefined, timestampMs)` with no crop
+  canvas and no coordinate remapping, matching the MoveNet backend's full-frame behavior
 
 #### Scenario: Disabling tracking-crop is a total kill-switch
 
@@ -248,6 +287,12 @@ event"), which is this capability's own mechanism and is likewise independent of
   successful one of those events regardless of this config value, since that window is this
   capability's own mechanism, not the continuous whole-clip optimization `TrackingCropConfig`
   gates
+
+#### Scenario: The combined kill-switch path passes no timestamp
+
+- **WHEN** both `TrackingCropConfig.enabled` and `PersonOfInterestConfig.enabled` are `false`
+- **THEN** every call is `estimatePoses(imageSource)` with no further arguments, byte-identical to
+  this backend's behavior before the tracking-crop and person-of-interest capabilities existed
 
 ### Requirement: Tracking-crop configuration is a single, overridable object
 
@@ -498,4 +543,244 @@ tracking state it leaves behind or the frame it produces for that call.
   counter resets, so the next periodic check is attempted after another full interval rather than
   every subsequent call, and the extra multi-pose model invocation is paid only on this rare failed
   check, not on every periodic tick
+
+### Requirement: WebCodecs sequential-decode sampling feasibility
+The system SHALL determine, per loaded clip, whether that clip can be sampled via WebCodecs
+sequential decode instead of `<video>`-playback sampling, via a pure feasibility check that never
+throws: `VideoDecoder` must exist in the browser, a source blob must be present, the blob must
+demux as an MP4 with a video track, and `VideoDecoder.isConfigSupported` must report the demuxed
+codec as decodable. Any failure at any gate SHALL resolve to `false`, never an exception.
+
+#### Scenario: A clean, decodable MP4 clip is eligible
+- **WHEN** the feasibility check runs against a well-formed MP4 blob whose video track's codec
+  `VideoDecoder.isConfigSupported` reports as supported
+- **THEN** the check resolves `true`
+
+#### Scenario: A non-MP4 source is not eligible
+- **WHEN** the feasibility check runs against a WebM blob (for example, one produced by the
+  webcam-recording path)
+- **THEN** the check resolves `false` without attempting a full decode
+
+#### Scenario: No source blob is not eligible
+- **WHEN** the feasibility check runs with no blob available
+- **THEN** the check resolves `false`
+
+#### Scenario: An unsupported codec is not eligible
+- **WHEN** the blob demuxes successfully but `VideoDecoder.isConfigSupported` reports the
+  resulting codec as unsupported in the current browser
+- **THEN** the check resolves `false`
+
+### Requirement: MP4 demuxing for sequential decode
+The system SHALL provide a pure MP4-demuxing function that, given a complete file's bytes,
+extracts its first video track's codec, out-of-band decoder configuration bytes (when present),
+pixel dimensions, average frame rate, duration, and every sample — in **decode order**, each
+carrying its raw bitstream data, presentation timestamp, duration, and keyframe flag — without
+requiring any DOM or WebCodecs global, so it is testable against real file bytes with no browser
+involved. The function SHALL never hang: for any input that is not a demuxable MP4 with a video
+track, it SHALL reject rather than leave its result unsettled.
+
+#### Scenario: A well-formed MP4's track is fully demuxed
+- **WHEN** demuxing runs against a complete, well-formed MP4 file's bytes
+- **THEN** the result includes the video track's codec string, pixel dimensions, an average frame
+  rate, the track's duration in seconds, and one sample per encoded frame, each with non-empty
+  data and a positive duration
+
+#### Scenario: Samples are returned in decode order, not presentation order
+- **WHEN** the source file's video track uses frame reordering (B-frames), such that presentation
+  order differs from decode order
+- **THEN** the returned samples are ordered by decode order (matching what `VideoDecoder.decode()`
+  requires), and their presentation timestamps are not necessarily monotonically increasing across
+  the array
+
+#### Scenario: Malformed or non-MP4 input rejects rather than hanging
+- **WHEN** demuxing runs against input that is empty, uses a different container format, is
+  truncated before a complete `moov` box, or otherwise cannot produce a usable video track
+- **THEN** the returned promise rejects, and does so without ever leaving the caller waiting
+  indefinitely
+
+### Requirement: Frame-rate-aware sequential sampling density
+The system SHALL provide a stateful frame-selection function for the sequential-decode path that
+selects decoded frames by presentation-time bucket (`floor(presentationTimeSec *
+targetSamplesPerSecond)`) rather than by a fixed frame-index stride, so that sampling density
+stays consistent in real time regardless of variation in the source's frame spacing. A
+`targetSamplesPerSecond` of `null` SHALL select every decoded frame.
+
+#### Scenario: A null target selects every frame
+- **WHEN** the frame selector is configured with `targetSamplesPerSecond: null`
+- **THEN** every frame presented to it is selected
+
+#### Scenario: A numeric target downsamples by time, not by index
+- **WHEN** the frame selector is configured with a numeric `targetSamplesPerSecond` lower than the
+  source's actual frame rate
+- **THEN** it selects the first frame to land in each new presentation-time bucket, and this
+  selection is determined by each frame's timestamp, not by its position in the sequence — so
+  variable frame spacing does not bias which portions of the clip get sampled more densely
+
+#### Scenario: A target at or above the source frame rate selects (nearly) every frame
+- **WHEN** the frame selector's configured `targetSamplesPerSecond` meets or exceeds the source's
+  actual frame rate
+- **THEN** every, or nearly every, presented frame lands in a new bucket and is selected
+
+### Requirement: Sequential-decode VideoFrame lifecycle discipline
+The system SHALL close every decoded `VideoFrame` the sequential-decode path's frame selector
+does not select immediately, within the same synchronous callback that received it from the
+decoder, and SHALL hold at most one selected `VideoFrame` open at a time end-to-end — closing a
+selected frame immediately after it has been drawn to a shared canvas, before requesting pose
+detection for it — so that decoding an entire clip never accumulates open `VideoFrame` resources
+proportional to the clip's total frame count.
+
+#### Scenario: An unselected frame is closed immediately
+- **WHEN** a decoded frame is presented to the sequential-decode path and the frame selector does
+  not select it
+- **THEN** that frame is closed before the decoder produces its next output, without ever being
+  handed to a consumer
+
+#### Scenario: A selected frame is closed before detection begins
+- **WHEN** a decoded frame is selected
+- **THEN** it is drawn to the shared canvas and closed before pose detection for that frame is
+  requested — no `VideoFrame` remains open while awaiting a detection result
+
+#### Scenario: Decoding never runs far ahead of consumption
+- **WHEN** the pose detector is slower than the decoder can produce selected frames
+- **THEN** the decoder's own encoded-chunk feed is throttled so that neither its internal decode
+  queue nor the selected-frame handoff queue grows without bound
+
+### Requirement: Adaptive sampling dispatch
+The system SHALL provide a single sampling entry point that dispatches, per analysis run, to
+either the WebCodecs sequential-decode sampler or the existing `<video>`-playback sampler, based
+on a feasibility result resolved before that run starts — never by probing feasibility as part of
+starting the run itself. Both samplers SHALL produce the identical output contract (a promise of
+pose samples, plus a handle exposing a `stop()` that resolves the promise with whatever was
+collected so far), so that every downstream consumer of a completed run's samples requires no
+knowledge of which sampler produced them.
+
+#### Scenario: A feasible clip is sampled sequentially
+- **WHEN** an analysis run starts for a clip the feasibility check already resolved as eligible
+- **THEN** sampling is dispatched to the WebCodecs sequential-decode sampler
+
+#### Scenario: An ineligible or not-yet-resolved clip falls back to playback sampling
+- **WHEN** an analysis run starts for a clip the feasibility check resolved as ineligible, or
+  before that resolution is available
+- **THEN** sampling is dispatched to the existing `<video>`-playback sampler, with no difference
+  in behavior from a run where sequential decode was never attempted
+
+#### Scenario: Stopping either sampler mid-run resolves with partial results
+- **WHEN** a run in progress is stopped, regardless of which sampler is active
+- **THEN** the sampler's promise resolves with whatever samples were collected up to that point,
+  never left pending and never rejected solely because of the stop
+
+### Requirement: Steady-state anchor acceptance requires continuity with the existing anchor
+
+The system SHALL, on an ordinary steady-state call (one that did not dispatch a multi-pose
+acquisition, reacquisition, or re-verification pass) that produces a usable detection while a
+person-of-interest anchor already exists, accept that detection's bounding box as the new anchor
+only if it is continuous with the existing anchor in BOTH position and scale. A usable detection
+that is not continuous SHALL NOT become the anchor, SHALL NOT reset the reacquisition-loss
+counter or any multi-pose episode state, and SHALL instead be counted as a tracking loss, so that
+`reacquisitionLossThreshold` can be reached and the multi-pose reacquisition path — which scores
+continuity across every simultaneously visible candidate — is given the chance to recover.
+
+Position continuity SHALL be satisfied when the derived bounding box has non-zero
+intersection-over-union with the existing anchor, OR when the distance between the two boxes'
+centers is within `maxCenterSpeedSidesPerSecond` multiplied by the anchor's own side
+(`max(width, height)`) and by the elapsed time since the previous call. Scale continuity SHALL be
+satisfied when the ratio of the derived box's area to the anchor's area lies within
+`[1 / maxAreaRatio, maxAreaRatio]`.
+
+The call SHALL still return the `PoseFrame` it detected, whether or not the gate accepted it —
+this gate governs which person the backend considers tracked, not whether a frame is emitted.
+
+#### Scenario: A confidently detected bystander does not steal the anchor
+
+- **WHEN** a steady-state call returns a usable detection whose bounding box neither overlaps the
+  existing anchor nor lies within the elapsed-time-scaled distance bound, or whose area differs
+  from the anchor's by more than `maxAreaRatio`
+- **THEN** the anchor is left unchanged, the reacquisition-loss counter is incremented rather than
+  reset, and the detected `PoseFrame` is still returned to the caller
+
+#### Scenario: Sustained rejection reaches the existing reacquisition path
+
+- **WHEN** `reacquisitionLossThreshold` consecutive steady-state calls each produce a detection
+  the continuity gate rejects
+- **THEN** the anchor is stale and the next call dispatches a multi-pose reacquisition scored by
+  continuity against the last known bounding box, exactly as it does for any other sustained
+  tracking loss
+
+#### Scenario: Ordinary frame-to-frame motion is unaffected
+
+- **WHEN** a steady-state call's derived bounding box overlaps the existing anchor at all, and its
+  area is within `maxAreaRatio` of the anchor's
+- **THEN** it is accepted as the new anchor and every counter is reset, exactly as before this
+  gate existed
+
+#### Scenario: The gate does not apply when there is nothing to be continuous with
+
+- **WHEN** no anchor currently exists, or the person-of-interest capability is disabled, or the
+  run has suspended person-of-interest disambiguation after exhausting its reacquisition budget
+- **THEN** the first usable detection is accepted as the anchor unconditionally, as it was before
+  this gate existed
+
+#### Scenario: A settle-in call is held to the same continuity requirement
+
+- **WHEN** a call inside the bounded settle-in window following a multi-pose selection event
+  produces a usable detection
+- **THEN** it is subject to the same continuity gate, scored against the just-selected anchor
+
+### Requirement: A periodic re-verification match claiming continuity must be scale-plausible
+
+The system SHALL, when a periodic re-verification pass selects a candidate whose selection was
+scored as CONTINUOUS with the existing anchor, additionally require that candidate's bounding-box
+area to lie within `[1 / maxAreaRatio, maxAreaRatio]` of the anchor's before adopting its box.
+A claimed-continuous selection failing that check SHALL be treated exactly as the existing "raw
+candidates but none usable during a periodic check" case: the anchor, the reacquisition-loss
+counter, and every multi-pose episode counter are left untouched, only the re-verification
+interval resets, and the call falls through to the ordinary single-pose call for that same frame.
+
+The selection heuristic's own continuity test is intersection-over-union and centre proximity
+only, with no scale term, so a candidate overlapping the anchor is scored continuous however
+differently sized it is — and then replaces the anchor with its own box. A collapsed anchor is
+worse than no gate at all, because the steady-state continuity gate then defends the collapsed box
+and begins rejecting genuine full-size detections of the real subject.
+
+This requirement SHALL NOT extend to a selection scored as NON-continuous. That case is an
+explicit "the tracked person is gone, here is the salient one now" switch, which is the purpose
+periodic re-verification exists to serve; a large scale change is expected there and is usually
+the very reason the switch is happening.
+
+#### Scenario: An overlapping but far smaller re-verification match does not collapse the anchor
+
+- **WHEN** a periodic re-verification pass selects a candidate scored continuous with the anchor,
+  whose bounding-box area differs from the anchor's by more than `maxAreaRatio`
+- **THEN** the anchor is unchanged, no settle-in window starts, the underlying detector is not
+  reset, the re-verification interval resets, and the call falls through to the ordinary
+  single-pose call for that same frame
+
+#### Scenario: A deliberate non-continuous identity switch is still allowed at any scale
+
+- **WHEN** a periodic re-verification pass selects a candidate scored NON-continuous with the
+  anchor, at any bounding-box area
+- **THEN** it re-seeds the anchor, resets the underlying detector, and starts a settle-in window,
+  exactly as it does when this gate is disabled
+
+### Requirement: Anchor continuity gate is configurable through the existing backend override
+
+The system SHALL expose the continuity gate's kill switch and both of its thresholds as a nested
+`continuityGate` object on `PersonOfInterestConfig` — `enabled`,
+`maxCenterSpeedSidesPerSecond`, and `maxAreaRatio` — resolved by the existing
+`resolvePoseDetectorConfig()` so the development-only `window.__STRIDES_POSE_BACKEND_OVERRIDE__`
+surface covers it alongside backend, model variant, tracking-crop, and person-of-interest
+selection, rather than introducing a separate override surface. A partial override of the nested
+object SHALL merge field-by-field over the defaults rather than replacing the whole object.
+
+#### Scenario: The gate can be disabled without disabling multi-pose dispatch
+
+- **WHEN** `personOfInterest.continuityGate.enabled` is `false` while
+  `personOfInterest.enabled` is `true`
+- **THEN** steady-state anchor acceptance behaves as it did before this gate existed, while
+  multi-pose acquisition, reacquisition, and periodic re-verification still run
+
+#### Scenario: A partial gate override preserves the other gate fields
+
+- **WHEN** the development-only backend override supplies only one of the `continuityGate` fields
+- **THEN** that field takes the overridden value and the remaining fields keep their defaults
 

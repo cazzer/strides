@@ -77,4 +77,6 @@
       verticalOscillationCm ~4.79, etc. — no regression). Screenshot at the clip's best-coverage
       timestamp shows a clean foot triangle at each ankle (heel behind, toe ahead, tracking the
       visible shoe), no floating-dot artifacts.
-- [ ] Commit on `feat/44-widen-foot-keypoints`
+- [x] Commit on `feat/44-widen-foot-keypoints` — landed on `main` by another route; verified
+      2026-08-16 by the heel/foot_index entries present in `src/pose/types.ts`'s
+      `COMMON_KEYPOINT_NAMES` at `main`.
