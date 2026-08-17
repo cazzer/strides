@@ -94,8 +94,18 @@ In development builds only, `useVideoAnalysis` auto-logs TWO console lines per r
    before the stage existed. `personSelection` itself is ALWAYS present (unlike `scaleCalibration`):
    `{ status: 'selected'|'skipped', skipReason, minBoundingBoxAreaPx, totalSamples,
    detectedSamplesIn, detectedSamplesOut, rejectedBelowFloor, rejectedOtherSegment, segmentCount,
-   segments (ranked by integrated area DESC, capped at 10, `[0]` is the winner), separationRatio }`
-   — `src/results/retroactivePersonSelection.ts`.
+   bridgedCuts, segments (ranked by integrated area DESC, capped at 10, `[0]` is the winner),
+   separationRatio }` — `src/results/retroactivePersonSelection.ts`.
+
+   **`bridgedCuts`** (#54) counts how many cuts the splice-tolerance rule DECLINED, because the
+   surviving detections either side of an offending one were continuous with each other. It counts
+   bridge *events*, not boundaries — one event removes the boundary in front of the frame and stops
+   the one behind it from ever being evaluated. It is the primary observable for anything in epic
+   #52: a smaller `segmentCount` alone cannot distinguish a clip that was healed from one that never
+   needed healing. Read `bridgedCuts >> 1` as "check whether two people got stitched together" — the
+   rule bounds *consecutive* bridging (two bad frames in a row still cut) but an alternating
+   good/bad stream can merge end to end, so cross-check `segments[0].medianAreaPx` and
+   `separationRatio` on multi-person footage.
 2. `[analysis-diagnostics:scale-pass] {...}` when the background MediaPipe scale pass reaches a
    terminal status — `{ status: 'done'|'failed'|'skipped', reason?: 'disabled'|'primary-scale',
    error?: string, diagnostics?: AnalysisDiagnostics }`. `diagnostics` (the scale pass's own
