@@ -1,5 +1,11 @@
 # Tasks
 
+**Outcome: the margin rule fired at step 3.3 and the floor is unchanged.** Tasks 4.3 and 4.4 are
+therefore struck through rather than done — they only exist to ship a new number, and no new
+number is shipping. 5.2 is likewise moot (`{}` and the baseline arm are the same thing when the
+default does not move; the `base` arm in 5.1 spells `2e-4` out and reproduces it). See
+`design.md`'s "Gate-by-gate verdict".
+
 ## 0. Pre-register before measuring
 
 - [x] 0.1 Create the change and write `proposal.md`, `design.md`, `specs/person-selection/spec.md`
@@ -36,29 +42,29 @@
 
 ## 2. Measure — NEEDS THE VERIFICATION LANE
 
-- [ ] 2.1 `--port 5199` on every invocation.
-- [ ] 2.2 Harvest traces: 3 trials × {demo1, demo2, multiperson}, no config override.
-- [ ] 2.3 Fetch the clips for keyframe extraction into the scratchpad, never the repo (Demo 1 from
+- [x] 2.1 `--port 5199` on every invocation.
+- [x] 2.2 Harvest traces: 3 trials × {demo1, demo2, multiperson}, no config override.
+- [x] 2.3 Fetch the clips for keyframe extraction into the scratchpad, never the repo (Demo 1 from
   Pexels per `DemoVideoButton.tsx`; Demo 2 is `src/video/demo-clips/park-approach.mp4`, portrait
   4K; multiperson is `e2e/fixtures/multiperson-track.mp4`, 1920×1080).
-- [ ] 2.4 Classify: per clip, the N smallest detections inside the winner's span and the N largest
+- [x] 2.4 Classify: per clip, the N smallest detections inside the winner's span and the N largest
   outside it; `ffmpeg -i clip.mp4 -ss <t> -frames:v 1 -q:v 3 out.png` (output seeking) per
   timestamp, and read the PNGs. Label each phantom / genuine-subject / bystander. **This is the
   step that produces `G4`, `S4`, `G1`, `S1`, and the step a sweep cannot replace.**
-- [ ] 2.5 Record per-clip, per-trial distributions and the four endpoints in `design.md`, each
+- [x] 2.5 Record per-clip, per-trial distributions and the four endpoints in `design.md`, each
   endpoint carrying its timestamp and keyframe verdict.
 
 ## 3. Derive and decide
 
-- [ ] 3.1 Compute both windows, apply the margin rule, `f = √(lower × upper)` to 2 s.f.
-- [ ] 3.2 Model verdict. Overlap with ratio ≥ 4 → D1 stands, no fraction-requirement delta.
+- [x] 3.1 Compute both windows, apply the margin rule, `f = √(lower × upper)` to 2 s.f.
+- [x] 3.2 Model verdict. Overlap with ratio ≥ 4 → D1 stands, no fraction-requirement delta.
   Disjoint → run the controlled downscale pair, then switch to the REMOVE + ADD branch.
-- [ ] 3.3 Margin fails → STOP. Write up the measurement, re-accept `2e-4`, close #57 with recorded
+- [x] 3.3 Margin fails → STOP. Write up the measurement, re-accept `2e-4`, close #57 with recorded
   evidence, say so in `design.md`. **An accepted outcome, not a failure.**
 
 ## 4. Revert the probe, then implement
 
-- [ ] 4.1 Revert the probe BEFORE any A/B arm runs, so the A/B measures the shipped code path
+- [x] 4.1 Revert the probe BEFORE any A/B arm runs, so the A/B measures the shipped code path
   exactly: `git checkout -- src/results/useVideoAnalysis.ts`, `rm
   src/results/boundingBoxTrace.experimental.ts scripts/bbox-trace-harvest.mjs`. Keep the diff in
   the scratchpad. Verify `grep -rn "bbox-trace" src scripts e2e` returns nothing.
@@ -69,25 +75,25 @@
   3,600 px² bystanders and the 1,600 px² alternating fixture all keep their meanings and no future
   default change can silently reclassify a fixture. Check `runClipAnalysisPipeline.test.ts`'s
   `SELECTING` the same way and pin there too if any assertion flips.
-- [ ] 4.3 Set the derived value, and rewrite the derivation comment in
+- [~] 4.3 STRUCK — no new number ships. Set the derived value, and rewrite the derivation comment in
   `retroactivePersonSelection.ts` with the four measured endpoints, both resolved absolute floors,
   both margins, and the classification evidence. Rewrite the paragraph that currently says Demo 1
   keeps `segmentCount >= 2` "until #57's re-derived floor demotes them" into the record of the
   joint #54 + #57 outcome. Extend `minBoundingBoxAreaFraction`'s field doc to say what the number
   is sized against (the model rationale there is unchanged and correct).
-- [ ] 4.4 Add the four pinning tests (P1–P4, design.md D4), all against
+- [~] 4.4 STRUCK — P1-P4 pin a NEW default against its counterfactual; with the default unchanged P1's counterfactual is the shipped value itself and the pair asserts nothing. Add the four pinning tests (P1–P4, design.md D4), all against
   `DEFAULT_RETROACTIVE_PERSON_SELECTION_CONFIG` directly. Update `FLOOR_1080P`'s comment to say it
   is the *test-local* fraction. Confirm the resolution-independence test still passes and leave it
   alone.
 
 ## 5. Verify live — NEEDS THE VERIFICATION LANE
 
-- [ ] 5.1 4-arm A/B via `scripts/ab-person-selection.mjs`, `--clips demo1,demo2,multiperson
+- [x] 5.1 4-arm A/B via `scripts/ab-person-selection.mjs`, `--clips demo1,demo2,multiperson
   --trials 3 --port 5199`. The baseline arm must spell out the OLD value
   (`{"personSelection":{"minBoundingBoxAreaFraction":2e-4}}`), not `{}` — once 4.3 lands, `{}` is
   the new default. Arms: `base`, `chosen` (`f`), `half` (`f/2`), `double` (`f×2`).
-- [ ] 5.2 A 1-arm confirmation after 4.3 lands: `--arm 'shipped={}'` must reproduce the `chosen`
+- [~] 5.2 MOOT — the default did not move, so `{}` and `base` are the same arm. A 1-arm confirmation after 4.3 lands: `--arm 'shipped={}'` must reproduce the `chosen`
   column. That is the proof the default edit and the measured arm are the same thing.
-- [ ] 5.3 `npm test`, `npm run build`, `npm run lint`.
-- [ ] 5.4 Fill `design.md`'s "Measured results" and gate-by-gate verdict;
+- [x] 5.3 `npm test`, `npm run build`, `npm run lint`.
+- [x] 5.4 Fill `design.md`'s "Measured results" and gate-by-gate verdict;
   `openspec validate derive-area-floor-from-4k-measurement --strict`. **Do NOT archive** — report.

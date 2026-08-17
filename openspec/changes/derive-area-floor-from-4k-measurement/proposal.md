@@ -1,5 +1,24 @@
 # Re-derive the bounding-box area floor from 4K measurement (issue #57, epic #52 item 4)
 
+## OUTCOME (2026-08-17) — measured, NOT shipped
+
+**The measurement was taken and the pre-registered margin rule fired. The floor stays at `2e-4`.**
+Read `design.md`'s "Measured results" and "Gate-by-gate verdict" first; the sections below are the
+proposal as written *before* measuring, kept intact as the pre-registration record.
+
+Headline: at 4K, **on the same clip and in the same scene**, the largest keyframe-confirmed
+spurious detection (8,432 px², Demo 1 t=8.36, empty track) and the smallest keyframe-confirmed
+genuine subject detection (24,473 px², Demo 1 t=4.32, the runner with a collapsed box) are only
+**2.90× apart** — against a pre-registered requirement of ≥4. The squeeze is *intra-clip*, so no
+resolution model can widen it, and a 4-arm live A/B confirmed it behaviourally: the derived value
+`1.7e-3` does close epic #52's headline gate on Demo 1 with every metric unmoved, but halving it
+re-breaks phantom rejection and doubling it destroys #54's healed track. Three pre-registered
+do-not-ship conditions fire (5, 3, 4) plus the plateau gate on both sides.
+
+**The spec delta is withdrawn** — its sizing requirement is unsatisfiable on this footage, and
+shipping it against unchanged code would encode a contract the implementation violates.
+**What ships: the test-suite decoupling (step 4.2) and this measurement record.**
+
 ## Why
 
 `minBoundingBoxAreaFraction: 2e-4` resolves to **1,658.88 px²** at 4K

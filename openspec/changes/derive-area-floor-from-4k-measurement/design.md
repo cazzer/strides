@@ -298,11 +298,267 @@ anyway. Criteria are never edited to match a result.
 
 # Measured results
 
-*TBD — Phase 2 (harvest + keyframe classification), Phase 3 (derivation), Phase 5 (live A/B).*
+Measured 2026-08-17, commit `fee2ff5`, real GPU (`ANGLE Metal Renderer: Apple M4 Pro`, confirmed
+by the driver's own renderer check — not SwiftShader), dev server started by the run on
+`--port 5199`, 3 trials per clip, no config override. Frame geometry re-confirmed with `ffprobe`:
+Demo 1 3840×2160 landscape, Demo 2 **2160×3840 portrait**, multiperson 1920×1080 — so both demo
+clips really do share a frame area of 8,294,400 px² with transposed dimensions, as D1 assumed.
+
+## Trace shape
+
+| clip | samples | detected | boxless | boxes | segmentCount | winner span |
+|---|---|---|---|---|---|---|
+| demo1 | 228/228/228 | 66/65/65 | 8/8/8 | 58/57/57 | 4/3/3 | [0.08, 6.32] / [0.08, 7.16] ×2 |
+| demo2 | 99/99/99 | 99/99/99 | 0/0/0 | 99/99/99 | 1/1/1 | [0.0334, 1.6683] ×3 |
+| multiperson | 233 ×3 | 204 ×3 | 26 ×3 | 178 ×3 | 2/2/2 | [1.75, 3.90] ×3 |
+
+Demo 2 and multiperson were **bit-identical across all three trials**. Demo 1 varied by exactly
+one detection: trial 1 found a box at t=6.36 that trials 2–3 did not, which is the whole reason
+its `segmentCount` reads 4 there and 3 in the others.
+
+## The four endpoints, keyframe-classified
+
+Every endpoint below was extracted with `ffmpeg -i clip.mp4 -ss <t> -frames:v 1` (output seeking)
+and inspected as an image, both as a full frame and as a grid-overlaid crop centred on the
+reported bounding-box centre.
+
+| symbol | value | fraction | clip | timestamp | box | keyframe verdict |
+|---|---|---|---|---|---|---|
+| `G4` | **8,432.19 px²** | 1.01661e-3 | demo1 | 8.36 | 49.9×169.1 at (2943, 790), n=9, s=0.323 | **PHANTOM** — the frame is an empty track; the crop is stadium seating and fence |
+| `S4` | **24,473.2 px²** | 2.95057e-3 | demo1 | 4.32 | 58.6×417.8 at (896, 606), n=4, s=0.258 | **GENUINE SUBJECT** — the runner mid-frame; the box has collapsed onto his front-arm/chest column |
+| `G1` | *see below* | — | multiperson | — | — | **no clean phantom endpoint exists at 1080p** |
+| `S1` | **8,835.6 px²** | 4.26100e-3 | multiperson | 1.75 | 43.9×201.4 at (1576, 716), n=11, s=0.367 | **GENUINE SUBJECT** — the runner entering frame right; box collapsed to his torso column |
+
+**Demo 1's out-of-winner population is entirely phantom, and reproduces the ticket exactly.** The
+five timestamps are t = 6.36, 7.20, 7.28, 7.44, 8.36 at 3,539 / 4,448 / 3,789 / 2,279 / 8,432 px²
+— the same five the ticket named. Keyframes at 6.36, 7.20 and 8.36 all show a completely empty
+track: no person anywhere in frame. `G4` is stationary to six significant figures across all three
+trials (8432.18 / 8432.18 / 8432.19), so R2 (non-stationary phantom size) does not bite here.
+
+**Demo 2 contributes no phantom endpoint at all** — one segment spanning the clip, every detection
+inside the winner. Its smallest box is 50,000.5 px² at t=0.2002 (141×354 at (823, 1922), n=11,
+s=0.666), keyframe-confirmed as **the runner at his most distant point in the approach**: a real,
+genuinely distant subject at 4K. `S4 = min(24,473.2, 50,000.5) = 24,473.2`.
+
+**`G1` cannot be pinned to one number, and the ambiguity is recorded rather than resolved by
+fiat.** Multiperson's non-subject detections fall into three keyframe-classified groups:
+
+- **A real near-field bystander** (the walker in white, x ≈ 50–130): 9,431.7 px² down to ~482 px²,
+  confirmed at t=0.0333 (a clearly visible person) and again at t=3.80. A bystander is **not** a
+  phantom — under D2's operative definition, floor-rejecting one is a permitted casualty, not a
+  lower bound the floor must clear.
+- **A facade box**: 4,646.9 px² at t=1.2833, a 30.8×150.9 column at (820, 105) — above the fence
+  line, across a building facade, whose bottom ~20 px grazes one distant background head. Not a
+  person box. **Spurious.**
+- **Degenerate slivers** at two fixed screen positions, c ≈ (492, 604–614) and c ≈ (1030, 602):
+  227.8 px² down to 7.9 px², the largest being 227.8 at t=0.6333. Keyframe at t=0.6833 shows empty
+  court. **Spurious** — this is the same 5–183 px² fixed-position garbage D4 originally measured on
+  the repro clip, reproduced.
+
+So `G1` is either **227.8 px²** (1.09857e-4, strict: the largest detection on genuinely empty
+pixels) or **4,646.9 px²** (2.24098e-3, inclusive: the largest box that does not enclose a person).
+Both readings are carried forward below; neither changes the verdict.
+
+## Windows and the margin rule
+
+```
+4K:     window ( G4/A_4K , S4/A_4K ) = ( 1.01661e-3 , 2.95057e-3 )   ratio 2.902
+1080p:  window ( G1/A_1080, S1/A_1080 )
+          strict    G1 = 227.8   → ( 1.09857e-4 , 4.26100e-3 )       ratio 38.79
+          inclusive G1 = 4,646.9 → ( 2.24098e-3 , 4.26100e-3 )       ratio 1.901
+
+combined, strict    ( 1.01661e-3 , 2.95057e-3 )   ratio 2.902
+combined, inclusive ( 2.24098e-3 , 2.95057e-3 )   ratio 1.317
+```
+
+**The pre-registered ship rule requires a window ratio ≥ 4. The measured ratio is 2.902 on the
+most generous reading and 1.317 on the strictest. Do-not-ship condition 5 FIRES.**
+
+Had a value been shipped, it would have been `f = √(1.01661e-3 × 2.95057e-3) = 1.7319e-3`, i.e.
+**1.7e-3** to 2 s.f. — 14,100 px² at 4K, 3,525 px² at 1080p. D3's criterion 2 fails there too, and
+by how much is worth recording: `f × A_4K / G4 = 1.672` and `S4 / (f × A_4K) = 1.736`, both short
+of the required 2. At 1080p the same value clears `S1` by 2.506× (fine) but sits *below* the
+inclusive `G1`, so it would not reject the facade box.
+
+## Why the window is narrow — the finding that matters
+
+**The squeeze is intra-clip, not cross-resolution.** `G4` and `S4` both come from Demo 1: the same
+clip, the same scene, the same 4K frame. The largest spurious detection and the smallest genuine
+subject detection on that one clip are only **2.90× apart**. No resolution model — a fraction, a
+per-frame-area table, a hybrid, or a power law — can widen a gap that exists *within* a single
+frame area. This is a stronger and more general result than "this particular fraction is wrong",
+and it retires the whole "re-derive the number" direction rather than just this attempt.
+
+**The binding constraint is not the one the ticket assumed.** The ticket, and D2, expected the
+ceiling to be "a distant real subject" — and Demo 2 supplies exactly that at 50,000 px², a
+comfortable 5.9× above the largest phantom. A floor sized purely against distant subjects would
+have had plenty of room. What actually binds is a **collapsed box on a near subject**: the t=4.32
+wedge, where `deriveBoundingBox` hulls only 4 confident keypoints and returns a 58×418 px sliver on
+a runner who occupies roughly 240×705 px. Phantom boxes and collapsed-subject boxes both come out
+as narrow vertical slivers of a few thousand px², because both are the *same kind of failure* — a
+box hulled from too few, badly-placed points. Area cannot separate them, because area is not what
+distinguishes them.
+
+**Confidence cannot separate them either — measured, and this rules out the obvious follow-up.**
+The probe carried `meanConfidence` and confident-keypoint count for free precisely so this could be
+checked. The largest phantom (t=8.36) has **n=9, s=0.323**. The genuine collapsed subject frame
+(t=4.32) has **n=4, s=0.258**. The phantom is detected with *more* confident keypoints and a
+*higher* mean confidence than the real subject frame. A confidence gate layered on top of, or
+instead of, the area floor would reject the subject before the phantom. That is a negative result,
+but a load-bearing one: it removes the cheapest alternative from the table before anyone spends a
+cycle on it.
+
+**Why keeping the wedge frame is not negotiable.** One could argue `S4` should exclude t=4.32 as a
+"detection failure rather than a genuine small subject" — and doing so would lift the ceiling to
+Demo 2's 50,000 px², giving a ratio of 5.93 and a passing window. That argument is refused on
+pre-registered grounds: criterion **A4** requires `segments[0].frameCount >= 53` and do-not-ship
+condition **2** fires if Demo 1's healed track loses frames. Floor-rejecting t=4.32 drops the
+winner to 52 detections and takes `bridgedCuts` to 0 — #54's healed wedge, undone. The gate binds
+regardless of how the frame is labelled, so the ceiling is 24,473.2 px². Criteria are not edited to
+match a result.
+
+## Live A/B — recorded evidence, explicitly NOT a ship justification
+
+The margin rule had already fired before this ran. It was run anyway because the reopened proposal
+needs to know whether the thin margin is *thin-but-harmless* or *actually harmful*, and because a
+plateau sweep is the behavioural form of the same question the arithmetic asks. **Nothing here can
+un-fire gate 5**, and the verdict below was written before the table was read.
+
+`scripts/ab-person-selection.mjs` (unmodified), commit `fee2ff5` **with the probe already
+reverted**, 4 arms × 3 clips × 3 trials, `--port 5199`, dev server started by the run, real GPU.
+Baseline spells the old value out rather than using `{}`. One trial failed
+(multiperson/half/trial 1, a 300 s `analysis complete` timeout); the same arm succeeded on trials
+2 and 3, so it is a flake, not an arm property.
+
+| | base `2e-4` | chosen `1.7e-3` | half `8.5e-4` | double `3.4e-3` |
+|---|---|---|---|---|
+| **demo1** floor px² | 1,658.88 | 14,100.5 | 7,050.24 | 28,201 |
+| `segmentCount` | 3 [3..4] | **1** | 2 | 1 |
+| `rejectedOtherSegment` | 7 [7..10] | **0** | 3 | 0 |
+| `rejectedBelowFloor` | 0 | 4 | 3 | 5 |
+| `rejectedOutsideEvidence` | 5 [3..5] | 8 | 6 | 8 |
+| `detectedSamplesOut` | 53 | 53 | 53 | **52** |
+| `segments[0].frameCount` | 53 | **53** | 53 | **52** |
+| `segments[0].medianAreaPx` | 491,133 [..492,789] | 491,133 | 491,133 | 492,704 |
+| `bridgedCuts` | 1 | 1 | 1 | **0** |
+| **demo2** everything | — | **bit-identical to base** | bit-identical | bit-identical |
+| **multiperson** floor px² | 414.72 | 3,525.12 | 1,762.56 | 7,050.24 |
+| `detectedSamplesOut` | 127 | 122 | 125 | 115 |
+| `segments[0].frameCount` | 123 | **119** | 121 | **112** |
+| `segments[0].medianAreaPx` | 31,670.2 | 31,937 (+0.84%) | 31,902.9 | **33,190.9 (+4.80%)** |
+| `separationRatio` | 33.5 | 41.7 | 35.2 | 75.3 |
+
+**Demo 1 at `chosen` reaches the epic gate.** `segmentCount === 1` and
+`rejectedOtherSegment === 0`, 3/3 trials — A1 and A2, epic #52's amended headline criterion —
+with the healed track fully intact (`frameCount` 53, `startTimestamp` 0.08, `medianAreaPx`
+491,133, `bridgedCuts` 1) and **every metric value identical to baseline**. A3 lands exactly:
+`rejectedBelowFloor` is 4 against a probe phantom count of 4 on the 65-detection trials. The
+`detectedFrames` prediction holds precisely — 53 → 53, with the 7 former `rejectedOtherSegment`
+frames redistributing into `rejectedBelowFloor` (4) and `rejectedOutsideEvidence` (5→8), and the
+accounting identity closing at 65 − 4 − 0 − 8 = 53. `separationRatio` → `null` and
+`endTimestamp` → 9.16, both predicted.
+
+**And the plateau collapses on both sides, exactly as the arithmetic said it would.** This is the
+finding, not an aside:
+
+- **`half` (f/2) misses the phantom.** The largest measured phantom is 8,432 px²; f/2 resolves to
+  7,050 px². `segmentCount` 2, `rejectedOtherSegment` 3 — A1 and A2 both fail. The floor is back
+  to not doing its job.
+- **`double` (f×2) eats the subject.** f×2 resolves to 28,201 px², above the 24,473 px² wedge.
+  `segments[0].frameCount` drops to 52 and `bridgedCuts` to 0 — **#54's healed wedge, undone**,
+  which is do-not-ship condition 2 firing on measurement rather than on prediction. Demo 1's
+  metrics move well outside the baseline trial range with it: `overstriding` 0.215 → 0.052,
+  `footStrikePattern` −0.159 → −0.259, `armSwingSymmetry` 0.756 → 0.862, `view.confidence`
+  0.774 → 0.730.
+
+So `f` is not sitting on a plateau at all — it is balanced between two failures a factor of two
+away in either direction, and the pre-registered gate D fails on **both** sides. That is the same
+2.9×-wide window, measured behaviourally instead of arithmetically, and the two agree.
+
+**Multiperson costs the winner frames at `chosen`, and the adjudication is nuanced.**
+`segments[0].frameCount` 123 → 119 and `detectedSamplesOut` 127 → 122, so criterion C's "does not
+decrease" and do-not-ship 3's "the winner loses frames" both **fire**. The adjudication, from the
+trace: the four boxes inside the winner that fall under 3,525 px² are at t = 3.6333 (1,603 px²),
+3.80 (1,095), 3.8167 (2,000) and 3.90 (1,976) — all at c ≈ (110–120, 615–655), all **after** the
+runner has exited frame left at t ≈ 3.55, and t=3.80 is keyframe-confirmed as **the standing
+bystander**, not the runner. So the floor is removing bystander frames from the winner's tail,
+which is desirable. The criterion was written before anyone knew the winner's partition tail
+contained bystander detections; it fires anyway and is recorded as fired rather than reworded.
+`medianAreaPx` moves +0.84%, inside the 1% bound. At `double` it moves **+4.80%**, breaching it.
+
+**Do-not-ship 4 fires at `chosen` on multiperson**, but weakly and for a measurement-design
+reason worth naming: the multiperson baseline is bit-identical across all three trials, so its
+"baseline trial range" is a single point and *any* movement is outside it. `trunkLean`
+4.104 → 4.182, `armSwingSymmetry` 0.420 → 0.378, `stepWidth` 1.376 → 1.395. These are small and
+consistent with dropping four bystander frames; the criterion as written has no tolerance band
+for a deterministic baseline. Recorded as fired, with that caveat, rather than reinterpreted.
 
 # Gate-by-gate verdict
 
-*TBD — Phase 5.*
+**VERDICT: do not ship a new number. `minBoundingBoxAreaFraction` stays at `2e-4`.** This is the
+outcome D2 and Phase 3.3 explicitly pre-authorised: *"If the ratio is < 4, do not ship a number.
+Record the measurement, re-accept `2e-4`, and reopen with a proposal that is not a single global
+fraction."*
+
+The stop is **overdetermined**, not marginal — three independent pre-registered conditions fire,
+one at the derivation and two on live measurement:
+
+| gate | outcome at `chosen = 1.7e-3` |
+|---|---|
+| **5 — window ratio ≥ 4** | **FIRED.** 2.902 (generous reading) / 1.317 (strict). Blocks on its own; no A/B result can overturn arithmetic. |
+| **3 — multiperson winner keeps its frames** | **FIRED.** `frameCount` 123 → 119, `detectedSamplesOut` 127 → 122. Adjudication: the four lost frames are keyframe-confirmed bystander detections in the winner's tail. `medianAreaPx` +0.84%, within bound. |
+| **4 — metric values inside the baseline range** | **FIRED** (weakly) on multiperson: the baseline is deterministic, so its range is a point and any movement is outside it. Demo 1 and Demo 2: no movement at all. |
+| **D — ≥2× plateau either side** | **FAILED BOTH SIDES.** `half` misses the phantom (`segmentCount` 2, `rejectedOtherSegment` 3); `double` eats the wedge (`frameCount` 52, `bridgedCuts` 0). |
+| 1 — Demo 2 canary | **PASS.** Bit-identical to baseline in every arm, including `double`. Its smallest genuine box (50,000 px²) is far above every candidate floor, so this clip never constrained anything. |
+| 2 — Demo 1 `frameCount >= 53` | **PASS at `chosen`** (53). **FAILS at `double`** (52) — the wedge, eaten. |
+| 6 — `no-detection-above-floor` | Not observed on any clip, in any arm. |
+| 7 — A1 / A2 | **PASS at `chosen`** — `segmentCount === 1`, `rejectedOtherSegment === 0`, 3/3 trials. Epic #52's amended headline criterion *is* reachable at this value; gate 5 outranks it. |
+
+**The honest summary of the tension**: a value exists (`1.7e-3`) that closes epic #52's headline
+gate on Demo 1 with every metric unmoved and Demo 2 untouched. It is not shipped because it sits
+in a 2.9×-wide window with no margin on either side, and the plateau sweep confirms behaviourally
+that halving it re-breaks the phantom rejection while doubling it destroys #54's healed track. A
+threshold with a factor-of-two cliff in both directions, derived from three scenes, is a
+liability on footage nobody has measured — which is exactly what the margin rule was written to
+refuse, and refusing it is the rule working, not the rule being inconvenient.
+
+The spec delta drafted for this change is **withdrawn, not weakened**. Its added paragraph
+requires the floor to sit above the largest measured spurious detection *and* below the smallest
+measured genuine subject; the measurement shows those two constraints admit only a 2.9×-wide band,
+so shipping that requirement while the code stays at `2e-4` would ship a contract the
+implementation knowingly violates.
+
+**What DOES ship from this change:** the test-suite decoupling (step 4.2), which is independent of
+the number and prevents the next re-derivation from silently reclassifying a dozen fixtures, plus
+this measurement record and the updated derivation comment in `retroactivePersonSelection.ts`.
+
+## Where the next attempt should start
+
+Not with a different number, and not with a different resolution model — both are ruled out above.
+The measurement points at three directions, in rough order of promise:
+
+1. **Reject on box SHAPE, not box area — but only as half of a rule.** Every phantom measured on
+   Demo 1 is a narrow vertical sliver: 49.9×169.1, 25.1×177.3, 22.2×170.9, 21.0×108.6, 27.7×127.6
+   — height:width from 3.4:1 to 7.7:1, all at y ≈ 750–790 (the seating/fence band). Well-detected
+   genuine subject boxes are 238×705, 264×806, 141×354 — 2.5:1 to 3.1:1, a cleanly separated band.
+   **But the t=4.32 wedge is 58.6×417.8, i.e. 7.1:1, and multiperson's `S1` is 43.9×201.4, i.e.
+   4.6:1** — both genuine, both squarely inside the phantom band. Shape fails on exactly the same
+   frames area fails on, and for the same reason: a collapsed hull over four keypoints is a sliver
+   whoever it belongs to. Shape is only useful combined with something else.
+2. **Reject on POSITION persistence.** Demo 1's phantoms cluster at two fixed screen positions
+   (x ≈ 1710–1713 across t = 7.20/7.28/7.44, and x ≈ 2943/3185) with near-zero motion, and
+   multiperson's slivers sit at exactly c ≈ (492, 604) and c ≈ (1030, 602) for ~0.5 s. A real
+   subject moves. This is the one discriminator the data supports that area does not, and it is
+   the same observation D4 made about the original repro clip ("at a fixed screen position, for
+   ~0.5s") without acting on it.
+3. **Nothing based on confidence.** Measured and ruled out above: the largest phantom has n=9 /
+   s=0.323 against the genuine wedge's n=4 / s=0.258.
+
+Note that (1) and (2) both describe the *segmentation* stage's job rather than the floor's — a
+fixed-position, non-moving cluster is precisely what a continuity bound is for. The most likely
+correct conclusion is that **the area floor should stay a coarse degenerate-box filter at `2e-4`
+and phantom rejection should move to a stage that can see motion**, which is a different proposal
+from this one and should be scoped as such.
 
 ---
 

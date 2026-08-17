@@ -1,2 +1,9 @@
 schema: spec-driven
 created: 2026-08-17
+# No spec delta. This change was pre-registered as a MODIFIED requirement on
+# `person-selection`'s area floor, the measurement was taken, and the pre-registered margin rule
+# fired — so the floor's value is unchanged and the sizing requirement that was drafted for it is
+# WITHDRAWN rather than weakened to fit (it is unsatisfiable on this repo's own footage; see
+# design.md's "Gate-by-gate verdict"). What remains is a measurement record plus a test-only
+# decoupling, neither of which changes the behaviour contract.
+skip_specs: true
