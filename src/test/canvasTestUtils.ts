@@ -18,10 +18,14 @@ export interface FakeCanvasRenderingContext2D {
   save: ReturnType<typeof vi.fn>
   restore: ReturnType<typeof vi.fn>
   drawImage: ReturnType<typeof vi.fn>
+  /** Used by the evidence annotation layer, which dashes its construction lines. */
+  setLineDash: ReturnType<typeof vi.fn>
   globalAlpha: number
   strokeStyle: string
   fillStyle: string
   lineWidth: number
+  lineCap: string
+  lineJoin: string
 }
 
 /** Stubs `HTMLCanvasElement.prototype.getContext` to return a fake 2D context (a plain object
@@ -38,10 +42,13 @@ export function stubCanvas2DContext(): FakeCanvasRenderingContext2D {
     save: vi.fn(),
     restore: vi.fn(),
     drawImage: vi.fn(),
+    setLineDash: vi.fn(),
     globalAlpha: 1,
     strokeStyle: '',
     fillStyle: '',
     lineWidth: 1,
+    lineCap: 'butt',
+    lineJoin: 'miter',
   }
 
   HTMLCanvasElement.prototype.getContext = ((contextId: string) => {
