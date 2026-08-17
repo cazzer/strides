@@ -45,6 +45,13 @@ function idleState(): Omit<VideoAnalysisState, 'start' | 'reset'> {
 export function useVideoAnalysis(
   videoSource: VideoSource,
   detector: PoseDetector | null,
+  /**
+   * Whether this clip is currently **presented** to the reader (today: its preview modal is open).
+   * The third conjunct of the loop condition below — see `results-view`, "Clip playback loops only
+   * while that clip is presented" (design.md D1). Defaults to `false`, i.e. an unpresented clip,
+   * which is what every caller that has no presentation concept gets.
+   */
+  presented = false,
 ): VideoAnalysisState {
   const { videoRef, metadata, sourceBlob } = videoSource
 
@@ -372,28 +379,66 @@ export function useVideoAnalysis(
     })()
   }, [detector, videoRef, metadata, sourceBlob, sequentialDecodeSupported])
 
-  // Once analysis reaches 'ready', sampling has already left the video paused at 'ended' (see
-  // sampleClip's docstring) — restart it with looping enabled so the skeleton overlay keeps
-  // replaying instead of sitting on the last frame. Muted because this play() call happens well
-  // outside the "Analyze" click's synchronous call stack, where autoplay policy is unreliable.
+  // Looping playback, owned by ONE declarative condition with three conjuncts (design.md D1,
+  // `results-view` "Clip playback loops only while that clip is presented"):
   //
-  // The background scale pass replays the same video for its own sampling, so this effect also
-  // waits for it: while the pass is 'pending'/'running' the loop stays un-armed (a looping video
-  // never fires 'ended', which the pass's sampleClip relies on), and this one declarative
-  // condition owns re-arming — it fires immediately when the pass was skipped, and again the
-  // moment the pass reaches 'done'/'failed'. No scale-pass code re-arms the loop imperatively.
+  //   phase === 'ready'  ∧  no scale pass in flight  ∧  this clip is presented
+  //
+  // 1. `'ready'`: sampling has already left the video paused at 'ended' (see sampleClip's
+  //    docstring), so the restart is what stops the overlay sitting on the last frame.
+  // 2. The background scale pass replays the same video for its own sampling, so the loop stays
+  //    un-armed while it is 'pending'/'running' (a looping video never fires 'ended', which the
+  //    pass's sampleClip relies on) and re-arms the moment it reaches a terminal status. No
+  //    scale-pass code re-arms the loop imperatively.
+  // 3. `presented`: clips now live in a header strip whose elements are concealed off screen
+  //    unless something is reading them, so an always-on loop would decode and composite N
+  //    videos nobody can see for the life of the session — with an overlay rAF loop clearing a
+  //    video-native-resolution canvas per clip on top. No presentation code arms or clears the
+  //    loop imperatively either; presenting flips this one input and the condition does the rest.
+  //
+  // Muted because this play() call happens well outside any click's synchronous call stack (it is
+  // an effect keyed on state), where autoplay policy is unreliable.
+  //
+  // ## The observational guard, and why it is structural rather than a rule to remember
+  //
+  // While the pipeline owns the element — 'sampling'/'processing', or a scale pass in flight —
+  // presenting or dismissing must write NOTHING to `loop`, `currentTime`, `muted`, or playback
+  // (`results-view`, same requirement; a write there arms a loop that swallows `ended`, rewinds
+  // the sampler, or fails an in-flight pass). The `video.loop` early-return below is what
+  // enforces it: this effect is the ONLY writer of `loop = true` in the app, while `start()` and
+  // the scale pass's replay both clear it, so `video.loop === true` means exactly "this effect
+  // armed it". Anything else and the un-arm branch is unreachable — a presentation change during
+  // a run reaches this effect and returns having touched nothing at all.
+  //
+  // That matters because on the default WebCodecs path sampling never touches the `<video>` at
+  // all, so a violation here is invisible until a WebM/webcam clip falls back to the playback
+  // path (design.md D1, risk R3).
   useEffect(() => {
-    if (state.phase !== 'ready') return
-    if (state.scalePass.status === 'pending' || state.scalePass.status === 'running') return
     const video = videoRef.current
     if (!video) return
-    video.muted = true
-    video.loop = true
-    video.currentTime = 0
-    video.play().catch(() => {
-      // Autoplay still blocked: loop stays armed for whenever playback next starts.
-    })
-  }, [state.phase, state.scalePass.status, videoRef])
+
+    const shouldLoop =
+      presented &&
+      state.phase === 'ready' &&
+      state.scalePass.status !== 'pending' &&
+      state.scalePass.status !== 'running'
+
+    if (shouldLoop) {
+      video.muted = true
+      video.loop = true
+      video.currentTime = 0
+      video.play().catch(() => {
+        // Autoplay still blocked: loop stays armed for whenever playback next starts.
+      })
+      return
+    }
+
+    // A conjunct dropped. Un-arm ONLY a loop this effect armed (see above) — never touch an
+    // element the pipeline currently owns.
+    if (!video.loop) return
+    video.loop = false
+    video.pause()
+  }, [presented, state.phase, state.scalePass.status, videoRef])
 
   // Drives the background scale pass (add-background-scale-pass, D1): once the primary run is
   // 'ready' with the pass 'pending', replay the same clip through a dedicated MediaPipe detector

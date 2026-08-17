@@ -42,6 +42,15 @@ export interface ClipSlotProps {
    * passed down rather than a new one being derived (design.md D3, "No new plumbing").
    */
   isActiveClip?: boolean
+  /**
+   * Whether this clip's preview is currently open. The session owns it (at most one clip is
+   * presented at a time) and it reaches three places from here: the loop condition inside
+   * `useVideoAnalysis` (design.md D1's third conjunct), the element's placement, and the entry,
+   * which grows its frame into the dialog's stage.
+   */
+  isPresented?: boolean
+  onPresent?: (clipId: string) => void
+  onDismiss?: () => void
   /** Called after every render with this clip's current `{ videoSource, analysis }` — the
    * caller (`MultiClipVideoSession`) must be the one that decides whether anything meaningful
    * changed before committing state, since this fires on every render, not just on real
@@ -78,11 +87,14 @@ export function ClipSlot({
   index = 0,
   total = 1,
   isActiveClip = false,
+  isPresented = false,
+  onPresent,
+  onDismiss,
   onReport,
   onRemove,
 }: ClipSlotProps) {
   const videoSource = useVideoSource()
-  const analysis = useVideoAnalysis(videoSource, detector)
+  const analysis = useVideoAnalysis(videoSource, detector, isPresented)
   // Reads `videoSource`'s blob and metadata only, never its `videoRef` — the poster is decoded on
   // a detached element, so it cannot move the playback position `sampleClip` is reading from (see
   // `useClipPoster`). Released by that hook's own cleanup when this slot unmounts.
@@ -149,9 +161,26 @@ export function ClipSlot({
       poster={poster}
       hostsLiveElement={hostsLiveElement}
       isActiveClip={isActiveClip}
+      isPresented={isPresented}
+      onPresent={() => onPresent?.(clipId)}
+      onDismiss={() => onDismiss?.()}
       onRemove={() => onRemove(clipId)}
     >
-      <VideoInputPanel videoSource={videoSource} onScreen={hostsLiveElement}>
+      {/*
+        `onScreen` for either reason — something is sampling this element, or a reader is looking
+        at it. They compose: opening a preview mid-analysis keeps the element on screen (larger,
+        in the dialog's stage) rather than pulling it out of the strip, so the ~20-24% sampled-
+        frame cost of concealment is never re-incurred (design.md D2's resolution).
+
+        `interactive` is the strictly narrower one: the native controls write into the very
+        playback state the pipeline owns while a run is in flight, so they stay `inert` until
+        nothing is reading the element.
+      */}
+      <VideoInputPanel
+        videoSource={videoSource}
+        onScreen={hostsLiveElement || isPresented}
+        interactive={isPresented && !hostsLiveElement}
+      >
         {analysis.phase === 'ready' &&
           analysis.robustFrames &&
           videoSource.metadata && (

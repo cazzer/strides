@@ -318,6 +318,115 @@ describe('MultiClipVideoSession', () => {
     expect(entries[1]).toContainElement(entries[1].querySelector('video'))
   })
 
+  it('previews one clip at a time: nothing loops until presented, and dismissing stops it again', async () => {
+    // design.md D1 / `results-view` "Clip playback loops only while that clip is presented". Two
+    // ready clips with no preview open must BOTH be stopped: an always-on loop would decode and
+    // composite N videos nobody can see for the life of the session.
+    render(<MultiClipVideoSession detector={makeFakeDetector()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
+    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
+    markVideoReady(canonicalVideos()[1])
+
+    const videos = canonicalVideos()
+    for (const video of videos) vi.spyOn(video, 'play').mockResolvedValue(undefined)
+    const pauses = videos.map((video) => vi.spyOn(video, 'pause').mockImplementation(() => {}))
+    await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
+
+    // Both ready, neither presented, neither looping.
+    expect(videos.map((v) => v.loop)).toEqual([false, false])
+
+    const entryButton = (n: number) =>
+      screen.getByRole('button', { name: new RegExp(`clip ${n} of 2:`, 'i') })
+
+    fireEvent.click(entryButton(2))
+    // Exactly one clip loops, and it is the one that was activated.
+    expect(videos.map((v) => v.loop)).toEqual([false, true])
+    expect(screen.getByRole('dialog')).toHaveAccessibleName(/clip 2 of 2/i)
+
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(videos.map((v) => v.loop)).toEqual([false, false])
+    expect(pauses[1]).toHaveBeenCalled()
+    expect(pauses[0]).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    // Focus is back on the entry that opened it.
+    expect(document.activeElement).toBe(entryButton(2))
+  })
+
+  it('the preview presents the clip’s already-mounted element, overlay and all', async () => {
+    render(<MultiClipVideoSession detector={makeFakeDetector()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
+
+    const video = canonicalVideos()[0]
+    vi.spyOn(video, 'play').mockResolvedValue(undefined)
+    vi.spyOn(video, 'pause').mockImplementation(() => {})
+
+    fireEvent.click(screen.getByRole('button', { name: /clip 1 of 1:/i }))
+
+    // No second element for the clip, and the existing one has not been remounted — the modal
+    // formed around it (`results-view`, "Revealing a clip does not change which element analysis
+    // holds"). Asserted on the node, not on a selector match.
+    expect(canonicalVideos()).toHaveLength(1)
+    expect(canonicalVideos()[0]).toBe(video)
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toContainElement(video)
+    // The overlay came along, still hidden from assistive technology.
+    const overlay = dialog.querySelector('canvas')
+    expect(overlay).not.toBeNull()
+    expect(overlay).toHaveAttribute('aria-hidden', 'true')
+    // On screen, in the dialog's stage — the concealed placement would defeat the whole preview.
+    expect(video.parentElement!.className).toContain('absolute')
+    expect(video.parentElement!.className).not.toContain('fixed')
+
+    fireEvent.click(screen.getByRole('button', { name: /close preview/i }))
+    expect(canonicalVideos()).toHaveLength(1)
+    expect(canonicalVideos()[0]).toBe(video)
+  })
+
+  it('a preview opened mid-analysis shows the video without an overlay, and writes nothing', async () => {
+    // The observational guard: a reader inspecting a clip mid-analysis is reasonable, and is made
+    // safe by presentation writing nothing while the pipeline owns the element.
+    sampleClipMock.mockImplementation(() => ({
+      promise: new Promise(() => {}),
+      handle: { stop: vi.fn() },
+    }))
+
+    render(<MultiClipVideoSession detector={makeFakeDetector()} />)
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
+
+    const video = canonicalVideos()[0]
+    const play = vi.spyOn(video, 'play').mockResolvedValue(undefined)
+    const pause = vi.spyOn(video, 'pause').mockImplementation(() => {})
+    const before = { loop: video.loop, muted: video.muted, currentTime: video.currentTime }
+
+    fireEvent.click(screen.getByRole('button', { name: /clip 1 of 1:/i }))
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toContainElement(video)
+    expect(dialog.querySelector('canvas')).toBeNull() // no frames yet, so no overlay
+    // The element stays `inert` while the pipeline owns it: the native controls write into the
+    // very playback state a run in flight depends on.
+    expect(video.parentElement).toHaveAttribute('inert')
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+
+    expect(play).not.toHaveBeenCalled()
+    expect(pause).not.toHaveBeenCalled()
+    expect(video.loop).toBe(before.loop)
+    expect(video.muted).toBe(before.muted)
+    expect(video.currentTime).toBe(before.currentTime)
+  })
+
   it('serializes the shared detector: the second clip stays queued until the first clip fully finishes', async () => {
     // Clip 1's primary sampling pass hangs until resolved manually -- every OTHER sampleClip
     // call (clip 1's scale pass, clip 2's primary and scale pass) resolves immediately, so the

@@ -87,24 +87,24 @@
 
 ## 5. Clip preview modal (`strides-kyu.5`)
 
-- [ ] 5.1 Activating a strip entry presents that clip's **already-mounted** element. The element does
+- [x] 5.1 Activating a strip entry presents that clip's **already-mounted** element. The element does
       not move in the DOM and `videoRef.current` keeps its identity across open → close
       (design.md D4).
-- [ ] 5.2 Reuse `SkeletonOverlay` unchanged, on the same gate it uses today (`phase === 'ready' &&
+- [x] 5.2 Reuse `SkeletonOverlay` unchanged, on the same gate it uses today (`phase === 'ready' &&
       robustFrames && metadata`). A preview opened before that renders the video with no overlay.
-- [ ] 5.3 Implement presentation-scoped looping: loop iff `phase === 'ready'` ∧ no scale pass in
+- [x] 5.3 Implement presentation-scoped looping: loop iff `phase === 'ready'` ∧ no scale pass in
       flight ∧ presented — as one declarative condition, extending the existing effect at
       `useVideoAnalysis.ts:385-396` rather than adding an imperative caller (design.md D1).
-- [ ] 5.4 Dismissing clears `loop` and stops playback, so no hidden clip decodes.
-- [ ] 5.5 Keep the unconditional loop clear at the top of `start()` (`useVideoAnalysis.ts:212-214`)
+- [x] 5.4 Dismissing clears `loop` and stops playback, so no hidden clip decodes.
+- [x] 5.5 Keep the unconditional loop clear at the top of `start()` (`useVideoAnalysis.ts:212-214`)
       and the scale pass's un-looped replay (`:478-482`) — both are sampling guarantees, not
       presentation concerns.
-- [ ] 5.6 Presenting/dismissing a clip whose analysis or scale pass is in flight writes **nothing**
+- [x] 5.6 Presenting/dismissing a clip whose analysis or scale pass is in flight writes **nothing**
       to `loop`, `currentTime`, `paused`, or `muted`. Test on the playback path specifically — the
       default WebCodecs path will not reveal a violation (design.md D1, risk R3).
-- [ ] 5.7 `aria-modal`, focus trap, Escape to dismiss, focus returned to the originating entry,
+- [x] 5.7 `aria-modal`, focus trap, Escape to dismiss, focus returned to the originating entry,
       overlay canvas stays `aria-hidden`.
-- [ ] 5.8 `npm test` and `tsc -b` clean.
+- [x] 5.8 `npm test` and `tsc -b` clean.
 
 ## 6. Header add-a-clip action (`strides-kyu.6`)
 

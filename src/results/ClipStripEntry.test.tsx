@@ -127,4 +127,73 @@ describe('ClipStripEntry', () => {
     fireEvent.click(screen.getByRole('button', { name: /remove clip/i }))
     expect(onRemove).toHaveBeenCalledTimes(1)
   })
+
+  it('activating the entry presents this clip', () => {
+    const onPresent = vi.fn()
+    renderEntry({ index: 1, total: 2, status: queuedStatus(), isActiveClip: false, onPresent })
+
+    fireEvent.click(screen.getByRole('button', { name: /clip 2 of 2: queued/i }))
+    expect(onPresent).toHaveBeenCalledTimes(1)
+  })
+
+  it('presenting grows the frame into a dialog without moving the clip’s element', () => {
+    // The whole mechanism, asserted on node identity rather than on a selector matching something:
+    // the modal forms around where the element already is (`results-view`, "Revealing a clip does
+    // not change which element analysis holds"). If this ever regresses to a portal or a
+    // reparent, `videoRef.current` goes stale mid-run.
+    const { rerender, props } = renderEntry({ isPresented: false })
+    const host = screen.getByTestId('video-host')
+
+    rerender(<ClipStripEntry {...props} isPresented />)
+    const dialog = screen.getByRole('dialog')
+    expect(screen.getByTestId('video-host')).toBe(host)
+    expect(dialog).toContainElement(host)
+    // The frame is the dialog's stage now, not a 96x72 box — same element, different class.
+    expect(document.querySelector('.clip-strip__frame')!.className).not.toContain('w-24')
+
+    rerender(<ClipStripEntry {...props} isPresented={false} />)
+    expect(screen.getByTestId('video-host')).toBe(host)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.querySelector('.clip-strip__frame')!.className).toContain('w-24')
+  })
+
+  it('shows the live element, not the poster, while presented', () => {
+    // A second, independent reason for the frame to hold the real element: `hostsLiveElement` is
+    // false here (nothing is sampling), yet drawing a still over the thing the reader opened the
+    // preview to look at would be absurd.
+    renderEntry({ hostsLiveElement: false, isPresented: true, poster: makePoster() })
+    expect(document.querySelector('.clip-strip__poster')).toBeNull()
+    expect(screen.getByTestId('video-host')).toBeInTheDocument()
+  })
+
+  it('takes the strip’s own controls out of the tab order while presented, and restores focus on dismiss', () => {
+    const { rerender, props } = renderEntry({ isPresented: false, status: queuedStatus() })
+    const activate = screen.getByRole('button', { name: /clip 1 of 1: queued/i })
+    const remove = screen.getByRole('button', { name: /remove clip/i })
+
+    rerender(<ClipStripEntry {...props} isPresented />)
+    // `hidden`, not merely styled away: the frame has moved into the fixed dialog surface, so the
+    // entry collapses and a zero-size button would still be a tab stop — a hole in the trap.
+    // Held by reference rather than re-queried, because `hidden` also drops both out of the
+    // accessibility tree, which is the other half of the point.
+    expect(activate).toHaveAttribute('hidden')
+    expect(remove).toHaveAttribute('hidden')
+    expect(screen.queryByRole('button', { name: /remove clip/i })).toBeNull()
+
+    rerender(<ClipStripEntry {...props} isPresented={false} />)
+    expect(activate).not.toHaveAttribute('hidden')
+    expect(document.activeElement).toBe(activate)
+  })
+
+  it('does not steal focus on mount', () => {
+    // The restore is guarded on a presented→not-presented transition, so an entry that has never
+    // been presented (every entry, on every mount) leaves focus alone.
+    const outside = document.createElement('button')
+    document.body.append(outside)
+    outside.focus()
+
+    renderEntry({ isPresented: false })
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
+  })
 })

@@ -100,6 +100,11 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   const [pendingLoads, setPendingLoads] = useState<Record<string, ClipPendingLoad>>({})
   const [clipStates, setClipStates] = useState<Record<string, ClipSession>>({})
   const [activeClipIndex, setActiveClipIndex] = useState(0)
+  // Which clip's preview is open, or `null`. Session-level rather than per-slot because it is a
+  // mutually exclusive choice: exactly one clip can be presented at a time, and "presented" is the
+  // third conjunct of every clip's loop condition (design.md D1), so two open previews would mean
+  // two clips decoding at once — precisely what scoping the loop to presentation exists to stop.
+  const [presentedClipId, setPresentedClipId] = useState<string | null>(null)
   // Reported up by the evidence gallery once it knows which metrics it actually produced imagery
   // for — the same report-up/fan-down shape `ClipSlot` already uses, and the only way the cards
   // (a sibling subtree) can learn it: whether a metric has evidence is not derivable from
@@ -113,6 +118,8 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
       return { ...prev, [clipId]: session }
     })
   }, [])
+
+  const dismissPreview = useCallback(() => setPresentedClipId(null), [])
 
   const addClip = useCallback((source: Blob | File, opts?: { frameRateHint?: number }) => {
     const id = makeClipId()
@@ -137,6 +144,11 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
       // to unmounting the slot. `reset()` is idempotent and cheap for a clip that was never active
       // (idle) or already terminal (ready/error), so it's called unconditionally rather than only
       // for the clip that happens to be active right now.
+      // A preview of the clip being removed cannot survive it — its stage is that clip's own
+      // element, which is about to unmount. Cleared before anything else so no render ever sees a
+      // `presentedClipId` pointing at a clip that is no longer in the session.
+      setPresentedClipId((current) => (current === id ? null : current))
+
       clipStates[id]?.analysis.reset()
 
       // Frees the poster's pixels in this same tick, for the same reason `reset()` is called here
@@ -215,6 +227,7 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
     setPendingLoads({})
     setClipStates({})
     setActiveClipIndex(0)
+    setPresentedClipId(null)
     setReportedEvidenceMetrics(NO_EVIDENCE_METRICS)
     headingRef.current?.focus()
   }, [clipStates, headingRef])
@@ -271,6 +284,9 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
                   index={index}
                   total={clipIds.length}
                   isActiveClip={id === activeClipId}
+                  isPresented={id === presentedClipId}
+                  onPresent={setPresentedClipId}
+                  onDismiss={dismissPreview}
                   onReport={handleReport}
                   onRemove={removeClip}
                 />

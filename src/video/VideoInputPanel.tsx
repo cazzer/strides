@@ -12,6 +12,19 @@ export interface VideoInputPanelProps {
    */
   onScreen?: boolean
   /**
+   * Whether the reader may operate the element directly — true only while this clip's preview is
+   * open AND nothing is sampling it. Drops `inert` and un-suppresses the native media controls;
+   * changes NOTHING about placement, size, or whether the element is rendered.
+   *
+   * Deliberately narrower than `onScreen`: while a run is in flight the reader may watch the
+   * element but not touch it, because the native controls write straight into the playback state
+   * the pipeline owns (a scrub rewinds the sampler; a pause stalls sampling and fails an
+   * in-flight scale pass by design). That is the same boundary the observational rule draws for
+   * presentation *code* — `results-view`, "Clip playback loops only while that clip is presented"
+   * — applied to the one other actor that can reach the element.
+   */
+  interactive?: boolean
+  /**
    * Rendered inside the same positioned wrapper as `<video>`, e.g. `SkeletonOverlay` (#8) — lets
    * a caller layer a canvas overlay directly on top of the canonical video element without this
    * component needing to know anything about what's being overlaid. The wrapper is a positioned
@@ -54,9 +67,17 @@ export interface VideoInputPanelProps {
  * On screen or not is the only variable that matters. So concealment is not a technique to be
  * chosen well — it is a cost to be avoided while anything is reading, and paid only afterwards.
  *
- * ### On screen (`onScreen`) — while the clip is being sampled
+ * ### On screen (`onScreen`) — while the clip is being sampled, or while its preview is open
  *
- * The element fills its strip entry: `absolute inset-0`, `object-contain`, 96x72 CSS px. That keeps
+ * "Presented" and "being sampled" are two independent reasons for the same element to be on screen
+ * (design.md D2's resolution), and they compose into this one placement: `absolute inset-0` inside
+ * whatever positioned box the caller has put around it. `ClipSlot` passes `onScreen` for either
+ * reason, and `ClipStripEntry` grows that box from a 96x72 strip entry into the preview dialog's
+ * stage by changing its own class — so opening a preview on a clip that is mid-analysis makes the
+ * live element BIGGER, never concealed, and the sampled-frame cost below is not re-incurred.
+ *
+ * The element fills its host box: `absolute inset-0`, `object-contain`, 96x72 CSS px in the strip.
+ * That keeps
  * the longest painted side at 72 (landscape) or 64 (portrait), both clear of the 60 measured as
  * sufficient. It is a child of the sticky header, which is the one placement where the header
  * cannot occlude it — the trap that made a nominally-visible arm measure like a concealed one while
@@ -74,9 +95,11 @@ export interface VideoInputPanelProps {
  *   - the box keeps its real size, because a degenerate box is what rules the zero-size option out
  *     in the first place.
  *
- * `inert` in both placements: an off-screen `<video controls>` is otherwise keyboard-focusable and
- * present in the accessibility tree, and an on-screen one inside a strip entry would put a second,
- * unlabelled tab stop inside a control that already has one. `inert` is interaction-only and does
+ * `inert` in both placements unless `interactive`: an off-screen `<video controls>` is otherwise
+ * keyboard-focusable and present in the accessibility tree, and an on-screen one inside a strip
+ * entry would put a second, unlabelled tab stop inside a control that already has one. The one
+ * exception is an open preview of a clip nothing is sampling, where the whole point is that the
+ * reader can scrub it. `inert` is interaction-only and does
  * not affect rendering or decode — measured, not assumed (`strides-kyu.3`'s G1a, hidden vs visible,
  * both demo clips, with and without it). Note this also makes `elementFromPoint` useless as a
  * visibility check here: `inert` removes the subtree from hit-testing while leaving it fully
@@ -97,13 +120,14 @@ export interface VideoInputPanelProps {
 export function VideoInputPanel({
   videoSource,
   onScreen = false,
+  interactive = false,
   children,
 }: VideoInputPanelProps) {
   const { status, videoRef } = videoSource
 
   return (
     <div
-      inert
+      inert={!interactive}
       className={
         onScreen
           ? 'video-input-panel__host absolute inset-0 bg-black'
@@ -132,7 +156,9 @@ export function VideoInputPanel({
         hidden={status === 'empty'}
         className={
           onScreen
-            ? 'block h-full w-full bg-black object-contain [&::-webkit-media-controls]:hidden'
+            ? interactive
+              ? 'block h-full w-full bg-black object-contain'
+              : 'block h-full w-full bg-black object-contain [&::-webkit-media-controls]:hidden'
             : 'block w-auto h-auto max-w-full max-h-[calc(100vh-150px)] bg-black'
         }
       />
