@@ -222,13 +222,25 @@ it was — collapsing to "resolvable" would erase exactly the distinction the th
   that exemplar (`:230`). The plan can recompute it per drawn frame from positions it already has.
 - `travelDirection` is **clip-wide** and comes from `estimateTravelDirection(frames, bodyScale)`
   (`travelDirection.ts:16-19`) — note it needs a body scale, so the plan must also call
-  `estimateBodyScale`. **Subtlety worth writing down:** metrics compute it over the
-  **presence-trimmed** frames while the plan holds the **untrimmed** array, so a plan-side
-  recomputation can in principle disagree with the metric's. It is a sign, and the trim removes
-  low-presence frames at the ends, so disagreement requires the trimmed and untrimmed hip-x
-  displacements to differ in sign — possible only on a clip where net displacement is near the
-  indeterminate threshold, which is exactly the clip where `estimateTravelDirection` returns `0` and
-  the mark is drawn unoriented anyway. Accepted, and recorded so nobody discovers it as a bug.
+  `estimateBodyScale`. Metrics compute it over the **presence-trimmed** frames while the plan holds
+  the **untrimmed** array, so a naive plan-side recomputation can disagree with the metric's. The
+  plan therefore trims first, reproducing exactly what `runClipAnalysisPipeline.ts:59-60` hands
+  `computeFormHeuristics`, so the two signs agree **by construction** rather than by argument.
+
+  > **Revision (`strides-ac9.6`).** This paragraph originally accepted the disagreement as
+  > unreachable, reasoning that it "requires the trimmed and untrimmed hip-x displacements to differ
+  > in sign — possible only on a clip where net displacement is near the indeterminate threshold,
+  > which is exactly the clip where `estimateTravelDirection` returns `0`". **That reasoning was
+  > wrong, and the implementation disproved it.** The two readings do not share endpoints:
+  > `estimateTravelDirection` uses the first and last frame where **hip-mid** resolves, while
+  > `trimToPresenceWindow` additionally requires **shoulder-mid** plus a run of ≥3 consecutive
+  > present frames. A frame with resolvable hips but no shoulders — a bystander, or the subject with
+  > an occluded torso — therefore sits *outside* the presence window yet still supplies an endpoint
+  > to the untrimmed reading. Parked at the far edge it reverses the sign with **both** readings far
+  > clear of the half-torso threshold and neither returning `0`. Constructed and pinned by test in
+  > `evidenceFrames.test.ts` ("matches the metrics by using their presence-trimmed frames, on a clip
+  > where the untrimmed array disagrees outright"): naive untrimmed `-1`, metric-side `+1`. The risk
+  > is removed rather than accepted.
 
 ---
 

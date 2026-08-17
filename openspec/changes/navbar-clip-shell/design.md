@@ -339,14 +339,38 @@ determinism caveat means cross-session numbers are not comparable.
 
 | gate | measurement | pre-registered pass rule |
 |---|---|---|
-| **G1 — the hard constraint** | Demo 1 and Demo 2, 3 trials each, `sampling.detectedFrames` and `personSelection.detectedSamplesIn`, before vs after | Both clips reach "Analysis complete"; median `detectedFrames` within 10% of the pre-change median on the same machine. **A drop beyond that means the hiding mechanism is wrong (D2) — change the mechanism, do not accept the number.** |
+| **G1a — the hard constraint, measured directly** | On a `'ready'` clip in the app's real final markup, a self-re-arming `requestVideoFrameCallback` on the clip's `<video>`, counted over a fixed window, hidden vs. visible. Both Demo 1 (25 fps) and Demo 2 (59.94 fps). | Hidden count within noise of the visible count and ≈ `fps × window`. A hidden count of `0`, or one far below visible, condemns the mechanism immediately. **This is the PRIMARY instrument** — see the correction below. |
+| **G1b — no regression on the sampling paths** | Demo 1 and Demo 2, 3 trials each, **two arms**: default, and `{"sequentialSampling":{"enabled":false}}`. Record `sampling.detectedFrames`, `personSelection.detectedSamplesIn`, and **`sampling.path`** per run. | Both clips reach "Analysis complete"; median `detectedFrames` within 10% of the pre-change median on the same machine, **in each arm**. Assert `sampling.path` is `'sequential'` in the default arm and `'playback'` in the override arm — if the override arm reports `'sequential'` the override did not take and the run is worthless. **A drop beyond 10% on the playback arm means the hiding mechanism is wrong (D2) — change the mechanism, do not accept the number.** |
 | **G2 — loop scoping** | Two ready clips, no preview open | No clip's element is playing (`paused === true`, `loop === false`) for every clip. Opening one preview starts exactly one; dismissing it stops that one. |
 | **G3 — progress independence** | Two-clip session, sampled during analysis | The two entries show different conditions at the same instant (one sampling, one queued) and do not move in lockstep. Directly falsifies "the strip is still rendering the aggregate". |
 | **G4 — the preview** | Open a preview on a ready clip | Overlay draws over the real element; the video element node identity is unchanged across open → close (D4). |
 | **G5 — no evidence-gallery regression** | `[evidence-coverage]`, last line per run | Per-clip totals match CLAUDE.md's recorded table — Demo 1 **7 images / 5 sections**, Demo 2 **5 / 4**. Extraction races playback state, so a change here means the detached-element path (or the poster capture) disturbed the clip's element. |
 
 `strides-kyu.9` owns G1–G4 and should record actual numbers in the ticket, not "looked fine". G5 is
-cheap to add to the same run and catches D5's worst failure mode.
+cheap to add to the same run and catches D5's worst failure mode. `strides-kyu.3` runs G1a and G1b
+for itself at the moment it applies the hiding mechanism, since it must not be built on top of.
+
+### Correction — G1 as originally written could not detect the failure it guards
+
+G1 was one row: "Demo 1 and Demo 2, `sampling.detectedFrames`, before vs after, within 10%". Run at
+default config, **that measurement is blind to the constraint.**
+
+`samplingRobustnessConfig.ts:40` ships `sequentialSampling: { enabled: true }`, so
+`useVideoAnalysis.ts:227-233` routes sampling through `sampleClipSequential` — WebCodecs, reading
+`sourceBlob`'s **bytes** — and `useVideoAnalysis.ts:268` gates `video.play()` behind
+`if (!usesSequentialDecode)`. Demo 1 and Demo 2 are both MP4, so on the default path **the `<video>`
+element is never read during sampling at all.** CLAUDE.md says as much: "`sequentialSampling`
+defaults on, so most MP4s sample through WebCodecs."
+
+A `display:none`-class regression would therefore yield an *identical* `detectedFrames` on both demo
+clips. The gate would pass green while the guarantee was broken, and the break would first surface
+on a webcam or WebM clip — where `canUseSequentialDecode` returns false (`webCodecsSupport.ts:80`),
+which is precisely the case D1's observational rule exists to protect.
+
+Hence the split above: **G1a** measures the guarantee itself (does the element still produce frames
+while hidden?) and is decisive in seconds; **G1b** keeps the regression check but adds the
+`playback` arm, which is the only arm that exercises the constraint, plus a `sampling.path` assertion
+so a silently-ignored override cannot be mistaken for a pass. Found while planning `strides-kyu.3`.
 
 ---
 
