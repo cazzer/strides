@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { graftScalePassResult, SCALE_PASS_PROVENANCE_CAVEAT } from './scalePassGraft'
+import {
+  graftScalePassResult,
+  withSubjectDivergenceCaveat,
+  SCALE_PASS_PROVENANCE_CAVEAT,
+  SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT,
+} from './scalePassGraft'
 import type {
   FormHeuristicsResult,
   MetricResult,
@@ -277,5 +282,84 @@ describe('graftScalePassResult', () => {
     expect(grafted.verticalOscillationCm.calibration).toBe(
       scale.verticalOscillationCm.calibration,
     )
+  })
+})
+
+describe('withSubjectDivergenceCaveat', () => {
+  it('uses the exact divergence sentence', () => {
+    expect(SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT).toBe(
+      'This second look may have measured a different person than the other metrics.',
+    )
+  })
+
+  it('appends to the two scale-sourced metrics and leaves everything else identical', () => {
+    const grafted = graftScalePassResult(makePrimary(), makeResult(makeVerticalOscillationCm()))
+
+    const caveated = withSubjectDivergenceCaveat(grafted)
+
+    expect(caveated.verticalOscillationCm.caveat).toBe(
+      `${SCALE_PASS_PROVENANCE_CAVEAT} ${SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT}`,
+    )
+    expect(caveated.stepWidthCm.caveat).toBe(
+      `${SCALE_PASS_PROVENANCE_CAVEAT} ${SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT}`,
+    )
+    // Divergence caveats the two numbers; it never withholds or alters them.
+    expect(caveated.verticalOscillationCm.value).toBe(grafted.verticalOscillationCm.value)
+    expect(caveated.stepWidthCm.value).toBe(grafted.stepWidthCm.value)
+    expect(caveated.verticalOscillationCm.calibration).toBe(
+      grafted.verticalOscillationCm.calibration,
+    )
+
+    expect(caveated.view).toBe(grafted.view)
+    expect(caveated.verticalOscillation).toBe(grafted.verticalOscillation)
+    expect(caveated.verticalRatio).toBe(grafted.verticalRatio)
+    expect(caveated.trunkLean).toBe(grafted.trunkLean)
+    expect(caveated.overstriding).toBe(grafted.overstriding)
+    expect(caveated.cadence).toBe(grafted.cadence)
+    expect(caveated.kneeFlexion).toBe(grafted.kneeFlexion)
+    expect(caveated.armSwingSymmetry).toBe(grafted.armSwingSymmetry)
+    expect(caveated.footStrikePattern).toBe(grafted.footStrikePattern)
+    expect(caveated.stepWidth).toBe(grafted.stepWidth)
+  })
+
+  it('composes after provenance, behind the metric’s own caveat', () => {
+    const ownCaveat = 'The bounce rhythm in this clip was not perfectly steady.'
+    const scale = makeResult(
+      makeVerticalOscillationCm({ caveat: ownCaveat }),
+      makeStepWidthCm({ caveat: null }),
+    )
+
+    const caveated = withSubjectDivergenceCaveat(
+      graftScalePassResult(makePrimary(), scale),
+    )
+
+    expect(caveated.verticalOscillationCm.caveat).toBe(
+      `${ownCaveat} ${SCALE_PASS_PROVENANCE_CAVEAT} ${SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT}`,
+    )
+    // No leading space when the grafted metric carried no caveat of its own before provenance.
+    expect(caveated.stepWidthCm.caveat).toBe(
+      `${SCALE_PASS_PROVENANCE_CAVEAT} ${SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT}`,
+    )
+  })
+
+  it('handles a null caveat without emitting a leading space', () => {
+    const result = makeResult(
+      makeVerticalOscillationCm({ caveat: null }),
+      makeStepWidthCm({ caveat: null }),
+    )
+
+    const caveated = withSubjectDivergenceCaveat(result)
+
+    expect(caveated.verticalOscillationCm.caveat).toBe(SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT)
+    expect(caveated.stepWidthCm.caveat).toBe(SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT)
+  })
+
+  it('does not mutate its input', () => {
+    const result = makeResult(makeVerticalOscillationCm({ caveat: null }))
+    const before = JSON.stringify(result)
+
+    withSubjectDivergenceCaveat(result)
+
+    expect(JSON.stringify(result)).toBe(before)
   })
 })

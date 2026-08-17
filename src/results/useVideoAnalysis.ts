@@ -8,7 +8,8 @@ import { sampleClipAdaptive } from './sampleClipAdaptive'
 import { runClipAnalysisPipeline } from './runClipAnalysisPipeline'
 import { resolveSamplingRobustnessConfig } from './samplingRobustnessConfig'
 import { resolveScalePassConfig } from './scalePassConfig'
-import { graftScalePassResult } from './scalePassGraft'
+import { graftScalePassResult, withSubjectDivergenceCaveat } from './scalePassGraft'
+import { assessScalePassSubjectAgreement } from './scalePassSubjectAgreement'
 import { getScalePassDetector } from '../pose/scalePassDetector'
 import type { ScalePassState, VideoAnalysisState } from './types'
 
@@ -409,9 +410,24 @@ export function useVideoAnalysis(
     }
 
     const video = videoRef.current
+    // All three are written in the ONE object literal that commits `phase: 'ready'` with
+    // `scalePass: 'pending'`, and every later write spreads `...s` without touching them — so the
+    // guard above (phase ready + pass pending) cannot pass on a render where any of them is null.
+    // Lifted together for the subject-agreement check below, which needs the primary pass's own
+    // frames and its person-selection verdict alongside its heuristics.
     const primaryHeuristics = state.heuristics
-    if (!video || !metadata || !primaryHeuristics) {
-      failPass('No video was available for the scale pass.')
+    const primaryRobustFrames = state.robustFrames
+    const primaryDiagnostics = state.diagnostics
+    // One guard block rather than two sequential ones, purely to satisfy
+    // `react-hooks/set-state-in-effect`: two early returns ahead of the `'running'` setState below
+    // trips it where one does not. The message still names which precondition actually failed —
+    // "no video" would be false for an incomplete primary result, and vice versa.
+    if (!video || !metadata || !primaryHeuristics || !primaryRobustFrames || !primaryDiagnostics) {
+      failPass(
+        !video || !metadata
+          ? 'No video was available for the scale pass.'
+          : 'The primary analysis result was incomplete when the scale pass started.',
+      )
       return
     }
 
@@ -539,10 +555,13 @@ export function useVideoAnalysis(
 
       try {
         // The byte-identical pipeline the primary run uses, over the scale pass's own samples.
-        // The pass's own `robustFrames` aren't retained — nothing renders a scale-pass skeleton
-        // overlay, and the graft below only ever reads `scaleHeuristics`/`scaleDiagnostics`.
-        const { heuristics: scaleHeuristics, diagnostics: scaleDiagnostics } =
-          runClipAnalysisPipeline(
+        // The pass's own `robustFrames` are read by the subject-agreement check below but never
+        // stored on state — nothing renders a scale-pass skeleton overlay.
+        const {
+          robustFrames: scaleRobustFrames,
+          heuristics: scaleHeuristics,
+          diagnostics: scaleDiagnostics,
+        } = runClipAnalysisPipeline(
             samples,
             samplingRobustnessConfig,
             usesSequentialDecode ? 'sequential' : 'playback',
@@ -560,14 +579,30 @@ export function useVideoAnalysis(
           failPass('The scale pass completed but measured no real-world scale.')
           return
         }
+        // Whose scale did the pass measure? (#56) Each pass ran person selection independently
+        // over its own backend's samples, so a pass that measured scale perfectly may still have
+        // measured a bystander's. Divergence caveats the two grafted numbers — it never withholds
+        // them, and on 'agreed'/'no-opinion' the graft is byte-identical to what it always was.
+        const subjectAgreement = assessScalePassSubjectAgreement(
+          {
+            frames: primaryRobustFrames,
+            personSelection: primaryDiagnostics.personSelection,
+          },
+          { frames: scaleRobustFrames, personSelection: scaleDiagnostics.personSelection },
+          samplingRobustnessConfig.personSelection,
+        )
         const grafted = graftScalePassResult(primaryHeuristics, scaleHeuristics)
+        const displayed =
+          subjectAgreement.status === 'diverged'
+            ? withSubjectDivergenceCaveat(grafted)
+            : grafted
         if (runIdRef.current !== runId) return
         setState((s) => ({
           ...s,
           // The one write the scale pass makes outside its own status object. `diagnostics`
           // stays the primary's — the scale pass's live on scalePass.diagnostics instead.
-          heuristics: grafted,
-          scalePass: { status: 'done', diagnostics: scaleDiagnostics },
+          heuristics: displayed,
+          scalePass: { status: 'done', diagnostics: scaleDiagnostics, subjectAgreement },
         }))
       } catch (err) {
         failPass(err instanceof Error ? err.message : 'Scale pass failed unexpectedly.')
@@ -577,6 +612,10 @@ export function useVideoAnalysis(
     state.phase,
     state.scalePass.status,
     state.heuristics,
+    // Inert additions (#56): neither changes independently of `phase`/`heuristics` — all three are
+    // written in one literal — and the once-per-run latch above no-ops a re-fire regardless.
+    state.robustFrames,
+    state.diagnostics,
     videoRef,
     metadata,
     sourceBlob,
@@ -624,10 +663,12 @@ export function useVideoAnalysis(
   // per terminal transition (each transition replaces the `scalePass` object wholesale, so
   // keying on its identity fires exactly once each). The primary line above stays byte-identical
   // — same trigger, same payload, primary pass only. `diagnostics` rides along only on 'done';
-  // 'skipped'/'failed' carry their reason/error instead.
+  // 'skipped'/'failed' carry their reason/error instead. `subjectAgreement` (#56) carries the
+  // MARGIN behind the verdict, not just the verdict — a boolean would leave a check that never
+  // fires and a check that fires by a hair indistinguishable in production diagnosis.
   useEffect(() => {
     if (!import.meta.env.DEV) return
-    const { status, reason, error, diagnostics } = state.scalePass
+    const { status, reason, error, subjectAgreement, diagnostics } = state.scalePass
     if (status !== 'done' && status !== 'failed' && status !== 'skipped') return
     console.log(
       '[analysis-diagnostics:scale-pass]',
@@ -635,6 +676,7 @@ export function useVideoAnalysis(
         status,
         ...(reason !== undefined ? { reason } : {}),
         ...(error !== undefined ? { error } : {}),
+        ...(subjectAgreement !== undefined ? { subjectAgreement } : {}),
         ...(status === 'done' && diagnostics !== null ? { diagnostics } : {}),
       }),
     )
