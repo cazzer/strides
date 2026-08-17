@@ -149,6 +149,41 @@ consistent with the same clip analysed while visible" — rather than naming a C
 the technique is an implementation detail and the frame count is the thing that must hold. The table
 above is guidance for `strides-kyu.3`, not a contract.
 
+> ## RESOLVED (`strides-kyu.13`) — read this before the ladder below
+>
+> The ladder is a record of a dead end. Everything under it measured correctly and concluded
+> correctly from what it had, but it was solving the wrong problem: **the cost is not any
+> concealment *technique*, it is concealment itself, and it is binary.**
+>
+> Demo 2, playback arm, 5 trials per arm, one session, real GPU, `sampling.path` asserted
+> `'playback'` on all 30 trials:
+>
+> | arm | painted area | median | vs control |
+> |---|---|---|---|
+> | visible, full size (control) | 124,256 px² | **61** | — |
+> | visible, full size (repeat, larger) | 182,756 px² | **61** | 0.0% |
+> | visible, **120 px** longest side | 8,100 px² | **62** | **+1.6%** |
+> | visible, **60 px** longest side | 2,025 px² | **62** | **+1.6%** |
+> | L0 offscreen + `inert` | **0 px²** | 49 | −19.7% |
+> | L0 offscreen + `inert` (repeat) | **0 px²** | 47 | −23.0% |
+>
+> **No threshold exists.** Painted area varies **61×** across the three passing arms with
+> throughput flat. A genuinely on-screen element keeps full throughput at 60 CSS px; a concealed
+> one loses ~20% at any size, by any mechanism.
+>
+> **Therefore: the analysing clip's element stays genuinely on screen, and the navbar strip entry
+> is where it lives.** A 60–120 px strip thumbnail *is* the live element while that clip's analysis
+> is in flight, reverting to the static poster at a terminal phase. This costs the design nothing —
+> it is the surface the epic was already building — and it composes with **D1**: "presented" and
+> "being sampled" become two independent reasons for the same element to be visible. Implemented by
+> `strides-kyu.4`.
+>
+> Two traps this measurement hit, both of which read healthy if you check the wrong thing: the
+> sticky header **occludes** a small element placed at `top-0`, turning a nominal "visible" arm into
+> a partial concealment while every class name looks right (`getBoundingClientRect` cannot see it —
+> screenshot the video's own rect); and `elementFromPoint` is useless here, because `inert` removes
+> the subtree from hit-testing while leaving it fully rendered.
+
 ### Measured: every rung of the ladder costs frames, and L0 is the least bad (`strides-kyu.3`)
 
 `strides-kyu.3` pre-registered an escalation ladder so that a failure had somewhere to go rather
