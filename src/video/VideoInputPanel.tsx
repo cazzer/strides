@@ -1,10 +1,6 @@
-import { useState } from 'react'
 import type { ReactNode } from 'react'
-import { DemoVideoButton } from './DemoVideoButton'
-import { FileUpload } from './FileUpload'
-import { WebcamCapture } from './WebcamCapture'
+import { ClipPicker } from './ClipPicker'
 import type { VideoSource } from './types'
-import parkApproachDemoUrl from './demo-clips/park-approach.mp4'
 
 export interface VideoInputPanelProps {
   /** Owned by the caller (e.g. `App.tsx`) via `useVideoSource()`. */
@@ -17,8 +13,6 @@ export interface VideoInputPanelProps {
   children?: ReactNode
 }
 
-type Tab = 'record' | 'upload'
-
 /**
  * Lets the user choose between recording via webcam and uploading a file,
  * and shows the resulting video's loading/error/ready state. Does not know
@@ -26,71 +20,11 @@ type Tab = 'record' | 'upload'
  * existing once `videoSource.status` changes.
  */
 export function VideoInputPanel({ videoSource, children }: VideoInputPanelProps) {
-  const [activeTab, setActiveTab] = useState<Tab>('record')
-  const [isRecording, setIsRecording] = useState(false)
-
   const { status, error, load, reset, videoRef } = videoSource
-  const showPicker = status === 'empty'
 
   return (
     <section className="video-input-panel space-y-4" aria-label="Video input">
-      {showPicker && (
-        <div className="flex border-2 border-black dark:border-white divide-x-2 divide-black dark:divide-white w-fit">
-          <button
-            type="button"
-            aria-pressed={activeTab === 'record'}
-            disabled={isRecording && activeTab !== 'record'}
-            title={
-              isRecording && activeTab !== 'record'
-                ? "Can't switch while recording"
-                : undefined
-            }
-            onClick={() => setActiveTab('record')}
-            className="px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide aria-pressed:bg-black aria-pressed:text-white dark:aria-pressed:bg-white dark:aria-pressed:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Record
-          </button>
-          <button
-            type="button"
-            aria-pressed={activeTab === 'upload'}
-            disabled={isRecording && activeTab !== 'upload'}
-            title={
-              isRecording && activeTab !== 'upload'
-                ? "Can't switch while recording"
-                : undefined
-            }
-            onClick={() => setActiveTab('upload')}
-            className="px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide aria-pressed:bg-black aria-pressed:text-white dark:aria-pressed:bg-white dark:aria-pressed:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Upload
-          </button>
-        </div>
-      )}
-
-      {showPicker && activeTab === 'record' && (
-        <WebcamCapture
-          onRecorded={(blob, opts) =>
-            load(blob, { frameRateHint: opts.frameRateHint ?? undefined })
-          }
-          onRecordingStateChange={setIsRecording}
-        />
-      )}
-
-      {showPicker && activeTab === 'upload' && (
-        <FileUpload onSelected={(file) => load(file)} />
-      )}
-
-      {showPicker && (
-        <div className="flex flex-wrap gap-2">
-          <DemoVideoButton onLoaded={(blob) => load(blob)} disabled={isRecording} label="Demo 1 (side view)" />
-          <DemoVideoButton
-            onLoaded={(blob) => load(blob)}
-            disabled={isRecording}
-            videoUrl={parkApproachDemoUrl}
-            label="Demo 2 (front view)"
-          />
-        </div>
-      )}
+      {status === 'empty' && <ClipPicker onSource={load} />}
 
       {status === 'loading' && <p role="status">Processing video…</p>}
 
