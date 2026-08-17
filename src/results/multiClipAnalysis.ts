@@ -1,4 +1,5 @@
 import type { MetricId } from '../heuristics/types'
+import type { ClipPoster } from '../video/posterFrame'
 import type { VideoSource } from '../video/types'
 import type {
   AnalysisPhase,
@@ -19,6 +20,16 @@ export interface ClipSession {
   clipId: string
   videoSource: VideoSource
   analysis: VideoAnalysisState
+  /**
+   * One still frame from this clip, for anything that has to show a clip as an image rather than a
+   * position ("clip 2 of 3"). `null` until the source is ready and the frame has been decoded, and
+   * `null` again once the source is replaced or cleared.
+   *
+   * A live `<canvas>` held in memory for the session, never a data URL, blob or stored asset — the
+   * same no-export rule the evidence gallery follows. Its owner is the `ClipSlot` that derived it
+   * (`useClipPoster`); a consumer renders it and must never mutate or release it.
+   */
+  poster: ClipPoster | null
 }
 
 const SCALE_PASS_STATUS_PRIORITY: ScalePassStatus[] = ['running', 'done', 'failed', 'skipped']

@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from 'react'
 import type { PoseDetector } from '../pose/detector'
+import { useClipPoster } from '../video/useClipPoster'
 import { useVideoSource } from '../video/useVideoSource'
 import { VideoInputPanel } from '../video/VideoInputPanel'
 import { SkeletonOverlay } from './SkeletonOverlay'
@@ -49,6 +50,10 @@ export function ClipSlot({
 }: ClipSlotProps) {
   const videoSource = useVideoSource()
   const analysis = useVideoAnalysis(videoSource, detector)
+  // Reads `videoSource`'s blob and metadata only, never its `videoRef` — the poster is decoded on
+  // a detached element, so it cannot move the playback position `sampleClip` is reading from (see
+  // `useClipPoster`). Released by that hook's own cleanup when this slot unmounts.
+  const poster = useClipPoster(videoSource)
 
   // Loads a pre-chosen source exactly once, before paint (useLayoutEffect, not useEffect) — so a
   // clip created with a `pendingLoad` never flashes VideoInputPanel's picker UI for a frame
@@ -87,7 +92,7 @@ export function ClipSlot({
   // responsibility belongs to the caller, which already holds the previous value to diff
   // against and can bail out of its own state update without triggering another render.
   useLayoutEffect(() => {
-    onReport(clipId, { clipId, videoSource, analysis })
+    onReport(clipId, { clipId, videoSource, analysis, poster })
   })
 
   return (
