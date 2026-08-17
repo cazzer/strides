@@ -331,30 +331,30 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
 
 ## 6. Frame extractor — seek, crop, composite (#66)
 
-- [ ] 6.1 New `src/video/extractFrames.ts`. Resurrect `seekTo(video, time)` from
+- [x] 6.1 New `src/video/extractFrames.ts`. Resurrect `seekTo(video, time)` from
   `git show ee7a56e^:src/quality/assessVideoQuality.ts` (`:32-57`) — `seeked` listener,
   `SEEK_TIMEOUT_MS = 2000` fallback, `<0.001s` no-op short-circuit — rather than writing a new one.
-- [ ] 6.2 Use a **second, detached** `<video>` from `URL.createObjectURL(sourceBlob)`. Never touch
+- [x] 6.2 Use a **second, detached** `<video>` from `URL.createObjectURL(sourceBlob)`. Never touch
   the visible element, which is loop-playing after ready (`useVideoAnalysis.ts:381-392`). Own and
   revoke this object URL here; never reuse or revoke `useVideoSource`'s private one.
-- [ ] 6.3 **At most one detached decoder open at a time**: all instants for one clip in one pass,
+- [x] 6.3 **At most one detached decoder open at a time**: all instants for one clip in one pass,
   tear down, next clip.
-- [ ] 6.4 Await one `requestVideoFrameCallback` after `seeked` before `drawImage` — `seeked` does not
+- [x] 6.4 Await one `requestVideoFrameCallback` after `seeked` before `drawImage` — `seeked` does not
   mean the new frame is composited.
-- [ ] 6.5 Draw with the nine-argument `drawImage(video, sx, sy, sw, sh, 0, 0, dw, dh)` — only the
+- [x] 6.5 Draw with the nine-argument `drawImage(video, sx, sy, sw, sh, 0, 0, dw, dh)` — only the
   crop rect, never a full 4K canvas per exemplar.
-- [ ] 6.6 Ghost compositing via `globalAlpha` at the plan's opacities.
-- [ ] 6.7 Return canvases / `ImageBitmap`s held in memory. **No `toDataURL`, no `toBlob`, no
+- [x] 6.6 Ghost compositing via `globalAlpha` at the plan's opacities.
+- [x] 6.7 Return canvases / `ImageBitmap`s held in memory. **No `toDataURL`, no `toBlob`, no
   download, no storage** (also unstubbed in jsdom).
-- [ ] 6.8 A seek that never fires `seeked` degrades to `reason: 'extraction-failed'`, never a
+- [x] 6.8 A seek that never fires `seeked` degrades to `reason: 'extraction-failed'`, never a
   spinner. Runs strictly after `phase: 'ready'`; no measurable analysis wall-clock regression.
-- [ ] 6.9 **PTS calibration hook (design D6/R1)**: a per-clip seek-time offset, applied at seek time
+- [x] 6.9 **PTS calibration hook (design D6/R1)**: a per-clip seek-time offset, applied at seek time
   only, never written back into `robustFrames[].timestamp`. Landed here if #68 measures a non-zero
   offset.
-- [ ] 6.10 Smoke test with `stubCanvas2DContext()` (`canvasTestUtils.ts:29`, fakes `drawImage` at
+- [x] 6.10 Smoke test with `stubCanvas2DContext()` (`canvasTestUtils.ts:29`, fakes `drawImage` at
   `:40` and `globalAlpha` at `:41`) and `makeVideoSeekable(video)` (`videoTestUtils.ts:13`). Assert
   *that* two frames blended at the right opacities and *what* crop rect was passed. Never pixels.
-- [ ] 6.11 `npm test`, `tsc -b`, `eslint` clean.
+- [x] 6.11 `npm test`, `tsc -b`, `eslint` clean.
 
 ## 7. Evidence gallery UI and per-card deep link (#67)
 
