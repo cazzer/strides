@@ -95,9 +95,20 @@ In development builds only, `useVideoAnalysis` auto-logs TWO console lines per r
    case this line reads exactly as it did before the stage existed. `personSelection` itself is
    ALWAYS present (unlike `scaleCalibration`):
    `{ status: 'selected'|'skipped', skipReason, minBoundingBoxAreaPx, totalSamples,
-   detectedSamplesIn, detectedSamplesOut, rejectedBelowFloor, rejectedOtherSegment, segmentCount,
+   detectedSamplesIn, detectedSamplesOut, rejectedBelowFloor, rejectedOtherSegment,
+   rejectedOutsideEvidence, segmentCount,
    bridgedCuts, segments (ranked by integrated area DESC, capped at 10, `[0]` is the winner),
    separationRatio }` — `src/results/retroactivePersonSelection.ts`.
+
+   **`rejectedOutsideEvidence`** (#55) counts detections nulled for sitting inside the WINNING
+   segment's partition span but outside its **evidenced interior** — the closed span from the
+   winner's first to its last surviving detection. Only a boxless frame (fewer than
+   `minConfidentKeypoints` confident points, so `deriveBoundingBox` returns nothing) can land here:
+   such a frame is never floor-checked and never segment-checked, and before #55 it rode through the
+   winner's whole back- and forward-extended partition span carrying `status: 'detected'`. Note the
+   two windows now DIFFER: `segments[k].startTimestamp`/`endTimestamp` still report the PARTITION
+   span, never the evidenced interior, so do not read that span as "the frames that were kept".
+   `detectedSamplesOut` is `detectedSamplesIn` minus all THREE rejection counts.
 
    **`bridgedCuts`** (#54) counts how many cuts the splice-tolerance rule DECLINED, because the
    surviving detections either side of an offending one were continuous with each other. It counts

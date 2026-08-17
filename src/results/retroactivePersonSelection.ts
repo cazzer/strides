@@ -103,6 +103,14 @@ export interface RetroactivePersonSelectionConfig {
  * left, and every one of them lies OUTSIDE the winner's span. Demo 1 keeps `segmentCount >= 2`
  * until #57's re-derived floor demotes them to `rejectedBelowFloor`, where D5 makes them harmless.
  *
+ * UPDATE (2026-08-16, issue #55): the second of the two open correctness items named above —
+ * boxless survival inside the winner's span — is CLOSED. A detection yielding no bounding box now
+ * survives only inside the winner's evidenced interior (first through last surviving detection),
+ * not anywhere in its partition span, and what the narrower window excludes is counted in
+ * `rejectedOutsideEvidence`. The inversion that item described (a bystander nulled by the floor at
+ * 5 confident keypoints but KEPT at 3) no longer holds. Primary/scale-pass selection divergence
+ * (#56) is still open and still live.
+ *
  * `minBoundingBoxAreaFraction: 2e-4` — 415 px² at 1080p, 1659 px² at 4K. Derived as roughly the
  * geometric mean of the largest measured garbage detection on the repro clip (183 px²) and the
  * smallest measured real person on it (~1000 px²): ~2.3x above the noise, ~40x below the smallest
@@ -162,9 +170,16 @@ export const DEFAULT_RETROACTIVE_PERSON_SELECTION_CONFIG: RetroactivePersonSelec
 }
 
 export interface PersonSelectionSegmentDiagnostics {
-  /** The segment's own span in the index partition — `startTimestamp` is the timestamp of its
+  /** The segment's own span in the index PARTITION — `startTimestamp` is the timestamp of its
    * first sample and `endTimestamp` of its last, so consecutive segments tile the whole clip with
-   * no gaps and no overlap. NOT the first/last surviving detection's timestamps. */
+   * no gaps and no overlap. NOT the first/last surviving detection's timestamps.
+   *
+   * Since restrict-boxless-survival that distinction is load-bearing rather than pedantic: the
+   * window a frame has to be inside to SURVIVE is the winner's EVIDENCED INTERIOR (its first
+   * through last surviving detection), which is narrower than this span and is deliberately not
+   * reported here. The two now differ, so do not read this span as "the frames that were kept" —
+   * `frameCount` below is the surviving-detection count, and `rejectedOutsideEvidence` on the
+   * parent object counts what the narrower window excluded. */
   startTimestamp: number
   endTimestamp: number
   /** How many surviving detections (post-floor, box-yielding) this segment contains — the count
@@ -174,8 +189,12 @@ export interface PersonSelectionSegmentDiagnostics {
   integratedAreaPx: number
   /** Median bounding-box area across the same set — `integratedAreaPx` split into its size and
    * duration halves, so a long-and-small segment reads differently from a short-and-large one.
-   * `0` for a segment with no surviving detections (impossible today: every segment starts at
-   * one). */
+   * `0` for a segment with no surviving detections — impossible today, because every segment
+   * starts at one: `segmentStarts` is only ever pushed at a surviving index (the splice-tolerance
+   * bridge DECLINES to push, it never introduces a start at a non-surviving one), and the
+   * partition only ever extends a segment's range OUTWARD from its start, never inward.
+   * Re-verified after splice-tolerant-segmentation, because `rejectedOutsideEvidence` now depends
+   * on it: that invariant is what makes the winner's evidenced interval non-empty. */
   medianAreaPx: number
 }
 
@@ -203,8 +222,27 @@ export interface PersonSelectionDiagnostics {
    * at all, which is counted here too — across every segment. */
   rejectedBelowFloor: number
   /** Detections nulled for belonging to a losing segment (floor rejections are not counted twice
-   * here). */
+   * here). Membership is decided by the PARTITION, so this keeps meaning exactly "lost its
+   * segment" — a frame discarded inside the winning segment is never counted here. */
   rejectedOtherSegment: number
+  /** Detections nulled for lying inside the WINNING segment's partition span but outside its
+   * evidenced interior — the closed interval between its first and last surviving detection.
+   *
+   * These are the frames that yielded no bounding box at all (fewer than `minConfidentKeypoints`
+   * confident points), so nothing about them was ever checked: not the area floor, not continuity,
+   * not identity. Before restrict-boxless-survival they passed through intact anywhere in the
+   * winner's partition — which, per the total partition, reaches back to index 0 and forward to
+   * the last sample — and arrived downstream carrying `status: 'detected'`, the strongest status
+   * this pipeline has, on possibly the wrong person's position. Worse, the same intruder WOULD
+   * have been nulled had it been detected slightly better: a box below the floor is rejected,
+   * while no box at all was kept. Fewer confident points bought survival.
+   *
+   * Counted separately from `rejectedBelowFloor` and `rejectedOtherSegment` rather than folded
+   * into either, and by design this counts EXACTLY the frames the evidenced-interior rule newly
+   * nulls: the losing-segment test is taken first, so no frame that was already being rejected
+   * changes bucket. Without that, a clip where the rule fired and a clip where it had nothing to
+   * do would report identically — the same reason `bridgedCuts` exists. */
+  rejectedOutsideEvidence: number
   segmentCount: number
   /** How many times a cut was DECLINED because the surviving detections either side of the
    * offending one were continuous with each other. Counts bridge EVENTS, not boundaries: one event
@@ -252,6 +290,7 @@ function skipped(
       detectedSamplesOut: detectedSamplesIn,
       rejectedBelowFloor: 0,
       rejectedOtherSegment: 0,
+      rejectedOutsideEvidence: 0,
       segmentCount: 0,
       bridgedCuts: 0,
       segments: [],
@@ -289,7 +328,16 @@ function skipped(
  *     Two consecutive failures still cut.
  *  4. Score each segment by INTEGRATED bounding-box area — area summed across its frames, which
  *     folds apparent size and duration into one number with no weights to tune. Highest wins.
- *  5. Null every frame outside the winner.
+ *  5. Null every frame outside the winner — and, inside it, every frame outside the winner's
+ *     EVIDENCED INTERIOR: the closed span from its first to its last surviving detection. A frame
+ *     that yields no bounding box is never floor-checked and never segment-checked, so nothing
+ *     about it has been verified; the winner's own surviving detections are the only evidence this
+ *     stage has that the winner was even on screen. Inside that span an unverifiable frame rides
+ *     along; outside it — including in the winner's own back-extended or forward-extended
+ *     partition tail — it is nulled and counted in `rejectedOutsideEvidence`. Nulling stays
+ *     TOTAL: the partition is untouched and still decides which segment every frame belongs to,
+ *     and therefore which rejection bucket it lands in. Only the SURVIVAL of an unverifiable frame
+ *     narrows.
  *
  * Losing frames become `{ timestamp, frame: null }` — a real gap — and NEVER another person's
  * keypoints. `applyRobustness` interpolates across gaps with no identity check whatsoever, so
@@ -470,12 +518,24 @@ export function selectRetroactivePersonOfInterest(
 
   const scored = partition.map(({ from, to }) => {
     const areas: number[] = []
+    // The segment's EVIDENCED INTERIOR: the first and last index at which it actually has box
+    // evidence. Recorded in the same pass that collects the areas rather than by a second scan,
+    // and for every segment rather than only the winner, so a segment's record describes itself.
+    // Never empty in practice — see `medianAreaPx`'s note on why every segment starts at a
+    // surviving index.
+    let evidenceFrom = -1
+    let evidenceTo = -1
     for (let i = from; i <= to; i += 1) {
-      if (surviving[i] !== null) areas.push(survivingAreaPx[i])
+      if (surviving[i] === null) continue
+      areas.push(survivingAreaPx[i])
+      if (evidenceFrom === -1) evidenceFrom = i
+      evidenceTo = i
     }
     return {
       from,
       to,
+      evidenceFrom,
+      evidenceTo,
       startTimestamp: samples[from].timestamp,
       endTimestamp: samples[to].timestamp,
       frameCount: areas.length,
@@ -490,11 +550,25 @@ export function selectRetroactivePersonOfInterest(
   }
 
   let rejectedOtherSegment = 0
+  let rejectedOutsideEvidence = 0
   const selected = samples.map((sample, i) => {
     if (sample.frame === null) return sample
-    const inWinner = i >= winner.from && i <= winner.to
-    if (inWinner && !belowFloor[i]) return sample
-    if (!belowFloor[i]) rejectedOtherSegment += 1
+    // `inEvidence` implies `inWinner`: the interval's ends are themselves surviving indices inside
+    // `[winner.from, winner.to]`. So this ONE test is simultaneously the old behaviour for a
+    // detection that yielded a box — every surviving index in the winner is inside the winner's
+    // own first/last by definition — and the new, narrower behaviour for one that did not. No
+    // branch distinguishes the two, so they cannot drift apart.
+    const inEvidence = i >= winner.evidenceFrom && i <= winner.evidenceTo
+    if (inEvidence && !belowFloor[i]) return sample
+    if (!belowFloor[i]) {
+      // Partition membership decides the bucket, and it is asked FIRST, so every frame that was
+      // already being rejected keeps the bucket it had. `rejectedOutsideEvidence` therefore counts
+      // exactly the frames this rule newly nulls — which is what makes it readable as an A/B
+      // observable rather than a reshuffling of existing counts.
+      const inWinner = i >= winner.from && i <= winner.to
+      if (inWinner) rejectedOutsideEvidence += 1
+      else rejectedOtherSegment += 1
+    }
     return { timestamp: sample.timestamp, frame: null }
   })
 
@@ -515,9 +589,13 @@ export function selectRetroactivePersonOfInterest(
       totalSamples: samples.length,
       detectedSamplesIn,
       detectedSamplesOut:
-        detectedSamplesIn - rejectedBelowFloor - rejectedOtherSegment,
+        detectedSamplesIn -
+        rejectedBelowFloor -
+        rejectedOtherSegment -
+        rejectedOutsideEvidence,
       rejectedBelowFloor,
       rejectedOtherSegment,
+      rejectedOutsideEvidence,
       segmentCount: scored.length,
       bridgedCuts,
       segments: ranked.slice(0, MAX_REPORTED_SEGMENTS).map((segment) => ({
