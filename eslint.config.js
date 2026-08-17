@@ -19,4 +19,13 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    // Node-run measurement tooling (scripts/ab-person-selection.mjs). Browser globals too: the
+    // `page.evaluate`/`addInitScript` callbacks in it are serialized and run in the page.
+    files: ['scripts/**/*.mjs'],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.browser },
+    },
+  },
 ])

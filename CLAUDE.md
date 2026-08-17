@@ -156,6 +156,40 @@ await page.goto('http://localhost:5173')
 // ...drive the demo clip, capture [analysis-diagnostics] as above
 ```
 
+**Scripted multi-trial A/B — `scripts/ab-person-selection.mjs`** (#53). Everything above, packaged:
+it starts (or reuses) the dev server, launches Chromium with the real-GPU args, runs N trials per
+arm across the three available clips, and prints a median + range per field. Prefer it over a
+throwaway driver — four `#52` tickets share it, and hand-written one-offs come out
+mutually-incomparable.
+
+```bash
+node scripts/ab-person-selection.mjs \
+  --arm 'off={"personSelection":{"enabled":false}}' \
+  --arm 'on={"personSelection":{"enabled":true}}' \
+  --clips demo1,demo2,multiperson --trials 3
+# equivalently: npm run ab:person-selection -- --arm 'off={}' ...
+```
+
+- **An arm is `--arm <label>=<json>`**, repeatable, where `<json>` is a partial
+  `SamplingRobustnessConfig` assigned to `window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__`
+  via `addInitScript`. `{}` is an untouched baseline. That is the only config plane exposed — the
+  backend and scale-pass globals still need hand-driving.
+- **Clips**: `demo1` (side-view track, fetched live from Pexels — needs network), `demo2`
+  (`park-approach.mp4`, local and fast), `multiperson` (`e2e/fixtures/multiperson-track.mp4`, via
+  the Upload tab). Default: all three. Note the demo buttons are labelled *Demo 1 (side view)* /
+  *Demo 2 (front view)* now, not the "try a demo video" copy older notes here quote.
+- Reads `playwright.config.ts` for the launch args, baseURL and dev-server command, and **reuses a
+  server already listening on that port** — pass `--port <n>` when another worktree might be
+  serving a different checkout on 5173, or you will A/B somebody else's code without noticing.
+- Prints the `WEBGL_debug_renderer_info` renderer string once per invocation and **refuses to run**
+  on SwiftShader/software rendering rather than quietly producing unrepresentative numbers.
+- Captures `sampling.*`, the whole `personSelection` block including `segments[0]`, `view`, and
+  every metric's `value`/`confidence`. Progress goes to stderr and the report to stdout, with a
+  fixed field order and no timestamps, so `> before.txt` / `> after.txt` compare with `diff`.
+  `--json <path>` also writes one record per (clip, arm) carrying every raw per-trial value.
+- Trial-major ordering (every arm runs before the next trial starts), so no single arm collects
+  all the cold-start runs. A failed trial is recorded and the matrix continues.
+
 **Known issues — two of the four registered backends are broken (2026-08-11).** MoveNet is the
 only `@tensorflow-models/pose-detection` model in this installed version (`2.1.3`) confirmed
 working end-to-end in this environment; both non-MoveNet models from that same package fail, in
@@ -594,9 +628,11 @@ where the second person is detected as confidently as the first. What IS confirm
 footage: the fixture reliably exercises the acquisition + periodic-re-verification code paths
 end-to-end. Full description: same design.md section, "Multi-person fixture" paragraph.
 
-Also flagged, not yet scoped: the eval harness/comparison tooling itself (multi-trial, labeled,
-diffable) that would actually drive variants through these config planes hasn't been built —
-this doc covers how to do it by hand, not a scripted harness.
+The eval harness/comparison tooling this backlog used to list as missing now exists for the
+sampling/robustness plane: `scripts/ab-person-selection.mjs` (#53, documented under "Live-browser
+verification harness" above) drives multi-trial, labeled, diffable A/Bs across all three clips.
+The backend (`__STRIDES_POSE_BACKEND_OVERRIDE__`), scale-pass and heuristics planes are still
+hand-driven — extending the driver to them is unbuilt, not designed away.
 
 From the vertical-oscillation accuracy investigation (2026-08-12, see section above), not yet
 built:
