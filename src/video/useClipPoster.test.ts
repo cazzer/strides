@@ -73,6 +73,28 @@ describe('useClipPoster', () => {
     await waitFor(() => expect(result.current).toBe(poster))
   })
 
+  it('derives once per source, not once per render', async () => {
+    const poster = makePoster()
+    deriveClipPosterMock.mockResolvedValue(poster)
+    const source = makeSource()
+    const { result, rerender } = renderHook(({ source }) => useClipPoster(source), {
+      initialProps: { source },
+    })
+    await waitFor(() => expect(result.current).toBe(poster))
+    expect(deriveClipPosterMock).toHaveBeenCalledTimes(1)
+
+    // A real `useVideoSource` hands back a NEW top-level object every render while its blob and
+    // metadata keep their identity, and `MultiClipVideoSession` re-renders every mounted `ClipSlot`
+    // on every progress tick — so the wrapper's identity churns dozens of times per analysis.
+    // Spreading it here reproduces exactly that: same three effect deps, different object.
+    for (let i = 0; i < 25; i += 1) rerender({ source: { ...source } })
+
+    // Not "still has a poster" — the COUNT. A dep that became per-render would keep this hook
+    // working and simply re-decode a 4K clip on every tick, which nothing else here would notice.
+    expect(deriveClipPosterMock).toHaveBeenCalledTimes(1)
+    expect(result.current).toBe(poster)
+  })
+
   it('releases the poster on unmount', async () => {
     const poster = makePoster()
     deriveClipPosterMock.mockResolvedValue(poster)

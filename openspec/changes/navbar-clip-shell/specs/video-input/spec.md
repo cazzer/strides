@@ -22,6 +22,20 @@ whichever mid-analysis frame happens to be current, which varies run to run. A d
 its own decoder MAY seek that decoder freely, since nothing else observes it, and SHALL tear down the
 decoder and revoke its object URL on every exit path, including timeout and error.
 
+At most one such decoder SHALL exist at a time across the whole session, and that limit SHALL be
+enforced by the derivation itself rather than asked of its callers. A session can acquire several
+clips in a single interaction — one multi-file selection loads every file at once — and each clip's
+derivation is requested independently, with no call site able to see the others. Full-resolution
+decoders are held open at the clip's own dimensions, which for this app's own reference footage is
+4K, and they are opened during analysis, competing with a live sampling run for memory and GPU.
+
+The instant a poster is taken from SHALL NOT be the clip's first frame whenever any later instant
+can be reached, **including when the clip's duration cannot be read at all**. A duration of
+`Infinity` is not an exotic failure: it is what a MediaRecorder-produced clip reports, which is
+every clip this app records itself. Treating an unreadable duration as zero would silently apply
+the first-frame outcome to a whole input mode, so an unreadable duration SHALL instead fall back to
+a fixed offset into the clip, and only then to the first frame if that offset cannot be reached.
+
 Because the source reaches `'ready'` on metadata alone, a frame is not guaranteed at that moment. The
 poster SHALL therefore become available at or after `'ready'`, once a frame has actually been
 decoded, and a consumer SHALL treat its absence as "not yet", rendering a neutral placeholder rather
@@ -66,6 +80,18 @@ a rendering context.
 - **WHEN** a poster derivation opens its own decoder and that derivation succeeds, times out, errors,
   or is abandoned because the clip was removed first
 - **THEN** the decoder is released and its object URL revoked in every one of those cases
+
+#### Scenario: Several clips arrive at once and decode one at a time
+
+- **WHEN** several clips are added in a single interaction and each asks for its poster
+- **THEN** no two poster decoders are open simultaneously — each starts only after the previous one
+  has been torn down — without any caller having arranged that ordering
+
+#### Scenario: A clip whose duration cannot be read still posters past its first frame
+
+- **WHEN** a clip reports no usable duration, as a webcam recording does
+- **THEN** the poster is taken from a fixed offset into the clip rather than from its first frame,
+  and falls back to the first frame only if that offset cannot be reached
 
 #### Scenario: The poster is not serialized or persisted
 

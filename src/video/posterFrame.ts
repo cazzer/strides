@@ -19,6 +19,17 @@ import type { VideoMetadata } from './types'
  * `sourceBlob` — a separate decoder with a separate object URL, holding no reference to the
  * canonical element — exactly as `extractClipEvidence` does, and for the same reason.
  *
+ * ### One detached decoder at a time, process-wide
+ *
+ * `deriveClipPoster` is called once per clip by a per-clip hook, so nothing at the call site can
+ * see the other clips — the caller-supplied array `extractSessionEvidence` loops over has no
+ * analogue here. The ordering therefore lives INSIDE the derivation, on a module-level queue
+ * (`posterQueue`): a second call cannot start its decoder until the first has torn its own down,
+ * whoever makes it and whenever. That is the same "sequential by construction rather than by caller
+ * convention" posture and the same reason — Demo 1 is 3840x2160 and Demo 2 is 2160x3840, and a
+ * multi-file pick mounts every clip in one tick, so N concurrent 4K decoders is not an acceptable
+ * amount of memory to hold, on top of the WebGL sampling run they would compete with.
+ *
  * ### No serialization
  *
  * The poster is a `<canvas>`, never a data URL, blob or object URL, and it is never persisted. The
@@ -43,8 +54,9 @@ export const POSTER_MAX_SIDE_PX = 240
 export const POSTER_TIMESTAMP_FRACTION = 0.1
 
 /**
- * Ceiling on the above, in seconds. On a long clip 10% is minutes in, which is both slow to seek
- * to and no more representative than the opening second.
+ * Ceiling on the above, in seconds — and, for a clip whose duration cannot be read at all, the
+ * whole answer (see `choosePosterTimestamps`). On a long clip 10% is minutes in, which is both slow
+ * to seek to and no more representative than the opening second.
  */
 export const POSTER_TIMESTAMP_MAX_SECONDS = 1
 
@@ -117,16 +129,31 @@ export function computePosterSize(
 }
 
 /**
- * PURE. Which instant to take the poster from, in seconds (see `POSTER_TIMESTAMP_FRACTION`).
+ * PURE. Which instants to try taking the poster from, in seconds, best first (see
+ * `POSTER_TIMESTAMP_FRACTION`). Never empty; the caller draws at the first one it can reach.
  *
- * Always strictly inside the clip: the fraction is below 1, so the result can never land on or past
- * the final frame, and an unusable duration (`null`, `NaN`, `Infinity`, zero or negative — every
- * one of which a `<video>` can report) falls back to 0, which is always seekable.
+ * **A usable duration yields exactly one candidate**, strictly inside the clip: the fraction is
+ * below 1, so it can never land on or past the final frame. There is deliberately no fallback
+ * behind it — the position was computed from a duration the element reported, so a seek that
+ * cannot reach it means the decoder is broken, and drawing frame 0 instead would substitute a
+ * frame nobody asked for (`drawPosterFrame` yields no poster rather than a wrong one).
+ *
+ * **An unusable duration yields the fixed offset, then 0.** `null`, `NaN`, `Infinity`, zero and
+ * negative are all things a `<video>` genuinely reports, and one of them is not an edge case at
+ * all: a MediaRecorder WebM — every webcam-recorded clip this app produces — reports
+ * `duration: Infinity`, which `useVideoSource` copies verbatim into `metadata.durationSec`.
+ * Clamping that to 0 would poster EVERY recorded run at its first frame, which is the one outcome
+ * `POSTER_TIMESTAMP_FRACTION` exists to avoid (a fade-in, a black leader, or the runner still
+ * walking back from the camera). With no duration there is no fraction to take, so the offset is
+ * a fixed guess rather than a computed position — and unlike the computed case it therefore earns
+ * a fallback, because a clip shorter than the offset, or one whose blob genuinely will not seek,
+ * should still get a thumbnail rather than none.
  */
-export function choosePosterTimestamp(durationSec: number | null | undefined): number {
-  if (durationSec == null) return 0
-  if (!Number.isFinite(durationSec) || durationSec <= 0) return 0
-  return Math.min(durationSec * POSTER_TIMESTAMP_FRACTION, POSTER_TIMESTAMP_MAX_SECONDS)
+export function choosePosterTimestamps(durationSec: number | null | undefined): number[] {
+  if (durationSec == null || !Number.isFinite(durationSec) || durationSec <= 0) {
+    return [POSTER_TIMESTAMP_MAX_SECONDS, 0]
+  }
+  return [Math.min(durationSec * POSTER_TIMESTAMP_FRACTION, POSTER_TIMESTAMP_MAX_SECONDS)]
 }
 
 /** Bounded wait for the element to hold decoded pixels. Resolves `false` on error or timeout. */
@@ -156,12 +183,36 @@ function waitForDecodedData(video: HTMLVideoElement, timeoutMs: number): Promise
 }
 
 /**
+ * Seeks to the first candidate that can actually be reached and returns it, or `null` if none can.
+ * Sequential and short-circuiting: a candidate that lands is drawn, and the ones behind it are
+ * never seeked to, so the single-candidate case costs exactly what one seek always cost.
+ */
+async function seekToFirstReachable(
+  video: HTMLVideoElement,
+  candidates: number[],
+  options: PosterDerivationOptions,
+): Promise<number | null> {
+  for (const candidate of candidates) {
+    const outcome = await seekTo(video, candidate, options.seekTimeoutMs)
+    if (outcome === 'timed-out') continue
+    // `'already-there'` skips the wait rather than shortening it: no seek means no new frame is
+    // coming, so every arm but the backstop is dead and waiting could only burn the timeout.
+    if (outcome === 'seeked') {
+      await waitForPresentedFrame(video, options.presentationTimeoutMs)
+    }
+    return candidate
+  }
+  return null
+}
+
+/**
  * The IMPURE half, against a `<video>` the CALLER owns and has already loaded — the same shape as
- * `extractPlannedFrames`. It decides nothing: the size and the timestamp both come from the pure
+ * `extractPlannedFrames`. It decides nothing: the size and the timestamps both come from the pure
  * functions above.
  *
- * `null` when the size is undecidable, the seek never completed, or the browser has no 2D context.
- * A poster is optional everywhere it is consumed, so every failure is a `null`, never a throw.
+ * `null` when the size is undecidable, no candidate instant could be reached, or the browser has no
+ * 2D context. A poster is optional everywhere it is consumed, so every failure is a `null`, never a
+ * throw.
  */
 export async function drawPosterFrame(
   video: HTMLVideoElement,
@@ -171,14 +222,12 @@ export async function drawPosterFrame(
   const size = computePosterSize(metadata, options.maxSidePx ?? POSTER_MAX_SIDE_PX)
   if (size === null) return null
 
-  const timestamp = choosePosterTimestamp(metadata.durationSec)
-  const outcome = await seekTo(video, timestamp, options.seekTimeoutMs)
-  if (outcome === 'timed-out') return null
-  // `'already-there'` skips the wait rather than shortening it: no seek means no new frame is
-  // coming, so every arm but the backstop is dead and waiting could only burn the timeout.
-  if (outcome === 'seeked') {
-    await waitForPresentedFrame(video, options.presentationTimeoutMs)
-  }
+  const timestamp = await seekToFirstReachable(
+    video,
+    choosePosterTimestamps(metadata.durationSec),
+    options,
+  )
+  if (timestamp === null) return null
 
   const canvas = document.createElement('canvas')
   canvas.width = size.width
@@ -193,19 +242,24 @@ export async function drawPosterFrame(
 }
 
 /**
+ * Tail of the process-wide poster queue (see the module doc's "One detached decoder at a time").
+ * Always settled or pending — never rejected, so one failed derivation cannot wedge the queue for
+ * every clip behind it.
+ */
+let posterQueue: Promise<unknown> = Promise.resolve()
+
+/**
  * One clip, one detached decoder, torn down before returning.
  *
  * The object URL is minted from `sourceBlob` and revoked here. `useVideoSource` keeps its own
  * private object URL for the canonical element; that one is never reused and never revoked from
  * here. Blob URLs inherit the document's origin, so the canvas is never tainted.
  */
-export async function deriveClipPoster(
-  sourceBlob: Blob | null,
-  metadata: VideoMetadata | null,
-  options: PosterDerivationOptions = {},
+async function decodePosterFrame(
+  sourceBlob: Blob,
+  metadata: VideoMetadata,
+  options: PosterDerivationOptions,
 ): Promise<ClipPoster | null> {
-  if (sourceBlob === null || metadata === null) return null
-
   const url = URL.createObjectURL(sourceBlob)
   const video = document.createElement('video')
   video.muted = true
@@ -228,6 +282,41 @@ export async function deriveClipPoster(
     video.load()
     URL.revokeObjectURL(url)
   }
+}
+
+/**
+ * Derives one clip's poster, **strictly after every derivation already asked for**.
+ *
+ * The wait is imposed here rather than asked of callers: `useClipPoster` is mounted once per clip
+ * and cannot see the other clips, so a picked-4-files session fires four of these in a single
+ * microtask flush with nothing between them. Chaining onto a module-level tail makes "one detached
+ * decoder exists at a time" a property of this function instead of a convention every future call
+ * site has to know about — the same guarantee `extractSessionEvidence` gets from its `for await`
+ * loop, reached the only way an N-caller API can reach it.
+ *
+ * A queued derivation is not cancellable, and deliberately so: it is bounded by its own load, seek
+ * and presentation timeouts, and `useClipPoster` already releases a poster that lands after its
+ * clip is gone. Cancellation would add a second way for the queue to be left holding a decoder.
+ *
+ * Nothing-to-do calls (no bytes, no metadata) resolve `null` immediately WITHOUT taking a place in
+ * the queue — they open no decoder, so making them wait behind one would be pure latency.
+ */
+export function deriveClipPoster(
+  sourceBlob: Blob | null,
+  metadata: VideoMetadata | null,
+  options: PosterDerivationOptions = {},
+): Promise<ClipPoster | null> {
+  if (sourceBlob === null || metadata === null) return Promise.resolve(null)
+
+  const derivation = posterQueue.then(() => decodePosterFrame(sourceBlob, metadata, options))
+  // The tail swallows outcomes on purpose. `decodePosterFrame` resolves `null` rather than throwing
+  // on every failure it knows about, but an unforeseen throw must still not leave `posterQueue`
+  // rejected — every later clip chains off it, and they would all reject without ever decoding.
+  posterQueue = derivation.then(
+    () => undefined,
+    () => undefined,
+  )
+  return derivation
 }
 
 /**
