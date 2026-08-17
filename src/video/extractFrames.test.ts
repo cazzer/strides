@@ -425,3 +425,203 @@ describe('extractClipEvidence', () => {
     revokeSpy.mockRestore()
   })
 })
+
+/**
+ * The decoder's whole lifetime, bracketed: an object URL is minted before the element exists and
+ * revoked after it is torn down, so an interleaved log is direct evidence of overlap. Same
+ * instrument `posterFrame.test.ts` uses on `posterQueue`, pointed at `evidenceQueue`.
+ */
+function bracketDecoders(): {
+  log: string[]
+  minted: () => number
+  restore: () => void
+} {
+  const log: string[] = []
+  let minted = 0
+  const createSpy = vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
+    minted += 1
+    log.push(`open:${minted}`)
+    return `blob:evidence-${minted}`
+  })
+  const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation((url) => {
+    log.push(`close:${String(url).replace('blob:evidence-', '')}`)
+  })
+  return {
+    log,
+    minted: () => minted,
+    restore: () => {
+      createSpy.mockRestore()
+      revokeSpy.mockRestore()
+    },
+  }
+}
+
+function clip(plan = planWith({ trunkLean: [PAIR] })) {
+  return { sourceBlob: new Blob(['x']), plan }
+}
+
+describe('extractSessionEvidence', () => {
+  it('opens one detached decoder at a time across SEPARATE overlapping passes', async () => {
+    stubCanvas2DContext()
+    const decoders = bracketDecoders()
+
+    // The bug this guards: the gallery starts a whole new pass whenever its input signature
+    // changes, which it legitimately does mid-session when the scale pass grafts
+    // `verticalOscillationCm` in. Each pass's own `for await` orders only its OWN clips, so
+    // nothing stopped the passes from doubling up — measured at three concurrent 4K decoders.
+    await Promise.all([
+      extractSessionEvidence([clip()], { loadTimeoutMs: 5 }),
+      extractSessionEvidence([clip()], { loadTimeoutMs: 5 }),
+    ])
+
+    // Strictly paired, never nested: `open:2` cannot appear before `close:1`. Serialized by
+    // construction inside `extractClipEvidence`, so no caller had to arrange it.
+    expect(decoders.log).toEqual(['open:1', 'close:1', 'open:2', 'close:2'])
+    decoders.restore()
+  })
+
+  it('interleaves multi-clip passes one clip at a time rather than doubling up', async () => {
+    stubCanvas2DContext()
+    const decoders = bracketDecoders()
+
+    await Promise.all([
+      extractSessionEvidence([clip(), clip()], { loadTimeoutMs: 5 }),
+      extractSessionEvidence([clip(), clip()], { loadTimeoutMs: 5 }),
+    ])
+
+    // Which pass owns which slot is not the claim — "never two open at once" is. Every close
+    // lands before the next open, whichever pass minted it.
+    expect(decoders.log).toHaveLength(8)
+    let open = 0
+    let peak = 0
+    for (const entry of decoders.log) {
+      open += entry.startsWith('open:') ? 1 : -1
+      peak = Math.max(peak, open)
+    }
+    expect(peak).toBe(1)
+    expect(open).toBe(0)
+    decoders.restore()
+  })
+
+  it('opens no decoder at all for a pass abandoned before it starts', async () => {
+    stubCanvas2DContext()
+    const decoders = bracketDecoders()
+    const controller = new AbortController()
+    controller.abort()
+
+    const results = await extractSessionEvidence([clip(), clip()], {
+      loadTimeoutMs: 5,
+      signal: controller.signal,
+    })
+
+    expect(decoders.log).toEqual([])
+    // Abandonment is a verdict, not a rejection or an empty list.
+    expect(results).toHaveLength(2)
+    expect(results[0].trunkLean).toEqual({
+      status: 'no-evidence',
+      reason: 'extraction-failed',
+    })
+    expect(results[0].cadence).toEqual({ status: 'no-evidence', reason: 'not-emitted' })
+    decoders.restore()
+  })
+
+  it('stops opening decoders for the clips behind an abandoned pass', async () => {
+    stubCanvas2DContext()
+    const controller = new AbortController()
+    const log: string[] = []
+    const createSpy = vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
+      log.push('open')
+      // Abandoned the instant the first clip's decoder exists — a superseded pass must not go on
+      // decoding the clips behind it for results already destined to be dropped on arrival.
+      controller.abort()
+      return 'blob:evidence'
+    })
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {
+      log.push('close')
+    })
+
+    await extractSessionEvidence([clip(), clip(), clip()], {
+      loadTimeoutMs: 5,
+      signal: controller.signal,
+    })
+
+    // One decoder opened, and released — not three, and not one held open.
+    expect(log).toEqual(['open', 'close'])
+    createSpy.mockRestore()
+    revokeSpy.mockRestore()
+  })
+
+  it('does not wedge the queue behind an abandoned pass', async () => {
+    stubCanvas2DContext()
+    const decoders = bracketDecoders()
+    const controller = new AbortController()
+    controller.abort()
+
+    await extractSessionEvidence([clip()], {
+      loadTimeoutMs: 5,
+      signal: controller.signal,
+    })
+    // The pass that supersedes it still gets its turn — the whole point of abandoning the first.
+    const results = await extractSessionEvidence([clip()], { loadTimeoutMs: 5 })
+
+    expect(decoders.log).toEqual(['open:1', 'close:1'])
+    expect(results[0].trunkLean).toEqual({
+      status: 'no-evidence',
+      reason: 'extraction-failed',
+    })
+    decoders.restore()
+  })
+})
+
+describe('abandoning an in-flight clip', () => {
+  it('abandons the WHOLE clip at the next image boundary, never a partial one', async () => {
+    const ctx = stubCanvas2DContext()
+    const { video } = seekableVideo()
+    const controller = new AbortController()
+    let drawn = 0
+    ctx.drawImage.mockImplementation(() => {
+      drawn += 1
+      if (drawn === 1) controller.abort()
+    })
+
+    const evidence = await extractPlannedFrames(
+      video,
+      planWith({ trunkLean: [PAIR], footStrikePattern: [SINGLE] }),
+      { signal: controller.signal },
+    )
+
+    // The pair whose base drew was already in flight and finishes its ghost — the check is per
+    // IMAGE — but it is reported as failed rather than shipped: a half-extracted clip wearing an
+    // `'extracted'` shape is a partial answer nothing downstream could tell apart from a whole one.
+    expect(drawn).toBe(2)
+    expect(evidence.trunkLean).toEqual({
+      status: 'no-evidence',
+      reason: 'extraction-failed',
+    })
+    expect(evidence.footStrikePattern).toEqual({
+      status: 'no-evidence',
+      reason: 'extraction-failed',
+    })
+    // A metric that never planned anything keeps the reason the plan gave it.
+    expect(evidence.cadence).toEqual({ status: 'no-evidence', reason: 'not-emitted' })
+  })
+
+  it('changes nothing when no signal is supplied', async () => {
+    const ctx = stubCanvas2DContext()
+    const { video } = seekableVideo()
+    const alphas = recordAlphas(ctx)
+
+    const evidence = await extractPlannedFrames(
+      video,
+      planWith({ trunkLean: [PAIR], footStrikePattern: [SINGLE] }),
+    )
+
+    expect(alphas).toEqual([
+      EVIDENCE_BASE_OPACITY,
+      EVIDENCE_GHOST_OPACITY,
+      EVIDENCE_BASE_OPACITY,
+    ])
+    expect(evidence.trunkLean.status).toBe('extracted')
+    expect(evidence.footStrikePattern.status).toBe('extracted')
+  })
+})
