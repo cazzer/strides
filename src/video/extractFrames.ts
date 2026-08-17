@@ -44,6 +44,16 @@ export const SEEK_TIMEOUT_MS = 2000
 export const LOAD_TIMEOUT_MS = 10000
 
 /**
+ * Backstop on the post-seek presentation grace period (see `waitForPresentedFrame`). Deliberately
+ * two orders of magnitude below `SEEK_TIMEOUT_MS`: this is a courtesy pause, not a gate, and the
+ * one situation that reaches it is a document that never paints (a backgrounded tab throttles
+ * `requestAnimationFrame` to nothing). A whole clip's plan is on the order of forty instants, so a
+ * seek-sized backstop here would cost a minute of wall clock to buy nothing `seeked` had not
+ * already guaranteed.
+ */
+export const FRAME_PRESENTATION_TIMEOUT_MS = 100
+
+/**
  * Cap on the side of the canvas a crop is drawn into, in device pixels. The crop rect itself is in
  * NATIVE video pixels and can be 2160 px on the demo clips — a full-resolution canvas per exemplar
  * is ~18 MB, and the gallery may hold two per metric across eleven metrics. Derived from the same
@@ -82,8 +92,11 @@ export interface EvidenceExtractionOptions {
   maxOutputSidePx?: number
   /** Bounded wait for `loadeddata` on a detached element. */
   loadTimeoutMs?: number
-  /** Bounded wait for each seek, and for the frame it presents. */
+  /** Bounded wait for each seek. A seek that exhausts it fails its exemplar. */
   seekTimeoutMs?: number
+  /** Backstop on the post-seek presentation grace period (see `FRAME_PRESENTATION_TIMEOUT_MS`).
+   * Exhausting it is not a failure — the frame is drawn either way. */
+  presentationTimeoutMs?: number
 }
 
 /** One renderable image: the plan it came from, and the canvas its instants were composited into. */
@@ -152,37 +165,86 @@ export function seekTo(
   })
 }
 
+/** Which arm of `waitForPresentedFrame` resolved it. Reported for observability — no arm is a
+ * failure, so the caller draws regardless of which one won. */
+export type FramePresentationSignal =
+  | 'video-frame-callback'
+  | 'animation-frame'
+  | 'timed-out'
+
 /**
- * Waits for one `requestVideoFrameCallback` — `seeked` reports that the seek completed, not that
- * the new frame is composited, and drawing immediately can capture the PREVIOUS frame, which on a
- * running subject is a plausible, silently-wrong image (design D11).
+ * Bounded, best-effort pause between a completed seek and the draw. **Every arm resolves and none
+ * of them fails the exemplar** — a presentation signal is a courtesy here, never the only path to
+ * a drawn frame.
  *
- * Resolves `false` on timeout, which fails the exemplar: a wrong image is worse than no image. A
- * browser that does not implement the API at all resolves `true` immediately — there is no other
- * signal available there, and refusing to extract on every such browser would be worse than
- * accepting the risk on one.
+ * ### Why this is not the `requestVideoFrameCallback` gate it replaced
+ *
+ * #66 awaited exactly one `requestVideoFrameCallback` after `seeked` and dropped the exemplar when
+ * it did not arrive, reasoning that `seeked` reports seek completion but not that the new frame is
+ * on screen (design D11 — an inference, never measured). Measured live for #59 (headless Chromium,
+ * real GPU): **`requestVideoFrameCallback` does not fire after a PAUSED seek** in this Chromium —
+ * detached or attached to the document, headless or headed. It fires normally during playback; the
+ * paused-seek case specifically never presents. So the gate never opened, and every metric on every
+ * clip degraded to `'extraction-failed'`.
+ *
+ * The premise was wrong as well as the remedy. `drawImage(video, …)` samples the DECODED frame at
+ * the current playback position, not the composited output `requestVideoFrameCallback` reports on,
+ * and `seeked` already implies `readyState >= HAVE_CURRENT_DATA` for the new position — the frame
+ * is decoded and drawable at that point. The #59 probe confirms it end to end: pixels drawn
+ * immediately after `seeked` alone are correct and DISTINCT per timestamp.
+ *
+ * ### The three arms
+ *
+ * - `requestVideoFrameCallback`, when the browser has it. First choice, and the reason the wait
+ *   still exists: a browser that DOES present after a paused seek gets the real signal.
+ * - Two `requestAnimationFrame` ticks. The everyday fallback, ~32 ms. Two rather than one because a
+ *   single tick can land ahead of the frame callback in a browser where that callback works, which
+ *   would make the real signal unreachable in practice.
+ * - `timeoutMs`. The backstop for a document that never paints at all, where
+ *   `requestAnimationFrame` is throttled to nothing and would hang this forever.
+ *
+ * A browser with no `requestVideoFrameCallback` simply loses the first arm and resolves through the
+ * other two, which is the same "extract anyway" posture the old code took by resolving immediately.
  */
-function waitForPresentedFrame(
+export function waitForPresentedFrame(
   video: HTMLVideoElement,
-  timeoutMs: number,
-): Promise<boolean> {
-  if (typeof video.requestVideoFrameCallback !== 'function') {
-    return Promise.resolve(true)
-  }
+  timeoutMs: number = FRAME_PRESENTATION_TIMEOUT_MS,
+): Promise<FramePresentationSignal> {
   return new Promise((resolve) => {
     let settled = false
-    const handle = video.requestVideoFrameCallback(() => {
+    let frameHandle: number | undefined
+    let rafHandle: number | undefined
+
+    // Armed before either fast arm is registered, and read only through the hoisted `settle`
+    // below, so no arm — not even one a stub fires synchronously — can reach it unassigned.
+    const timer = setTimeout(() => settle('timed-out'), timeoutMs)
+
+    function settle(signal: FramePresentationSignal) {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolve(true)
-    })
-    const timer = setTimeout(() => {
-      if (settled) return
-      settled = true
-      video.cancelVideoFrameCallback?.(handle)
-      resolve(false)
-    }, timeoutMs)
+      if (frameHandle !== undefined) video.cancelVideoFrameCallback?.(frameHandle)
+      if (rafHandle !== undefined && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(rafHandle)
+      }
+      resolve(signal)
+    }
+
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      frameHandle = video.requestVideoFrameCallback(() => {
+        frameHandle = undefined
+        settle('video-frame-callback')
+      })
+    }
+
+    if (typeof requestAnimationFrame === 'function') {
+      rafHandle = requestAnimationFrame(() => {
+        rafHandle = requestAnimationFrame(() => {
+          rafHandle = undefined
+          settle('animation-frame')
+        })
+      })
+    }
   })
 }
 
@@ -220,6 +282,7 @@ interface ResolvedOptions {
   maxOutputSidePx: number
   loadTimeoutMs: number
   seekTimeoutMs: number
+  presentationTimeoutMs: number
 }
 
 function resolveOptions(options: EvidenceExtractionOptions): ResolvedOptions {
@@ -229,13 +292,16 @@ function resolveOptions(options: EvidenceExtractionOptions): ResolvedOptions {
     maxOutputSidePx: options.maxOutputSidePx ?? EVIDENCE_OUTPUT_MAX_SIDE_PX,
     loadTimeoutMs: options.loadTimeoutMs ?? LOAD_TIMEOUT_MS,
     seekTimeoutMs: options.seekTimeoutMs ?? SEEK_TIMEOUT_MS,
+    presentationTimeoutMs:
+      options.presentationTimeoutMs ?? FRAME_PRESENTATION_TIMEOUT_MS,
   }
 }
 
 /**
  * Seeks to one planned instant and draws it through the plan's crop rect at the plan's opacity.
- * `false` when the frame could not be shown to be on screen — the caller drops the whole exemplar
- * rather than shipping a half-composited image.
+ * `false` only when the SEEK itself never completed — the caller drops the whole exemplar rather
+ * than shipping an image of whichever instant happened to be loaded. The presentation wait that
+ * follows a completed seek cannot fail it (see `waitForPresentedFrame`).
  *
  * The nine-argument `drawImage` is the point (design R3): only the crop rect is ever read, and the
  * destination canvas is the display crop, so a 3840x2160 clip never allocates a full-frame canvas.
@@ -251,9 +317,11 @@ async function drawInstant(
   const target = Math.max(0, instant.timestamp + options.seekOffsetSeconds)
   const outcome = await seekTo(video, target, options.seekTimeoutMs)
   if (outcome === 'timed-out') return false
+  // `'already-there'` skips the wait rather than shortening it: the short-circuit means the element
+  // is ALREADY showing this instant, so no new frame is coming and every arm but the backstop would
+  // be dead. Waiting there could only burn the timeout and then draw the identical pixels.
   if (outcome === 'seeked') {
-    const presented = await waitForPresentedFrame(video, options.seekTimeoutMs)
-    if (!presented) return false
+    await waitForPresentedFrame(video, options.presentationTimeoutMs)
   }
   ctx.globalAlpha = instant.opacity
   ctx.drawImage(
