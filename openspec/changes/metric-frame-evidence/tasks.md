@@ -88,26 +88,72 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
 
 ## 2. Spectral fit phase and the vertical-oscillation family (#62)
 
-- [ ] 2.1 `spectralFit.ts`: add `phaseRadians = atan2(b, a)` and `tMeanSeconds` to
+- [x] 2.1 `spectralFit.ts`: add `phaseRadians = atan2(b, a)` and `tMeanSeconds` to
   `SpectralFitSuccess`. Assert `peakToPeakAmplitude` and every existing field bit-identical
   before/after — this primitive is shared by four metrics.
-- [ ] 2.2 A shared helper deriving (max, adjacent min) instants from `(frequencyHz, phaseRadians,
+  Proved by a temporary before/after harness (added, measured, reverted, per CLAUDE.md's cycle):
+  4 raw fits over noisy irregular series plus all four metrics × 4 clips × 3 views, walked
+  key-by-key with `Object.is` — **0 shared keys changed, 0 removed**, the only difference being
+  the two added fields and `exemplars`. The anchor fixture's 8 pre-existing fields were measured
+  on the pre-change tree and are now pinned with exact `toBe` in `spectralFit.test.ts`
+  ("holds every pre-existing field bit-identical on a fixed noisy input"), which also cross-checks
+  the recovered phase against the fixture's KNOWN 0.7 rad — the only independent evidence that
+  `atan2(b, a)` read the right two coefficients in the right order.
+- [x] 2.2 A shared helper deriving (max, adjacent min) instants from `(frequencyHz, phaseRadians,
   tMeanSeconds)`, selecting the pair whose midpoint is nearest the centre of `spanSeconds`, then
   snapping each to a sampled frame via `findNearestFrame` + the half-median-interval tolerance.
-- [ ] 2.3 **The sign rule (design D8).** `hipBounce.ts:95` fits raw downward-positive image-y;
+  Landed as `src/heuristics/bounceInstants.ts` — a new module rather than a home in `spectralFit.ts`
+  (which knows nothing of `RobustPoseFrame` and must not learn) or `hipBounce.ts` (whose series
+  `verticalOscillationCm` deliberately never reads). It also owns the one `heuristics → results`
+  import in the package, for `findNearestFrame`.
+  Two points D8 left open, decided here and flagged for a later design correction pass rather than
+  edited into design.md by the implementing ticket:
+  - **The span centre is the FIT's, not the frame array's** — `resolvedSpanCenter(frames, series)`
+    excludes leading/trailing frames that contributed no sample, since ranking cycles against the
+    wrong centre picks the wrong cycle.
+  - **One candidate pair, no walking outward.** D8 says "if either half fails to snap, the pair is
+    rejected", so a failed snap emits nothing rather than falling back to a less-supported cycle,
+    which would picture a different bounce from the one the selection claims to have chosen.
+- [x] 2.3 **The sign rule (design D8).** `hipBounce.ts:95` fits raw downward-positive image-y;
   `verticalOscillationCm.ts:154` integrates upward-positive deltas. Resolve max-versus-min against
   each fit's own series convention at the call site. Unit-test direction against a synthetic fixture
   with known geometry — a mislabelled caption passes every other check.
-- [ ] 2.4 `verticalOscillation.ts`: emit the bounce trough/peak pair for one cycle.
-- [ ] 2.5 `verticalOscillationCm.ts`: pair each fit with its producing `IntegrationRun` (which
+  Encoded as a mandatory `maximumIs: 'highest' | 'lowest'` option with no default and no inference,
+  stated at each of the three call sites. `bounceInstants.test.ts`'s "bounce exemplar direction"
+  block asserts, per metric, that the frame at `timestamp` has a SMALLER hip-mid image-y than the
+  one at `pairedTimestamp` and that both sit within 10% of the clip's real bounce extremes.
+  **Verified load-bearing**: flipping `maximumIs` on all three metrics fails exactly those three
+  tests (`expected 415 to be less than 385`) and nothing else.
+- [x] 2.4 `verticalOscillation.ts`: emit the bounce trough/peak pair for one cycle.
+  The crop seed follows `verticalOscillationSignal` (hips or ears), so the crop can never show a
+  body region this run did not measure.
+- [x] 2.5 `verticalOscillationCm.ts`: pair each fit with its producing `IntegrationRun` (which
   carries `timestamps`, `:41-47`) so `selectWeightedMedianFit`'s winner has attributable instants.
   This is the awkward one — budget for it. **Widen `IntegrationRun` with a parallel
   `frames: RobustPoseFrame[]`** (one entry per run sample, pushed in `buildRuns`'s existing loop
   where `frame` is already the loop variable) — see 2.8.
-- [ ] 2.6 `verticalRatio.ts`: numerator exemplar from the same bounce fit.
-- [ ] 2.7 `cadence.ts`: **emit nothing** (design D7). Add a test asserting `cadence.exemplars` is
+  Done as specified. `selectWeightedMedianFit` now selects over `{ fit, run }` tuples; the sort key
+  and the stable-sort/dominance property are unchanged, so the winner is the same run it always
+  was. **The winner is deliberately NOT carried on `ScaleCalibratedVerticalOscillation`** — that
+  object is spread by reference onto `AnalysisDiagnostics.scaleCalibration` and `JSON.stringify`d
+  to the console, so a `RobustPoseFrame[]` reachable from it would break D9's byte-stability
+  guarantee and the harness that parses that line. The body moved into a private `calibrate()`
+  returning `{ calibration, winner }`; the exported `computeVerticalOscillationCm` is now a thin
+  wrapper over it, and the metric layer calls `calibrate` directly — still exactly one computation,
+  and `result.calibration` is still that call's object verbatim, so #36's reference-identity
+  invariant holds.
+  Regression test "takes its instants from the WINNING run": a dominant 40-frame run against a
+  14-frame fragment placed on the far side of a long tracking gap. **Verified load-bearing** —
+  resolving against the whole clip instead fails it.
+- [x] 2.6 `verticalRatio.ts`: numerator exemplar from the same bounce fit.
+  Hip-seeded, matching the numerator's own hip-pinning. The file's edits are confined to the
+  numerator so #63's stride-pair denominator does not collide.
+- [x] 2.7 `cadence.ts`: **emit nothing** (design D7). Add a test asserting `cadence.exemplars` is
   absent, so a future contributor's "fix" fails loudly rather than shipping a borrowed picture.
-- [ ] 2.8 Per-instance signal for this family. **Corrected — the original text ("stop discarding
+  The module doc now carries D7's reasoning and both rejected alternatives, so the decision is
+  legible where the "fix" would be made. Two tests assert absence — one in `cadence.test.ts`, one
+  in `bounceInstants.test.ts` beside the metrics that DO emit from the same fit.
+- [x] 2.8 Per-instance signal for this family. **Corrected — the original text ("stop discarding
   `mid.interpolated` at `hipBounce.ts:83`") named the wrong mechanism and, for
   `verticalOscillationCm`, the wrong file.** The shipped gate is FRAME-based: `cropDerivable(frame,
   seed)` and `detectionFactor(frame, seed)` both read `frame.keypoints`, and `ExemplarInstant` is
@@ -125,9 +171,36 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
   - Snap each instant against the frames the fitted samples came from: the winning run's `frames`
     for the cm path, the metric's own `frames` for the pixel path.
   - Reuse `pairQuality` (`min`) for the bounce pair and D11's base rule; do not invent a mean.
+
+  Done as written — `IntegrationRun.frames`, no `hipBounce.ts` change of any kind, snapping against
+  the winning run's `frames` (cm) and the metric's own `frames` (pixel), `pairQuality` reused.
+  **Two consequences worth recording, both deliberate:**
+  - **The bounce instants carry no `value`, so `scoreExemplarInstant` scores them on
+    `detectionFactor` alone.** A fitted amplitude has no per-instance values to build a
+    distribution from, and inventing one (the raw hip-y excursion at that frame) would reintroduce
+    exactly the jittery quantity the spectral estimator replaced. `ExemplarInstant.value` is
+    already optional for precisely this shape of instant, so no gate change was needed.
+  - **D11's base rule does not resolve this family**, because it is stated in terms of distance
+    from the metric's own median and there is no such median here. D1's row names instant A as the
+    bounce trough (body highest on screen), so BASE = highest and GHOST = lowest, unconditionally
+    and regardless of which sign convention produced them. Worth a line in a future design
+    correction pass; not edited into design.md by this ticket.
+  - A pixel-path snap landing on a frame with no resolvable hip is caught by hard reject 1 and the
+    exemplar is dropped, exactly as D8 anticipates — measured on a gapped fixture where the
+    centre-most cycle straddles the gap: the cm path (which snaps inside its own gapless run) still
+    emits, the pixel path does not.
 - [ ] 2.9 Regression anchor: track clip VO_cm 4.78–4.79 cm (±0.005 across trials),
   `fit.frequencyHz × 60` == `cadence.value`. A >0.05 cm spread means something moved.
-- [ ] 2.10 `npm test`, `tsc -b`, `eslint` clean.
+  **Outstanding — needs the live-browser harness, deferred to §8.** What was done instead, and why
+  it is meaningful but not a substitute: the anchor's PURPOSE is to catch a perturbed shared
+  primitive, and 2.1's key-by-key before/after comparison establishes that no field of any fit or
+  any metric moved at all, on four clips and four metrics, including the `fit.frequencyHz × 60` vs
+  `cadence.value` cross-check (both sides byte-identical to the pre-change tree). That bounds the
+  risk to zero for anything the unit fixtures exercise; it does not exercise the track clip.
+- [x] 2.10 `npm test`, `tsc -b`, `eslint` clean.
+  `tsc -b`: No errors found. `vitest run`: 900 passed, 0 failed (872 at `2526d64` + 28 new).
+  `eslint .`: No issues found. Every existing test file's diff is purely additive — 0 removed
+  lines across all five.
 
 ## 3. `armSwingSymmetry` and the stride denominator (#63)
 

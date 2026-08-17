@@ -331,3 +331,57 @@ describe('computeVerticalOscillation', () => {
     })
   })
 })
+
+describe('computeVerticalOscillation — bounce exemplar', () => {
+  const frames = generateSyntheticGait({
+    ...BASE_PARAMS,
+    verticalBouncePx: 20,
+    view: 'side',
+  })
+
+  it('emits one ghosted bounce pair, seeded on the points the metric itself read', () => {
+    const exemplars = computeVerticalOscillation(frames, 'side').exemplars!
+
+    expect(exemplars).toHaveLength(1)
+    const [exemplar] = exemplars
+    expect(exemplar.kind).toBe('bounceCycle')
+    expect(exemplar.pairedTimestamp).toBeDefined()
+    // Bilateral midpoint, not a per-side measurement.
+    expect(exemplar.side).toBeUndefined()
+    expect(exemplar.cropKeypoints.slice(0, 2)).toEqual(['left_hip', 'right_hip'])
+    // Context is a torso band, so a single midpoint isn't a zero-area rect.
+    expect(exemplar.cropKeypoints).toContain('left_shoulder')
+    expect(exemplar.cropKeypoints).toContain('right_knee')
+  })
+
+  it('carries timestamps that exist in the frames the metric was given', () => {
+    const [exemplar] = computeVerticalOscillation(frames, 'side').exemplars!
+    const timestamps = frames.map((frame) => frame.timestamp)
+
+    expect(timestamps).toContain(exemplar.timestamp)
+    expect(timestamps).toContain(exemplar.pairedTimestamp)
+    expect(exemplar.timestamp).not.toBe(exemplar.pairedTimestamp)
+  })
+
+  it('seeds the crop on whichever pair verticalOscillationSignal actually fitted', () => {
+    const [exemplar] = computeVerticalOscillation(frames, 'side', {
+      ...DEFAULT_HEURISTICS_CONFIG,
+      verticalOscillationSignal: 'earMid',
+    }).exemplars!
+
+    // A crop showing the hips would be a picture of a body region this run never measured.
+    expect(exemplar.cropKeypoints.slice(0, 2)).toEqual(['left_ear', 'right_ear'])
+  })
+
+  it('emits nothing when the fit was refused', () => {
+    const flat = generateSyntheticGait({
+      ...BASE_PARAMS,
+      verticalBouncePx: 0,
+      view: 'side',
+    })
+    const result = computeVerticalOscillation(flat, 'side')
+
+    expect(result.value).toBeNull()
+    expect(result.exemplars).toBeUndefined()
+  })
+})

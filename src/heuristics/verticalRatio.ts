@@ -4,8 +4,11 @@ import { analyzeHipBounce } from './hipBounce'
 import type { SpectralFitFailureReason } from './spectralFit'
 import { estimateStrideLength } from './strideLength'
 import type { StrideLengthFailureReason } from './strideLength'
+import { buildBounceCycleExemplar, resolvedSpanCenter } from './bounceInstants'
+import { selectExemplars } from './exemplars'
 import { computeMetricConfidence } from './confidence'
 import { clamp01 } from './mathUtils'
+import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 
 /**
@@ -25,6 +28,11 @@ import type { RobustPoseFrame } from '../pose/robustness/types'
  * gap-tolerance mitigations need to stop being deferred.
  */
 const MIN_STRIDE_PAIRS = 3
+
+/** The points the NUMERATOR reads at an instant — hip-pinned, exactly as the numerator's own fit
+ * is (see the hip-pinning section below). The denominator's stride pair is a separate exemplar
+ * with a separate seed and is not this ticket's. */
+const BOUNCE_SEED_KEYPOINTS: KeypointName[] = ['left_hip', 'right_hip']
 
 /** Sinusoid partial R² at or above which the shared hip-bounce fit is treated as fully
  * trustworthy — identical constant, identical reasoning, as `verticalOscillation.ts`'s and
@@ -220,6 +228,22 @@ export function computeVerticalRatio(
     )
   }
 
+  // Numerator exemplar only. `maximumIs: 'lowest'` because `analyzeHipBounce` fits raw
+  // downward-positive image-y — see `bounceInstants.ts`'s module doc on the sign trap.
+  const spanCenterSeconds = resolvedSpanCenter(frames, bounceSignal.hipY)
+  const exemplars =
+    spanCenterSeconds === null
+      ? undefined
+      : selectExemplars(
+          buildBounceCycleExemplar({
+            fit,
+            frames,
+            spanCenterSeconds,
+            maximumIs: 'lowest',
+            seed: BOUNCE_SEED_KEYPOINTS,
+          }),
+        )
+
   return {
     metric: 'verticalRatio',
     value,
@@ -230,5 +254,6 @@ export function computeVerticalRatio(
     frameCoverage: bounceSignal.frameCoverage,
     sampleSize: stride.pairCount,
     caveat: caveats.length > 0 ? caveats.join(' ') : null,
+    ...(exemplars && { exemplars }),
   }
 }

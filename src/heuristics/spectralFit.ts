@@ -112,6 +112,23 @@ export interface SpectralFitSuccess {
   spanSeconds: number
   /** `spanSeconds × frequencyHz` — fractional, not rounded. */
   observedCycles: number
+  /**
+   * Phase `φ = atan2(b, a)` of the fitted oscillation, radians in `(−π, π]`. Together with
+   * `tMeanSeconds` this is what makes a fitted extremum nameable in clock time: the sinusoid
+   * component is `√(a²+b²)·sin(ω·(t − tMeanSeconds) + φ)` with `ω = 2π·frequencyHz`, so its
+   * maxima sit at `tMeanSeconds + (π/2 − φ)/ω + k/frequencyHz` and its minima half a period away.
+   *
+   * Reported because `peakToPeakAmplitude` collapses `a` and `b` into a magnitude and throws the
+   * direction away — WHEN the oscillation peaks is not recoverable from any other reported field.
+   * Says nothing about which body position a maximum corresponds to: that depends entirely on the
+   * sign convention of the series the caller fitted, and this primitive never sees one.
+   */
+  phaseRadians: number
+  /**
+   * The sample-mean time the fit was centred on (see the module doc on conditioning). Phase is
+   * measured from HERE, not from zero, so a caller reconstructing an instant must add it back.
+   */
+  tMeanSeconds: number
 }
 
 export interface SpectralFitFailure {
@@ -415,5 +432,9 @@ export function fitSpectralSinusoid(
     sampleCount,
     spanSeconds,
     observedCycles,
+    // Reported, not re-derived: `a` and `b` are the same two coefficients `peakToPeakAmplitude`
+    // was formed from, read once here before they go out of scope.
+    phaseRadians: Math.atan2(b, a),
+    tMeanSeconds: tMean,
   }
 }

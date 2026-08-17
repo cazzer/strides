@@ -1,9 +1,12 @@
+import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { estimateBodyScale } from './bodyScale'
 import { resolveMidpoint } from './keypoints'
 import { fitSpectralSinusoid } from './spectralFit'
 import type { SpectralFitSuccess, SpectralSample } from './spectralFit'
 import { analyzeHipBounce } from './hipBounce'
+import { buildBounceCycleExemplar, resolvedSpanCenter } from './bounceInstants'
+import { selectExemplars } from './exemplars'
 import { computeMetricConfidence } from './confidence'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type {
@@ -37,6 +40,11 @@ function isUsableScale(value: number | null): value is number {
   return value !== null && Number.isFinite(value) && value > 0
 }
 
+/** The points this metric reads at an instant. Hip-pinned unconditionally —
+ * `verticalOscillationSignal` does not apply here (see the module doc's Config section), so unlike
+ * `verticalOscillation` this seed never varies by config. */
+const BOUNCE_SEED_KEYPOINTS: KeypointName[] = ['left_hip', 'right_hip']
+
 /** One maximal contiguous stretch of frames where the hip midpoint resolves. */
 interface IntegrationRun {
   /** Hip-mid image y, in pixels, one entry per frame in the run. */
@@ -44,6 +52,17 @@ interface IntegrationRun {
   timestamps: number[]
   /** Pixels-per-metre per frame in the run; null where that frame carried no measurement. */
   scales: Array<number | null>
+  /**
+   * The frames themselves, index-parallel to the three arrays above — kept so an instant derived
+   * from this run's fit can be scored and cropped.
+   *
+   * Deliberately the frames and not a per-sample `interpolated` flag: the shared exemplar gate is
+   * frame-based (it reads `frame.keypoints` for both the crop-derivability reject and the
+   * detection score), and the flag `resolveMidpoint` would hand over reads `true` for a one-sided
+   * pair even when that side was itself detected. This metric builds its own series and never goes
+   * through `hipBounce.ts`, so it cannot inherit anything the pixel-space siblings do here.
+   */
+  frames: RobustPoseFrame[]
 }
 
 /**
@@ -66,12 +85,13 @@ function buildRuns(frames: RobustPoseFrame[]): IntegrationRun[] {
       continue
     }
     if (current === null) {
-      current = { hipY: [], timestamps: [], scales: [] }
+      current = { hipY: [], timestamps: [], scales: [], frames: [] }
       runs.push(current)
     }
     current.hipY.push(hipMid.y)
     current.timestamps.push(frame.timestamp)
     current.scales.push(isUsableScale(frame.pixelsPerMeter) ? frame.pixelsPerMeter : null)
+    current.frames.push(frame)
   }
 
   return runs
@@ -159,6 +179,19 @@ function buildMetricSeries(run: IntegrationRun, scales: number[]): SpectralSampl
 }
 
 /**
+ * A run that cleared every gate, paired with the fit it produced.
+ *
+ * The pairing is the point: `selectWeightedMedianFit` used to return a bare `SpectralFitSuccess`
+ * with no way back to the run behind it, and a fit alone names no frames — so the winner's
+ * bounce instants had nothing real to attach to. Selecting over the pair costs nothing and makes
+ * the reported amplitude attributable to the footage it came from.
+ */
+interface FittedRun {
+  fit: SpectralFitSuccess
+  run: IntegrationRun
+}
+
+/**
  * Picks the contributing run whose amplitude is the SAMPLE-COUNT-WEIGHTED MEDIAN: sort by
  * amplitude (stable, so equal amplitudes keep run order), then walk the sorted list accumulating
  * `sampleCount` and take the first run whose cumulative count, doubled, reaches the total — the
@@ -175,21 +208,19 @@ function buildMetricSeries(run: IntegrationRun, scales: number[]): SpectralSampl
  * everything sorted before it sums to less than half the total, so the cumulative test cannot trip
  * early. A noisy 15-sample fragment therefore can never outvote a 50-sample run.
  */
-function selectWeightedMedianFit(
-  fits: SpectralFitSuccess[],
-): SpectralFitSuccess | null {
+function selectWeightedMedianFit(fits: FittedRun[]): FittedRun | null {
   if (fits.length === 0) return null
 
   const sorted = [...fits].sort(
-    (a, b) => a.peakToPeakAmplitude - b.peakToPeakAmplitude,
+    (a, b) => a.fit.peakToPeakAmplitude - b.fit.peakToPeakAmplitude,
   )
   let total = 0
-  for (const fit of sorted) total += fit.sampleCount
+  for (const entry of sorted) total += entry.fit.sampleCount
 
   let cumulative = 0
-  for (const fit of sorted) {
-    cumulative += fit.sampleCount
-    if (cumulative * 2 >= total) return fit
+  for (const entry of sorted) {
+    cumulative += entry.fit.sampleCount
+    if (cumulative * 2 >= total) return entry
   }
   // Unreachable: every fit's sampleCount is a positive integer, so the last iteration always has
   // `cumulative === total`. Kept as a total function rather than a non-null assertion.
@@ -283,11 +314,38 @@ function arbitrateFailureReason(
  * carry a scale but yielded no fittable run returns a result object with a null amplitude, a null
  * `fit`, and a `fitFailureReason` naming why — measured-but-unfittable is a different fact from
  * not-measured, and an unexplained null is indistinguishable from a bug.
+ *
+ * A thin wrapper over the private `calibrate` below, which does the same single computation but
+ * additionally hands back the winning `IntegrationRun` so the metric layer can name that run's
+ * bounce instants. See `CalibrationOutcome` for why the winner must not ride on the object
+ * returned here.
  */
 export function computeVerticalOscillationCm(
   frames: RobustPoseFrame[],
   config: HeuristicsConfig = DEFAULT_HEURISTICS_CONFIG,
 ): ScaleCalibratedVerticalOscillation | null {
+  return calibrate(frames, config)?.calibration ?? null
+}
+
+/**
+ * `computeVerticalOscillationCm`'s result plus the run behind it.
+ *
+ * Split out rather than widened onto `ScaleCalibratedVerticalOscillation` itself because that
+ * object is carried BY REFERENCE onto `AnalysisDiagnostics.scaleCalibration` and
+ * `JSON.stringify`d to the console — a `RobustPoseFrame[]` reachable from there would blow up the
+ * diagnostics line and break its byte-for-byte stability, which the live-verification harness
+ * parses. The winner travels beside the calibration instead, never inside it.
+ */
+interface CalibrationOutcome {
+  calibration: ScaleCalibratedVerticalOscillation
+  /** `null` when no run contributed — the same condition as `calibration.fit === null`. */
+  winner: FittedRun | null
+}
+
+function calibrate(
+  frames: RobustPoseFrame[],
+  config: HeuristicsConfig,
+): CalibrationOutcome | null {
   const scales = collectScales(frames)
   if (scales.length === 0) return null
 
@@ -304,7 +362,7 @@ export function computeVerticalOscillationCm(
     frequencyStepHz: config.spectralFitFrequencyStepHz,
   }
 
-  const contributing: SpectralFitSuccess[] = []
+  const contributing: FittedRun[] = []
   const refusals: RunRefusal[] = []
 
   for (const run of buildRuns(frames)) {
@@ -327,39 +385,43 @@ export function computeVerticalOscillationCm(
       refusals.push({ frameCount: run.hipY.length, reason: 'below-quality-gate' })
       continue
     }
-    contributing.push(fit)
+    contributing.push({ fit, run })
   }
 
   const winner = selectWeightedMedianFit(contributing)
+  const winningFit = winner?.fit ?? null
   // Summed across ALL contributing runs, not just the winner's: the reported cycle count is how
   // much bounce the calculation actually observed, even though the amplitude comes from one run.
   let observedCycles = 0
-  for (const fit of contributing) observedCycles += fit.observedCycles
+  for (const entry of contributing) observedCycles += entry.fit.observedCycles
 
   return {
-    verticalOscillationCm:
-      winner === null ? null : winner.peakToPeakAmplitude * 100,
-    sampleSize: Math.floor(observedCycles),
-    observedCycles,
-    fit:
-      winner === null
-        ? null
-        : {
-            frequencyHz: winner.frequencyHz,
-            peakToPeakAmplitudeCm: winner.peakToPeakAmplitude * 100,
-            sinusoidR2: winner.sinusoidR2,
-            totalR2: winner.totalR2,
-            secondPeakRatio: winner.secondPeakRatio,
-            sampleCount: winner.sampleCount,
-            spanSeconds: winner.spanSeconds,
-            observedCycles: winner.observedCycles,
-          },
-    fitFailureReason: winner === null ? arbitrateFailureReason(refusals) : null,
-    scaleDriftRatio: scales[scales.length - 1] / scales[0],
-    medianPixelsPerMeter,
-    torsoMeters: torsoLengthPx === null ? null : torsoLengthPx / medianPixelsPerMeter,
-    scaleCoverage: scales.length / frames.length,
-    integrationRuns: contributing.length,
+    winner,
+    calibration: {
+      verticalOscillationCm:
+        winningFit === null ? null : winningFit.peakToPeakAmplitude * 100,
+      sampleSize: Math.floor(observedCycles),
+      observedCycles,
+      fit:
+        winningFit === null
+          ? null
+          : {
+              frequencyHz: winningFit.frequencyHz,
+              peakToPeakAmplitudeCm: winningFit.peakToPeakAmplitude * 100,
+              sinusoidR2: winningFit.sinusoidR2,
+              totalR2: winningFit.totalR2,
+              secondPeakRatio: winningFit.secondPeakRatio,
+              sampleCount: winningFit.sampleCount,
+              spanSeconds: winningFit.spanSeconds,
+              observedCycles: winningFit.observedCycles,
+            },
+      fitFailureReason: winningFit === null ? arbitrateFailureReason(refusals) : null,
+      scaleDriftRatio: scales[scales.length - 1] / scales[0],
+      medianPixelsPerMeter,
+      torsoMeters: torsoLengthPx === null ? null : torsoLengthPx / medianPixelsPerMeter,
+      scaleCoverage: scales.length / frames.length,
+      integrationRuns: contributing.length,
+    },
   }
 }
 
@@ -522,10 +584,15 @@ export function computeVerticalOscillationCmMetric(
 ): VerticalOscillationCmResult {
   const viewFitEntry = config.viewFitTable.verticalOscillationCm[view]
 
-  const calibration = computeVerticalOscillationCm(frames, config)
-  if (calibration === null) {
+  // `calibrate`, not `computeVerticalOscillationCm` — the same single computation, taken with the
+  // winning run still attached so its bounce instants can be named. `calibration` below is that
+  // one call's object verbatim, so the by-reference identity `analysisDiagnostics.ts` relies on
+  // is unchanged.
+  const outcome = calibrate(frames, config)
+  if (outcome === null) {
     return nullResult(viewFitEntry.fit, NO_SCALE_CAVEAT, null)
   }
+  const { calibration, winner } = outcome
 
   if (calibration.verticalOscillationCm === null || calibration.fit === null) {
     const reason = calibration.fitFailureReason ?? 'no-usable-run'
@@ -578,6 +645,25 @@ export function computeVerticalOscillationCmMetric(
     )
   }
 
+  // The winner's OWN frames are the snap target — the amplitude describes that one continuous
+  // stretch, so an instant from it has to land inside it. `maximumIs: 'highest'`: this metric's
+  // fitted series integrates `(y[k−1] − y[k])` deltas and is upward-positive, the OPPOSITE
+  // convention to the pixel-space siblings' raw image-y. See `bounceInstants.ts`'s sign trap.
+  const spanCenterSeconds =
+    winner === null ? null : resolvedSpanCenter(winner.run.frames, winner.run.hipY)
+  const exemplars =
+    winner === null || spanCenterSeconds === null
+      ? undefined
+      : selectExemplars(
+          buildBounceCycleExemplar({
+            fit: winner.fit,
+            frames: winner.run.frames,
+            spanCenterSeconds,
+            maximumIs: 'highest',
+            seed: BOUNCE_SEED_KEYPOINTS,
+          }),
+        )
+
   return {
     metric: 'verticalOscillationCm',
     value: calibration.verticalOscillationCm,
@@ -589,5 +675,6 @@ export function computeVerticalOscillationCmMetric(
     sampleSize: calibration.sampleSize,
     caveat: caveats.length > 0 ? caveats.join(' ') : null,
     calibration,
+    ...(exemplars && { exemplars }),
   }
 }

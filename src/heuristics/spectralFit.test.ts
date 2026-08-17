@@ -465,3 +465,120 @@ describe('fitSpectralSinusoid — quality diagnostics', () => {
     }
   })
 })
+
+describe('fitSpectralSinusoid — phase', () => {
+  /** Where the fitted sinusoid peaks, as a continuous time: `A·sin(ω(t − tMean) + φ)` is maximal
+   * where its argument is `π/2`. This is the reconstruction every caller of `phaseRadians`
+   * performs, so testing it here tests the field's contract rather than its arithmetic. */
+  function reconstructedMaximum(fit: SpectralFitSuccess): number {
+    const omega = 2 * Math.PI * fit.frequencyHz
+    return fit.tMeanSeconds + (Math.PI / 2 - fit.phaseRadians) / omega
+  }
+
+  /** Distance between two instants on a circle of one period — a maximum recurs every period, so
+   * "the same peak" and "the peak one cycle later" must compare equal. */
+  function circularDistance(a: number, b: number, period: number): number {
+    const wrapped = (((a - b) % period) + period) % period
+    return Math.min(wrapped, period - wrapped)
+  }
+
+  it('reconstructs the input sinusoid’s own peaks, at every phase', () => {
+    const frequencyHz = 2
+    for (const phase of [0, 0.7, Math.PI / 2, 2.5, -1.3, Math.PI]) {
+      const samples = sineSamples({
+        frequencyHz,
+        sampleRateHz: 60,
+        sampleCount: 120,
+        phase,
+      })
+      const fit = expectSuccess(fitSpectralSinusoid(samples, GRID))
+      // `halfAmplitude·sin(2πf·t + phase)` peaks where `2πf·t + phase = π/2`.
+      const trueMaximum = (Math.PI / 2 - phase) / (2 * Math.PI * frequencyHz)
+      expect(
+        circularDistance(reconstructedMaximum(fit), trueMaximum, 1 / frequencyHz),
+        `phase ${phase}`,
+      ).toBeLessThan(1e-6)
+    }
+  })
+
+  it('measures phase from tMeanSeconds, which is the mean of the USABLE sample times', () => {
+    const clean = sineSamples({ frequencyHz: 2, sampleRateHz: 60, sampleCount: 120 })
+    const polluted = [
+      ...clean,
+      ...Array.from({ length: 8 }, () => ({ t: Number.NaN, v: 3 })),
+      { t: 500, v: Number.POSITIVE_INFINITY },
+    ]
+    const expectedMean = clean.reduce((sum, s) => sum + s.t, 0) / clean.length
+
+    for (const samples of [clean, polluted]) {
+      const fit = expectSuccess(fitSpectralSinusoid(samples, GRID))
+      expect(fit.tMeanSeconds).toBeCloseTo(expectedMean, 12)
+    }
+  })
+
+  it('shifts phase, not frequency or amplitude, when the whole series is delayed', () => {
+    const base = expectSuccess(
+      fitSpectralSinusoid(
+        sineSamples({ frequencyHz: 2, sampleRateHz: 60, sampleCount: 120 }),
+        GRID,
+      ),
+    )
+    const delay = 0.37
+    const delayed = expectSuccess(
+      fitSpectralSinusoid(
+        sineSamples({
+          frequencyHz: 2,
+          sampleRateHz: 60,
+          sampleCount: 120,
+          timeOffset: delay,
+        }),
+        GRID,
+      ),
+    )
+
+    expect(delayed.frequencyHz).toBe(base.frequencyHz)
+    expect(delayed.peakToPeakAmplitude).toBeCloseTo(base.peakToPeakAmplitude, 9)
+    expect(delayed.tMeanSeconds).toBeCloseTo(base.tMeanSeconds + delay, 9)
+    // Centring absorbs the delay entirely: same waveform, same phase relative to the new centre.
+    expect(delayed.phaseRadians).toBeCloseTo(base.phaseRadians, 9)
+    expect(reconstructedMaximum(delayed)).toBeCloseTo(reconstructedMaximum(base) + delay, 9)
+  })
+
+  /**
+   * Frozen regression anchor. Every constant below was MEASURED on the tree immediately before
+   * `phaseRadians`/`tMeanSeconds` were added, then pinned with exact equality — this primitive is
+   * read by `cadence` and all three vertical-oscillation metrics, so a refactor that perturbs its
+   * return path by one ulp changes four user-visible numbers at once. `toBe`, not `toBeCloseTo`:
+   * the point is bit-identity, and a tolerance here would hide exactly what it exists to catch.
+   */
+  it('holds every pre-existing field bit-identical on a fixed noisy input', () => {
+    const noise = seededNormals(20260817, 60)
+    const samples: SpectralSample[] = Array.from({ length: 60 }, (_, i) => {
+      const t = i / 25
+      return {
+        t,
+        v: 640 + 21 * Math.sin(2 * Math.PI * 1.52 * t + 0.7) + 4 * t + 2.5 * noise[i],
+      }
+    })
+
+    const fit = expectSuccess(fitSpectralSinusoid(samples, GRID))
+    expect(fit.peakToPeakAmplitude).toBe(44.01056838073015)
+    expect(fit.frequencyHz).toBe(1.52)
+    expect(fit.sinusoidR2).toBe(0.9786118881581739)
+    expect(fit.totalR2).toBe(0.9789921953138012)
+    expect(fit.secondPeakRatio).toBe(0.03840339414971118)
+    expect(fit.sampleCount).toBe(60)
+    expect(fit.spanSeconds).toBe(2.36)
+    expect(fit.observedCycles).toBe(3.5871999999999997)
+
+    // The two new fields, pinned alongside so their own drift is caught too — and cross-checked
+    // against the fixture's KNOWN phase of 0.7 rad, which is the only independent evidence that
+    // `atan2(b, a)` was read off the right two coefficients in the right order.
+    expect(fit.phaseRadians).toBe(-0.6016749041829399)
+    expect(fit.tMeanSeconds).toBe(1.1799999999999997)
+    const omega = 2 * Math.PI * fit.frequencyHz
+    const phaseAtOrigin = fit.phaseRadians - omega * fit.tMeanSeconds
+    const wrapped = (((phaseAtOrigin - 0.7) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
+    expect(Math.min(wrapped, 2 * Math.PI - wrapped)).toBeLessThan(0.02)
+  })
+})

@@ -114,3 +114,27 @@ describe('computeVerticalRatio', () => {
     }
   })
 })
+
+describe('computeVerticalRatio — numerator exemplar', () => {
+  const frames = generateSyntheticGait({ ...BASE_PARAMS, verticalBouncePx: 6, view: 'side' })
+
+  it('emits the bounce pair its numerator was fitted from, hip-seeded', () => {
+    const exemplars = computeVerticalRatio(frames, 'side').exemplars!
+
+    expect(exemplars).toHaveLength(1)
+    const [exemplar] = exemplars
+    expect(exemplar.kind).toBe('bounceCycle')
+    // Hip-pinned, exactly as the numerator's own fit is — never `verticalOscillationSignal`'s pair.
+    expect(exemplar.cropKeypoints.slice(0, 2)).toEqual(['left_hip', 'right_hip'])
+    expect(frames.map((frame) => frame.timestamp)).toContain(exemplar.timestamp)
+    expect(frames.map((frame) => frame.timestamp)).toContain(exemplar.pairedTimestamp)
+  })
+
+  it('emits nothing when the metric reports no value', () => {
+    const flat = generateSyntheticGait({ ...BASE_PARAMS, verticalBouncePx: 0, view: 'side' })
+    const result = computeVerticalRatio(flat, 'side')
+
+    expect(result.value).toBeNull()
+    expect(result.exemplars).toBeUndefined()
+  })
+})

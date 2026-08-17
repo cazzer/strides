@@ -114,6 +114,19 @@ function isNearGridEdge(frequencyHz: number, config: HeuristicsConfig): boolean 
  * View tolerance is identical to vertical oscillation's (`viewFitTable.cadence` == side 1.0,
  * front 0.85, ambiguous 0.6) — see `types.ts`'s comment on that table entry for why the two are no
  * longer merely similar but exactly the same, now that both fit the same input series.
+ *
+ * ## No exemplar frames, deliberately
+ *
+ * This metric emits no `exemplars`, and that is a decision rather than an omission. A cadence is
+ * steps per minute — a property of a SEQUENCE, not of any pair of instants. The bounce peak and
+ * trough `verticalOscillation` emits from this exact same fit depict the bounce's AMPLITUDE, which
+ * is the number that metric reports and precisely the one this metric does not; rendering them
+ * under a cadence card would put byte-identical images beneath two different numbers and teach the
+ * reader that this picture explains this figure. The other plausible depiction, two consecutive
+ * same-side footstrikes, is worse still on a factual basis: cadence stopped reading footstrikes
+ * entirely when it moved onto the spectral fit (see above), so those instants did not produce this
+ * number at all. Better no picture than an invented one — a time-axis chart is the only honest
+ * depiction of a frequency, and drawn annotation is out of scope.
  */
 export function computeCadence(
   frames: RobustPoseFrame[],

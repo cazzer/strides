@@ -66,8 +66,8 @@ export interface ViewDetectionResult {
  * per-measurement rather than "footstrike"/"frame": three different metrics can pick the same
  * instant for three different reasons, and a caption has to say which reason it is.
  *
- * Members are added by the metric that needs them — the vertical-oscillation family and
- * `armSwingSymmetry` add theirs when they start emitting.
+ * Members are added by the metric that needs them — `armSwingSymmetry` adds its own when it
+ * starts emitting.
  */
 export type MetricExemplarKind =
   | 'kneeFlexionPeak'
@@ -75,6 +75,11 @@ export type MetricExemplarKind =
   | 'footStrike'
   | 'stepWidthStrike'
   | 'trunkLeanRange'
+  /** One bounce half-cycle — the highest and lowest points of the fitted vertical oscillation,
+   * shared by `verticalOscillation`, `verticalOscillationCm` and `verticalRatio`'s NUMERATOR
+   * (all three read the same shape of fit). `cadence` reads that fit too and deliberately emits
+   * nothing: a rate is a property of a sequence, and these two stills depict an amplitude. */
+  | 'bounceCycle'
 
 /**
  * One renderable piece of evidence for a metric: either a single instant, or a ghosted PAIR of

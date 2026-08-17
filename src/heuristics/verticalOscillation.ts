@@ -13,6 +13,8 @@ import type {
 import { estimateBodyScale } from './bodyScale'
 import { analyzeBounceSignal } from './hipBounce'
 import type { SpectralFitFailureReason } from './spectralFit'
+import { buildBounceCycleExemplar, resolvedSpanCenter } from './bounceInstants'
+import { selectExemplars } from './exemplars'
 import { computeMetricConfidence } from './confidence'
 import { clamp01 } from './mathUtils'
 
@@ -281,6 +283,24 @@ export function computeVerticalOscillation(
     )
   }
 
+  // `maximumIs: 'lowest'` — `analyzeBounceSignal` fits RAW image-y, which grows downward, so the
+  // fitted maximum is the runner at the BOTTOM of the bounce. The centimetre sibling fits
+  // upward-positive deltas and passes the opposite answer for the same body; see
+  // `bounceInstants.ts`'s module doc.
+  const spanCenterSeconds = resolvedSpanCenter(frames, rawSignalY)
+  const exemplars =
+    spanCenterSeconds === null
+      ? undefined
+      : selectExemplars(
+          buildBounceCycleExemplar({
+            fit: spectralFit,
+            frames,
+            spanCenterSeconds,
+            maximumIs: 'lowest',
+            seed: SIGNAL_KEYPOINTS[signal],
+          }),
+        )
+
   return {
     metric: 'verticalOscillation',
     value,
@@ -293,5 +313,6 @@ export function computeVerticalOscillation(
     caveat: caveats.length > 0 ? caveats.join(' ') : null,
     series,
     fit,
+    ...(exemplars && { exemplars }),
   }
 }
