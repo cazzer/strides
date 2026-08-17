@@ -31,6 +31,18 @@ backend. Everything needed already exists:
   filtering a robust frame to its `'detected'` keypoints and running `deriveBoundingBox` with the
   run's own `personSelection` confidence knobs reproduces exactly the box the selection stage
   scored. **No new plumbing, and no new diagnostics field.**
+
+  Exact *so long as `robustness.minKeypointConfidence` and `personSelection.minKeypointConfidence`
+  agree* — both `0.3` by default. The `'detected'` filter has already applied the robustness floor,
+  so the effective floor here is the **max of the two**, and only a dev override moving exactly one
+  of them separates them (CLAUDE.md's own worked example is
+  `{ robustness: { minKeypointConfidence: 0.9 } }`). That cannot reach production — the window
+  global is `import.meta.env.DEV`-gated — and the asymmetry is benign in direction: a raised
+  robustness floor shrinks boxes on BOTH sides symmetrically, so the realistic outcome is fewer
+  comparable instants and more `'no-opinion'`, never a spurious `'diverged'`. Noted rather than
+  guarded, because the no-new-diagnostics design rests on this claim and the qualification is the
+  honest form of it. Note that the predicate bullet below covers the `personSelection` plane only —
+  it does not cover this second knob.
 - **Cross-backend comparability.** `BBOX_EXCLUDED_KEYPOINT_NAMES` excludes head and foot points, so
   the box is the hull of the same 12 limb/torso landmarks on both backends. MediaPipe emits them in
   source-video pixels. Same anatomy, same coordinate space.
@@ -220,7 +232,10 @@ console line in all nine runs.
 three-frame difference is frames that carry a detection inside the winner's span but yield no box
 (fewer than `minConfidentKeypoints` confident points) — the same frames the selection stage's own
 scorer skipped. Re-deriving from `'detected'` keypoints reproduces the stage's box set exactly,
-which is the claim D1 rests on.
+which is the claim D1 rests on — measured here at the shipped defaults, where the two
+`minKeypointConfidence` knobs agree at 0.3. That is the condition D1 qualifies the claim on, so
+this verifies it on real footage exactly where it is asserted to hold; it says nothing about a dev
+override that moves only one of the two.
 
 **S3 passes.** Every rendered caveat is byte-identical to the Step 0 pre-change text, e.g. Demo 2:
 `"The bounce rhythm in this clip wasn't perfectly steady — confidence reduced accordingly.

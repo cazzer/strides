@@ -74,6 +74,14 @@ interface Instant {
  * `'unrecoverable'`/`'interpolated'`, never `'detected'`. So filtering to `'detected'` keypoints
  * and re-deriving with the run's own selection knobs reproduces exactly the box the stage used,
  * with no new diagnostics field to carry it.
+ *
+ * Exact so long as `robustness.minKeypointConfidence` and `personSelection.minKeypointConfidence`
+ * agree (both 0.3 by default); the effective floor here is the MAX of the two, because the
+ * `'detected'` filter already applied the robustness one. Only a dev override moving exactly one
+ * of them separates them — CLAUDE.md's own worked example is
+ * `{ robustness: { minKeypointConfidence: 0.9 } }` — and the asymmetry is benign in direction: a
+ * raised robustness floor shrinks the box on BOTH sides symmetrically, so the realistic outcome
+ * is fewer comparable instants and more `'no-opinion'`, never a spurious `'diverged'`.
  */
 function boxForFrame(
   frame: RobustPoseFrame,

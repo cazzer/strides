@@ -122,8 +122,9 @@ passes' independently selected subjects and record the outcome on the scale-pass
 
 The comparison SHALL be made **at matched timestamps**, not between aggregate statistics of the two
 winners: for each pass, a bounding box SHALL be derived per robust frame from that frame's
-`'detected'` keypoints alone, using the run's own resolved person-selection confidence bounds, so
-the boxes are exactly those the selection stage scored. Each primary box SHALL be paired with the
+`'detected'` keypoints alone, using the run's own resolved person-selection confidence bounds —
+reproducing the boxes the selection stage scored whenever the robustness and person-selection
+keypoint-confidence floors agree, as they do by default. Each primary box SHALL be paired with the
 nearest scale-pass box in time; a pair separated by more than a bounded pairing tolerance SHALL not
 be compared at all. A compared pair SHALL count as agreeing when it satisfies the same
 bounding-box continuity predicate the person-selection stage itself uses, with the run's own

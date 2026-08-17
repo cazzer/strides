@@ -54,8 +54,10 @@ this repo's own regression-anchor clip.
 
 - **No field is added to `PersonSelectionSegmentDiagnostics`, `PersonSelectionDiagnostics`,
   `AnalysisDiagnostics`, or `ClipPipelineResult`.** The signal needs none — it reads
-  `RobustPoseFrame.keypoints[i].status === 'detected'`, which already encodes exactly the frames
-  that survived person selection. This also keeps the merge surface with #55 and #57 at zero.
+  `RobustPoseFrame.keypoints[i].status === 'detected'`, which is set only on frames that survived
+  person selection, and at the shipped defaults reproduces the boxes that stage scored (see
+  design.md D1 for the one condition that qualifies on). This also keeps the merge surface with
+  #55 and #57 at zero.
 - `graftScalePassResult`'s signature and body are untouched, so its module contract ("its gate
   lives at the call site") stays literally true. The check lives at the call site.
 - `src/results/retroactivePersonSelection.ts` is touched for documentation only.
