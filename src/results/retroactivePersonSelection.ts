@@ -66,20 +66,37 @@ export interface RetroactivePersonSelectionConfig {
  *
  * Revert with `enabled: false` here, or per-run via
  * `window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = { personSelection: { enabled: false } }`.
- * The real fix is a splice-tolerant segmentation rule (design.md follow-up 1, confirmed against
- * the trace to heal this case); the two open correctness items in design.md's Risks table
+ * The proposed fix was a splice-tolerant segmentation rule (design.md follow-up 1) — built in #54,
+ * and measured NOT to heal this particular case; see the update below. The two open correctness
+ * items in design.md's Risks table
  * (boxless survival inside the winner's span, primary/scale-pass selection divergence) were
  * documented as prerequisites for enabling and are now live rather than pending.
  *
- * UPDATE (2026-08-16, issue #54): follow-up 1 has landed. The cut loop below now declines a cut
- * when the surviving detections either side of the offending one are continuous with each other,
- * which heals BOTH of the t=4.32 wedge's cuts from one decision and returns the stranded prefix to
- * the runner's segment. The record above stands unrewritten on purpose — a ship rule that gets
- * reworded whenever it fires is not a ship rule, and the override was real. What it caught is
- * narrower now, not gone: the rule's Demo 1 condition (`segmentCount` 1, zero rejections) is a
- * JOINT #54 + #57 outcome, because five phantom detections of 2,279-8,432 px² clear the 4K area
- * floor of 1,659 px² and fail the ratio bound at ~19.9x — a transition the bridge cannot merge and
- * should not. Demo 1 keeps `segmentCount >= 2` until #57's re-derived floor demotes those to
+ * UPDATE (2026-08-16, issue #54): follow-up 1 has landed — the cut loop below now declines a cut
+ * when the surviving detections either side of the offending one are continuous with each other —
+ * but it does NOT fix the Demo 1 case described above, and the paragraph above therefore stands in
+ * full, not as history. Measured live (3 trials, real GPU): Demo 1 is bit-identical with and
+ * without the rule, `bridgedCuts: 0`, still `segmentCount` 5-6 and still 13-16 detected frames lost.
+ *
+ * Why, traced frame by frame rather than assumed: the bridge asks exactly the intended question
+ * about exactly the intended pair — t=4.24 (167,867 px² at (574,849)) against t=4.36 (108,121 px²
+ * at (824,738)), 0.12s apart, inside the time-gap tolerance — and `isBoundingBoxContinuous` says
+ * NO. Those two boxes are disjoint in x by 0.49 px, so IoU is exactly 0 (issue #54's premise of
+ * "IoU ~= 0.13" is wrong), and the centre-speed term then has to carry position alone: 273.2 px of
+ * travel against a 253.9 px budget, short by 7.6%. The area ratio (1.553) passes and never gets
+ * consulted. Reaching this pair needs `maxCenterSpeedSidesPerSecond` ~3.3 instead of 3 — a change
+ * to what continuity MEANS, which is deliberately out of this rule's scope and would break parity
+ * with the online anchor gate. Left as a human decision, not tuned in.
+ *
+ * The rule is not idle: on `e2e/fixtures/multiperson-track.mp4` it fires 4 times, takes
+ * `segmentCount` 8 -> 2 and the winner 119 -> 123 frames, without merging a bystander (winner
+ * `medianAreaPx` moves 0.84%, `separationRatio` stays 33.5). It is a proven no-op on both demo
+ * clips.
+ *
+ * Note also that even with the wedge healed, Demo 1's `segmentCount` 1 / zero-rejection condition
+ * is a JOINT #54 + #57 outcome: five phantom detections of 2,279-8,432 px² clear the 4K area floor
+ * of 1,659 px² and fail the ratio bound at ~19.9x — a transition the bridge cannot merge and should
+ * not. Demo 1 keeps `segmentCount >= 2` until #57's re-derived floor demotes those to
  * `rejectedBelowFloor`, where D5 makes them harmless.
  *
  * `minBoundingBoxAreaFraction: 2e-4` — 415 px² at 1080p, 1659 px² at 4K. Derived as roughly the
@@ -102,10 +119,11 @@ export interface RetroactivePersonSelectionConfig {
  * area swing with a simultaneous ~400px centroid jump across two consecutive frames of one person.
  * Extra margin here is cheap, but it is not sufficient — see design.md's D7: that wedge's first
  * cut is a POSITION failure (IoU 0, ~12 sides/s against a 3 sides/s bound) that no value of this
- * bound can heal. That half is handled instead by the splice-tolerance bridge in the cut loop
- * below (issue #54), which declines a cut when the surviving detections either side of the
- * offending one are continuous with each other — a rule about WHICH PAIR to ask about, leaving
- * this bound's own meaning untouched. Widening the ratio remains the wrong instrument for it.
+ * bound can heal. The splice-tolerance bridge in the cut loop below (issue #54) targets that half —
+ * a rule about WHICH PAIR to ask about, leaving this bound's own meaning untouched — but measured
+ * live it does not reach THIS wedge either, because the pair it would merge misses the POSITION
+ * test by 7.6% of speed budget (see the #54 update above). Widening the ratio is still the wrong
+ * instrument; on Demo 1 nothing currently shipped is the right one.
  *
  * `maxCenterSpeedSidesPerSecond: 3` — the same bound the online gate uses, for the same reason
  * (a runner crossing a 1920px frame in ~1.5s is ~1.8 sides/s against a ~700px box).

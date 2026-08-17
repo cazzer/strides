@@ -56,8 +56,11 @@ When a bridge fires at `i`, `previousIndex` **stays at `prev`** and the loop con
 iteration compares `next` against `prev` — the pair the bridge already verified — so it passes, no
 second cut is evaluated, and the reference then advances to `next` normally.
 
-This heals BOTH of Demo 1's cuts from ONE bridge decision: the 4.24→4.32 position failure is
-declined, and the 4.32→4.36 scale failure is never asked because 4.32 never becomes the reference.
+This is designed to heal BOTH of Demo 1's cuts from ONE bridge decision: the 4.24→4.32 position
+failure declined, and the 4.32→4.36 failure never asked because 4.32 never becomes the reference.
+**Measured, it does not get the chance on Demo 1** — the `(4.24, 4.36)` pair fails the unmodified
+predicate, so no bridge fires and this mechanic is untested on that clip (see "Measured A/B
+results"). It is exercised on the multi-person fixture, where the rule fires 4 times.
 If `previousIndex = i` still ran, the next iteration would compare against the wedge and cut —
 recovering the 5-frame prefix but re-stranding the 49-frame tail, which is **strictly worse than
 today**. This is the part a naive patch gets wrong, and it looks like partial success when it
@@ -159,13 +162,131 @@ span had its own wedge. `medianAreaPx` is what discriminates "a wedge inside one
    only one boundary healed (D2).
 5. `detectedSamplesOut` decreases on any clip.
 
-## Measured A/B results
+## Measured A/B results (2026-08-16, real GPU)
 
-**Not yet run.** The single live-browser verification lane is held by another agent; the run is
-deliberately deferred rather than executed concurrently, because concurrent Chromium+WebGL pose
-detection contends for the one GPU and this pipeline drops frames under load, which would silently
-undercount `detectedFrames` in both sets of numbers. This section is filled in with a 3-trial table
-(medians and ranges, per the Stage 1 precedent) before the change is archived.
+`scripts/ab-person-selection.mjs`, 3 trials × 3 clips × 2 arms, `--port 5199` (5173 was held by the
+main checkout's dev server — the exact hazard #53's reuse refusal exists for). Renderer confirmed
+`ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)`, not SwiftShader. Server started by the run.
+Both arms are **stage-on**; they differ only in code.
+
+**Provenance caveat, stated plainly:** the driver stamps the commit, and both reports stamp `33d1abf`
+because the before-arm was produced by reverting the single runtime file this change touches
+(`src/results/retroactivePersonSelection.ts`) to `d9cfc1a` in place, running, and restoring it. That
+file is the only runtime file #54 modifies, so the swap is exact — but the commit line in
+`54-before.txt` is not a valid provenance record and the file's git blob is the real discriminator.
+
+Medians with `[min..max]` where trials differed.
+
+| field | Demo 1 before | Demo 1 after | Demo 2 before | Demo 2 after | multi before | multi after |
+|---|---|---|---|---|---|---|
+| `bridgedCuts` | — | **0** | — | **0** | — | **4** |
+| `segmentCount` | 5 [5..6] | 5 [5..6] | 1 | 1 | 8 | **2** |
+| `rejectedOtherSegment` | 13 [13..16] | 13 [13..16] | 0 | 0 | 52 | **47** |
+| `rejectedBelowFloor` | 0 | 0 | 0 | 0 | 30 | 30 |
+| `detectedSamplesOut` | 52 [50..52] | 52 [50..52] | 99 | 99 | 122 | **127** |
+| `sampling.detectedFrames` | 52 [50..52] | 52 [50..52] | 99 | 99 | 122 | **127** |
+| `separationRatio` | 16.149 | 16.149 | null | null | 45.749 | **33.541** |
+| `segments[0].startTimestamp` | 4.36 | 4.36 | 0.0334 | 0.0334 | 1.75 | 1.75 |
+| `segments[0].endTimestamp` | 7.16 [6.32..7.16] | 7.16 [6.32..7.16] | 1.6683 | 1.6683 | 3.8167 | **3.90** |
+| `segments[0].frameCount` | 47 | 47 | 99 | 99 | 119 | **123** |
+| `segments[0].medianAreaPx` | 515,680 | 515,680 | 134,081 | 134,081 | 31,937 | **31,670** |
+
+Demo 1 and Demo 2 are **bit-identical on every captured field, metrics included**, and `bridgedCuts`
+is 0 on both — the tightest available proof that the new path never executed.
+
+### Verdict against the pre-registered criteria
+
+| gate | result |
+|---|---|
+| **Demo 1 D1-1** `bridgedCuts >= 1` | **FAIL** — 0, all 3 trials |
+| **Demo 1 D1-2** winner starts ≤ 3.90 | **FAIL** — 4.36, unchanged |
+| **Demo 1 D1-3** winner `frameCount` ≥ 54 | **FAIL** — 47, unchanged |
+| **Demo 1 D1-4** `segmentCount` down ≥ 2 | **FAIL** — 5, unchanged |
+| **Demo 1 D1-5** `rejectedOtherSegment` down ≥ 6 | **FAIL** — 13, unchanged |
+| **Demo 1 D1-6** `detectedFrames` up ≥ 5 | **FAIL** — 52, unchanged |
+| **Demo 1 D1-7** `detectedSamplesOut` never decreases | PASS (unchanged everywhere, +5 on multi) |
+| **Demo 2** no-op, `bridgedCuts === 0` | **PASS** — bit-identical, 3/3 trials |
+| **Multi-person** `separationRatio >= 3` | **PASS** — 33.54 |
+| **Multi-person** `medianAreaPx >= 28,700` | **PASS** — 31,670, a **0.84%** drop from 31,937 |
+| **Multi-person** winner span ≈[1.7, 3.9] | **PASS** — [1.75, 3.90] |
+| **Do-not-ship 1** (bystander merged) | not triggered — see above |
+| **Do-not-ship 2** (Demo 2 no longer a no-op) | not triggered |
+| **Do-not-ship 3** (Demo 1 `bridgedCuts` 0, `segmentCount` unchanged) | **FIRED** |
+| **Do-not-ship 4** (`bridgedCuts >= 1` but `frameCount` ≈49) | not triggered — the rule never fired at all, so D2 is untested on Demo 1 |
+| **Do-not-ship 5** (`detectedSamplesOut` decreases) | not triggered |
+
+**Do-not-ship condition 3 fired. Its instruction is "re-trace, do not tune", and that is what was
+done — no threshold was touched.**
+
+### Re-trace: why the bridge did not fire on Demo 1
+
+A temporary trace probe was spliced into the cut loop, one Demo 1 run captured, and the probe
+reverted (`git checkout --`, tree verified clean). The wedge is exactly where the archived D7 trace
+put it, and the bridge asked exactly the right question at exactly the right moment:
+
+```
+cont  #104@4.24 (a=167867, c=574,849) vs #98@4.00
+  ?bridge #104@4.24 -> #107@4.36 (a=108121, c=824,738)
+          elapsed=0.12 gapOK=true geom=FALSE
+          overlapX=-0.49  IoU=0.0000  dist=273.2  budget=253.9  shortfall=+7.6%  areaRatio=1.553
+CUT   #106@4.32 (a=24473, c=896,606) vs #104@4.24
+  ?bridge #106@4.32 -> #108@4.40   elapsed=0.08 geom=FALSE (dist 404.5 vs budget 100.3, ratio 17.4)
+CUT   #107@4.36 vs #106@4.32
+```
+
+**The load-bearing empirical premise of this whole change is refuted on one of its two halves.** The
+ticket and the plan both assert that "t=4.24 and t=4.36 overlap at **IoU≈0.13** with an area ratio of
+~1.55", and call the bridge "verified viable against the D7 trace". Measured against the boxes this
+clip actually produces today:
+
+- **area ratio 1.553** — the ~1.55 figure is correct, and it passes the bound of 4 comfortably;
+- **IoU is exactly 0.0000, not 0.13** — the two boxes are disjoint in x by **0.49 px**;
+- the centre-speed term, which then has to carry position alone, travels **273.2 px against a
+  253.9 px budget** — short by **7.6%**.
+
+Position therefore fails on both halves, `isBoundingBoxContinuous` short-circuits before the
+(passing) area test, and the bridge is correctly declined. The rule is implemented as specified and
+behaves as specified; **the fixture it was specified against does not match this clip's measured
+geometry.** D1's "it can only merge a pair the unmodified predicate already accepts" is precisely
+what bites here — the predicate does not accept this pair, by a margin of half a pixel of overlap
+and 7.6% of speed budget.
+
+Reaching it would require loosening `maxCenterSpeedSidesPerSecond` from 3 to ≈3.3, or otherwise
+restating what continuity means. **That is the tuning D1 forbids and do-not-ship 3 explicitly rules
+out**, and it would also break the deliberate parity with the online anchor gate's bound. Not done;
+flagged for a human decision instead.
+
+### What the change DOES do, measured
+
+On `e2e/fixtures/multiperson-track.mp4` the rule fires 4 times and does exactly what it was built to
+do — on real footage, not a synthetic fixture:
+
+- `segmentCount` **8 → 2**; the runner's own span stops being chopped into pieces.
+- winner `frameCount` **119 → 123**, span [1.75, 3.8167] → [1.75, **3.90**] — it recovers the tail of
+  the runner's track, and the start is unmoved.
+- `detectedSamplesOut` **122 → 127** (+5), `rejectedOtherSegment` **52 → 47**.
+- **No bystander was merged**, which is the gate that outranks every accept condition:
+  `medianAreaPx` moves 31,937 → 31,670, a **0.84%** drop against a 10% tolerance, and
+  `separationRatio` stays at **33.5** against a floor of 3. A merged bystander would have dragged
+  the winner's median area down hard; it did not move.
+
+`separationRatio` falling 45.7 → 33.5 is expected and benign: with `segmentCount` down to 2 the
+runner-up is now a consolidation of what were several bystander segments, so the denominator grew.
+The winner is unchanged in identity, position and apparent size.
+
+### One incidental confirmation, worth recording
+
+The same trace shows the phantom transition `#153@6.20 -> #178@7.20` with `elapsed=1.00`: its centre
+displacement of 1,956.9 px is **inside** a 2,194.6 px speed budget — position PASSES — and it is
+declined purely on `areaRatio=53.4`. That is a live, on-real-footage demonstration of the
+degeneracy `maxContinuityGapSeconds` exists to bound: at a full second of elapsed time the speed
+term has stopped discriminating anything. It is also independent evidence for R4 and for routing
+both checks through `isContinuousPair`.
+
+### Raw reports
+
+`54-before.txt` / `54-after.txt` and their `--json` companions, scratchpad-only (measurement
+artifacts, not committed).
 
 ## Risks
 

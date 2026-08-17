@@ -63,7 +63,13 @@
 
 - [x] 5.1 `openspec validate splice-tolerant-segmentation --strict`
 - [x] 5.2 `npm test`, `npm run build`, `npm run lint` — all green.
-- [ ] 5.3 3-trial A/B on all three clips via `scripts/ab-person-selection.mjs`, against the
-  pre-registered criteria in design.md, results recorded there as a table. **Deferred — the single
-  live-browser verification lane is held elsewhere.**
-- [ ] 5.4 Archive once the A/B has run and passed.
+- [x] 5.3 3-trial A/B on all three clips via `scripts/ab-person-selection.mjs`, against the
+  pre-registered criteria in design.md, results recorded there as a table. **Done — and Demo 1
+  FAILED every one of its six substantive criteria.** Do-not-ship condition 3 fired; the cause was
+  re-traced with a temporary probe (since reverted) and no threshold was tuned. Demo 2 is a proven
+  no-op; the multi-person fixture passes every gate including the bystander-merge gate that
+  outranks the rest.
+- [ ] 5.4 **Do not archive.** The change is correct and useful but does not close #52's blocker.
+  Needs a human decision on whether to widen `maxCenterSpeedSidesPerSecond` from 3 to ~3.3 — which
+  would break the deliberate parity with the online anchor gate and is exactly the tuning D1 and
+  do-not-ship 3 forbid this change from doing on its own.

@@ -36,8 +36,8 @@ the fix belongs in the offline stage's cut loop, not in the shared predicate.
   **with each other** — same predicate, same bounds, time-gap term included. The bridge changes the
   *operands*, never the predicate, so it can only merge a pair the unmodified
   `isBoundingBoxContinuous` already accepts.
-- **The reference does not advance across a bridged frame.** One bridge decision heals *both* of
-  Demo 1's cuts: the position failure in front is declined, and the scale failure behind it is never
+- **The reference does not advance across a bridged frame.** One bridge decision is meant to heal
+  *both* of Demo 1's cuts: the position failure in front declined, and the failure behind it never
   asked, because the wedge frame never becomes the reference.
 - **Tolerance is bounded to exactly one detection by construction**, not by a counter — after a
   bridge the next comparison is against the same reference the bridge just verified, so it cannot
@@ -48,6 +48,30 @@ the fix belongs in the offline stage's cut loop, not in the shared predicate.
 - **One new diagnostics field, `bridgedCuts: number`** on `PersonSelectionDiagnostics`. Without an
   observable, a healed clip and a clip that never had a wedge both just report a smaller
   `segmentCount` — indistinguishable from any other tuning effect, which makes the A/B unreadable.
+
+## Measured outcome — the Demo 1 goal is NOT met
+
+Recorded here rather than only in design.md, because it changes what this proposal delivers.
+3 trials × 3 clips × 2 arms, real GPU, 2026-08-16:
+
+- **Demo 1 is bit-identical with and without the rule** (`bridgedCuts: 0`, `segmentCount` still 5–6,
+  still 13–16 detected frames lost). Do-not-ship condition 3 fired; per its own instruction the
+  cause was re-traced and **nothing was tuned**.
+- **The premise is refuted on one half.** The ticket asserts the wedge's neighbours "overlap at
+  IoU≈0.13 with an area ratio of ~1.55". Measured: area ratio 1.553 (correct, and passing), but
+  **IoU is exactly 0** — the boxes are disjoint in x by 0.49 px — and the centre-speed fallback is
+  short by **7.6%** (273.2 px travelled against a 253.9 px budget). The predicate correctly rejects
+  the pair, so the bridge correctly declines. Reaching it means changing what continuity *means*,
+  which this change deliberately does not do.
+- **It does work, on real footage, elsewhere**: on the multi-person fixture it fires 4 times, takes
+  `segmentCount` 8 → 2 and the winner 119 → 123 frames, with no bystander merged (winner
+  `medianAreaPx` −0.84%, `separationRatio` 33.5).
+- **Proven no-op on both demo clips** — `bridgedCuts: 0` is the tightest available evidence that the
+  new path never executed.
+
+So this lands a correct, tested, measurably-useful rule that **does not close #52's blocker**.
+Whether to widen `maxCenterSpeedSidesPerSecond` (3 → ~3.3, breaking parity with the online anchor
+gate) is a decision this change does not take.
 
 ## Impact
 
