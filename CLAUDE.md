@@ -85,8 +85,10 @@ In development builds only, `useVideoAnalysis` auto-logs TWO console lines per r
    the detector found but the selection stage attributed to somebody else counts as *missing*
    there. `personSelection.detectedSamplesIn` preserves the pre-selection count — compare the two
    to tell "the detector found nothing" from "the detector found somebody else". The stage ships
-   **off** by default, in which case the two are always equal and this line reads exactly as it did
-   before the stage existed. `personSelection` itself is ALWAYS present (unlike `scaleCalibration`):
+   **on** by default, so expect the two to DIVERGE — by 13-16 detected frames on the side-view demo
+   clip. They are equal only under a `{ personSelection: { enabled: false } }` override, in which
+   case this line reads exactly as it did before the stage existed. `personSelection` itself is
+   ALWAYS present (unlike `scaleCalibration`):
    `{ status: 'selected'|'skipped', skipReason, minBoundingBoxAreaPx, totalSamples,
    detectedSamplesIn, detectedSamplesOut, rejectedBelowFloor, rejectedOtherSegment, segmentCount,
    segments (ranked by integrated area DESC, capped at 10, `[0]` is the winner), separationRatio }`
@@ -219,7 +221,7 @@ coincidental to this clip/environment. For a real before/after comparison, run a
 variant and compare medians/ranges, not single runs.
 
 **Environment gotcha — the cached browser binary can be version-mismatched.** `playwright` is a
-devDependency here (since `37441b7`), so driver scripts written in this repo resolve the import and
+devDependency here (since `06d9f72`), so driver scripts written in this repo resolve the import and
 run in place. But `chromium.launch()`'s default version-pinned browser lookup can fail if the only
 cached binaries under `~/Library/Caches/ms-playwright/` don't match the installed `playwright`
 package's expected revision (`Executable doesn't exist at
