@@ -3,6 +3,7 @@ import type { MetricId } from '../heuristics/types'
 import type {
   ClipEvidencePlan,
   EvidenceFramePlan,
+  EvidenceInstantPlan,
 } from '../results/evidenceFrames'
 import {
   EVIDENCE_BASE_OPACITY,
@@ -46,14 +47,37 @@ const ALL_METRICS: MetricId[] = [
   'stepWidthCm',
 ]
 
+/**
+ * The annotation inputs a plan carries. This module reads NONE of them — it seeks, crops and
+ * composites, and every mark drawn from these is the annotation layer's job — but they are
+ * required fields, so the fixtures carry realistic ones rather than empty stand-ins that could
+ * never come out of `planExemplarFrames`.
+ */
+const HIP_KEYPOINTS: EvidenceInstantPlan['keypoints'] = [
+  { name: 'left_hip', status: 'detected', x: 800, y: 540 },
+  { name: 'right_hip', status: 'interpolated', x: 900, y: 545 },
+]
+const HIP_SIGNS: EvidenceInstantPlan['outwardSign'] = { left: -1, right: 1 }
+
 const PAIR: EvidenceFramePlan = {
   metric: 'trunkLean',
   kind: 'trunkLeanRange',
   quality: 0.82,
   label: 'Most forward lean, ghosted against most upright',
-  base: { timestamp: 1.5, opacity: EVIDENCE_BASE_OPACITY },
-  ghost: { timestamp: 2.25, opacity: EVIDENCE_GHOST_OPACITY },
+  base: {
+    timestamp: 1.5,
+    opacity: EVIDENCE_BASE_OPACITY,
+    keypoints: HIP_KEYPOINTS,
+    outwardSign: HIP_SIGNS,
+  },
+  ghost: {
+    timestamp: 2.25,
+    opacity: EVIDENCE_GHOST_OPACITY,
+    keypoints: HIP_KEYPOINTS,
+    outwardSign: HIP_SIGNS,
+  },
   crop: { x: 412, y: 130, side: 900 },
+  travelDirection: 1,
   demotedFromPair: false,
 }
 
@@ -63,9 +87,18 @@ const SINGLE: EvidenceFramePlan = {
   side: 'left',
   quality: 0.7,
   label: 'Left footstrike',
-  base: { timestamp: 0.75, opacity: EVIDENCE_BASE_OPACITY },
+  base: {
+    timestamp: 0.75,
+    opacity: EVIDENCE_BASE_OPACITY,
+    keypoints: [
+      { name: 'left_ankle', status: 'detected', x: 120, y: 900 },
+      { name: 'left_knee', status: 'unrecoverable' },
+    ],
+    outwardSign: null,
+  },
   ghost: null,
   crop: { x: 0, y: 0, side: 320 },
+  travelDirection: -1,
   demotedFromPair: true,
 }
 

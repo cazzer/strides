@@ -9,6 +9,9 @@ import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { VideoMetadata } from '../video/types'
 import { buildFrame } from '../heuristics/__fixtures__/testFrames'
 import { MIN_EXEMPLAR_QUALITY } from '../heuristics/exemplars'
+import { estimateBodyScale } from '../heuristics/bodyScale'
+import { estimateTravelDirection } from '../heuristics/travelDirection'
+import { trimToPresenceWindow } from '../heuristics/presenceWindow'
 import type {
   FormHeuristicsResult,
   MetricExemplar,
@@ -27,15 +30,20 @@ import {
   EVIDENCE_NEAR_IDENTICAL_IOU,
   boundingBoxOfPoints,
   computeEvidenceCropRect,
+  evidenceOutputSide,
   evidenceSnapToleranceSeconds,
+  evidenceTravelDirection,
   frameCropBox,
   isNearIdenticalPair,
   planClipEvidence,
   planExemplarFrames,
   planMetricEvidence,
   resolveExemplarFrames,
+  resolveInstantKeypoints,
+  resolveOutwardSigns,
   snapToSampledFrame,
   summarizeEvidenceCoverage,
+  toEvidenceOutputSpace,
 } from './evidenceFrames'
 import type {
   ClipEvidencePlan,
@@ -268,6 +276,177 @@ describe('frameCropBox', () => {
   })
 })
 
+describe('resolveInstantKeypoints', () => {
+  it('keeps detected, interpolated and unrecoverable apart', () => {
+    const frame = buildFrame(
+      {
+        left_hip: { x: 900, y: 540 },
+        right_hip: { x: 1000, y: 545, status: 'interpolated' },
+      },
+      0,
+    )
+    // `left_heel` is MediaPipe-only and unrecoverable on MoveNet — the third state, and the one a
+    // two-state "resolvable or not" model would lose.
+    expect(
+      resolveInstantKeypoints(frame, [...HIP_SEED, 'left_heel']),
+    ).toEqual([
+      { name: 'left_hip', status: 'detected', x: 900, y: 540 },
+      { name: 'right_hip', status: 'interpolated', x: 1000, y: 545 },
+      { name: 'left_heel', status: 'unrecoverable' },
+    ])
+  })
+
+  it('carries no coordinates at all on an unrecoverable point', () => {
+    const [mark] = resolveInstantKeypoints(buildFrame({}, 0), ['left_hip'])
+    // Not `x: 0` and not `x: null` — the mark has to be DROPPED, and a type with no coordinate
+    // arm is what makes drawing one at the origin unreachable rather than merely discouraged.
+    expect('x' in mark).toBe(false)
+    expect('y' in mark).toBe(false)
+  })
+
+  it('preserves the exemplar order and drops a repeated name', () => {
+    const frame = hipFrame(0, 960, 540)
+    expect(
+      resolveInstantKeypoints(frame, [
+        'right_hip',
+        'left_hip',
+        'right_hip',
+      ]).map((mark) => mark.name),
+    ).toEqual(['right_hip', 'left_hip'])
+  })
+})
+
+describe('resolveOutwardSigns', () => {
+  it('signs each side away from the hip midline', () => {
+    // left_hip at 900, right_hip at 1000, midline 950: left is the negative-x side.
+    expect(resolveOutwardSigns(hipFrame(0, 950, 540))).toEqual({
+      left: -1,
+      right: 1,
+    })
+  })
+
+  it('flips with the hips, because it is per-frame and not clip-wide', () => {
+    const mirrored = buildFrame(
+      { left_hip: { x: 1000, y: 540 }, right_hip: { x: 900, y: 540 } },
+      0,
+    )
+    expect(resolveOutwardSigns(mirrored)).toEqual({ left: 1, right: -1 })
+  })
+
+  it('is null when only one hip resolves — the strict bilateral gate, not the tolerant midpoint', () => {
+    // `resolveMidpoint` would happily stand the one hip in for the pair, collapsing the midline
+    // onto it and making every sign identically zero. That is the sign-flip bug `stepWidth.ts`
+    // was fixed for, so this reads null rather than a fabricated direction.
+    const oneHip = buildFrame({ left_hip: { x: 900, y: 540 } }, 0)
+    expect(resolveOutwardSigns(oneHip)).toBeNull()
+  })
+
+  it('is null when both hips share an x, rather than falling back to +1 like the metric does', () => {
+    const degenerate = buildFrame(
+      { left_hip: { x: 950, y: 540 }, right_hip: { x: 950, y: 560 } },
+      0,
+    )
+    expect(resolveOutwardSigns(degenerate)).toBeNull()
+  })
+})
+
+describe('evidenceTravelDirection', () => {
+  /** Shoulders and hips both resolvable, so the frame is inside the presence window. */
+  function present(t: number, hipX: number): RobustPoseFrame {
+    return buildFrame(
+      {
+        left_shoulder: { x: hipX - 50, y: 300 },
+        right_shoulder: { x: hipX + 50, y: 300 },
+        left_hip: { x: hipX - 50, y: 500 },
+        right_hip: { x: hipX + 50, y: 500 },
+      },
+      t,
+    )
+  }
+
+  it('reads the direction the runner is travelling', () => {
+    const frames = [0, 1, 2, 3].map((i) => present(i * 0.1, 100 + i * 200))
+    expect(evidenceTravelDirection(frames)).toBe(1)
+    expect(evidenceTravelDirection([...frames].reverse())).toBe(-1)
+  })
+
+  it('is 0 when net displacement is under half a torso length', () => {
+    const frames = [0, 1, 2, 3].map((i) => present(i * 0.1, 100 + i * 5))
+    expect(evidenceTravelDirection(frames)).toBe(0)
+  })
+
+  it('is 0 when no body scale is resolvable at all', () => {
+    expect(evidenceTravelDirection([hipFrame(0, 500, 540)])).toBe(0)
+  })
+
+  it('matches the metrics by using their presence-trimmed frames, on a clip where the untrimmed array disagrees outright', () => {
+    // Frame 0 has hips but no shoulders, so the presence trim excludes it while
+    // `estimateTravelDirection` — which reads the first and last frame where HIP-mid resolves at
+    // all — would take it as the starting endpoint. Parked at the right edge, it reverses the
+    // reading. Design D4 argued this can only happen near the indeterminate threshold; it cannot,
+    // because the two arrays do not share endpoints, and both readings below are far clear of it.
+    const frames: RobustPoseFrame[] = [
+      hipFrame(0, 1900, 500),
+      ...[1, 2, 3, 4, 5].map((i) => present(i * 0.1, 100 + (i - 1) * 200)),
+    ]
+
+    const untrimmedScale = estimateBodyScale(frames)
+    expect(untrimmedScale).not.toBeNull()
+    const naive = estimateTravelDirection(frames, untrimmedScale!)
+
+    const metricFrames = trimToPresenceWindow(frames)
+    const metricScale = estimateBodyScale(metricFrames)
+    expect(metricScale).not.toBeNull()
+    const asMetricsSeeIt = estimateTravelDirection(metricFrames, metricScale!)
+
+    // Both confident, and opposite: the disagreement is real, not a threshold artefact.
+    expect(naive).toBe(-1)
+    expect(asMetricsSeeIt).toBe(1)
+    // The plan sides with the metrics, so a mark can never point opposite the card it explains.
+    expect(evidenceTravelDirection(frames)).toBe(asMetricsSeeIt)
+  })
+})
+
+describe('evidenceOutputSide / toEvidenceOutputSpace', () => {
+  it('caps without upscaling', () => {
+    expect(evidenceOutputSide(900, 640)).toBe(640)
+    expect(evidenceOutputSide(320, 640)).toBe(320)
+    expect(evidenceOutputSide(0.2, 640)).toBe(1)
+  })
+
+  it('scales by outputSide/crop.side, which is not 1 on a fractional crop under the cap', () => {
+    const crop = { x: 100, y: 200, side: 500.5 }
+    const side = evidenceOutputSide(crop.side, 640)
+    // Rounding is in the numerator only, so an uncapped crop still scales.
+    expect(side).toBe(501)
+    expect(toEvidenceOutputSpace({ x: 100, y: 200 }, crop, side)).toEqual({
+      x: 0,
+      y: 0,
+    })
+    // The crop's far corner is one whole crop side from its origin, so it maps to the canvas's
+    // far corner — `side`, NOT `crop.side`. A scale hard-coded to 1 (or to
+    // `maxOutputSidePx / crop.side`, which is 1.278 here) puts it half a pixel short and every
+    // mark inside it proportionally off.
+    const corner = toEvidenceOutputSpace(
+      { x: 100 + crop.side, y: 200 + crop.side },
+      crop,
+      side,
+    )
+    expect(corner.x).toBeCloseTo(side, 10)
+    expect(corner.y).toBeCloseTo(side, 10)
+    expect(corner.x).not.toBeCloseTo(crop.side, 3)
+  })
+
+  it('maps a capped crop into the capped canvas', () => {
+    const crop = { x: 0, y: 0, side: 2160 }
+    const side = evidenceOutputSide(crop.side, 640)
+    expect(toEvidenceOutputSpace({ x: 2160, y: 1080 }, crop, side)).toEqual({
+      x: 640,
+      y: 320,
+    })
+  })
+})
+
 describe('computeEvidenceCropRect', () => {
   it('is square and floors a degenerate single-point seed at the minimum side', () => {
     const frame = buildFrame({ left_hip: { x: 500, y: 500 } }, 0)
@@ -447,13 +626,88 @@ describe('planExemplarFrames', () => {
       HD,
       0.05,
     )
-    expect(plan?.base).toEqual({ timestamp: 0, opacity: EVIDENCE_BASE_OPACITY })
-    expect(plan?.ghost).toEqual({ timestamp: 0.1, opacity: EVIDENCE_GHOST_OPACITY })
+    expect(plan?.base).toMatchObject({
+      timestamp: 0,
+      opacity: EVIDENCE_BASE_OPACITY,
+    })
+    expect(plan?.ghost).toMatchObject({
+      timestamp: 0.1,
+      opacity: EVIDENCE_GHOST_OPACITY,
+    })
     expect(plan?.demotedFromPair).toBe(false)
     // One rect, unioned across both drawn frames.
     expect(plan?.crop).toEqual(
       computeEvidenceCropRect(paired, [...HIP_SEED], HD),
     )
+  })
+
+  it('resolves annotation inputs for BOTH instants of a pair, at each instant', () => {
+    // Two genuinely different hip positions: an annotation of the ghost that reused the base's
+    // positions would draw the second body's marks on the first body.
+    const paired = [hipFrame(0, 500, 540), hipFrame(0.1, 900, 620)]
+    const plan = planExemplarFrames(
+      'trunkLean',
+      exemplar({ timestamp: 0, pairedTimestamp: 0.1 }),
+      paired,
+      HD,
+      0.05,
+    )
+    expect(plan?.base.keypoints).toEqual(
+      resolveInstantKeypoints(paired[0], [...HIP_SEED]),
+    )
+    expect(plan?.ghost?.keypoints).toEqual(
+      resolveInstantKeypoints(paired[1], [...HIP_SEED]),
+    )
+    expect(plan?.base.keypoints).not.toEqual(plan?.ghost?.keypoints)
+    // And the per-frame sign is per-frame, resolved from each instant's own hips.
+    expect(plan?.base.outwardSign).toEqual(resolveOutwardSigns(paired[0]))
+    expect(plan?.ghost?.outwardSign).toEqual(resolveOutwardSigns(paired[1]))
+  })
+
+  it('carries an unrecoverable keypoint as unrecoverable rather than dropping or moving it', () => {
+    const frames = [
+      buildFrame(
+        {
+          left_hip: { x: 500, y: 540 },
+          right_hip: { x: 600, y: 540, status: 'interpolated' },
+        },
+        0,
+      ),
+    ]
+    const plan = planExemplarFrames(
+      'footStrikePattern',
+      // `left_heel` is named but unrecoverable on this backend — the crop already tolerates that;
+      // the annotation has to KNOW about it rather than silently see two keypoints.
+      exemplar({
+        kind: 'footStrike',
+        timestamp: 0,
+        cropKeypoints: [...HIP_SEED, 'left_heel'],
+      }),
+      frames,
+      HD,
+      0.05,
+    )
+    expect(plan?.base.keypoints).toEqual([
+      { name: 'left_hip', status: 'detected', x: 500, y: 540 },
+      { name: 'right_hip', status: 'interpolated', x: 600, y: 540 },
+      { name: 'left_heel', status: 'unrecoverable' },
+    ])
+  })
+
+  it('carries the clip-wide travel direction, defaulting to the frames it was given', () => {
+    const plan = planExemplarFrames(
+      'trunkLean',
+      exemplar(),
+      frames,
+      HD,
+      0.05,
+    )
+    expect(plan?.travelDirection).toBe(evidenceTravelDirection(frames))
+  })
+
+  it('takes the travel direction it is threaded, so every item of a clip agrees', () => {
+    const plan = planExemplarFrames('trunkLean', exemplar(), frames, HD, 0.05, -1)
+    expect(plan?.travelDirection).toBe(-1)
   })
 
   it('demotes a near-identical pair to its base for a kind that reads as a single', () => {
@@ -724,6 +978,26 @@ describe('planClipEvidence', () => {
       HD,
     )
     expect(plan.overstriding.status).toBe('planned')
+  })
+
+  it('gives every metric of a clip the same travel direction', () => {
+    const plan = planClipEvidence(
+      heuristicsResult({
+        overstriding: { exemplars: [exemplar({ kind: 'overstrideRange' })] },
+        trunkLean: { exemplars: [exemplar()] },
+        footStrikePattern: {
+          exemplars: [exemplar({ kind: 'footStrike', side: 'left' })],
+        },
+      }),
+      frames,
+      HD,
+    )
+    const directions = Object.values(plan).flatMap((entry) =>
+      entry.status === 'planned' ? entry.items.map((i) => i.travelDirection) : [],
+    )
+    expect(directions).toHaveLength(3)
+    expect(new Set(directions).size).toBe(1)
+    expect(directions[0]).toBe(evidenceTravelDirection(frames))
   })
 
   it('produces a well-formed plan from metadata whose duration is Infinity', () => {
