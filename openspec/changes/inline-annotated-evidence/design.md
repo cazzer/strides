@@ -430,12 +430,111 @@ Registered before implementation so the outcome cannot be adjudicated after the 
 
 ---
 
+## D12 — Decisions taken while building the annotation-geometry layer (`strides-ac9.7`)
+
+Four calls the earlier sections left open or got wrong. All four are implemented in
+`src/results/evidenceAnnotations.ts` and pinned by `evidenceAnnotations.test.ts`.
+
+### D12.1 — Grafted metrics get no signed or oriented mark. **Option (a).**
+
+`stepWidthCm` and `verticalOscillationCm` arrive by graft from the background MediaPipe scale
+pass, which carries its exemplars' timestamps but not its `RobustPoseFrame[]` — `scalePassGraft.ts`
+records that "the only frames any consumer holds are the primary pass's", and `EvidenceGallery`
+duly hands `planClipEvidence` `clip.analysis.robustFrames` (MoveNet). Both metrics' joint positions
+**and** their hip polarity are therefore resolved off a primary-pass frame snapped to the grafted
+timestamp — never the frame that measured them.
+
+Positions survive that: they are the primary detector's own estimate of the same body at the same
+instant, and they land on the image the extractor draws. A **polarity** does not. At a near-frontal
+step-width strike the two hips sit a few pixels apart, which is exactly where two detectors' orderings
+become a coin flip; a caliper carrying the inverse polarity would label a crossover strike as landing
+on its own side, contradicting `stepWidth.ts:273-277`'s crossover caveat in the same viewport.
+
+- **(c) accept it** has no argument available. The mechanism is confirmed, not hypothetical, and it
+  lands precisely where the metric lives rather than in a tail case.
+- **(b) joints only** overpays. It would strip `verticalOscillationCm` — the one grafted metric
+  measured as reaching the gallery on all three test clips — of marks that carry no polarity at all.
+
+So: `GRAFTED_METRICS` suppresses polarity, not geometry. `stepWidthCm`'s caliper still draws, as the
+unsigned lateral span it honestly is; `verticalOscillationCm` is bit-identical to
+`verticalOscillation` on the same exemplar. `resolveOutwardSigns`' doc comment, which claimed to be
+`stepWidth.ts:222-223` "verbatim, not an approximation", now names this exception — true for the
+primary pass, false for these two.
+
+**Not fixed here**: the clean fix is for a grafted exemplar to carry its own pass's frames, or for
+the graft to be dropped when no primary frame corroborates it. Both are `scalePassGraft.ts`'s
+business, not this layer's.
+
+### D12.2 — No caliper where the exemplar records no per-instant side.
+
+`overstriding` (`:99-101`) and `stepWidth` (`:91-93`) both omit `side` when their two instants are
+different feet — the usual case for both. `EvidenceInstantPlan` records no per-instant side either,
+so **which ankle this instant's strike was is not derivable from the plan**. The exemplar's
+`cropKeypoints` happens to order the base's ankle before the ghost's, but that is a private detail
+of two metric modules, and reading it would make "which foot was measured" a silent function of an
+array order nobody is testing. A caliper drawn to the other foot is a measurement that was never
+taken, which is the same class of error as a guessed sign.
+
+Those pairs therefore ship the per-instant truths only — the hip midline (per frame, so a pair
+carries two), the hip-width segment, and the joints — and no caliper. Singles and demoted pairs,
+which do carry a `side`, get the full mark set.
+
+**The fix, if the caliper turns out to matter**: a per-instant `side` on `EvidenceInstantPlan`,
+resolved in `planExemplarFrames` from the exemplar the same way its positions already are. That is a
+widening of `strides-ac9.6`'s seam, not a new one.
+
+### D12.3 — `footStrikePattern` draws no midfoot band.
+
+`strides-ac9.7`'s description asks for "the ±0.05·torso midfoot band as guide lines". Dropped, on the
+requirement this change itself adds: *"Every mark SHALL be derived from **this runner's own keypoints
+in the depicted frames**"*, and the system *"SHALL NOT overlay a reference posture, an ideal, a
+target, … or any other geometry the runner did not produce."*
+
+The band fails both halves. Its half-width is `midfootBandRatio × torsoLengthPx`, and `torsoLengthPx`
+is the clip-median body scale (`bodyScale.ts:41`) — a length that exists in no depicted frame, which
+is the same undrawable denominator D2 already refuses to label. And a ±5% band around the knee's
+vertical reads as a target zone: "land inside here" is a claim about correct form, which is the
+claim D1's surviving prohibition exists to prevent. That it is the classifier's own decision boundary
+is exactly why it looks authoritative.
+
+What is drawn instead is the honest numerator: the shank, the plumb at the knee, and the horizontal
+caliper `ankle.x − knee.x` (`footStrikePattern.ts:191-193`). Still no shank-versus-vertical arc — the
+metric forms a horizontal offset, not an angle.
+
+### D12.4 — Which instants were measured, as data.
+
+The spec requires that "an instant carried purely for legibility … SHALL NOT be captioned as
+measured", and the caption layer cannot see that from the geometry. `EvidenceAnnotation` therefore
+carries `valueMeasuredAtInstant` per instant, sourced from the metric modules rather than from what
+looks measured:
+
+| kind | base | ghost | source |
+|---|---|---|---|
+| `bounceCycle` | **false** | **false** | the exemplar carries no `value` on either instant, "precisely because a fitted amplitude has no per-instance values" (`bounceInstants.ts:193-200`) |
+| `kneeFlexionPeak` | true | **false** | the trough is scored with `value` absent (`kneeFlexion.ts:104-108`) and is documented as not a measurement (`:74-77`) |
+| every other kind | true | true | both instants carry their own measured value |
+
+`kneeFlexion`'s ghost is also denied the angle arc — an arc is the strongest "this was measured here"
+mark in the vocabulary, and no angle was taken at the trough. It keeps the thigh and shank, which is
+what makes the bent knee readable against a straight one.
+
+The `kneeFlexionPeak` arc that *is* drawn spans the **interior** angle at the knee, and carries
+`reportedValueIsSupplement: true` — `kneeFlexion.ts:198` reports `180 − interiorAngle`. That is D11
+rule 3's supplement relationship expressed as a field a test can assert rather than a comment a
+reviewer has to notice.
+
+---
+
 ## Open questions
 
-- **Does the joint layer draw edges, or only points?** `strides-ac9.7`'s mark table names joint
-  positions; `toDrawOps`'s model carries both. Edges make a limb readable as a limb, but on a tight
-  crop most edges leave the frame. Deferred to `strides-ac9.7` with a bias toward "edges only between
-  keypoints the exemplar itself names", which falls out of the subset rule in D5 anyway.
+- ~~**Does the joint layer draw edges, or only points?**~~ **Answered in `strides-ac9.7`: both, with
+  the bias this question already carried.** An edge draws only when the exemplar named **both**
+  endpoints and both resolved — which is the D5 subset rule, and it keeps every edge inside the crop
+  by construction, since the crop is derived from those same keypoints. One addition the question did
+  not anticipate: an edge is **skipped entirely when the measurement layer already drew that exact
+  segment** (`kneeFlexion`'s thigh and shank, `armSwingSymmetry`'s upper arm and forearm,
+  `stepWidth`'s hip-to-hip). The same segment stroked twice in two styles is one muddy layer, not the
+  two separable ones D5 requires.
 - **Does a caption change per metric, or does the existing `plan.label` carry it?** `captionFor`
   (`EvidenceGallery.tsx:254-270`) already builds from `plan.label`, which is the metric's own words.
   The honesty rule constrains what a caption may *not* say; it does not require new copy. Assume the

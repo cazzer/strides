@@ -59,34 +59,46 @@ evidence surface at all.
 
 ## 2. Build the pure per-metric annotation-geometry layer (`strides-ac9.7`)
 
-- [ ] 2.1 New pure module: `EvidenceFramePlan` → annotation draw ops in **output-canvas** coordinates.
-  Zero canvas, zero DOM references.
-- [ ] 2.2 Implement the forward transform `s = max(1, round(min(crop.side, 640))) / crop.side`,
+- [x] 2.1 New pure module: `EvidenceFramePlan` → annotation draw ops in **output-canvas** coordinates.
+  Zero canvas, zero DOM references. — `src/results/evidenceAnnotations.ts`, with the same
+  comment-stripped `module hygiene` scan `evidenceFrames.test.ts` uses.
+- [x] 2.2 Implement the forward transform `s = max(1, round(min(crop.side, 640))) / crop.side`,
   `c = (kp - crop.origin) * s`. The exact inverse already exists at `movenet.ts:86-95`; do not
-  re-derive it from scratch.
-- [ ] 2.3 Unit-test the transform with a **fractional** `crop.side`, so `s ≠ 1` is exercised (design
-  D3 — `s` is not `640 / crop.side`).
-- [ ] 2.4 Joint layer: reuse the `skeletonGeometry.ts` `DrawOp` model, `DETECTED_OPACITY` /
+  re-derive it from scratch. — reuses `evidenceFrames.ts`'s existing `evidenceOutputSide` /
+  `toEvidenceOutputSpace`, called from exactly one place (`MarkBuilder.toCanvas`), asserted by
+  hygiene test so no caller can bypass it.
+- [x] 2.3 Unit-test the transform with a **fractional** `crop.side`, so `s ≠ 1` is exercised (design
+  D3 — `s` is not `640 / crop.side`). — two cases, a fractional side under the cap (321.7 → 322) and
+  one above it (1200.5 → 640), plus an explicit assertion against the naive `640 / crop.side`.
+- [x] 2.4 Joint layer: reuse the `skeletonGeometry.ts` `DrawOp` model, `DETECTED_OPACITY` /
   `INTERPOLATED_OPACITY`, the `Math.min` edge rule, and skip-unrecoverable-entirely. Compose each
   point's own opacity with a per-frame base/ghost multiplier (base 1.0, ghost
   `EVIDENCE_GHOST_OPACITY` 0.5). Do not write a second skeleton renderer.
-- [ ] 2.5 Draw only the exemplar's own keypoints, never all 22 `SKELETON_EDGES`.
-- [ ] 2.6 Per-metric mark sets, per the epic's table: `trunkLean` torso vector + vertical ray + arc at
+- [x] 2.5 Draw only the exemplar's own keypoints, never all 22 `SKELETON_EDGES`. — and never an edge
+  the measurement layer already drew as a named segment (design D12.4's neighbour, recorded under
+  "Open questions").
+- [x] 2.6 Per-metric mark sets, per the epic's table: `trunkLean` torso vector + vertical ray + arc at
   hip-mid; `kneeFlexion` hip→knee→ankle chain + extended reference ray + arc at the knee;
   `overstriding` plumb at `hipMid.x` + horizontal caliper to the ankle; `footStrikePattern` shank +
-  plumb at the knee + horizontal caliper + the ±0.05·torso midfoot band, one instant, **no
-  shank-versus-vertical arc**; `stepWidth`/`stepWidthCm` per-frame midline at `hipMidX` (two midlines
+  plumb at the knee + horizontal caliper, one instant, **no shank-versus-vertical arc**;
+  `stepWidth`/`stepWidthCm` per-frame midline at `hipMidX` (two midlines
   for a pair, not one) + caliper; `armSwingSymmetry` shoulder→elbow→wrist + a horizontal through each
   shoulder + two vertical bars for `wrist.y − shoulder.y`; `bounceCycle` midpoint marker + horizontal
   at each instant's midpoint-y; `verticalRatio` `stridePair` hip-mid marker + vertical tick at each
-  hip-mid x + horizontal caliper between ticks.
-- [ ] 2.7 `kneeFlexion`: handle the supplement relationship explicitly — the drawn arc is the interior
-  angle, the card reports `180 − interiorAngle` (`kneeFlexion.ts:198`).
-- [ ] 2.8 **No mark carries a numeric label** (design D2 and D11 rule 3). A metric with no honestly
-  drawable measurement gets joints only.
-- [ ] 2.9 `cadence` produces nothing here either — a third guard is not required, but the module must
+  hip-mid x + horizontal caliper between ticks. — **two deviations, both recorded in design D12**:
+  no ±0.05·torso midfoot band (D12.3 — it is sized by a clip-median denominator and reads as a target
+  zone), and no caliper on an `overstrideRange`/`stepWidthStrike` pair, whose per-instant side the
+  plan does not record (D12.2).
+- [x] 2.7 `kneeFlexion`: handle the supplement relationship explicitly — the drawn arc is the interior
+  angle, the card reports `180 − interiorAngle` (`kneeFlexion.ts:198`). — carried as
+  `EvidenceArcOp.reportedValueIsSupplement`, a field a test asserts rather than a comment.
+- [x] 2.8 **No mark carries a numeric label** (design D2 and D11 rule 3). A metric with no honestly
+  drawable measurement gets joints only. — enforced in the type (no op has a label field) and by an
+  allowlist test over every op key across all eight exemplar kinds.
+- [x] 2.9 `cadence` produces nothing here either — a third guard is not required, but the module must
   not be reachable for it.
-- [ ] 2.10 `npm test` and `tsc -b` clean.
+- [x] 2.10 `npm test` and `tsc -b` clean. — 78 files / 1118 tests (from 77 / 1083), `tsc -b` and
+  `npx eslint .` clean.
 
 ## 3. Draw the annotation layer onto the evidence canvas (`strides-ac9.8`)
 
