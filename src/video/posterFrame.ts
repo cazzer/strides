@@ -46,19 +46,30 @@ import type { VideoMetadata } from './types'
 export const POSTER_MAX_SIDE_PX = 240
 
 /**
- * How far into the clip the poster frame is taken from, as a fraction of duration. Not zero: the
- * first frame of a real clip is routinely a fade-in, a black leader, or the runner not yet in
- * shot, and a strip of black squares is worse than no strip. A fraction rather than a constant so
- * a very short clip does not land past a meaningful part of itself.
+ * How far into the clip the poster frame is taken from, as a fraction of duration: the middle.
+ *
+ * Not zero: the first frame of a real clip is routinely a fade-in, a black leader, or the runner
+ * not yet in shot, and a strip of black squares is worse than no strip. Not merely *near* the
+ * start either — a running clip's opening second is the approach, where the subject is smallest,
+ * furthest from camera, and often not yet in frame at all. The middle is where the runner is most
+ * reliably present, largest, and mid-stride, which is what a thumbnail is for.
+ *
+ * A fraction rather than a constant so a very short clip does not land past a meaningful part of
+ * itself; the midpoint is strictly inside any positive duration, so it can never reach the final
+ * frame.
  */
-export const POSTER_TIMESTAMP_FRACTION = 0.1
+export const POSTER_TIMESTAMP_FRACTION = 0.5
 
 /**
- * Ceiling on the above, in seconds — and, for a clip whose duration cannot be read at all, the
- * whole answer (see `choosePosterTimestamps`). On a long clip 10% is minutes in, which is both slow
- * to seek to and no more representative than the opening second.
+ * The whole answer for a clip whose duration cannot be read at all (see `choosePosterTimestamps`),
+ * in seconds. With no duration there is no midpoint to compute, so this is a fixed guess: far
+ * enough in to clear a leader, near enough the start to be reachable in a clip of unknown length.
+ *
+ * Deliberately NOT a ceiling on the fraction above. Capping the midpoint would defeat it — the
+ * middle of a 60 s clip is 30 s, and clamping that to 1 s would put every clip longer than two
+ * seconds back at its opening, which is the outcome the fraction exists to avoid.
  */
-export const POSTER_TIMESTAMP_MAX_SECONDS = 1
+export const POSTER_TIMESTAMP_FALLBACK_SECONDS = 1
 
 /**
  * Bounded wait for the detached element to have decoded data. Same reasoning as the evidence
@@ -132,28 +143,27 @@ export function computePosterSize(
  * PURE. Which instants to try taking the poster from, in seconds, best first (see
  * `POSTER_TIMESTAMP_FRACTION`). Never empty; the caller draws at the first one it can reach.
  *
- * **A usable duration yields exactly one candidate**, strictly inside the clip: the fraction is
- * below 1, so it can never land on or past the final frame. There is deliberately no fallback
- * behind it — the position was computed from a duration the element reported, so a seek that
- * cannot reach it means the decoder is broken, and drawing frame 0 instead would substitute a
+ * **A usable duration yields exactly one candidate**, the midpoint, strictly inside the clip: the
+ * fraction is below 1, so it can never land on or past the final frame. There is deliberately no
+ * fallback behind it — the position was computed from a duration the element reported, so a seek
+ * that cannot reach it means the decoder is broken, and drawing frame 0 instead would substitute a
  * frame nobody asked for (`drawPosterFrame` yields no poster rather than a wrong one).
  *
  * **An unusable duration yields the fixed offset, then 0.** `null`, `NaN`, `Infinity`, zero and
  * negative are all things a `<video>` genuinely reports, and one of them is not an edge case at
- * all: a MediaRecorder WebM — every webcam-recorded clip this app produces — reports
- * `duration: Infinity`, which `useVideoSource` copies verbatim into `metadata.durationSec`.
- * Clamping that to 0 would poster EVERY recorded run at its first frame, which is the one outcome
- * `POSTER_TIMESTAMP_FRACTION` exists to avoid (a fade-in, a black leader, or the runner still
- * walking back from the camera). With no duration there is no fraction to take, so the offset is
- * a fixed guess rather than a computed position — and unlike the computed case it therefore earns
- * a fallback, because a clip shorter than the offset, or one whose blob genuinely will not seek,
- * should still get a thumbnail rather than none.
+ * all: a MediaRecorder WebM reports `duration: Infinity`, which `useVideoSource` copies verbatim
+ * into `metadata.durationSec`. Clamping that to 0 would poster such a clip at its first frame,
+ * which is the one outcome `POSTER_TIMESTAMP_FRACTION` exists to avoid (a fade-in, a black leader,
+ * or the runner still walking back from the camera). With no duration there is no midpoint to
+ * take, so the offset is a fixed guess rather than a computed position — and unlike the computed
+ * case it therefore earns a fallback, because a clip shorter than the offset, or one whose blob
+ * genuinely will not seek, should still get a thumbnail rather than none.
  */
 export function choosePosterTimestamps(durationSec: number | null | undefined): number[] {
   if (durationSec == null || !Number.isFinite(durationSec) || durationSec <= 0) {
-    return [POSTER_TIMESTAMP_MAX_SECONDS, 0]
+    return [POSTER_TIMESTAMP_FALLBACK_SECONDS, 0]
   }
-  return [Math.min(durationSec * POSTER_TIMESTAMP_FRACTION, POSTER_TIMESTAMP_MAX_SECONDS)]
+  return [durationSec * POSTER_TIMESTAMP_FRACTION]
 }
 
 /** Bounded wait for the element to hold decoded pixels. Resolves `false` on error or timeout. */

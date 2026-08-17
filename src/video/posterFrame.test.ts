@@ -5,7 +5,7 @@ import { stubRequestVideoFrameCallback } from '../test/videoFrameCallbackTestUti
 import type { VideoMetadata } from './types'
 import {
   POSTER_MAX_SIDE_PX,
-  POSTER_TIMESTAMP_MAX_SECONDS,
+  POSTER_TIMESTAMP_FALLBACK_SECONDS,
   choosePosterTimestamps,
   computePosterSize,
   deriveClipPoster,
@@ -124,15 +124,18 @@ describe('computePosterSize', () => {
 })
 
 describe('choosePosterTimestamps', () => {
-  it('takes a frame a tenth of the way in, never the clip’s leader frame', () => {
+  it('takes the middle frame, never the clip’s leader frame', () => {
     const [first, ...rest] = choosePosterTimestamps(8)
-    expect(first).toBeCloseTo(0.8, 10)
+    expect(first).toBeCloseTo(4, 10)
     // A computed position needs no fallback — see the "no second candidate" case below.
     expect(rest).toEqual([])
   })
 
-  it('caps at POSTER_TIMESTAMP_MAX_SECONDS on a long clip', () => {
-    expect(choosePosterTimestamps(600)).toEqual([POSTER_TIMESTAMP_MAX_SECONDS])
+  it('does not cap the midpoint on a long clip', () => {
+    // The midpoint is the whole point: clamping a 600s clip to a fixed ceiling would put every
+    // clip longer than a couple of seconds back near its opening, which is what the fraction
+    // exists to avoid.
+    expect(choosePosterTimestamps(600)).toEqual([300])
   })
 
   it('stays strictly inside a very short clip', () => {
@@ -147,7 +150,7 @@ describe('choosePosterTimestamps', () => {
     // recorded run at the frame that is routinely a fade-in, a black leader, or the runner still
     // walking back from the camera. `null`/`NaN` are what a still-loading or failed element gives.
     for (const unusable of [null, undefined, Number.NaN, Number.POSITIVE_INFINITY, 0, -4]) {
-      expect(choosePosterTimestamps(unusable)).toEqual([POSTER_TIMESTAMP_MAX_SECONDS, 0])
+      expect(choosePosterTimestamps(unusable)).toEqual([POSTER_TIMESTAMP_FALLBACK_SECONDS, 0])
     }
   })
 
@@ -180,9 +183,9 @@ describe('drawPosterFrame', () => {
 
     const poster = await drawPosterFrame(video, metadata({ durationSec: 8 }))
 
-    expect(seeked).toEqual([0.8])
+    expect(seeked).toEqual([4])
     expect(poster).not.toBeNull()
-    expect(poster!.timestamp).toBeCloseTo(0.8, 10)
+    expect(poster!.timestamp).toBeCloseTo(4, 10)
     expect(poster!.width).toBe(240)
     expect(poster!.height).toBe(135)
     expect(poster!.canvas.width).toBe(240)
@@ -234,8 +237,8 @@ describe('drawPosterFrame', () => {
       metadata({ durationSec: Number.POSITIVE_INFINITY }),
     )
 
-    expect(seeked).toEqual([POSTER_TIMESTAMP_MAX_SECONDS])
-    expect(poster!.timestamp).toBe(POSTER_TIMESTAMP_MAX_SECONDS)
+    expect(seeked).toEqual([POSTER_TIMESTAMP_FALLBACK_SECONDS])
+    expect(poster!.timestamp).toBe(POSTER_TIMESTAMP_FALLBACK_SECONDS)
   })
 
   it('degrades to frame 0 — rather than to no poster — when that offset cannot be reached', async () => {

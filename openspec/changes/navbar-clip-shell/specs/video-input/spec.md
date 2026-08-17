@@ -29,12 +29,22 @@ derivation is requested independently, with no call site able to see the others.
 decoders are held open at the clip's own dimensions, which for this app's own reference footage is
 4K, and they are opened during analysis, competing with a live sampling run for memory and GPU.
 
-The instant a poster is taken from SHALL NOT be the clip's first frame whenever any later instant
-can be reached, **including when the clip's duration cannot be read at all**. A duration of
-`Infinity` is not an exotic failure: it is what a MediaRecorder-produced clip reports, which is
-every clip this app records itself. Treating an unreadable duration as zero would silently apply
-the first-frame outcome to a whole input mode, so an unreadable duration SHALL instead fall back to
-a fixed offset into the clip, and only then to the first frame if that offset cannot be reached.
+The instant a poster is taken from SHALL be the **midpoint of the clip**, and SHALL NOT be the
+clip's first frame whenever any later instant can be reached — **including when the clip's duration
+cannot be read at all**.
+
+The midpoint rather than merely some offset past the start, because a running clip's opening second
+is the approach: the subject is at their smallest, furthest from camera, and frequently not yet in
+frame. The middle is where the runner is most reliably present, largest, and mid-stride, which is
+what a thumbnail exists to show. The midpoint is strictly inside any positive duration, so it can
+never land on the final frame, and it SHALL NOT be capped at a fixed ceiling — capping it would put
+every clip longer than a few seconds back near its opening, defeating the rule.
+
+A duration of `Infinity` is not an exotic failure: it is what a MediaRecorder-produced clip can
+report. Treating an unreadable duration as zero would silently apply the first-frame outcome to a
+whole input mode. With no duration there is no midpoint to compute, so an unreadable duration SHALL
+instead fall back to a fixed offset into the clip, and only then to the first frame if that offset
+cannot be reached.
 
 Because the source reaches `'ready'` on metadata alone, a frame is not guaranteed at that moment. The
 poster SHALL therefore become available at or after `'ready'`, once a frame has actually been
@@ -87,9 +97,15 @@ a rendering context.
 - **THEN** no two poster decoders are open simultaneously — each starts only after the previous one
   has been torn down — without any caller having arranged that ordering
 
+#### Scenario: A poster is taken from the middle of the clip
+
+- **WHEN** a clip reports a usable duration, of any length
+- **THEN** the poster is taken from that clip's midpoint — not its opening, and not a fixed offset
+  from the start — so a long clip posters from its middle rather than from its approach
+
 #### Scenario: A clip whose duration cannot be read still posters past its first frame
 
-- **WHEN** a clip reports no usable duration, as a webcam recording does
+- **WHEN** a clip reports no usable duration, as a webcam recording can
 - **THEN** the poster is taken from a fixed offset into the clip rather than from its first frame,
   and falls back to the first frame only if that offset cannot be reached
 
