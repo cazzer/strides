@@ -86,11 +86,20 @@
   online anchor gate uses".
 - [x] 6.5 Re-correct the doc comments round 1 had corrected the other way — the wedge is now
   measured as healed, and the round-1 trace is kept as D4's evidence base.
+- [x] 6.6 Pin the bound in the unit suite. Before this, 3 → 4 was a no-op for all 795 tests
+  (every discontinuity in the file fails on scale or time), so the bound's only evidence was a
+  live A/B CI cannot run. Fixture scaled from the real measurement, with IoU, area ratio and
+  elapsed all held far from their bounds so the speed term is provably what decides; asserts the
+  shipped default plus the counterfactual at 3. Verified to fail when the default is reverted.
+- [x] 6.7 Record the D1-3 adjudication in design.md **underneath** the fired gate, leaving both the
+  FAIL and the pre-registered criterion unedited.
 
 ## 7. Still open
 
 - [ ] 7.1 **Do not archive.** Demo 1 reaches `segmentCount` 3–4, not 1 — the remaining three
   segments are phantom detections that #57's re-derived area floor demotes. Closing #52's headline
   criterion is still the joint #54 + #57 outcome recorded in the gate amendment.
-- [ ] 7.2 D1-3's one-frame miss is reported, not tuned around; it needs a human call on whether the
-  criterion or the result is what should move.
+- [x] 7.2 D1-3's one-frame miss — **adjudicated 2026-08-16: accepted as a fired gate.** The
+  criterion imported a session-variable constant (the tail length) as an absolute; the property it
+  proxied for is independently established by the relative moves (+6 frames, winner start
+  4.36 → 0.08, `detectedFrames` +6). Neither the criterion nor the FAIL row was edited.

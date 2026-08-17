@@ -460,6 +460,54 @@ describe('selectRetroactivePersonOfInterest', () => {
       expect(select(far).diagnostics.segmentCount).toBe(1)
     })
 
+    it('pins maxCenterSpeedSidesPerSecond: the offline bound of 4 keeps a pair that 3 would cut', () => {
+      // The ONLY test that the offline centre-speed bound is load-bearing. Every other
+      // discontinuity in this suite fails on scale or on time, so before this existed the bound
+      // could be reverted 4 -> 3 with the whole suite still green, and its only evidence was a
+      // live A/B that CI cannot run (design.md D4).
+      //
+      // Scaled from the real Demo 1 measurement that D4 exists for: the runner's own t=4.24 and
+      // t=4.36 boxes travel 273.2px of centre displacement against a 253.9px budget at 3 sides/s
+      // -- a 7.6% shortfall -- while overlapping not at all and differing in area by only 1.55x.
+      // This fixture reproduces that shape with round numbers.
+      //
+      // Reference box [100,300]x[100,800]: centre (200,450), area 140,000, longest side 700.
+      // Candidate box [353,593]x[100,800]: centre (473,450), area 168,000.
+      //   - centre displacement is exactly 273px, purely horizontal
+      //   - budget at 3 sides/s over 0.12s = 3 x 700 x 0.12 = 252  -> 273 > 252, CUTS
+      //   - budget at 4 sides/s over 0.12s = 4 x 700 x 0.12 = 336  -> 273 < 336, continuous
+      // The other two terms are deliberately held far from their bounds so neither can be what
+      // decides: the boxes are disjoint in x (300 < 353) so IoU is 0 and the overlap half of the
+      // position test cannot rescue either case, the area ratio is 1.2 against a bound of 4, and
+      // 0.12s is nowhere near the 1.0s continuity gap.
+      const samples: PoseSample[] = [
+        detected(0, 100, 100, 200, 700),
+        detected(0.12, 353, 100, 240, 700),
+      ]
+
+      // Against the SHIPPED default -- fails if `maxCenterSpeedSidesPerSecond` is reverted to 3.
+      const shipped = select(samples)
+      expect(shipped.diagnostics.segmentCount).toBe(1)
+      expect(shipped.diagnostics.detectedSamplesOut).toBe(2)
+      // Two samples, so a cut here has no lookahead target and splice tolerance is not involved
+      // either way -- this isolates the bound, not the bridge.
+      expect(shipped.diagnostics.bridgedCuts).toBe(0)
+
+      // The counterfactual, so this proves the bound is load-bearing rather than merely passing:
+      // the identical fixture at the online gate's 3 still cuts.
+      const atThree = select(samples, { ...CONFIG, maxCenterSpeedSidesPerSecond: 3 })
+      expect(atThree.diagnostics.segmentCount).toBe(2)
+
+      // ...and it is the SPEED term deciding, not the scale one: at 3 sides/s it cuts even with the
+      // area bound thrown wide open.
+      const atThreeWideArea = select(samples, {
+        ...CONFIG,
+        maxCenterSpeedSidesPerSecond: 3,
+        maxAreaRatio: 1000,
+      })
+      expect(atThreeWideArea.diagnostics.segmentCount).toBe(2)
+    })
+
     it('every sample belongs to exactly one segment, and the segments tile the clip', () => {
       const samples: PoseSample[] = [
         missing(0),

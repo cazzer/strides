@@ -158,6 +158,17 @@ trigger with a looser speed bound.
 **The online gate is not touched.** `personOfInterestConfig.ts` keeps `maxCenterSpeedSidesPerSecond:
 3`; the change is confined to `DEFAULT_RETROACTIVE_PERSON_SELECTION_CONFIG`.
 
+**The bound has unit coverage.** It did not when it was changed: every discontinuity in
+`retroactivePersonSelection.test.ts` fails on scale or on time, so 3 → 4 was a no-op for all 795
+tests and the bound's only evidence was a live A/B that CI cannot run. `'pins
+maxCenterSpeedSidesPerSecond: the offline bound of 4 keeps a pair that 3 would cut'` closes that:
+a pair scaled from the real Demo 1 measurement (273 px of centre travel, budget 252 at 3 and 336 at
+4) with IoU held at 0, the area ratio at 1.2 against a bound of 4, and elapsed at 0.12 s against a
+1.0 s gap, so the speed term is provably the only one deciding. It asserts against the shipped
+default, so reverting the default fails it, and asserts the counterfactual at 3 — plus a third case
+at 3 with `maxAreaRatio: 1000` — so it proves the bound is load-bearing rather than merely passing.
+Verified as a real tripwire by flipping the default to 3 and confirming exactly this one test fails.
+
 **No numeric bound appears in any spec**, so this needs no delta of its own — verified by grep over
 `openspec/specs/`. The `person-selection` requirement's body did describe continuity as "the SAME
 predicate the online anchor gate uses", which with two of three bounds now deliberately looser
@@ -428,6 +439,29 @@ D1-3's threshold of 54 came from "55 minus a frame of sampling jitter", where 55
 so the 53-vs-54 gap is cross-session sampling variance in the tail, not unhealed frames. Recorded
 as a FAIL rather than reinterpreted: the criterion was pre-registered against an absolute number
 and it did not meet it.
+
+#### Adjudication (2026-08-16) — accepted as a fired gate, criterion NOT amended
+
+The D1-3 row above stays a FAIL and the pre-registered criterion stays exactly as written. What
+follows is the decision to accept it anyway, recorded separately so that both the fired gate and
+the judgement remain visible; retroactively editing a criterion to match a result is the failure
+mode the pre-registration exists to prevent, and it is the same move the Stage 1 override is a
+cautionary record of.
+
+The reasoning, verified against the recorded tables rather than asserted:
+
+- baseline arm 47 → treatment 53, a delta of exactly **+6 = 5-frame prefix + 1 wedge frame**;
+- winner start **4.36 → 0.08**, i.e. the prefix is inside the winner rather than merely adjacent;
+- `sampling.detectedFrames` **+6**, matching the same six frames from an independent field.
+
+**D1-3 was a proxy** for "the stranded prefix is recovered", expressed as an absolute frame count.
+The absolute number imported a session-variable constant (the tail length) as if it were fixed, so
+the criterion was mis-specified rather than unmet — but the *property* it was proxying for is
+independently established by the three relative moves above, none of which depends on the tail's
+length. Accepted on that basis.
+
+A future re-run of this criterion should express it relatively (winner `frameCount` ≥ baseline
+winner `frameCount` + 6) rather than absolutely.
 
 ### Multi-person: the widened bound changed nothing here
 
