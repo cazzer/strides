@@ -87,8 +87,11 @@ evidence surface at all.
   at each instant's midpoint-y; `verticalRatio` `stridePair` hip-mid marker + vertical tick at each
   hip-mid x + horizontal caliper between ticks. — **two deviations, both recorded in design D12**:
   no ±0.05·torso midfoot band (D12.3 — it is sized by a clip-median denominator and reads as a target
-  zone), and no caliper on an `overstrideRange`/`stepWidthStrike` pair, whose per-instant side the
-  plan does not record (D12.2).
+  zone), and — at the time of writing — no caliper on an `overstrideRange`/`stepWidthStrike` pair,
+  whose per-instant side the plan did not record (D12.2). **The second deviation is closed**
+  (`strides-ac9.9`): the two metrics now state the side each instant was measured on,
+  `EvidenceInstantPlan.side` resolves it, and both pair kinds emit their `ankleOffsetCaliper` —
+  each half anchored on its own ankle. D12.3 stands.
 - [x] 2.7 `kneeFlexion`: handle the supplement relationship explicitly — the drawn arc is the interior
   angle, the card reports `180 − interiorAngle` (`kneeFlexion.ts:198`). — carried as
   `EvidenceArcOp.reportedValueIsSupplement`, a field a test asserts rather than a comment.

@@ -67,6 +67,9 @@ function instant(
     opacity?: number
     outwardSign?: EvidenceOutwardSigns | null
     timestamp?: number
+    /** Defaults to the explicit absence, NOT to a side — a fixture that silently acquired a foot
+     * it never named would make the sideless-instant assertions below pass for the wrong reason. */
+    side?: 'left' | 'right' | null
   } = {},
 ): EvidenceInstantPlan {
   return {
@@ -74,6 +77,7 @@ function instant(
     opacity: options.opacity ?? EVIDENCE_BASE_OPACITY,
     keypoints,
     outwardSign: options.outwardSign ?? null,
+    side: options.side ?? null,
   }
 }
 
@@ -349,11 +353,14 @@ describe('per-metric mark sets', () => {
         metric: 'overstriding',
         kind: 'overstrideRange',
         side: 'right',
-        base: instant([
-          pos('left_hip', 300, 400),
-          pos('right_hip', 340, 400),
-          pos('right_ankle', 420, 560),
-        ]),
+        base: instant(
+          [
+            pos('left_hip', 300, 400),
+            pos('right_hip', 340, 400),
+            pos('right_ankle', 420, 560),
+          ],
+          { side: 'right' },
+        ),
       }),
       MAX_OUTPUT_SIDE,
     )
@@ -421,10 +428,12 @@ describe('per-metric mark sets', () => {
         side: 'left',
         base: instant([...hips(400), pos('left_ankle', 290, 560)], {
           outwardSign: { left: -1, right: 1 },
+          side: 'left',
         }),
         ghost: instant([...hips(410), pos('left_ankle', 296, 566)], {
           opacity: EVIDENCE_GHOST_OPACITY,
           outwardSign: { left: -1, right: 1 },
+          side: 'left',
         }),
       }),
       MAX_OUTPUT_SIDE,
@@ -647,7 +656,7 @@ describe('polarity', () => {
             pos('right_hip', 340, 400),
             pos('left_ankle', 290, 560),
           ],
-          { outwardSign: null },
+          { outwardSign: null, side: 'left' },
         ),
       }),
       MAX_OUTPUT_SIDE,
@@ -659,21 +668,78 @@ describe('polarity', () => {
     expect(caliper.polarity).toBeNull()
   })
 
-  it('draws no caliper for an opposite-foot pair, whose per-instant side is not derivable', () => {
-    // `stepWidth.ts:91-93` omits `side` because the two instants are deliberately opposite feet,
-    // and the plan records no per-instant side, so which ankle this instant's strike was is not
-    // recoverable here. The midline and the hip segment are still per-instant truths.
+  it('calipers each half of an opposite-foot pair to its OWN ankle', () => {
+    // The common case for `stepWidth`: the pair is deliberately built from opposite feet
+    // (`selectOppositeSidePair`), so the frame-level `side` is absent by design and reading it
+    // here used to drop the caliper on the majority path. The per-instant side is what makes each
+    // half answerable, and each half must reach for a DIFFERENT ankle — the two feet are the whole
+    // point of the picture.
     const hips: EvidenceKeypointPosition[] = [
       pos('left_hip', 300, 400),
       pos('right_hip', 340, 400),
+    ]
+    const feet: EvidenceKeypointPosition[] = [
+      pos('left_ankle', 290, 560),
+      pos('right_ankle', 355, 545),
     ]
     const annotation = planEvidenceAnnotations(
       plan({
         metric: 'stepWidth',
         kind: 'stepWidthStrike',
+        // No frame-level side, exactly as `stepWidth.ts` emits it for this pair.
+        base: instant([...hips, ...feet], {
+          outwardSign: { left: -1, right: 1 },
+          side: 'left',
+        }),
+        ghost: instant([...hips, ...feet], {
+          opacity: EVIDENCE_GHOST_OPACITY,
+          outwardSign: { left: -1, right: 1 },
+          side: 'right',
+        }),
+      }),
+      MAX_OUTPUT_SIDE,
+    )
+
+    const [baseCaliper] = byRole(
+      annotation.ops,
+      'ankleOffsetCaliper',
+      'base',
+    ) as EvidenceCaliperOp[]
+    const [ghostCaliper] = byRole(
+      annotation.ops,
+      'ankleOffsetCaliper',
+      'ghost',
+    ) as EvidenceCaliperOp[]
+
+    // Both halves measured, each from the hip midline (320) to its own foot — never to the same
+    // one twice, which is what a frame-level side would have forced.
+    expect([baseCaliper.x1, baseCaliper.x2]).toEqual([320, 290])
+    expect([ghostCaliper.x1, ghostCaliper.x2]).toEqual([320, 355])
+    expect(baseCaliper.y1).toBe(560)
+    expect(ghostCaliper.y1).toBe(545)
+    // And each reads its own foot's polarity: the left ankle at 290 is left of the midline and
+    // `outwardSign.left` is −1, so it landed on its own side (+1); the right ankle at 355 is right
+    // of the midline and `outwardSign.right` is +1, likewise (+1).
+    expect(baseCaliper.polarity).toBe(1)
+    expect(ghostCaliper.polarity).toBe(1)
+  })
+
+  it('draws no caliper for an instant whose side the metric never stated', () => {
+    // The explicit absence, still honoured: the midline and the hip segment are per-instant truths
+    // that need no side, but a caliper needs to know which ankle was measured, and guessing one
+    // would depict a measurement that was never taken.
+    const annotation = planEvidenceAnnotations(
+      plan({
+        metric: 'stepWidth',
+        kind: 'stepWidthStrike',
         base: instant(
-          [...hips, pos('left_ankle', 290, 560), pos('right_ankle', 355, 545)],
-          { outwardSign: { left: -1, right: 1 } },
+          [
+            pos('left_hip', 300, 400),
+            pos('right_hip', 340, 400),
+            pos('left_ankle', 290, 560),
+            pos('right_ankle', 355, 545),
+          ],
+          { outwardSign: { left: -1, right: 1 }, side: null },
         ),
       }),
       MAX_OUTPUT_SIDE,
@@ -700,7 +766,7 @@ describe('grafted metrics resolve annotation off the primary pass’s frames', (
         pos('right_hip', 340, 400),
         pos('left_ankle', 290, 560),
       ],
-      { outwardSign: { left: -1, right: 1 } },
+      { outwardSign: { left: -1, right: 1 }, side: 'left' },
     )
     const caliperFor = (metric: 'stepWidth' | 'stepWidthCm') =>
       byRole(

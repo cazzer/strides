@@ -191,6 +191,16 @@ export interface EvidenceInstantPlan {
    * x — the degenerate case `stepWidth` records and hard-rejects (`stepWidth.ts:230`). Guessing a
    * side here would be a false statement about which way the runner's foot crossed. */
   outwardSign: EvidenceOutwardSigns | null
+  /**
+   * Which side of the body THIS instant's measurement was about — `null` where the metric is not
+   * per-side at all, or where it is but did not say. Resolved by `resolveInstantSide`; never
+   * guessed, and never defaulted to a side.
+   *
+   * Distinct from `EvidenceFramePlan.side`, which is present only when BOTH instants share a side.
+   * `overstriding` and `stepWidth` both pair instants that need not be the same foot, so on their
+   * pairs — the common case for both — the frame-level field is absent while this one is not.
+   */
+  side: 'left' | 'right' | null
 }
 
 /** One renderable image: a base frame, optionally a ghost composited over it, and the square crop
@@ -403,6 +413,39 @@ export function resolveOutwardSigns(
 }
 
 /**
+ * Which side of the body one instant of an exemplar was measured on — RESOLVED from what the
+ * metric stated, never inferred from anything positional.
+ *
+ * Two fields, in priority order, because they answer two different questions:
+ *
+ * 1. `measuredSide`/`pairedMeasuredSide` — the per-INSTANT fact, emitted by the metric that took
+ *    the measurement. The narrower statement, so it wins where present.
+ * 2. `side` — the PAIR-level fact, whose own contract is "present only where the metric measures
+ *    per side, and only when both instants of a pair share that side". Its presence therefore
+ *    licenses attributing it to either instant; this is a reading of a documented invariant, not a
+ *    guess. It is what every same-side metric (`kneeFlexionPeak`, `stridePair`, `armSwingCycle`,
+ *    `footStrike`) supplies, and why those metrics needed no change to be answerable here.
+ *
+ * `null` — an explicit absence — when neither is present. The alternative, defaulting to a side,
+ * would point a caliper at the wrong foot with nothing downstream able to tell.
+ *
+ * **What this deliberately does NOT do is read `cropKeypoints`.** The measured ankle is ordered
+ * first in both `overstriding`'s and `stepWidth`'s crop sets today, so the side is technically
+ * recoverable from position 0 of that array — but that ordering is a private consequence of two
+ * modules concatenating `seedFor(base)` before `seedFor(ghost)`, is asserted by no test as a
+ * contract, and would silently invert the moment either module reordered a seed. A wrong side here
+ * is not a visible failure; it is a caliper confidently drawn to the other foot.
+ */
+export function resolveInstantSide(
+  exemplar: MetricExemplar,
+  role: 'base' | 'ghost',
+): 'left' | 'right' | null {
+  const measured =
+    role === 'base' ? exemplar.measuredSide : exemplar.pairedMeasuredSide
+  return measured ?? exemplar.side ?? null
+}
+
+/**
  * The clip's direction of travel, computed the way the METRICS compute it and not merely the way
  * that reads naturally here: over the presence-TRIMMED frames, with a body scale estimated from
  * those same trimmed frames.
@@ -596,14 +639,16 @@ export function isNearIdenticalPair(
  */
 function instantPlan(
   frame: RobustPoseFrame,
-  cropKeypoints: KeypointName[],
+  exemplar: MetricExemplar,
+  role: 'base' | 'ghost',
   opacity: number,
 ): EvidenceInstantPlan {
   return {
     timestamp: frame.timestamp,
     opacity,
-    keypoints: resolveInstantKeypoints(frame, cropKeypoints),
+    keypoints: resolveInstantKeypoints(frame, exemplar.cropKeypoints),
     outwardSign: resolveOutwardSigns(frame),
+    side: resolveInstantSide(exemplar, role),
   }
 }
 
@@ -672,15 +717,11 @@ export function planExemplarFrames(
     ...(exemplar.side === undefined ? {} : { side: exemplar.side }),
     quality: exemplar.quality,
     label: exemplar.label,
-    base: instantPlan(
-      resolved.base,
-      exemplar.cropKeypoints,
-      EVIDENCE_BASE_OPACITY,
-    ),
+    base: instantPlan(resolved.base, exemplar, 'base', EVIDENCE_BASE_OPACITY),
     ghost:
       ghost === null
         ? null
-        : instantPlan(ghost, exemplar.cropKeypoints, EVIDENCE_GHOST_OPACITY),
+        : instantPlan(ghost, exemplar, 'ghost', EVIDENCE_GHOST_OPACITY),
     crop,
     travelDirection,
     demotedFromPair: isPair && ghost === null,
