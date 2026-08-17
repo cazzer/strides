@@ -157,9 +157,24 @@ That set is empty (see table), so this reduces to shipping no annotation.
 
 ## D3 — Where annotation geometry is decided, and the transform
 
-**Pure layer.** Every mark's position, orientation and extent is computed in the plan, in the **output
-image's** coordinate space, and asserted by unit tests. The impure layer receives a list of draw ops
-and strokes them.
+**Pure layer.** Every mark's position, orientation and extent is computed in the plan and asserted by
+unit tests. The impure layer receives a list of draw ops and strokes them.
+
+**In which coordinate space, precisely.** The plan stores positions in **native video pixels** — the
+same space `crop` is in, and the space `resolvePoint` returns. It does **not** pre-bake output-canvas
+coordinates, because the output side depends on `maxOutputSidePx`, a runtime extractor option no plan
+can see (`extractFrames.ts`'s `EVIDENCE_OUTPUT_MAX_SIDE_PX` is a default the caller may override).
+The conversion is itself pure and lives in the same module — `toEvidenceOutputSpace(point, crop,
+outputSide)`, with `evidenceOutputSide(cropSide, maxOutputSidePx)` — so geometry and pixels are scaled
+by one number by construction, and both are unit-testable with no canvas.
+
+> **Revision (`strides-ac9.6` review).** This paragraph originally said marks are computed "in the
+> **output image's** coordinate space", which the implementation does not do and should not. Left
+> uncorrected it is a live trap for `ac9.7`: an implementer who takes `plan.base.keypoints` as
+> already-canvas coordinates and strokes them directly would, on a 4K clip with `crop.side = 1200`
+> capped to a 640 px canvas, draw a hip at native `x = 1900` onto a 640-wide canvas — every mark off
+> the image, yielding a silently unannotated but otherwise correct-looking thumbnail that no existing
+> test would catch. **Call `toEvidenceOutputSpace`; do not assume.**
 
 **The transform, verified.** `extractFrames.ts:354-357` and `:327-337`:
 

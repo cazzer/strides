@@ -603,8 +603,13 @@ function instantPlan(
  * `travelDirection` is threaded in rather than derived per exemplar because it is a property of
  * the CLIP: `planClipEvidence` computes it once and every item of every metric carries the same
  * value. The default keeps this function independently callable — it is exported and unit-tested
- * directly — and derives the identical number from the same frames, so no caller can end up with
- * a plan whose sign disagrees with its own frames.
+ * directly — and derives the identical number from the same frames.
+ *
+ * The parameter is a plain override, NOT a guarantee: passing an explicit value that disagrees
+ * with `evidenceTravelDirection(frames)` yields a plan whose sign contradicts its own frames, and
+ * nothing here rejects that. Every in-repo caller passes the derived value. If you are writing a
+ * new caller, pass the derived value or omit the argument — an inverted sign silently flips the
+ * direction of every caliper drawn from this plan, and no test downstream will catch it.
  */
 export function planExemplarFrames(
   metric: MetricId,

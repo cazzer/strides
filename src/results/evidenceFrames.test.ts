@@ -101,6 +101,36 @@ function sampledFrames(count = 11): RobustPoseFrame[] {
   )
 }
 
+/**
+ * `sampledFrames`, but carrying shoulders as well as hips, so a travel direction is actually
+ * derivable from it.
+ *
+ * `boxFrame` carries hips ONLY. `trimToPresenceWindow` requires shoulder-mid AND hip-mid, so it
+ * returns an empty window on that fixture, `estimateBodyScale` is then null, and
+ * `evidenceTravelDirection` is `0` on every path. A test that asserts a threaded direction against
+ * `sampledFrames()` therefore asserts `0 === 0` and passes just as well against an implementation
+ * that hardcodes zero, or that recomputes the direction independently per metric. Use this fixture
+ * whenever the direction itself is what is under test.
+ *
+ * Default step of 40 px/sample over 11 samples is 400 px of travel against a 200 px torso — four
+ * times the half-torso threshold, so the sign is unambiguous. Pass a negative step to travel the
+ * other way (timestamps stay ascending, which reversing the array would not).
+ */
+function travellingFrames(count = 11, stepPx = 40): RobustPoseFrame[] {
+  return Array.from({ length: count }, (_, i) => {
+    const x = 500 + i * stepPx
+    return buildFrame(
+      {
+        left_shoulder: { x: x - 50, y: 300 },
+        right_shoulder: { x: x + 50, y: 300 },
+        left_hip: { x: x - 50, y: 500 },
+        right_hip: { x: x + 50, y: 500 },
+      },
+      Number((i * 0.1).toFixed(2)),
+    )
+  })
+}
+
 function exemplar(overrides: Partial<MetricExemplar> = {}): MetricExemplar {
   return {
     kind: 'trunkLeanRange',
@@ -695,14 +725,21 @@ describe('planExemplarFrames', () => {
   })
 
   it('carries the clip-wide travel direction, defaulting to the frames it was given', () => {
-    const plan = planExemplarFrames(
-      'trunkLean',
-      exemplar(),
-      frames,
-      HD,
-      0.05,
-    )
-    expect(plan?.travelDirection).toBe(evidenceTravelDirection(frames))
+    // Asserted against a fixture with a REAL direction, and against the literal ±1 rather than
+    // against another call to the same function — otherwise this passes against a hardcoded 0.
+    const rightward = travellingFrames()
+    const leftward = travellingFrames(11, -40)
+    expect(evidenceTravelDirection(rightward)).toBe(1)
+    expect(evidenceTravelDirection(leftward)).toBe(-1)
+
+    expect(
+      planExemplarFrames('trunkLean', exemplar(), rightward, HD, 0.05)
+        ?.travelDirection,
+    ).toBe(1)
+    expect(
+      planExemplarFrames('trunkLean', exemplar(), leftward, HD, 0.05)
+        ?.travelDirection,
+    ).toBe(-1)
   })
 
   it('takes the travel direction it is threaded, so every item of a clip agrees', () => {
@@ -981,6 +1018,12 @@ describe('planClipEvidence', () => {
   })
 
   it('gives every metric of a clip the same travel direction', () => {
+    // Must run on a fixture with a NON-ZERO direction. On a hips-only fixture every value is 0,
+    // so `new Set(...).size === 1` holds even for an implementation that recomputes the direction
+    // independently per metric — which is the exact property this test claims to pin.
+    const travelling = travellingFrames()
+    expect(evidenceTravelDirection(travelling)).toBe(1)
+
     const plan = planClipEvidence(
       heuristicsResult({
         overstriding: { exemplars: [exemplar({ kind: 'overstrideRange' })] },
@@ -989,15 +1032,14 @@ describe('planClipEvidence', () => {
           exemplars: [exemplar({ kind: 'footStrike', side: 'left' })],
         },
       }),
-      frames,
+      travelling,
       HD,
     )
     const directions = Object.values(plan).flatMap((entry) =>
       entry.status === 'planned' ? entry.items.map((i) => i.travelDirection) : [],
     )
     expect(directions).toHaveLength(3)
-    expect(new Set(directions).size).toBe(1)
-    expect(directions[0]).toBe(evidenceTravelDirection(frames))
+    expect(directions).toEqual([1, 1, 1])
   })
 
   it('produces a well-formed plan from metadata whose duration is Infinity', () => {
