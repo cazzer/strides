@@ -198,6 +198,56 @@ across the two passes on each clip (228 / 99 / 233).
 post-selection detected counts are 56 vs 57 (Demo 1), 99 vs 87 (Demo 2), 127 vs 122 (multiperson),
 so R3's `>= 20` has a large margin on every clip.
 
+## Live verification — measured after implementation
+
+Same harness as Step 0, same machine, real GPU (`ANGLE Metal Renderer: Apple M4 Pro`), 3 trials
+per clip, reading `subjectAgreement` off `[analysis-diagnostics:scale-pass]` and scanning the
+rendered page for the divergence sentence.
+
+| clip | verdict (all 3 trials) | `comparedInstants` | `agreeingInstants` | fraction | divergence sentence on page |
+|---|---|---|---|---|---|
+| Demo 1 | `agreed` | 53 | 52 | 0.9811 | no |
+| Demo 2 | `agreed` | 99 | 99 | 1.0000 | no |
+| multiperson | `agreed` | 114 | 110 | 0.9649 | no |
+
+Bit-identical across all three trials on every clip. **S2 passes** (`'agreed'` every trial,
+`comparedInstants` 53–114 against a floor of 20, minimum fraction 0.9649 against a floor of 0.85).
+R1, R2 and R3 all clear with wide margin, and R6 is clear — `subjectAgreement` appeared on the
+console line in all nine runs.
+
+`comparedInstants` cross-checks the box extraction. Demo 1's primary reports
+`detectedSamplesOut: 56` but `segments[0].frameCount: 53`; the check compares exactly 53. The
+three-frame difference is frames that carry a detection inside the winner's span but yield no box
+(fewer than `minConfidentKeypoints` confident points) — the same frames the selection stage's own
+scorer skipped. Re-deriving from `'detected'` keypoints reproduces the stage's box set exactly,
+which is the claim D1 rests on.
+
+**S3 passes.** Every rendered caveat is byte-identical to the Step 0 pre-change text, e.g. Demo 2:
+`"The bounce rhythm in this clip wasn't perfectly steady — confidence reduced accordingly.
+Real-world scale was measured in only 89% of the analyzed frames — confidence reduced accordingly.
+From a second look at the same clip."`
+
+**S4 passes, within the MoveNet primary's documented run-to-run variance.** Step 0 was executed on
+the base commit with none of this change's code present, so it is a genuine before-arm. Comparing
+it against the after-arm: Demo 1 and multiperson are **bit-identical on both passes**, every
+`personSelection` and `sampling` field included (`integratedAreaPx` to the last digit). Demo 2's
+scale pass is bit-identical; its MoveNet primary's `segments[0].integratedAreaPx` moves 0.46% at an
+identical frame count. That is the known tfjs non-determinism, not a change effect — **the same
+arm reproduces it internally**: Demo 1's trial 1 differs from trials 2 and 3 (`kneeFlexion` 120.69
+vs 116.92, `verticalRatio` 0.068 vs 0.052) with no code difference whatsoever. No systematic
+shift, and the rendered centimetre values match the pre-change run at displayed precision on all
+three clips (4.4 / 10.5 / 7.2 cm).
+
+**The true-positive direction is NOT verified, exactly as predicted.** The check did not fire on
+`multiperson-track.mp4` — it read `agreed` at 0.9649 every trial. MediaPipe runs `numPoses: 1` and
+picks the most prominent person, which is the same largest-subject bias `integratedAreaPx` scoring
+has, so the two passes converge on the runner there. This was pre-registered as explicitly not a
+reject condition, and it is reported as a known unverified direction rather than written up as a
+passed criterion. **No threshold was loosened to manufacture a divergence**; doing so would invert
+the entire false-positive posture the design rests on. Closing it needs a clip where the scale
+pass's own most-prominent-person pick genuinely differs from MoveNet's — which does not exist in
+this repo today.
+
 ## Pre-registered criteria
 
 Constants fixed at `MAX_PAIRING_GAP_SECONDS = 0.1`, `MIN_COMPARABLE_INSTANTS = 10`,

@@ -101,7 +101,9 @@
 ## 9. Live verification
 
 - [x] 9.1 3 trials × 3 clips, capturing `subjectAgreement` from the scale-pass line. Evaluate S2,
-  S3, S4 and R1–R3, R6.
-- [x] 9.2 Opportunistic true-positive attempt on `multiperson-track.mp4`. **Expected NOT to fire**
-  (MediaPipe's `numPoses: 1` shares the area scorer's largest-subject bias). Report honestly as a
-  known unverified direction — do NOT manufacture a divergence by loosening a threshold.
+  S3, S4 and R1–R3, R6. Result: `agreed` on 9/9 runs, `comparedInstants` 53/99/114, minimum
+  agreeing fraction 0.9649. S2/S3/S4 pass; R1/R2/R3/R6 clear. Table in design.md.
+- [x] 9.2 Opportunistic true-positive attempt on `multiperson-track.mp4`. **Did NOT fire**, as
+  predicted — `agreed` at 0.9649 every trial, because MediaPipe's `numPoses: 1` shares the area
+  scorer's largest-subject bias. Reported as a known unverified direction, not as a passed
+  criterion. No threshold was loosened.
