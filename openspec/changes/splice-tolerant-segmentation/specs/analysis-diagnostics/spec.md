@@ -8,10 +8,9 @@ stage's status, its typed skip reason (or null when it selected), the resolved a
 floor, the pre-selection and post-selection detection counts, the counts rejected below the floor
 and rejected for belonging to another segment, the total segment count, the number of cuts the
 splice-tolerance rule declined, the ranked segment summaries, and the separation ratio. The block
-SHALL be the value the selection stage produced, by
-reference, never a recomputation. Because `sampling.detectedFrames` reflects the post-selection
-sequence, the pre-selection count preserved here is what distinguishes "the detector found nothing"
-from "the detector found somebody else".
+SHALL be the value the selection stage produced, by reference, never a recomputation. Because
+`sampling.detectedFrames` reflects the post-selection sequence, the pre-selection count preserved
+here is what distinguishes "the detector found nothing" from "the detector found somebody else".
 
 #### Scenario: A disabled stage still reports itself
 

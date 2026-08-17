@@ -60,8 +60,9 @@ the fix belongs in the offline stage's cut loop, not in the shared predicate.
   the live online anchor gate (`movenet.ts:472`, invoked `:1017`); the bridge is a second call to
   the existing pure function on a different pair. No signature change, no new export, no change to
   the online tracker.
-- **Not a no-op only where it should not be.** Every one of the 25 pre-existing tests in
-  `retroactivePersonSelection.test.ts` passes with no assertion edited — every discontinuity in that
+- **Not a no-op only where it should not be.** Every one of the 32 pre-existing test cases in
+  `retroactivePersonSelection.test.ts` passes with no assertion edited — verified by running that
+  file's pre-change revision verbatim against the new implementation. Every discontinuity in that
   suite is either far outside the scale bound, time-driven, or terminal with no lookahead target,
   so none can bridge.
 - Out of scope, deliberately: #55 (boxless survival inside the winner's span), #56 (scale-pass

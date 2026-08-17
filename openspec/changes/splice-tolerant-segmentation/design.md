@@ -36,9 +36,14 @@ not a convenience: it makes it structurally impossible to omit the
 `elapsedSeconds <= maxContinuityGapSeconds` term on the `(prev, next)` pair. The `:597` test builds
 12 mutually-discontinuous single-frame segments alternating x between 50 and 1400 at 2s spacing —
 its `i-1` and `i+1` pairs share parity, so they are *geometrically* continuous with each other
-(IoU 0.444, area ratio 2.25, inside the bound of 4) and are separated only by time. A geometry-only
-bridge collapses that test from 12 segments to ~6. Writing the bridge check as a second inline
-expression is exactly the edit that would reintroduce it.
+(IoU 0.444, area ratio 2.25, inside the bound of 4) and are separated only by time. Simulated
+against that fixture's real box math, a geometry-only bridge collapses it from **12 segments to 4,
+with 8 bridged cuts**. The damage exceeds what the parity overlap alone would cause, because the
+speed bound is `3 × referenceSide × elapsed`: drop the time term and a bridge over a *longer* gap
+gets a proportionally *larger* displacement budget, so once the reference sticks it swallows a run
+of frames on the opposite side of the frame as well (measured: one reference bridged six
+consecutive frames). Writing the bridge check as a second inline expression is exactly the edit
+that would reintroduce this.
 
 Two facts recorded at the helper: its parameters are **chronological** (`reference` = earlier,
 `candidate` = later), the inverse of `isBoundingBoxContinuous`'s own `(candidate, reference)`
@@ -62,6 +67,11 @@ condition 4 below).
 **Tolerance is bounded to exactly one detection by construction, not by a counter.** After a bridge,
 the next surviving frame is compared against `prev`, and we only bridged *because* that comparison
 passes — so it cannot bridge again. Two consecutive bad frames still cut.
+
+**Read that bound precisely: it is on CONSECUTIVE bridges, not on total bridges.** An alternating
+good/bad stream can still merge end to end at up to ⌈n/2⌉ bridges, every one of them individually
+legal under D1. That is a live risk, not a foreclosed one — see R3, where it is measured, and the
+alternating fixture that pins it as a unit test.
 
 ## D3 — BRIDGE-AND-KEEP, not bridge-and-null
 
@@ -163,7 +173,7 @@ undercount `detectedFrames` in both sets of numbers. This section is filled in w
 |---|---|---|---|
 | R1 | The bridge merges two different people across a one-frame transition | Bounded by construction: only merges pairs the unmodified predicate already accepts | Multi-person `medianAreaPx` / `separationRatio`; unit test B |
 | R2 | A genuine hard scene cut lasting exactly one surviving frame gets bridged | Requires the frames either side of a real cut to be continuous, which after a real cut they are not | **Unmeasurable today — no fixture clip has a scene cut.** Mitigated by unit test C and by `bridgedCuts` itself |
-| R3 | Chained bridging swallows a long bad stretch | Foreclosed by D2 | Unit test C |
+| R3 | Chained bridging swallows a long bad stretch | **Partially bounded, NOT foreclosed.** D2 forecloses *consecutive* bridging only — no two adjacent surviving detections can both be bridged, so a contiguous bad run of length ≥ 2 still cuts (unit test C). It does **not** foreclose bridging every *other* frame: an alternating good/bad stream can merge end to end, at up to ⌈n/2⌉ bridges. Measured on a 7-sample alternating runner/bystander fixture: `segmentCount` 1, `bridgedCuts` 3, all 7 detections kept including the bystander's 3, versus 7 segments and 1 detection with the bridge suppressed. Every one of those bridges is individually legal under D1 | **Multi-person `segments[0].medianAreaPx` / `separationRatio`** — the A/B gate that discriminates "a wedge inside one person healed" from "a bystander stitched in". Unit test C bounds a *contiguous* run and says nothing about an alternating one; the alternating fixture is pinned as its own unit test instead. `bridgedCuts` is the live signal: `bridgedCuts >> 1` on a clip means "check whether two people got stitched together", not "a wedge was healed" |
 | R4 | The time-gap term is dropped from the bridge pair in a later edit | Structurally foreclosed by the single `isContinuousPair` helper | `:597` + its new `bridgedCuts === 0` assertion + unit test D |
 | R8 | D3 leaves a collapsed pose in the metric stream | Its keypoints pass the identical 0.3 gate downstream; the box reaches no metric | Demo 1 metric values in the A/B. If a metric moves implausibly and traces to t=4.32, open bridge-and-null as a follow-up under #55 — not a mid-flight scope change |
 

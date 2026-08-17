@@ -587,6 +587,39 @@ describe('selectRetroactivePersonOfInterest', () => {
       expect(diagnostics.segmentCount).toBe(3)
       expect(diagnostics.bridgedCuts).toBe(0)
     })
+
+    it('CAN merge an alternating two-person stream end to end — the bound is on CONSECUTIVE bridges only', () => {
+      // The boundary of the tolerance, pinned deliberately rather than left to be discovered on a
+      // real clip. Not advancing the reference bounds CONSECUTIVE bridging -- two bad frames in a
+      // row still cut (the case above) -- but it does NOT bound bridging on every OTHER frame.
+      // Here a runner and a bystander alternate at 0.04s spacing, and each is continuous with
+      // itself across the 0.08s skip, so every single bridge is individually legal: each one
+      // merges a pair the unmodified predicate accepts. The stage nonetheless keeps all seven
+      // detections, the bystander's three included. Without the bridge this fixture is 7 segments
+      // and 1 surviving detection.
+      //
+      // This is the shape the multi-person A/B gate (winner medianAreaPx, separationRatio) exists
+      // to catch on real footage, and it is why bridgedCuts is reported: bridgedCuts >> 1 on a
+      // clip means "check whether two people got stitched together", not "a wedge was healed".
+      const samples: PoseSample[] = [
+        detected(0, 100, 100, 400),
+        detected(0.04, 1500, 700, 60),
+        detected(0.08, 110, 100, 400),
+        detected(0.12, 1510, 700, 60),
+        detected(0.16, 120, 100, 400),
+        detected(0.2, 1520, 700, 60),
+        detected(0.24, 130, 100, 400),
+      ]
+
+      const { diagnostics } = select(samples)
+
+      expect(diagnostics.segmentCount).toBe(1)
+      expect(diagnostics.bridgedCuts).toBe(3)
+      expect(diagnostics.detectedSamplesOut).toBe(7)
+      // Bounded at one bridge per two surviving detections -- ceil(n / 2) is the ceiling, and a
+      // 7-frame alternating stream hits 3, not 6.
+      expect(diagnostics.bridgedCuts).toBeLessThanOrEqual(Math.ceil(samples.length / 2))
+    })
   })
 
   describe('never substitutes another person for a rejected one', () => {
@@ -704,11 +737,18 @@ describe('selectRetroactivePersonOfInterest', () => {
       const { diagnostics } = select(samples)
 
       expect(diagnostics.segmentCount).toBe(12)
-      // The splice-tolerance landmine, asserted rather than left implicit: frames i-1 and i+1
+      // The splice-tolerance landmine, asserted rather than left implicit. Frames i-1 and i+1
       // share parity here, so they sit at the SAME centre x with an area ratio of at most 2.25 --
       // geometrically continuous with each other, inside the bound of 4, IoU 0.444. Only the 4s
-      // between them refuses the bridge. A bridge that checked geometry without re-applying
-      // maxContinuityGapSeconds would collapse this to ~6 segments and ~5 bridged cuts.
+      // between them refuses the bridge.
+      //
+      // Simulated against this fixture's real box math, a bridge that checked geometry without
+      // re-applying maxContinuityGapSeconds gives 4 segments and 8 bridged cuts. The damage is
+      // worse than the parity overlap alone suggests, because the speed bound is
+      // 3 x referenceSide x elapsed: with the time term gone, a bridge over a LONGER gap gets a
+      // proportionally larger displacement budget, so once the reference sticks it swallows a run
+      // of frames on the far side of the frame too (measured: one reference bridged six
+      // consecutive frames).
       expect(diagnostics.bridgedCuts).toBe(0)
       expect(diagnostics.segments).toHaveLength(10)
       const areas = diagnostics.segments.map((s) => s.integratedAreaPx)
