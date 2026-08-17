@@ -738,18 +738,20 @@ function buildKneeFlexionMarks(ctx: InstantContext): void {
 }
 
 function buildOverstrideMarks(ctx: InstantContext): void {
-  const { builder, index, plan } = ctx
+  const { builder, index, instant } = ctx
   const hipMid = builder.tolerantMidpoint(index, 'left_hip', 'right_hip')
   if (hipMid === null) return
   builder.guide('hipMidlinePlumb', 'vertical', hipMid)
 
-  // No caliper without a side. `overstriding.ts:99-101` omits `side` whenever its two strikes are
-  // different feet — which is the usual case, since the pair is the furthest-reaching strike
-  // against the closest-landing one and nothing constrains them to one foot. The plan records no
-  // PER-INSTANT side, so which ankle this instant's strike was is genuinely not derivable here,
-  // and a caliper drawn to the other foot's ankle would be a measurement that was never taken.
-  const side = plan.side
-  if (side === undefined) return
+  // The instant's OWN foot, not the frame-level `plan.side`. `overstriding.ts` omits `side`
+  // whenever its two strikes are different feet — the usual case, since the pair is the
+  // furthest-reaching strike against the closest-landing one and nothing constrains them to one
+  // foot — so reading `plan.side` here dropped the caliper on the majority path. The per-instant
+  // side is stated by the metric and resolved in the plan (`resolveInstantSide`); `null` still
+  // means no caliper, because a caliper drawn to the other foot's ankle would be a measurement
+  // that was never taken.
+  const side = instant.side
+  if (side === null) return
   const ankle = builder.point(index, ANKLE_NAME[side])
   if (ankle === null) return
   const foot = derived(ankle, hipMid.x, ankle.y)
@@ -785,7 +787,7 @@ function buildFootStrikeMarks(ctx: InstantContext): void {
 }
 
 function buildStepWidthMarks(ctx: InstantContext): void {
-  const { builder, index, plan, instant } = ctx
+  const { builder, index, instant } = ctx
   const left = builder.point(index, 'left_hip')
   const right = builder.point(index, 'right_hip')
   const hipMid = builder.strictMidpoint(index, 'left_hip', 'right_hip')
@@ -799,12 +801,13 @@ function buildStepWidthMarks(ctx: InstantContext): void {
   builder.line('hipWidthSegment', left, right, ['left_hip', 'right_hip'])
   builder.guide('hipMidlinePlumb', 'vertical', hipMid)
 
-  // Same missing-per-instant-side problem as `overstriding`, and for the same reason:
-  // `stepWidth.ts:91-93` omits `side` on the pair because "the two instants are deliberately
-  // opposite feet, so naming one would be wrong about the other". The single/demoted exemplar
-  // does carry a side and does get its caliper.
-  const side = plan.side
-  if (side === undefined) return
+  // The instant's OWN foot, for the same reason as `overstriding`: `stepWidth.ts` omits the
+  // frame-level `side` on the pair because "the two instants are deliberately opposite feet, so
+  // naming one would be wrong about the other" — and that pair is this metric's common case. Each
+  // instant names its own foot, so both halves of the ghost get their caliper, each measured from
+  // the ankle its own strike was measured from.
+  const side = instant.side
+  if (side === null) return
   const ankle = builder.point(index, ANKLE_NAME[side])
   if (ankle === null) return
   // `stepWidth`'s polarity is `outwardSign`, per-INSTANT (`stepWidth.ts:222-223`), never the

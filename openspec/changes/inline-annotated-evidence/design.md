@@ -326,13 +326,18 @@ thumbnails are meaningfully smaller. Two rules:
 
 **`results-view` only.** Reasoning, so a reviewer can check it rather than take it:
 
-- **`form-heuristics`** — untouched. Exemplars are emitted exactly as today; D4 resolves positions and
-  signs in the *plan*, not on `MetricExemplar`. The requirement at `form-heuristics/spec.md:1256-1262`
-  lists what an exemplar carries; adding to that list is not forbidden, but this change does not add
-  to it. **The one condition that changes this:** if `strides-ac9.6` concludes that a sign or a
-  position must ride on `MetricExemplar` after all — seams (b) or (c) rather than the preferred (a) —
-  then that requirement must be MODIFIED in the same pass, because a downstream reader would otherwise
-  find a field the spec does not describe. Flagged, not assumed away.
+- **`form-heuristics`** — **the flagged condition fired; it now has a delta.** The original reasoning
+  held for positions and signs, which D4 resolves in the *plan*: `strides-ac9.6` took seam (a) as
+  preferred and needed nothing on `MetricExemplar`. It did **not** hold for the per-instant SIDE,
+  which `strides-ac9.7` found missing and `strides-ac9.9` fixed. Unlike a position or a sign, that
+  fact is not recomputable from a `RobustPoseFrame`: which ankle a footstrike metric measured is a
+  choice the metric made, and the only trace of it left in the exemplar is the order of
+  `cropKeypoints` — which is a private detail of two modules, not a contract, and reading it was
+  refused. So the side had to ride on `MetricExemplar` (`measuredSide`/`pairedMeasuredSide`), and per
+  this bullet's own rule the requirement at `form-heuristics/spec.md:1256-1262` — *"Metrics emit
+  exemplar instants as timestamps, never frame indices"* — is MODIFIED in the same pass rather than
+  leaving a downstream reader to find a field the spec does not describe. Flagged, not assumed away,
+  and then honoured. See D12.2's resolution block.
 - **`multi-clip-analysis`** — untouched. Its binding sentence is "When more than one clip is present,
   the interface SHALL indicate which clip a metric's evidence came from"
   (`multi-clip-analysis/spec.md:176`), and its scenario at `:179-183` says "the interface indicates
@@ -482,6 +487,30 @@ which do carry a `side`, get the full mark set.
 **The fix, if the caliper turns out to matter**: a per-instant `side` on `EvidenceInstantPlan`,
 resolved in `planExemplarFrames` from the exemplar the same way its positions already are. That is a
 widening of `strides-ac9.6`'s seam, not a new one.
+
+> **Resolution (`strides-ac9.9`).** It mattered — the pair is the *common* case for both metrics, so
+> this deviation cost the majority path, not an edge. The fix landed as described above, with one
+> addition the paragraph above did not anticipate: **the side is not derivable from the exemplar as
+> it stood**, so resolving it in the plan was not sufficient on its own. `MetricExemplar` gained
+> `measuredSide`/`pairedMeasuredSide` — the per-instant fact, stated by the two metrics that took the
+> measurement — and `resolveInstantSide` reads those, falling back to the pair-level `side` whose own
+> contract already covers both instants (which is why the four same-side metrics needed no change).
+> `EvidenceInstantPlan.side` is `'left' | 'right' | null`, a required key, so an instant with no
+> stated side is an explicit absence rather than a missing property that could read as a default.
+> The `cropKeypoints`-ordering inference stayed refused, and is now pinned by a test that gives the
+> crop set the *opposite* leading ankle and asserts the stated side still wins.
+>
+> This fired **D8's single named condition**: the side rides on `MetricExemplar`, so
+> `form-heuristics`' "Metrics emit exemplar instants as timestamps, never frame indices" requirement
+> is MODIFIED in the same pass rather than silently widened.
+>
+> One thing the fix does **not** buy, recorded so it is not re-derived: `overstriding` still emits no
+> mixed-foot exemplar on any constructible fixture. Its most/least strikes sit either side of a
+> near-zero median on an alternating-foot clip, which puts them under the 1.5-MAD typicality ramp,
+> and any spread wide enough to clear the ramp trips `isOutlier`'s 3-MAD reject instead — both scale
+> off the same MAD. That is the same squeeze CLAUDE.md records for `overstriding` on all three real
+> clips. The mixed-foot path is therefore asserted at the plan layer, where it is reachable, and the
+> metric layer asserts only the emission.
 
 ### D12.3 — `footStrikePattern` draws no midfoot band.
 

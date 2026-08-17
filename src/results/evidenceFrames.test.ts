@@ -40,6 +40,7 @@ import {
   planMetricEvidence,
   resolveExemplarFrames,
   resolveInstantKeypoints,
+  resolveInstantSide,
   resolveOutwardSigns,
   snapToSampledFrame,
   summarizeEvidenceCoverage,
@@ -692,6 +693,122 @@ describe('planExemplarFrames', () => {
     // And the per-frame sign is per-frame, resolved from each instant's own hips.
     expect(plan?.base.outwardSign).toEqual(resolveOutwardSigns(paired[0]))
     expect(plan?.ghost?.outwardSign).toEqual(resolveOutwardSigns(paired[1]))
+  })
+
+  it('gives each half of a stepWidth pair its own, DIFFERENT foot', () => {
+    // The pair `stepWidth` builds is opposite-footed by construction, so the frame-level `side` is
+    // absent and cannot answer this — which is the whole reason the per-instant field exists.
+    const paired = [hipFrame(0, 500, 540), hipFrame(0.1, 900, 620)]
+    const plan = planExemplarFrames(
+      'stepWidth',
+      exemplar({
+        kind: 'stepWidthStrike',
+        timestamp: 0,
+        pairedTimestamp: 0.1,
+        measuredSide: 'left',
+        pairedMeasuredSide: 'right',
+      }),
+      paired,
+      HD,
+      0.05,
+    )
+    expect(plan?.base.side).toBe('left')
+    expect(plan?.ghost?.side).toBe('right')
+    expect(plan?.base.side).not.toBe(plan?.ghost?.side)
+    // ...and the frame-level field is still absent, because the pair still has no ONE side.
+    expect('side' in plan!).toBe(false)
+  })
+
+  it('gives each half of an overstride pair its own foot', () => {
+    const paired = [hipFrame(0, 500, 540), hipFrame(0.1, 900, 620)]
+    const plan = planExemplarFrames(
+      'overstriding',
+      exemplar({
+        kind: 'overstrideRange',
+        timestamp: 0,
+        pairedTimestamp: 0.1,
+        measuredSide: 'right',
+        pairedMeasuredSide: 'left',
+      }),
+      paired,
+      HD,
+      0.05,
+    )
+    expect(plan?.base.side).toBe('right')
+    expect(plan?.ghost?.side).toBe('left')
+  })
+
+  it('carries an explicit absence, never a default side, when the metric named none', () => {
+    // `null` rather than `undefined` or a quietly-chosen `'left'`: a caliper anchored on a guessed
+    // foot is a confident picture of a measurement nobody took, and nothing downstream could tell.
+    const paired = [hipFrame(0, 500, 540), hipFrame(0.1, 900, 620)]
+    const plan = planExemplarFrames(
+      'trunkLean',
+      exemplar({ timestamp: 0, pairedTimestamp: 0.1 }),
+      paired,
+      HD,
+      0.05,
+    )
+    expect(plan?.base.side).toBeNull()
+    expect(plan?.ghost?.side).toBeNull()
+  })
+
+  it('falls back to the pair-level `side`, which by contract covers both instants', () => {
+    // Every same-side metric (`kneeFlexionPeak`, `stridePair`, `armSwingCycle`, `footStrike`)
+    // supplies only `side`, whose own contract is "only when both instants share that side" — so
+    // attributing it to each instant reads a documented invariant rather than guessing, and those
+    // four metrics needed no change to become answerable.
+    const paired = [hipFrame(0, 500, 540), hipFrame(0.1, 900, 620)]
+    const plan = planExemplarFrames(
+      'kneeFlexion',
+      exemplar({
+        kind: 'kneeFlexionPeak',
+        timestamp: 0,
+        pairedTimestamp: 0.1,
+        side: 'right',
+      }),
+      paired,
+      HD,
+      0.05,
+    )
+    expect(plan?.base.side).toBe('right')
+    expect(plan?.ghost?.side).toBe('right')
+  })
+
+  it('prefers the per-instant side over the pair-level one, being the narrower claim', () => {
+    // `overstriding` emits both whenever its two strikes happen to share a foot. They agree there;
+    // this pins which one is authoritative if they ever could not.
+    expect(
+      resolveInstantSide(
+        exemplar({ side: 'left', measuredSide: 'right', pairedMeasuredSide: 'left' }),
+        'base',
+      ),
+    ).toBe('right')
+    expect(resolveInstantSide(exemplar({ side: 'left' }), 'ghost')).toBe('left')
+    expect(resolveInstantSide(exemplar(), 'base')).toBeNull()
+  })
+
+  it('never reads the side off `cropKeypoints` ordering', () => {
+    // The measured ankle IS ordered first in both metrics' crop sets today, so an inference from
+    // position 0 would pass every other test in this file. It is a private consequence of
+    // `seedFor(base)` being concatenated ahead of `seedFor(ghost)`, not a contract — so a crop set
+    // that leads with the OTHER foot must still resolve to what the metric actually said.
+    const contradicting = exemplar({
+      kind: 'stepWidthStrike',
+      cropKeypoints: ['right_ankle', 'left_hip', 'right_hip', 'left_ankle'],
+      measuredSide: 'left',
+    })
+    expect(resolveInstantSide(contradicting, 'base')).toBe('left')
+    // ...and stripped of the stated side it resolves to nothing, rather than to `'right'`.
+    expect(
+      resolveInstantSide(
+        exemplar({
+          kind: 'stepWidthStrike',
+          cropKeypoints: ['right_ankle', 'left_hip', 'right_hip', 'left_ankle'],
+        }),
+        'base',
+      ),
+    ).toBeNull()
   })
 
   it('carries an unrecoverable keypoint as unrecoverable rather than dropping or moving it', () => {

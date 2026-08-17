@@ -21,10 +21,18 @@ inside a draw call is geometry no test can reach.
 The pure layer SHALL have, for every instant it plans, the information an annotation needs: the
 resolved position of each keypoint the exemplar's own mark set names, each carrying whether it was
 directly detected, interpolated, or unrecoverable; the transform from video-native pixels to the
-output image's coordinate space; and the sign of any directional quantity a mark's orientation
-depends on — direction of travel, or which side of the body's midline counts as outward. A mark whose
-orientation is guessed rather than derived is a false statement about the runner, and the plan is the
-only place where it can be derived and tested.
+output image's coordinate space; the sign of any directional quantity a mark's orientation depends
+on — direction of travel, or which side of the body's midline counts as outward; and, where the
+metric measures one side of the body, **which side that instant's own measurement was about**. A mark
+whose orientation is guessed rather than derived is a false statement about the runner, and the plan
+is the only place where it can be derived and tested.
+
+That last one SHALL be recorded **per instant**, not per image. A metric may deliberately pair two
+instants measured on opposite sides — step width's constructed opposite-foot pair is exactly that,
+and an overstride range's two extremes need not share a foot either — so a single image-level side
+is absent on precisely the pairs it would be needed for. The plan SHALL carry an explicit absence
+where no side was stated, and a mark that needs one SHALL be omitted rather than anchored on a
+guessed limb.
 
 Timestamps SHALL be resolved against that clip's own sampled frames. The system SHALL NOT derive any
 extraction timestamp from the clip's reported duration: a recorded webcam clip commonly reports an
