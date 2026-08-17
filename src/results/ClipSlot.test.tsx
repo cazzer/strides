@@ -55,23 +55,32 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/**
+ * Every clip now arrives through `pendingLoad` — the slot has no picker of its own any more.
+ *
+ * The flush between mounting and `markVideoReady` is load-bearing, not ceremony: `pendingLoad`'s
+ * `load()` is deferred one microtask (`ClipSlot.tsx`'s `queueMicrotask`, and the comment there on
+ * why), and `useVideoSource` attaches its `loadedmetadata` listener lazily *inside* `load()`.
+ * Dispatching the event before that microtask runs means nothing is listening and the clip never
+ * reaches `'ready'` — which reads as a mysterious hang rather than a failed assertion.
+ */
+async function mountWithPendingLoad(detector: PoseDetector | null) {
+  render(
+    <ClipSlot
+      clipId="a"
+      pendingLoad={{ source: new File(['x'], 'run.mp4', { type: 'video/mp4' }) }}
+      detector={detector}
+      onReport={() => {}}
+      onRemove={() => {}}
+    />,
+  )
+  await act(async () => {})
+  markVideoReady(document.querySelector('video[controls]')!)
+}
+
 describe('ClipSlot', () => {
   it('shows a queued hint once the video is loaded but no detector is available yet', async () => {
-    render(
-      <ClipSlot
-        clipId="a"
-        pendingLoad={null}
-        detector={null}
-        onReport={() => {}}
-        onRemove={() => {}}
-        canRemove={false}
-      />,
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
-    const file = new File(['x'], 'run.mp4', { type: 'video/mp4' })
-    fireEvent.change(screen.getByLabelText(/choose a video file/i), { target: { files: [file] } })
-    markVideoReady(document.querySelector('video[controls]')!)
+    await mountWithPendingLoad(null)
 
     await waitFor(() =>
       expect(screen.getByText(/queued.*waiting for another clip/i)).toBeInTheDocument(),
@@ -80,22 +89,7 @@ describe('ClipSlot', () => {
   })
 
   it('auto-starts sampling once the video is ready and a detector is supplied', async () => {
-    const detector = makeFakeDetector()
-    render(
-      <ClipSlot
-        clipId="a"
-        pendingLoad={null}
-        detector={detector}
-        onReport={() => {}}
-        onRemove={() => {}}
-        canRemove={false}
-      />,
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
-    const file = new File(['x'], 'run.mp4', { type: 'video/mp4' })
-    fireEvent.change(screen.getByLabelText(/choose a video file/i), { target: { files: [file] } })
-    markVideoReady(document.querySelector('video[controls]')!)
+    await mountWithPendingLoad(makeFakeDetector())
 
     await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
     expect(screen.queryByText(/queued/i)).not.toBeInTheDocument()
@@ -112,7 +106,6 @@ describe('ClipSlot', () => {
         detector={null}
         onReport={() => {}}
         onRemove={() => {}}
-        canRemove={false}
       />,
     )
 
@@ -124,21 +117,9 @@ describe('ClipSlot', () => {
     expect(document.querySelector('video[controls]')?.getAttribute('src')).toMatch(/^blob:/)
   })
 
-  it('hides the remove button when canRemove is false', () => {
-    render(
-      <ClipSlot
-        clipId="a"
-        pendingLoad={null}
-        detector={null}
-        onReport={() => {}}
-        onRemove={() => {}}
-        canRemove={false}
-      />,
-    )
-    expect(screen.queryByRole('button', { name: /remove clip/i })).not.toBeInTheDocument()
-  })
-
-  it('shows the remove button and calls onRemove with its clipId when canRemove is true', () => {
+  it('always renders the remove button and calls onRemove with its clipId', () => {
+    // Unconditional since the session models zero clips: the only remaining clip is removable
+    // too, and removing it returns the page to the picker.
     const onRemove = vi.fn()
     render(
       <ClipSlot
@@ -147,7 +128,6 @@ describe('ClipSlot', () => {
         detector={null}
         onReport={() => {}}
         onRemove={onRemove}
-        canRemove
       />,
     )
     fireEvent.click(screen.getByRole('button', { name: /remove clip/i }))
@@ -163,7 +143,6 @@ describe('ClipSlot', () => {
         detector={null}
         onReport={onReport}
         onRemove={() => {}}
-        canRemove={false}
       />,
     )
     expect(onReport).toHaveBeenCalled()

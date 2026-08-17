@@ -149,6 +149,92 @@ consistent with the same clip analysed while visible" — rather than naming a C
 the technique is an implementation detail and the frame count is the thing that must hold. The table
 above is guidance for `strides-kyu.3`, not a contract.
 
+### Measured: every rung of the ladder costs frames, and L0 is the least bad (`strides-kyu.3`)
+
+`strides-kyu.3` pre-registered an escalation ladder so that a failure had somewhere to go rather
+than inviting a guess:
+
+| rung | mechanism |
+|---|---|
+| **L0** | `position: fixed; top: 0; left: -200vw`, full size, `inert` — the preferred row above |
+| L1 | `fixed; inset: 0`, full size, `opacity: 0`, `pointer-events: none` |
+| L2 | `fixed; inset: 0; z-index: -1` plus an opaque app-shell backdrop |
+| L3 | a 1×1 `overflow: hidden` window onto a full-size element (last resort) |
+
+**L0 shipped, and the whole ladder was measured. No rung passes G1b.** `VideoInputPanel`'s video
+host carries `fixed top-0 left-[-200vw] w-fit max-w-full` plus `inert`; `hidden={status ===
+'empty'}` on the `<video>` is untouched. Two implementation notes worth keeping: `fixed` rather
+than `absolute`, because the host must stay a positioned ancestor so `SkeletonOverlay`'s
+`absolute inset-0` keeps this exact containing block (no ancestor carries a
+`transform`/`filter`/`contain` that would capture it); and plain offsets rather than a transform,
+since transforms invite compositor culling and `will-change` heuristics.
+
+#### G1a passed — and G1a alone is not sufficient
+
+Real GPU (`ANGLE Metal Renderer: Apple M4 Pro`), real final markup, probed only after both the
+primary pass and the scale pass concluded. Self-re-arming `requestVideoFrameCallback`, counted
+over a fixed 2 s window:
+
+| arm | Demo 1 (25 fps, expect ≈50) | Demo 2 (59.94 fps, expect ≈120) |
+|---|---|---|
+| **hidden + `inert` (shipped)** | **51** (25.49 fps) | **116** (57.96 fps) |
+| hidden, `inert` removed | 50 (24.98) | 118 (58.96) |
+| **visible (control)** | **50** (24.99) | **118** (58.99) |
+| visible + `inert` | 50 (24.99) | 117 (58.47) |
+
+`readyState: 4`, `paused: false`, box non-degenerate (1013×570 and 321×570) at `x = -2558` in
+every arm. Hidden is within noise of visible, and `inert` moves nothing — so `inert` is
+interaction-only here, as assumed.
+
+**But G1a passed while G1b failed.** G1a measures an *idle* element with no competing per-frame
+work, and the real failure is not binary — the element still presents frames when hidden, just
+fewer of them once something is contending for the frame budget. D8 calls G1a "the PRIMARY
+instrument" and "decisive in seconds"; on this evidence it is necessary but **not sufficient**,
+and it cannot be run without G1b's playback arm beside it. That is a correction to D8, found the
+same way D8's own correction was found — by running the gate rather than reasoning about it.
+
+#### G1b, playback arm: the ladder, measured end to end
+
+Demo 2 only (portrait 4K, 59.94 fps — the sole test clip whose sampling is throughput-limited,
+and therefore the only one that can observe this), 5 trials per variant, paired back-to-back on
+one machine in one session, baseline re-measured in a throwaway worktree at `ab5d185` at the
+same time so the comparison is not cross-session:
+
+| variant | `sampling.detectedFrames` | vs base |
+|---|---|---|
+| base `ab5d185` (old layout, visible) | 62 [57..63] | — |
+| this layout, wrapper left `relative` (visible) | 61 [56..63] | −2% |
+| this layout, `fixed` but **on screen** | 63 [57..64] | +2% |
+| **L0** `fixed`, off screen, `inert` | **47** [46..57] | **−24%** |
+| **L3** 1×1 `overflow:hidden` window | **47** [40..59] | **−24%** |
+| **L2** `-z-20` behind an opaque backdrop | **39** [37..47] | **−37%** |
+| **L1** `opacity-0` + `-z-10` | **34** [33..39] | **−45%** |
+
+Three things fall out, and they change what the ladder is for:
+
+1. **The restructure itself is free.** Collapsing the grid, emptying the session and moving the
+   picker cost nothing measurable (61 vs 62). So does `position: fixed` on its own (63). Every
+   frame lost is lost to *concealment*.
+2. **The ladder's ordering is inverted.** L0 is not merely the first rung to try — it is, jointly
+   with L3, the **best** of the concealed options, and descending makes it monotonically worse.
+   A ladder whose purpose is "descend on failure" has nowhere to go here.
+3. **Only a throughput-limited clip can see it.** Demo 1 (landscape 4K, 25 fps) reads 47 → 47 at
+   every rung: 40 ms per frame leaves the sampler enough slack to absorb the extra per-frame cost.
+   Demo 2 has 16.7 ms and does not. A future gate that measures only Demo 1 will read green
+   through this entire failure.
+
+**Blast radius.** The default WebCodecs path is untouched — Demo 1 53 → 53 and Demo 2 99 → 99,
+with `sampling.path` asserted `'sequential'`. The loss lands only where `canUseSequentialDecode`
+says no: WebM and webcam recordings, which is precisely the population D1's observational guard
+exists to protect, and precisely the population D8's correction identified as the one the old G1
+was blind to.
+
+**Not resolved here.** Picking a rung cannot fix a cost that every rung shares, and inventing a
+mechanism outside the ladder (for instance, keeping the element genuinely on screen while its own
+analysis is in flight, and concealing it only afterwards — the one shape the data suggests would
+work) is a change to what the reader sees during analysis, which is a product decision this
+ticket has no mandate to make. Reported on `strides-kyu.3` for the epic to decide.
+
 **Nothing in `tsc -b` or `npm test` can catch a violation.** jsdom has no media pipeline, no decoder,
 and no `requestVideoFrameCallback`; a hidden element that never presents a frame is
 indistinguishable, under test, from a working one. That is why the guarantee is written into the spec
@@ -437,6 +523,24 @@ change does, and why:
   `start()` out to every clip). It is unrelated to this epic's restructure, "Automatic analysis
   start" still requires it to exist, and this change neither moves nor removes it. If the shell
   redesign wants it per clip, that is a separate change with its own delta on that requirement.
+
+  **Resolved by `strides-kyu.3`: it does not move.** It stays exactly where it is, inside
+  `ResultsView`, which that ticket did not edit at all. Three reasons, in the order they bind:
+  the control is aggregate-scoped, so a per-clip home would change *what it does*, not just where
+  it sits; the spec requires only that it remain **available**, which it is; and moving it would
+  need a delta on "Automatic analysis start" that this change deliberately does not carry (D10).
+  Recorded here rather than left open so a later ticket does not re-derive it.
+
+- **Where a clip's own surface lives between `strides-kyu.3` and `strides-kyu.4`/`.5`.** After
+  `.3` a clip is mounted, decodable, and has **no presentation surface at all** — no thumbnail, no
+  placeholder, no "1 clip loaded" chip. That is the intended intermediate state, not an oversight:
+  a stand-in would have to be thrown away by `.4`, and building one would put a second, competing
+  notion of "how a clip is shown" into the tree while the strip is being designed. What `.3` does
+  keep in the body, deliberately, is everything a reader still has to *act* on — the loading line,
+  the load-error alert and Try again (`video-input`'s "Clear error messages for permission and
+  format failures" requires it be visible), the queued hint, and Remove. Moving the whole
+  `ClipSlot` off screen instead of just its video host would have destroyed those while keeping
+  every unit test green, since jsdom sees the DOM and not the CSS.
 - **A clip name or label.** Deliberately out of scope: clips stay positional, because the per-metric
   fusion source index and the "Combined from clip N of TOTAL" provenance copy already number them
   that way, and introducing a second identity scheme would need those reconciled first.
