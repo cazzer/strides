@@ -292,6 +292,8 @@ const FAKE_SCALE_CALIBRATION: ScaleCalibratedVerticalOscillation = {
 // What the scale pass's own computeFormHeuristics call returns: measured centimetre metrics for
 // BOTH verticalOscillationCm and stepWidthCm (#45), plus a deliberately DIFFERENT trunkLean value
 // (99 vs. the primary's 5) so a test can prove the graft discarded everything except those two.
+// Both carry exemplars, so the divergence test can prove those are withheld while the numbers
+// they belong to are not.
 const FAKE_SCALE_HEURISTICS: FormHeuristicsResult = {
   ...FAKE_HEURISTICS,
   trunkLean: { ...FAKE_HEURISTICS.trunkLean, value: 99 },
@@ -306,6 +308,16 @@ const FAKE_SCALE_HEURISTICS: FormHeuristicsResult = {
     sampleSize: 3,
     caveat: null,
     calibration: FAKE_SCALE_CALIBRATION,
+    exemplars: [
+      {
+        kind: 'bounceCycle',
+        timestamp: 1.2,
+        pairedTimestamp: 1.5,
+        quality: 0.8,
+        label: 'Highest and lowest point of one bounce',
+        cropKeypoints: ['left_hip', 'right_hip'],
+      },
+    ],
   },
   stepWidthCm: {
     metric: 'stepWidthCm',
@@ -317,6 +329,15 @@ const FAKE_SCALE_HEURISTICS: FormHeuristicsResult = {
     frameCoverage: 1,
     sampleSize: 5,
     caveat: null,
+    exemplars: [
+      {
+        kind: 'stepWidthStrike',
+        timestamp: 2.1,
+        quality: 0.7,
+        label: 'A typical footstrike',
+        cropKeypoints: ['left_ankle', 'right_ankle'],
+      },
+    ],
   },
 }
 
@@ -1225,6 +1246,14 @@ describe('useVideoAnalysis', () => {
         expect(result.current.heuristics?.stepWidthCm.caveat).toBe(
           SCALE_PASS_PROVENANCE_CAVEAT,
         )
+        // Exemplars included: an agreed pass measured the same subject, so its instants can be
+        // pictured against the primary pass's frames.
+        expect(result.current.heuristics?.verticalOscillationCm.exemplars).toBe(
+          FAKE_SCALE_HEURISTICS.verticalOscillationCm.exemplars,
+        )
+        expect(result.current.heuristics?.stepWidthCm.exemplars).toBe(
+          FAKE_SCALE_HEURISTICS.stepWidthCm.exemplars,
+        )
       })
 
       it('caveats both grafted metrics — and still completes the pass — on divergence', async () => {
@@ -1254,6 +1283,10 @@ describe('useVideoAnalysis', () => {
         expect(result.current.heuristics?.verticalOscillationCm.value).toBe(4.79)
         expect(result.current.heuristics?.stepWidthCm.value).toBe(8.2)
         expect(result.current.heuristics?.trunkLean).toBe(FAKE_HEURISTICS.trunkLean)
+        // The pictures, though, ARE withheld: a crop resolved against the primary pass's frames
+        // would show the primary pass's subject under a number measured about a different one.
+        expect('exemplars' in result.current.heuristics!.verticalOscillationCm).toBe(false)
+        expect('exemplars' in result.current.heuristics!.stepWidthCm).toBe(false)
       })
 
       it('has no opinion, and adds no sentence, when a pass selected nobody', async () => {

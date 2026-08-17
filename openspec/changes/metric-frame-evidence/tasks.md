@@ -271,24 +271,36 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
 
 ## 4. Fusion provenance and clip plumbing (#64)
 
-- [ ] 4.1 `fuseHeuristics.ts`: add `fusionSourceIndices(results): Record<MetricId, number>` as a
+- [x] 4.1 `fuseHeuristics.ts`: add `fusionSourceIndices(results): Record<MetricId, number>` as a
   **sibling pure function** reusing the same comparator. Do **not** change
   `fuseFormHeuristicsResults`'s return shape — its single-clip reference identity at `:48-50` is
   load-bearing.
-- [ ] 4.2 Test that the sibling's winner agrees with `fuseFormHeuristicsResults`'s winner for every
+- [x] 4.2 Test that the sibling's winner agrees with `fuseFormHeuristicsResults`'s winner for every
   metric on a multi-clip fixture, and that the single-clip case maps every metric to index 0.
-- [ ] 4.3 `MultiClipVideoSession.tsx`: pass `clips: ClipSession[]` (which already carry
+- [x] 4.3 `MultiClipVideoSession.tsx`: pass `clips: ClipSession[]` (which already carry
   `videoSource` → `sourceBlob`/`metadata`, and non-null per-clip `analysis.robustFrames`) plus the
   source-index map down to the gallery's mount point. Handles unbounded N.
-- [ ] 4.4 Preserve `ResultsView`'s no-hooks/presentational contract (`:28-33`). No hook there, no
+  **As built:** `clips` is already a local at the mount point, and the map is one call away —
+  `computeFusionSourceIndices(clips)` (`multiClipAnalysis.ts`), which wraps `fusionSourceIndices`
+  behind the *same* all-clips-ready gate the fused aggregate uses, so the two can never attribute
+  a result that does not exist yet. The mount point itself is a documented JSX seam naming both
+  inputs verbatim: `tsconfig.app.json` sets `noUnusedLocals`, so computing the map here with
+  nothing rendering it would not compile, and a placeholder component that renders nothing is
+  exactly the UI scaffolding 4.6 forbids. #67 adds one import and one element.
+- [x] 4.4 Preserve `ResultsView`'s no-hooks/presentational contract (`:28-33`). No hook there, no
   React context — this codebase keeps the dependency explicit (`ClipSlot` reports up,
   `MultiClipVideoSession` fans down). Do not change the aggregate state to carry frames.
-- [ ] 4.5 Implement design D5's scale-pass graft rules: grafted exemplars resolve their crop rects
+- [x] 4.5 Implement design D5's scale-pass graft rules: grafted exemplars resolve their crop rects
   against the **primary** pass's `robustFrames`, and are **dropped entirely** when
   `subjectAgreement.status === 'diverged'`. Check `scalePassGraft.ts:98-106` and `:19-24`, both of
   which spread whole `MetricResult` objects.
-- [ ] 4.6 No UI in this ticket. It ends with data at the mount point and nothing rendering it.
-- [ ] 4.7 `npm test`, `tsc -b`, `eslint` clean.
+  **As built:** the first rule holds by construction and is now documented on the graft — the
+  scale pass's own `RobustPoseFrame[]` never leave `useVideoAnalysis`'s scale-pass effect, so the
+  primary's are the only frames any consumer can resolve against. The second is a new pure
+  `dropGraftedExemplars`, composed by the caller alongside `withSubjectDivergenceCaveat` under the
+  identical condition rather than folded into it, so each function's name stays literally true.
+- [x] 4.6 No UI in this ticket. It ends with data at the mount point and nothing rendering it.
+- [x] 4.7 `npm test`, `tsc -b`, `eslint` clean.
 
 ## 5. Pure evidence plan — timestamps, crop rects, blend, gate (#65)
 

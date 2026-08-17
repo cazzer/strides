@@ -1,4 +1,4 @@
-import type { FormHeuristicsResult, MetricResult } from '../heuristics/types'
+import type { FormHeuristicsResult, MetricId, MetricResult } from '../heuristics/types'
 
 /**
  * Appended to a fused metric's caveat naming which of the N input clips it came from —
@@ -77,5 +77,51 @@ export function fuseFormHeuristicsResults(
     footStrikePattern: pickMetric('footStrikePattern'),
     stepWidth: pickMetric('stepWidth'),
     stepWidthCm: pickMetric('stepWidthCm'),
+  }
+}
+
+/**
+ * Which of the N input clips each metric was selected FROM — the same decision
+ * `fuseFormHeuristicsResults` makes, as data rather than dissolved into `fusionProvenanceCaveat`'s
+ * English sentence. The whole winning `MetricResult` is spread by the fuse above, so a metric's
+ * `exemplars` (the instants it is evidenced by) travel across clips for free and land in a result
+ * whose consumer may be holding a *different* clip's frames and blob. Resolving them needs the
+ * index, and recovering it by regexing a prose caveat would be neither stable nor honest.
+ *
+ * A SIBLING function rather than a wider return type on `fuseFormHeuristicsResults`: that
+ * function's single-clip reference identity (above) is load-bearing as a regression proof, and any
+ * richer return shape forces it to construct something new. The two share `pickBestWithIndex` —
+ * one comparator, so they cannot disagree about who won, ties included — and a test asserts they
+ * agree metric by metric on a multi-clip fixture.
+ *
+ * A single clip maps every metric to `0` by construction, not by a special case: the comparator
+ * over a one-element array is already `0`.
+ *
+ * Explicit per-metric entries, matching the fuse's own style — `Record<MetricId, number>` makes a
+ * future new `MetricId` a compile error here as well as there, which a loop over `Object.keys`
+ * would silently absorb.
+ */
+export function fusionSourceIndices(
+  results: FormHeuristicsResult[],
+): Record<MetricId, number> {
+  if (results.length === 0) {
+    throw new Error('fusionSourceIndices requires at least one result')
+  }
+
+  const sourceIndex = (key: Exclude<keyof FormHeuristicsResult, 'view'>): number =>
+    pickBestWithIndex(results.map((r) => r[key] as MetricResult)).index
+
+  return {
+    verticalOscillation: sourceIndex('verticalOscillation'),
+    verticalRatio: sourceIndex('verticalRatio'),
+    verticalOscillationCm: sourceIndex('verticalOscillationCm'),
+    trunkLean: sourceIndex('trunkLean'),
+    overstriding: sourceIndex('overstriding'),
+    cadence: sourceIndex('cadence'),
+    kneeFlexion: sourceIndex('kneeFlexion'),
+    armSwingSymmetry: sourceIndex('armSwingSymmetry'),
+    footStrikePattern: sourceIndex('footStrikePattern'),
+    stepWidth: sourceIndex('stepWidth'),
+    stepWidthCm: sourceIndex('stepWidthCm'),
   }
 }

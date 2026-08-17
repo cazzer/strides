@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  dropGraftedExemplars,
   graftScalePassResult,
   withSubjectDivergenceCaveat,
   SCALE_PASS_PROVENANCE_CAVEAT,
@@ -7,10 +8,23 @@ import {
 } from './scalePassGraft'
 import type {
   FormHeuristicsResult,
+  MetricExemplar,
   MetricResult,
   ScaleCalibratedVerticalOscillation,
   VerticalOscillationCmResult,
 } from '../heuristics/types'
+
+function makeExemplar(overrides: Partial<MetricExemplar> = {}): MetricExemplar {
+  return {
+    kind: 'bounceCycle',
+    timestamp: 1.2,
+    pairedTimestamp: 1.5,
+    quality: 0.8,
+    label: 'Highest and lowest point of one bounce',
+    cropKeypoints: ['left_hip', 'right_hip'],
+    ...overrides,
+  }
+}
 
 function makeMetric(overrides: Partial<MetricResult>): MetricResult {
   return {
@@ -170,6 +184,23 @@ describe('graftScalePassResult', () => {
     expect(grafted.armSwingSymmetry).toBe(primary.armSwingSymmetry)
     expect(grafted.footStrikePattern).toBe(primary.footStrikePattern)
     expect(grafted.stepWidth).toBe(primary.stepWidth)
+  })
+
+  it("carries the scale pass's exemplars across verbatim, timestamps untouched", () => {
+    // Both passes sampled the same clip on the same media clock, so a grafted instant stays
+    // meaningful — and its crop geometry then resolves against the PRIMARY pass's frames, the
+    // only ones any consumer holds (the scale pass's never leave `useVideoAnalysis`).
+    const exemplars = [makeExemplar()]
+    const primary = makePrimary()
+    const scale = makeResult(
+      makeVerticalOscillationCm({ exemplars }),
+      makeStepWidthCm({ exemplars: [makeExemplar({ kind: 'stepWidthStrike' })] }),
+    )
+
+    const grafted = graftScalePassResult(primary, scale)
+
+    expect(grafted.verticalOscillationCm.exemplars).toBe(exemplars)
+    expect(grafted.stepWidthCm.exemplars).toEqual([makeExemplar({ kind: 'stepWidthStrike' })])
   })
 
   it('does not mutate either input', () => {
@@ -359,6 +390,94 @@ describe('withSubjectDivergenceCaveat', () => {
     const before = JSON.stringify(result)
 
     withSubjectDivergenceCaveat(result)
+
+    expect(JSON.stringify(result)).toBe(before)
+  })
+})
+
+describe('dropGraftedExemplars', () => {
+  it('removes the key on both grafted metrics rather than emptying it', () => {
+    const result = makeResult(
+      makeVerticalOscillationCm({ exemplars: [makeExemplar()] }),
+      makeStepWidthCm({ exemplars: [makeExemplar({ kind: 'stepWidthStrike' })] }),
+    )
+
+    const dropped = dropGraftedExemplars(result)
+
+    // Absent, never `[]` — "this metric shows nothing" must not read as "its instants went
+    // missing", which is the distinction `MetricResult.exemplars` being optional exists to make.
+    expect('exemplars' in dropped.verticalOscillationCm).toBe(false)
+    expect('exemplars' in dropped.stepWidthCm).toBe(false)
+  })
+
+  it('leaves the numbers, their caveats and every other metric alone', () => {
+    const caveated = withSubjectDivergenceCaveat(
+      graftScalePassResult(
+        makePrimary(),
+        makeResult(
+          makeVerticalOscillationCm({ exemplars: [makeExemplar()] }),
+          makeStepWidthCm({ exemplars: [makeExemplar({ kind: 'stepWidthStrike' })] }),
+        ),
+      ),
+    )
+
+    const dropped = dropGraftedExemplars(caveated)
+
+    // The number stays, caveated — only the picture is withheld, because a crop of the primary
+    // pass's subject under a number measured about somebody else asserts an identity the caveat
+    // beside it only doubts.
+    expect(dropped.verticalOscillationCm.value).toBe(4.79)
+    expect(dropped.stepWidthCm.value).toBe(8.2)
+    expect(dropped.verticalOscillationCm.caveat).toBe(
+      `${SCALE_PASS_PROVENANCE_CAVEAT} ${SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT}`,
+    )
+    expect(dropped.verticalOscillationCm.calibration).toBe(
+      caveated.verticalOscillationCm.calibration,
+    )
+
+    expect(dropped.view).toBe(caveated.view)
+    expect(dropped.verticalOscillation).toBe(caveated.verticalOscillation)
+    expect(dropped.verticalRatio).toBe(caveated.verticalRatio)
+    expect(dropped.trunkLean).toBe(caveated.trunkLean)
+    expect(dropped.overstriding).toBe(caveated.overstriding)
+    expect(dropped.cadence).toBe(caveated.cadence)
+    expect(dropped.kneeFlexion).toBe(caveated.kneeFlexion)
+    expect(dropped.armSwingSymmetry).toBe(caveated.armSwingSymmetry)
+    expect(dropped.footStrikePattern).toBe(caveated.footStrikePattern)
+    expect(dropped.stepWidth).toBe(caveated.stepWidth)
+  })
+
+  it('keeps the primary pass’s own exemplars — divergence is about the two grafted metrics', () => {
+    const primaryExemplars = [makeExemplar({ kind: 'trunkLeanRange' })]
+    const primary: FormHeuristicsResult = {
+      ...makePrimary(),
+      trunkLean: makeMetric({ metric: 'trunkLean', exemplars: primaryExemplars }),
+    }
+
+    const dropped = dropGraftedExemplars(
+      graftScalePassResult(primary, makeResult(makeVerticalOscillationCm())),
+    )
+
+    expect(dropped.trunkLean.exemplars).toBe(primaryExemplars)
+  })
+
+  it('is a no-op, by reference, when neither grafted metric carried exemplars', () => {
+    const result = makeResult(makeVerticalOscillationCm(), makeStepWidthCm())
+
+    const dropped = dropGraftedExemplars(result)
+
+    expect(dropped.verticalOscillationCm).toBe(result.verticalOscillationCm)
+    expect(dropped.stepWidthCm).toBe(result.stepWidthCm)
+  })
+
+  it('does not mutate its input', () => {
+    const result = makeResult(
+      makeVerticalOscillationCm({ exemplars: [makeExemplar()] }),
+      makeStepWidthCm({ exemplars: [makeExemplar({ kind: 'stepWidthStrike' })] }),
+    )
+    const before = JSON.stringify(result)
+
+    dropGraftedExemplars(result)
 
     expect(JSON.stringify(result)).toBe(before)
   })

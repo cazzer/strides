@@ -40,6 +40,14 @@ function withProvenance<T extends MetricResult>(scaleMetric: T): T {
  * - Every other metric, and `view`, stay reference-identical to `primary`'s — the scale pass's
  *   versions of them are deliberately discarded (MoveNet remains the better primary for the
  *   rest; see the change's proposal.md for the assessed evidence).
+ * - `exemplars` carry with the grafted objects, unaltered. They are the scale pass's OWN instants,
+ *   but both passes sampled the same clip on the same media clock, so the timestamps stay
+ *   meaningful. What does NOT carry is the scale pass's `RobustPoseFrame[]`: they never leave
+ *   `useVideoAnalysis`'s scale-pass effect, so the only frames any consumer holds are the primary
+ *   pass's, and a grafted exemplar's crop geometry therefore resolves against those — the same
+ *   body at the same instant, as a different detector estimated its joints. A grafted timestamp
+ *   with no primary frame inside the snap tolerance yields no evidence; widening the tolerance to
+ *   rescue one would be inventing a frame.
  * - `calibration` carries by reference, preserving the identity invariant #36 established
  *   (`scalePass.diagnostics.scaleCalibration === grafted.verticalOscillationCm.calibration`).
  *   `stepWidthCm` has no such companion object to carry — see its own module doc for why.
@@ -87,9 +95,11 @@ export const SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT =
  * function's stated contract — unconditional, gated entirely by its caller — stays literally true,
  * and so the graft's own tests keep exercising the graft alone. The caller composes the two.
  *
- * Divergence caveats the grafted numbers; it never withholds or alters them. Suppression would
+ * Divergence caveats the grafted NUMBERS; it never withholds or alters them. Suppression would
  * mean shipping an unvalidated metric-removal path on a signal that has never fired on real
- * footage — see the change's design.md D2 for why the asymmetry decides it.
+ * footage — see the change's design.md D2 for why the asymmetry decides it. Their exemplar
+ * IMAGES are a different question and get the opposite answer — see `dropGraftedExemplars`, which
+ * the caller composes with this one.
  */
 export function withSubjectDivergenceCaveat(
   result: FormHeuristicsResult,
@@ -108,5 +118,37 @@ export function withSubjectDivergenceCaveat(
         .filter(Boolean)
         .join(' '),
     },
+  }
+}
+
+/** Removes the key rather than emptying it: `exemplars` is ABSENT when a metric has no instants
+ * to show, never an empty array, so "this metric shows nothing" never reads as "its instants went
+ * missing". Returns the input untouched when there was nothing to remove. */
+function withoutExemplars<T extends MetricResult>(metric: T): T {
+  if (metric.exemplars === undefined) return metric
+  const stripped = { ...metric }
+  delete stripped.exemplars
+  return stripped
+}
+
+/**
+ * Drops the two scale-pass-sourced metrics' exemplars, and nothing else — composed over an
+ * already-grafted result by the same caller, under the same condition, as
+ * `withSubjectDivergenceCaveat`.
+ *
+ * Why an image is treated more harshly than the number it captions: a diverged verdict (#56) means
+ * the two passes selected DIFFERENT PEOPLE. The grafted number is then honestly caveated as
+ * possibly somebody else's and the reader can weigh it. An exemplar cannot be caveated the same
+ * way — its crop geometry resolves against the PRIMARY pass's frames (the only ones any consumer
+ * holds), so it would picture the primary pass's subject under a number the scale pass measured
+ * about a different one, asserting an identity that a sentence beside it merely doubts. Withdrawing
+ * the picture costs a metric its evidence on a clip whose scale pass already disagrees with itself
+ * about who was measured; showing it would be a confident visual claim that is wrong.
+ */
+export function dropGraftedExemplars(result: FormHeuristicsResult): FormHeuristicsResult {
+  return {
+    ...result,
+    verticalOscillationCm: withoutExemplars(result.verticalOscillationCm),
+    stepWidthCm: withoutExemplars(result.stepWidthCm),
   }
 }

@@ -185,6 +185,25 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
           />
         )}
       </div>
+      {/*
+        Evidence-gallery mount point: a THIRD child of <main> and a sibling of ResultsView, never
+        a child of it (the grid is two-column, so the gallery needs `lg:col-span-2` to span rather
+        than land in column 1 of row 2). Everything it needs is already in scope here and needs no
+        new plumbing:
+
+          clips                              — one `ClipSession` per analyzed clip, in the same
+                                               order the aggregate fused them, each carrying its
+                                               own `videoSource.sourceBlob`/`metadata` and its own
+                                               non-null `analysis.robustFrames` (the aggregate's
+                                               are null by design — see `multiClipAnalysis.ts`)
+          computeFusionSourceIndices(clips)  — which of those clips each FUSED metric was selected
+                                               from, or null until every clip is ready
+
+        i.e. `<EvidenceGallery clips={clips} sourceIndices={sourceIndices} />` once that map is
+        non-null, spanning both grid columns. Deliberately not rendered yet: the component is a
+        separate ticket's, and a placeholder that renders nothing would be UI scaffolding this one
+        has no use for.
+      */}
     </main>
   )
 }
