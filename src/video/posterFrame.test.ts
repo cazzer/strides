@@ -6,7 +6,7 @@ import type { VideoMetadata } from './types'
 import {
   POSTER_MAX_SIDE_PX,
   POSTER_TIMESTAMP_MAX_SECONDS,
-  choosePosterTimestamp,
+  choosePosterTimestamps,
   computePosterSize,
   deriveClipPoster,
   drawPosterFrame,
@@ -29,6 +29,29 @@ function metadata(overrides: Partial<VideoMetadata> = {}): VideoMetadata {
 function seekableVideo(): HTMLVideoElement {
   const video = document.createElement('video')
   makeVideoSeekable(video)
+  return withSelfFiringFrameCallback(video)
+}
+
+/**
+ * The same, but seeks past `limit` never complete — `currentTime` moves and no `seeked` ever
+ * arrives, which is what a clip shorter than the requested instant, or one whose later positions
+ * are not seekable at all, looks like from `seekTo`'s side.
+ */
+function seekableUpTo(limit: number): HTMLVideoElement {
+  const video = document.createElement('video')
+  let currentTime = 0
+  Object.defineProperty(video, 'currentTime', {
+    configurable: true,
+    get: () => currentTime,
+    set: (value: number) => {
+      currentTime = value
+      if (value <= limit) video.dispatchEvent(new Event('seeked'))
+    },
+  })
+  return withSelfFiringFrameCallback(video)
+}
+
+function withSelfFiringFrameCallback(video: HTMLVideoElement): HTMLVideoElement {
   const controller = stubRequestVideoFrameCallback(video)
   const register = video.requestVideoFrameCallback.bind(video)
   video.requestVideoFrameCallback = ((callback: VideoFrameRequestCallback) => {
@@ -100,29 +123,51 @@ describe('computePosterSize', () => {
   })
 })
 
-describe('choosePosterTimestamp', () => {
+describe('choosePosterTimestamps', () => {
   it('takes a frame a tenth of the way in, never the clip’s leader frame', () => {
-    expect(choosePosterTimestamp(8)).toBeCloseTo(0.8, 10)
+    const [first, ...rest] = choosePosterTimestamps(8)
+    expect(first).toBeCloseTo(0.8, 10)
+    // A computed position needs no fallback — see the "no second candidate" case below.
+    expect(rest).toEqual([])
   })
 
   it('caps at POSTER_TIMESTAMP_MAX_SECONDS on a long clip', () => {
-    expect(choosePosterTimestamp(600)).toBe(POSTER_TIMESTAMP_MAX_SECONDS)
+    expect(choosePosterTimestamps(600)).toEqual([POSTER_TIMESTAMP_MAX_SECONDS])
   })
 
   it('stays strictly inside a very short clip', () => {
-    const t = choosePosterTimestamp(0.5)
+    const [t] = choosePosterTimestamps(0.5)
     expect(t).toBeGreaterThan(0)
     expect(t).toBeLessThan(0.5)
   })
 
-  it('falls back to the first frame for a duration a video element cannot report', () => {
-    // `Infinity` is what a still-loading or unseekable stream reports, and jsdom's default is NaN.
-    expect(choosePosterTimestamp(null)).toBe(0)
-    expect(choosePosterTimestamp(undefined)).toBe(0)
-    expect(choosePosterTimestamp(Number.NaN)).toBe(0)
-    expect(choosePosterTimestamp(Number.POSITIVE_INFINITY)).toBe(0)
-    expect(choosePosterTimestamp(0)).toBe(0)
-    expect(choosePosterTimestamp(-4)).toBe(0)
+  it('still targets a real offset — never frame 0 — for a duration a video cannot report', () => {
+    // `Infinity` is what a MediaRecorder WebM reports for its whole life, so this is every
+    // webcam-recorded clip in the app, not a rare edge: clamping it to 0 would poster every
+    // recorded run at the frame that is routinely a fade-in, a black leader, or the runner still
+    // walking back from the camera. `null`/`NaN` are what a still-loading or failed element gives.
+    for (const unusable of [null, undefined, Number.NaN, Number.POSITIVE_INFINITY, 0, -4]) {
+      expect(choosePosterTimestamps(unusable)).toEqual([POSTER_TIMESTAMP_MAX_SECONDS, 0])
+    }
+  })
+
+  it('offers frame 0 only as the fallback behind that offset, never as the first choice', () => {
+    // The distinction the two branches turn on: an offset guessed without a duration degrades to
+    // frame 0 rather than to no poster at all, but a position computed FROM a duration does not —
+    // there, an unreachable seek means a broken decoder, and frame 0 would be a substitution.
+    for (const unusable of [null, Number.POSITIVE_INFINITY]) {
+      expect(choosePosterTimestamps(unusable).indexOf(0)).toBe(1)
+    }
+    for (const usable of [0.5, 8, 600]) {
+      expect(choosePosterTimestamps(usable)).not.toContain(0)
+      expect(choosePosterTimestamps(usable)).toHaveLength(1)
+    }
+  })
+
+  it('never offers nothing to try', () => {
+    for (const duration of [null, undefined, Number.NaN, Number.POSITIVE_INFINITY, 0, -4, 0.5, 8]) {
+      expect(choosePosterTimestamps(duration).length).toBeGreaterThan(0)
+    }
   })
 })
 
@@ -176,6 +221,37 @@ describe('drawPosterFrame', () => {
     expect(poster).toBeNull()
     expect(ctx.drawImage).not.toHaveBeenCalled()
   })
+
+  it('seeks a webcam clip’s unreadable duration to the fixed offset, not to frame 0', async () => {
+    stubCanvas2DContext()
+    const video = seekableVideo()
+    const seeked: number[] = []
+    video.addEventListener('seeked', () => seeked.push(video.currentTime))
+
+    // Exactly what `useVideoSource` copies out of a MediaRecorder WebM element.
+    const poster = await drawPosterFrame(
+      video,
+      metadata({ durationSec: Number.POSITIVE_INFINITY }),
+    )
+
+    expect(seeked).toEqual([POSTER_TIMESTAMP_MAX_SECONDS])
+    expect(poster!.timestamp).toBe(POSTER_TIMESTAMP_MAX_SECONDS)
+  })
+
+  it('degrades to frame 0 — rather than to no poster — when that offset cannot be reached', async () => {
+    const ctx = stubCanvas2DContext()
+    // Half a second of recording, and a duration the element will not admit to: the offset is past
+    // the end and its seek never completes, so the fallback is what keeps the clip picturable.
+    const poster = await drawPosterFrame(
+      seekableUpTo(0.5),
+      metadata({ durationSec: Number.POSITIVE_INFINITY }),
+      { seekTimeoutMs: 5 },
+    )
+
+    expect(poster).not.toBeNull()
+    expect(poster!.timestamp).toBe(0)
+    expect(ctx.drawImage).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('deriveClipPoster', () => {
@@ -213,6 +289,87 @@ describe('deriveClipPoster', () => {
     // an element, so no element anyone else holds can be seeked by it.
     expect(seeked).not.toHaveBeenCalled()
     expect(canonical.currentTime).toBe(0)
+    revokeSpy.mockRestore()
+  })
+
+  it('opens one detached decoder at a time, however many clips ask at once', async () => {
+    stubCanvas2DContext()
+    // The decoder's whole lifetime, bracketed: an object URL is minted before the element exists
+    // and revoked after it is torn down, so an interleaved log is direct evidence of overlap.
+    const log: string[] = []
+    let minted = 0
+    const createSpy = vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
+      minted += 1
+      log.push(`open:${minted}`)
+      return `blob:poster-${minted}`
+    })
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation((url) => {
+      log.push(`close:${String(url).replace('blob:poster-', '')}`)
+    })
+
+    // One `addClip` per file, all in one tick — what `FileUpload`'s `multiple` picker does with a
+    // four-file selection, and what mounts four `useClipPoster`s in a single flush.
+    await Promise.all([
+      deriveClipPoster(new Blob(['a']), metadata(), { loadTimeoutMs: 5 }),
+      deriveClipPoster(new Blob(['b']), metadata(), { loadTimeoutMs: 5 }),
+      deriveClipPoster(new Blob(['c']), metadata(), { loadTimeoutMs: 5 }),
+      deriveClipPoster(new Blob(['d']), metadata(), { loadTimeoutMs: 5 }),
+    ])
+
+    // Strictly paired, never nested: `open:2` cannot appear before `close:1`. Serialized by
+    // construction inside `deriveClipPoster`, so no caller had to arrange it.
+    expect(log).toEqual([
+      'open:1',
+      'close:1',
+      'open:2',
+      'close:2',
+      'open:3',
+      'close:3',
+      'open:4',
+      'close:4',
+    ])
+
+    createSpy.mockRestore()
+    revokeSpy.mockRestore()
+  })
+
+  it('takes no place in the queue when there is nothing to decode', async () => {
+    stubCanvas2DContext()
+    const createSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:poster')
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+
+    // Queued behind a real derivation, but resolves without waiting for it: no bytes means no
+    // decoder, so there is nothing for it to be serialized against.
+    const real = deriveClipPoster(new Blob(['a']), metadata(), { loadTimeoutMs: 50 })
+    const settled: string[] = []
+    void real.then(() => settled.push('real'))
+    await deriveClipPoster(null, metadata()).then(() => settled.push('nothing'))
+
+    expect(settled).toEqual(['nothing'])
+    await real
+    expect(settled).toEqual(['nothing', 'real'])
+
+    createSpy.mockRestore()
+    revokeSpy.mockRestore()
+  })
+
+  it('does not wedge the queue when a derivation fails outright', async () => {
+    stubCanvas2DContext()
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const createSpy = vi
+      .spyOn(URL, 'createObjectURL')
+      .mockImplementationOnce(() => {
+        throw new Error('no object URL for you')
+      })
+      .mockReturnValue('blob:poster')
+
+    await expect(deriveClipPoster(new Blob(['a']), metadata())).rejects.toThrow('no object URL')
+    // The clip behind it still gets its turn — the tail is deliberately never left rejected.
+    await expect(
+      deriveClipPoster(new Blob(['b']), metadata(), { loadTimeoutMs: 5 }),
+    ).resolves.toBeNull()
+
+    createSpy.mockRestore()
     revokeSpy.mockRestore()
   })
 })

@@ -11,11 +11,13 @@ const {
   applyRobustnessMock,
   computeFormHeuristicsMock,
   getScalePassDetectorMock,
+  deriveClipPosterMock,
 } = vi.hoisted(() => ({
   sampleClipMock: vi.fn(),
   applyRobustnessMock: vi.fn(),
   computeFormHeuristicsMock: vi.fn(),
   getScalePassDetectorMock: vi.fn(),
+  deriveClipPosterMock: vi.fn(),
 }))
 
 vi.mock('./sampleClip', () => ({
@@ -26,7 +28,15 @@ vi.mock('./sampleClip', () => ({
 vi.mock('../pose/robustness/interpolate', () => ({ applyRobustness: applyRobustnessMock }))
 vi.mock('../heuristics/index', () => ({ computeFormHeuristics: computeFormHeuristicsMock }))
 vi.mock('../pose/scalePassDetector', () => ({ getScalePassDetector: getScalePassDetectorMock }))
+// Only the decode is mocked — jsdom decodes nothing, and `releaseClipPoster` must stay REAL, since
+// what the two release tests below check is that this component calls it on the right canvas at the
+// right moment. Mocking it would let them pass against a component that never released anything.
+vi.mock('../video/posterFrame', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../video/posterFrame')>()),
+  deriveClipPoster: deriveClipPosterMock,
+}))
 
+import type { ClipPoster } from '../video/posterFrame'
 import { MultiClipVideoSession } from './MultiClipVideoSession'
 
 function makeFakeDetector(): PoseDetector {
@@ -99,6 +109,47 @@ function canonicalVideos(): HTMLVideoElement[] {
   return Array.from(document.querySelectorAll('video[controls]'))
 }
 
+function makePoster(): ClipPoster {
+  const canvas = document.createElement('canvas')
+  canvas.width = 240
+  canvas.height = 135
+  return { canvas, width: 240, height: 135, timestamp: 0.8 }
+}
+
+/** Released == the backing store is gone. The recorded `width`/`height` deliberately survive. */
+function isReleased(poster: ClipPoster): boolean {
+  return poster.canvas.width === 0 && poster.canvas.height === 0
+}
+
+/**
+ * Hands each clip its own poster, keyed by the file it was loaded from rather than by call order,
+ * so an assertion naming "clip 1's poster" cannot be satisfied by whichever derivation happened to
+ * resolve first.
+ */
+function posterPerFile(): Map<string, ClipPoster> {
+  const byName = new Map<string, ClipPoster>()
+  deriveClipPosterMock.mockImplementation((blob: Blob) => {
+    const name = blob instanceof File ? blob.name : 'anonymous'
+    const poster = byName.get(name) ?? makePoster()
+    byName.set(name, poster)
+    return Promise.resolve(poster)
+  })
+  return byName
+}
+
+/**
+ * Waits until every loaded clip's poster has travelled the whole path this component owns:
+ * `useClipPoster` state -> `ClipSlot`'s report-up -> `sameClipSession` -> `clipStates`. Asserted on
+ * the count so a test cannot proceed against a session whose posters have not landed yet — a
+ * release assertion would then pass for having nothing to release.
+ */
+async function waitForPosters(count: number) {
+  await waitFor(() => expect(deriveClipPosterMock).toHaveBeenCalledTimes(count))
+  await act(async () => {
+    await Promise.resolve()
+  })
+}
+
 beforeEach(() => {
   sampleClipMock.mockReset()
   applyRobustnessMock.mockReset()
@@ -107,6 +158,8 @@ beforeEach(() => {
   applyRobustnessMock.mockReturnValue(FAKE_ROBUST_FRAMES)
   computeFormHeuristicsMock.mockReturnValue(FAKE_HEURISTICS)
   getScalePassDetectorMock.mockResolvedValue(makeFakeDetector())
+  deriveClipPosterMock.mockReset()
+  deriveClipPosterMock.mockResolvedValue(null)
   // Resolves every sampling call (primary or scale pass, either clip) immediately with one
   // null-frame sample -- with FAKE_HEURISTICS' calibration: null, every scale pass concludes
   // 'failed' ("measured no real-world scale"), a terminal status, same as
@@ -233,6 +286,81 @@ describe('MultiClipVideoSession', () => {
     await waitFor(() => expect(canonicalVideos()).toHaveLength(1))
     // A lone remaining clip has nothing left to remove itself from.
     expect(screen.queryByRole('button', { name: /remove clip/i })).not.toBeInTheDocument()
+  })
+
+  it('releases the removed clip’s poster in `removeClip` itself, and leaves the survivor’s alone', async () => {
+    const posters = posterPerFile()
+    const headingRef = createRef<HTMLHeadingElement>()
+    render(<MultiClipVideoSession detector={null} headingRef={headingRef} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
+      target: { files: [new File(['x'], 'run1.mp4', { type: 'video/mp4' })] },
+    })
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
+
+    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
+      target: { files: [new File(['y'], 'run2.mp4', { type: 'video/mp4' })] },
+    })
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
+    markVideoReady(canonicalVideos()[1])
+    await waitForPosters(2)
+
+    const removed = posters.get('run1.mp4')!
+    const survivor = posters.get('run2.mp4')!
+    expect(isReleased(removed)).toBe(false)
+
+    // Raw DOM `.click()`, deliberately NOT `fireEvent` — for the same reason as the mid-analysis
+    // teardown test below. `fireEvent` wraps the state update, the commit AND the passive-effect
+    // flush in `act()`, which would run the unmounting `ClipSlot`'s `useClipPoster` cleanup and
+    // release this poster for entirely different reasons. React processes the click's state update
+    // and commit synchronously either way, but passive effects are only *scheduled*. Asserting
+    // inside that gap is what makes this a test of `removeClip`'s own call and not of React's
+    // cleanup ordering — which both code comments at the release sites say they deliberately do
+    // NOT lean on.
+    screen.getAllByRole('button', { name: /remove clip/i })[0].click()
+
+    expect(isReleased(removed)).toBe(true)
+    // The clip that stayed keeps its pixels: this frees one poster, not the session's.
+    expect(isReleased(survivor)).toBe(false)
+
+    await act(async () => {})
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(1))
+    expect(isReleased(survivor)).toBe(false)
+  })
+
+  it('releases every clip’s poster in `handleChooseDifferentVideo` itself when the session resets', async () => {
+    const posters = posterPerFile()
+    const headingRef = createRef<HTMLHeadingElement>()
+    render(<MultiClipVideoSession detector={null} headingRef={headingRef} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
+      target: { files: [new File(['x'], 'run1.mp4', { type: 'video/mp4' })] },
+    })
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
+
+    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
+      target: { files: [new File(['y'], 'run2.mp4', { type: 'video/mp4' })] },
+    })
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
+    markVideoReady(canonicalVideos()[1])
+    await waitForPosters(2)
+
+    const all = [posters.get('run1.mp4')!, posters.get('run2.mp4')!]
+    expect(all.map(isReleased)).toEqual([false, false])
+
+    // Same raw-click reasoning as above: every slot is about to unmount, so a flushed passive pass
+    // would release all of these regardless of what this component did.
+    screen.getByRole('button', { name: /choose a different video/i }).click()
+
+    // EVERY clip, not just the active one — the session is going away whole.
+    expect(all.map(isReleased)).toEqual([true, true])
+
+    await act(async () => {})
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(1))
   })
 
   it('removing the currently-ACTIVE, mid-analysis clip deterministically tears down its detector-holding pipeline before the next clip becomes active', async () => {
