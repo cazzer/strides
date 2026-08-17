@@ -292,12 +292,12 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
 
 ## 5. Pure evidence plan — timestamps, crop rects, blend, gate (#65)
 
-- [ ] 5.1 New `src/results/evidenceFrames.ts`. **Zero DOM**: no `document`, no `HTMLVideoElement`,
+- [x] 5.1 New `src/results/evidenceFrames.ts`. **Zero DOM**: no `document`, no `HTMLVideoElement`,
   no canvas; importable in a node environment.
-- [ ] 5.2 Exemplar → timestamps → frames via `findNearestFrame`
+- [x] 5.2 Exemplar → timestamps → frames via `findNearestFrame`
   (`skeletonGeometry.ts:85-108`), **reused, not reimplemented**, plus the half-median-interval snap
   tolerance it does not provide (it clamps and never returns null for a non-empty array).
-- [ ] 5.3 Crop rect: `boundingBoxOfPoints` over the exemplar's own `cropKeypoints`, unioned across
+- [x] 5.3 Crop rect: `boundingBoxOfPoints` over the exemplar's own `cropKeypoints`, unioned across
   both frames of a pair, then `computeCropRect(box, w, h, EVIDENCE_CROP_PADDING_MULTIPLIER,
   EVIDENCE_CROP_MIN_SIDE_PX)` (`movenetCrop.ts:269`) for padding, squaring and clamping. Do **not**
   reuse `deriveBoundingBox` — it excludes exactly the head/foot names this table wants.
@@ -307,27 +307,27 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
   would vary apparent subject scale, which is the one thing D13 exists to hold constant. Note
   `computeCropRect` applies the `min(frameWidth, frameHeight)` cap **last**, so the 320 floor can
   never demand pixels a small source does not have.
-- [ ] 5.4 Context keypoints are strictly optional: a crop must be well-defined from the seed alone,
+- [x] 5.4 Context keypoints are strictly optional: a crop must be well-defined from the seed alone,
   and any unresolvable context point is omitted. Never anchor on a `(0,0)` MoveNet foot keypoint.
-- [ ] 5.5 Blend plan: base = `timestamp`, ghost = `pairedTimestamp`, `globalAlpha` 1.0 / 0.5.
-- [ ] 5.6 Apply the gate here; return the discriminated per-metric result
+- [x] 5.5 Blend plan: base = `timestamp`, ghost = `pairedTimestamp`, `globalAlpha` 1.0 / 0.5.
+- [x] 5.6 Apply the gate here; return the discriminated per-metric result
   (`{ status: 'planned', items }` | `{ status: 'no-evidence', reason }`) the UI branches on.
-- [ ] 5.7 Near-identical-pair demotion: crop-box IoU ≥ 0.98 (reuse `computeBoundingBoxIoU`) or both
+- [x] 5.7 Near-identical-pair demotion: crop-box IoU ≥ 0.98 (reuse `computeBoundingBoxIoU`) or both
   instants snapping to the same frame → demote to the base frame, or drop for a metric with no
   honest single-instant semantics.
-- [ ] 5.8 **`metadata.durationSec` must not appear in this module at all.** A unit test on a
+- [x] 5.8 **`metadata.durationSec` must not appear in this module at all.** A unit test on a
   metadata fixture with `durationSec: Infinity` produces a well-formed plan.
-- [ ] 5.9 Export the **pure** `summarizeEvidenceCoverage(...)` — plan(s) + `fusionSourceIndices` in,
+- [x] 5.9 Export the **pure** `summarizeEvidenceCoverage(...)` — plan(s) + `fusionSourceIndices` in,
   the `[evidence-coverage]` payload out, exactly the schema in design D9. **Pure: no `console`, no
   DOM** (§7.12 emits it). Numbers and enums only — no `ImageBitmap`, canvas, `Blob`, object URL or
   data URI may be reachable from the payload, and no metric `value`/`confidence` (that is
   `[analysis-diagnostics]`'s job and two sources of truth can disagree). Unit-test that it
   `JSON.stringify`/`parse`s round-trip and that every `no-evidence` reason reaches it verbatim.
-- [ ] 5.10 Unit tests: crop rects at frame edges, missing/interpolated keypoints, single vs pair,
+- [x] 5.10 Unit tests: crop rects at frame edges, missing/interpolated keypoints, single vs pair,
   the near-identical case, the gate threshold boundary, degenerate/unbounded keypoint sets, and a
   4K-sized frame. Include the degenerate single-point seed, which must land on the 320 px floor
   rather than a zero-side rect.
-- [ ] 5.11 `npm test`, `tsc -b`, `eslint` clean.
+- [x] 5.11 `npm test`, `tsc -b`, `eslint` clean.
 
 ## 6. Frame extractor — seek, crop, composite (#66)
 
