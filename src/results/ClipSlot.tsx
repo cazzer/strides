@@ -14,9 +14,10 @@ export interface ClipPendingLoad {
 
 export interface ClipSlotProps {
   clipId: string
-  /** A source already chosen before this slot existed (e.g. one file out of a multi-file
-   * session-level picker) — loaded once, on mount. `null` for a slot whose own (unmodified)
-   * `VideoInputPanel` picker is how the user chooses its clip interactively. */
+  /** The source chosen before this slot existed — loaded once, on mount. Since the session
+   * models zero clips and creates every clip (the first one included) through `addClip`, a slot
+   * mounted by `MultiClipVideoSession` always has one; `null` remains legal for a slot mounted
+   * with nothing to load, which is what the tests exercise. */
   pendingLoad: ClipPendingLoad | null
   /** Non-null only for the one clip currently allowed to sample against the shared, stateful
    * pose detector (see `nextActiveClipIndex` / the concurrency mitigation in this change's
@@ -29,9 +30,6 @@ export interface ClipSlotProps {
    * transitions. */
   onReport: (clipId: string, session: ClipSession) => void
   onRemove: (clipId: string) => void
-  /** Removal is disabled below one remaining clip — a multi-clip session always keeps at least
-   * one slot to show a picker in. */
-  canRemove: boolean
 }
 
 /**
@@ -46,7 +44,6 @@ export function ClipSlot({
   detector,
   onReport,
   onRemove,
-  canRemove,
 }: ClipSlotProps) {
   const videoSource = useVideoSource()
   const analysis = useVideoAnalysis(videoSource, detector)
@@ -111,15 +108,15 @@ export function ClipSlot({
       {videoSource.status === 'ready' && analysis.phase === 'idle' && !detector && (
         <p role="status">Queued — waiting for another clip to finish analyzing…</p>
       )}
-      {canRemove && (
-        <button
-          type="button"
-          onClick={() => onRemove(clipId)}
-          className="inline-flex items-center justify-center border-2 border-black dark:border-white px-3 py-1.5 font-sans text-xs font-semibold uppercase tracking-wide text-black dark:text-white transition-colors hover:bg-black hover:text-white dark:hover:bg-white dark:hover:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
-        >
-          Remove clip
-        </button>
-      )}
+      {/* Unconditional now that a zero-clip session is representable — every clip, including the
+          only one, can be removed, and removing the last one returns the page to the picker. */}
+      <button
+        type="button"
+        onClick={() => onRemove(clipId)}
+        className="inline-flex items-center justify-center border-2 border-black dark:border-white px-3 py-1.5 font-sans text-xs font-semibold uppercase tracking-wide text-black dark:text-white transition-colors hover:bg-black hover:text-white dark:hover:bg-white dark:hover:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
+      >
+        Remove clip
+      </button>
     </div>
   )
 }
