@@ -60,9 +60,14 @@ browser does.
 npm run dev -- --port 5173 --strictPort &
 # poll: curl -sf http://localhost:5173
 ```
-- `page.getByRole('button', { name: /try a demo video/i }).click()` loads a fixed reference
-  clip (`src/video/DemoVideoButton.tsx`) — the standard clip for before/after comparisons.
-  Alternative: Upload tab + `input[type=file]` + `setInputFiles(path)` for a different clip.
+- `page.getByRole('button', { name: /demo 1/i }).click()` loads a fixed reference clip — the
+  side-view track clip, the standard one for before/after comparisons, fetched live from Pexels
+  so this button needs network. `/demo 2/i` loads the local front-approach clip
+  (`src/video/demo-clips/park-approach.mp4`). The rendered labels are *Demo 1 (side view)* and
+  *Demo 2 (front view)* (`src/video/VideoInputPanel.tsx`) — `'Try a demo video'` survives only as
+  `DemoVideoButton`'s unused default prop and matching on it finds nothing, so ignore that string
+  wherever older notes below still quote it. Alternative: Upload tab + `input[type=file]` +
+  `setInputFiles(path)` for a different clip.
 - Analysis starts **automatically** once the clip is ready and the detector has loaded — no
   button click needed. Wait for `page.getByText(/analyzing|processing results/i)` then
   `page.getByText(/analysis complete/i)` (the latter can take 10-90s depending on clip
@@ -176,8 +181,7 @@ node scripts/ab-person-selection.mjs \
   backend and scale-pass globals still need hand-driving.
 - **Clips**: `demo1` (side-view track, fetched live from Pexels — needs network), `demo2`
   (`park-approach.mp4`, local and fast), `multiperson` (`e2e/fixtures/multiperson-track.mp4`, via
-  the Upload tab). Default: all three. Note the demo buttons are labelled *Demo 1 (side view)* /
-  *Demo 2 (front view)* now, not the "try a demo video" copy older notes here quote.
+  the Upload tab). Default: all three.
 - Reads `playwright.config.ts` for the launch args, baseURL and dev-server command, and **reuses a
   server already listening on that port** — pass `--port <n>` when another worktree might be
   serving a different checkout on 5173, or you will A/B somebody else's code without noticing.
