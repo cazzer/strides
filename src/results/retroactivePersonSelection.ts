@@ -23,6 +23,11 @@ export interface RetroactivePersonSelectionConfig {
    * Keypoints are in source-video pixels on both sampling paths, so an absolute floor would be 4x
    * more permissive at 4K than at 1080p — the same physical subject at the same distance produces
    * four times the pixel area. A fraction is resolution-independent by construction.
+   *
+   * What this is sized against, measured (#57, see the default's comment below): it is a coarse
+   * DEGENERATE-BOX filter, not a person/non-person classifier. It reliably rejects sub-1000 px²
+   * garbage; it provably cannot separate a spurious detection from a badly-collapsed real one,
+   * because at 4K those overlap in size within a single clip to within 2.9x.
    */
   minBoundingBoxAreaFraction: number
   /** Per-keypoint score floor handed to `deriveBoundingBox`. */
@@ -101,11 +106,11 @@ export interface RetroactivePersonSelectionConfig {
  * bit-identical no-op under both changes.
  *
  * Note that Demo 1's `segmentCount` 1 / zero-rejection condition is STILL not met (it measures 3-4
- * with 7-10 rejections), and remains a JOINT #54 + #57 outcome: five phantom detections of
- * 2,279-8,432 px² clear the 4K area floor of 1,659 px² and fail the ratio bound at ~19.9x — a
- * transition the bridge cannot merge and should not. Those three phantom segments are all that is
- * left, and every one of them lies OUTSIDE the winner's span. Demo 1 keeps `segmentCount >= 2`
- * until #57's re-derived floor demotes them to `rejectedBelowFloor`, where D5 makes them harmless.
+ * with 7-10 rejections), and it is NOT going to be met by raising the area floor — see the #57
+ * measurement recorded under `minBoundingBoxAreaFraction` below, which closed that route. Five
+ * phantom detections of 2,279-8,432 px² clear the 4K area floor of 1,659 px² and fail the ratio
+ * bound at ~19.9x — a transition the bridge cannot merge and should not. Those phantom segments
+ * are all that is left, and every one of them lies OUTSIDE the winner's span.
  *
  * UPDATE (2026-08-16, issue #55): boxless survival inside the winner's span — the second of the
  * two correctness items named above — is CLOSED. A detection yielding no bounding box now
@@ -121,10 +126,49 @@ export interface RetroactivePersonSelectionConfig {
  * segmentation bounds already answer is worse than the residue it would remove.
  * Primary/scale-pass selection divergence (#56) is still open and still live.
  *
- * `minBoundingBoxAreaFraction: 2e-4` — 415 px² at 1080p, 1659 px² at 4K. Derived as roughly the
- * geometric mean of the largest measured garbage detection on the repro clip (183 px²) and the
- * smallest measured real person on it (~1000 px²): ~2.3x above the noise, ~40x below the smallest
- * real subject. Deliberately nowhere near either boundary.
+ * `minBoundingBoxAreaFraction: 2e-4` — 415 px² at 1080p, 1659 px² at 4K. Originally derived as
+ * roughly the geometric mean of the largest measured garbage detection on the repro clip (183 px²)
+ * and the smallest measured real person on it (~1000 px²).
+ *
+ * RE-DERIVED AND DELIBERATELY LEFT ALONE (2026-08-17, issue #57). This value does NOT catch the 4K
+ * phantoms described above, and #57 set out to raise it so that it would. It measured the full
+ * per-detection bounding-box distribution on all three clips (3 trials each, real GPU, temporary
+ * `[bbox-trace]` probe, since reverted) and classified the extremes by pulling the keyframe at each
+ * timestamp. The attempt FAILED on its own pre-registered margin rule, and the reason generalises
+ * past this ticket:
+ *
+ *   G4 = 8,432 px²  Demo 1 t=8.36  — keyframe: an EMPTY track. The largest phantom at 4K.
+ *   S4 = 24,473 px² Demo 1 t=4.32  — keyframe: the runner. The wedge frame above, collapsed onto
+ *                                    his front-arm column. The smallest genuine winner box at 4K.
+ *
+ * Both from the SAME CLIP and the same scene, only **2.90x apart**, against a pre-registered
+ * requirement of >=4 (i.e. >=2x clear of each side). The squeeze is intra-clip, so it is not a
+ * resolution problem and no resolution model — a bigger fraction, a per-frame-area table, a hybrid,
+ * a power law — can widen it. Phantom boxes and collapsed-subject boxes are the same shape and the
+ * same size because they are the same kind of failure: a hull over too few, badly-placed keypoints.
+ *
+ * Two negative results worth not re-discovering:
+ *  - CONFIDENCE does not separate them either. The largest phantom has 9 confident keypoints and
+ *    mean score 0.323; the genuine wedge frame has 4 and 0.258. A confidence gate would reject the
+ *    real subject FIRST.
+ *  - ASPECT RATIO does not either. Phantoms run 3.4:1 to 7.7:1 (height:width) and well-detected
+ *    subjects 2.5:1 to 3.1:1 — cleanly separated until you notice the wedge is 7.1:1 and the
+ *    multi-person clip's smallest genuine box is 4.6:1.
+ *
+ * The candidate value the measurement produced, `1.7e-3`, was A/B'd anyway (4 arms, 3 clips, 3
+ * trials) because a plateau sweep is the behavioural form of the same question. It DOES reach epic
+ * #52's headline gate on Demo 1 — `segmentCount` 1, `rejectedOtherSegment` 0, healed track intact,
+ * every metric unmoved, Demo 2 bit-identical — but `f/2` puts `segmentCount` back to 2 (the 8,432
+ * phantom survives) and `f*2` drops the winner to 52 frames with `bridgedCuts: 0` (the wedge is
+ * eaten, undoing #54). A factor-of-two cliff in both directions, derived from three scenes, is a
+ * liability on footage nobody has measured. Full tables, keyframe verdicts and the gate-by-gate
+ * adjudication: `openspec/changes/derive-area-floor-from-4k-measurement/design.md`.
+ *
+ * What the evidence actually points at, if someone picks this up: the phantoms sit at FIXED screen
+ * positions with near-zero motion (Demo 1: x ~1710 across t=7.20/7.28/7.44; the repro clip: one
+ * spot for ~0.5s), which a continuity/motion test can see and a per-frame area threshold cannot.
+ * That is the segmentation stage's job, not this floor's. Treat this number as a coarse
+ * degenerate-box filter and leave it there.
  *
  * `minKeypointConfidence: 0.3` / `minConfidentKeypoints: 4` — matched to
  * `DEFAULT_TRACKING_CROP_CONFIG`'s own `deriveBoundingBox` arguments, so "is there a usable box in
