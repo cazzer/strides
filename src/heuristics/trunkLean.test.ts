@@ -111,5 +111,66 @@ describe('computeTrunkLean', () => {
     expect(result.value).toBeNull()
     expect(result.confidence).toBe(0)
     expect(result.caveat).not.toBeNull()
+    expect(result.exemplars).toBeUndefined()
+  })
+})
+
+/** A rigid torso rotated about the hip, so `computeTrunkLean` reads back exactly `deg`. */
+function leanFrame(deg: number, timestamp: number) {
+  const rad = (deg * Math.PI) / 180
+  const dx = 150 * Math.sin(rad)
+  const dy = -150 * Math.cos(rad)
+  return buildFrame(
+    {
+      left_hip: { x: 197, y: 400 },
+      right_hip: { x: 203, y: 400 },
+      left_shoulder: { x: 197 + dx, y: 400 + dy },
+      right_shoulder: { x: 203 + dx, y: 400 + dy },
+    },
+    timestamp,
+  )
+}
+
+describe('computeTrunkLean exemplars', () => {
+  // Deviations from the median (5) are 1, 0.5, 0, 0, 0.5, 1, 15 -> MAD 0.5, outlier bound 1.5.
+  const LEANS = [4, 4.5, 5, 5, 5.5, 6, 20]
+
+  it('ghosts the most forward lean against the most upright one', () => {
+    const frames = LEANS.map((deg, i) => leanFrame(deg, i / 30))
+
+    const result = computeTrunkLean(frames, 'side')
+    const [evidence] = result.exemplars!
+
+    expect(result.exemplars).toHaveLength(1)
+    expect(evidence.kind).toBe('trunkLeanRange')
+    expect(evidence.timestamp).toBeCloseTo(5 / 30, 10) // the 6 deg frame
+    expect(evidence.pairedTimestamp).toBeCloseTo(0, 10) // the 4 deg frame
+    // Both surviving ends sit one MAD from the median, i.e. 1/1.5 of the outlier bound.
+    expect(evidence.quality).toBeCloseTo(1 / 1.5, 6)
+    expect(evidence.cropKeypoints).toEqual([
+      'left_shoulder',
+      'right_shoulder',
+      'left_hip',
+      'right_hip',
+    ])
+  })
+
+  it('rejects the outlier outright rather than showing it as the extreme', () => {
+    const frames = LEANS.map((deg, i) => leanFrame(deg, i / 30))
+
+    const [evidence] = computeTrunkLean(frames, 'side').exemplars!
+
+    // The 20 deg frame is the raw argmax and is 30 MADs out — a tracking glitch, not a lean.
+    expect(evidence.timestamp).not.toBeCloseTo(6 / 30, 10)
+    expect(evidence.pairedTimestamp).not.toBeCloseTo(6 / 30, 10)
+  })
+
+  it('emits nothing when the lean never varies — there is no range to picture', () => {
+    const frames = Array.from({ length: 12 }, (_, i) => leanFrame(6, i / 30))
+
+    const result = computeTrunkLean(frames, 'side')
+
+    expect(result.value).toBeCloseTo(6, 5)
+    expect(result.exemplars).toBeUndefined()
   })
 })

@@ -14,8 +14,38 @@ export type StrideLengthFailureReason =
   | 'too-few-footstrikes'
   | 'no-usable-pairs'
 
+/**
+ * One same-side consecutive-footstrike pair that survived step 4 below, kept whole rather than
+ * collapsed to its displacement number.
+ *
+ * The two FRAMES, not their indices, are what this carries: `verticalRatio.ts` turns the median
+ * pair into a `MetricExemplar`, and the shared exemplar gate (`exemplars.ts`) scores a
+ * `RobustPoseFrame` — it reads `frame.keypoints` for both crop-derivability and the detected/
+ * interpolated split. An index would also be wrong across the presence trim (see
+ * `MetricExemplar.timestamp`'s doc).
+ */
+export interface StridePair {
+  side: 'left' | 'right'
+  /** Hip-mid horizontal displacement across this stride, signed positive in the runner's own
+   * direction of travel — strictly positive, by the `d > 0` filter in step 4. */
+  displacementPx: number
+  /** The footstrike frame this stride started at. */
+  startFrame: RobustPoseFrame
+  /** The next same-side footstrike frame, where it ended. */
+  endFrame: RobustPoseFrame
+}
+
 export type StrideLengthResult =
-  | { ok: true; strideLengthPx: number; pairCount: number; candidatePairCount: number }
+  | {
+      ok: true
+      strideLengthPx: number
+      pairCount: number
+      candidatePairCount: number
+      /** Every kept pair, in detection order (all of the left side's, then all of the right's).
+       * `pairs.length === pairCount` and `strideLengthPx === median(pairs.map(displacementPx))`,
+       * both by construction. */
+      pairs: StridePair[]
+    }
   | { ok: false; reason: StrideLengthFailureReason }
 
 const HIP_NAMES: [KeypointName, KeypointName] = ['left_hip', 'right_hip']
@@ -61,7 +91,9 @@ const HIP_NAMES: [KeypointName, KeypointName] = ['left_hip', 'right_hip']
  *    positive, so a caller dividing by `strideLengthPx` never risks a zero-or-negative
  *    denominator.
  * 5. Empty kept-pairs list → `'no-usable-pairs'`. Otherwise
- *    `{ ok: true, strideLengthPx: median(d), pairCount: d.length, candidatePairCount }`.
+ *    `{ ok: true, strideLengthPx: median(d), pairCount: d.length, candidatePairCount, pairs }`,
+ *    where each kept pair is returned whole (`StridePair`) rather than as a bare `d` — see that
+ *    type's doc for why the frames travel with the number.
  *
  * **No re-pairing across a dropped strike.** If strike `k+1` is dropped at step 4, this does NOT
  * fall back to pairing `k` with `k+2` — that interval spans two real strides, not one, and
@@ -137,7 +169,7 @@ export function estimateStrideLength(
   }
   if (candidatePairCount === 0) return { ok: false, reason: 'too-few-footstrikes' }
 
-  const displacements: number[] = []
+  const pairs: StridePair[] = []
   for (const side of ['left', 'right'] as const) {
     const strikes = bySide[side]
     for (let i = 0; i < strikes.length - 1; i += 1) {
@@ -148,16 +180,19 @@ export function estimateStrideLength(
       if (hipA === null || hipB === null) continue
 
       const d = (hipB.x - hipA.x) * travelDirection
-      if (d > 0) displacements.push(d)
+      if (d > 0) {
+        pairs.push({ side, displacementPx: d, startFrame: frameA, endFrame: frameB })
+      }
     }
   }
 
-  if (displacements.length === 0) return { ok: false, reason: 'no-usable-pairs' }
+  if (pairs.length === 0) return { ok: false, reason: 'no-usable-pairs' }
 
   return {
     ok: true,
-    strideLengthPx: median(displacements),
-    pairCount: displacements.length,
+    strideLengthPx: median(pairs.map((pair) => pair.displacementPx)),
+    pairCount: pairs.length,
     candidatePairCount,
+    pairs,
   }
 }

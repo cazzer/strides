@@ -1,3 +1,4 @@
+import type { KeypointName } from '../pose/types'
 import type { SpectralFitFailureReason } from './spectralFit'
 
 /**
@@ -58,6 +59,74 @@ export interface ViewDetectionResult {
   }
 }
 
+/**
+ * What an exemplar depicts, in the terms of the metric that emitted it — enough for presentation
+ * code to caption it, and the discriminator for the one metric whose two exemplars answer
+ * different questions (`verticalRatio`'s numerator versus its denominator). Deliberately named
+ * per-measurement rather than "footstrike"/"frame": three different metrics can pick the same
+ * instant for three different reasons, and a caption has to say which reason it is.
+ *
+ * Members are added by the metric that needs them — `armSwingSymmetry` adds its own when it
+ * starts emitting.
+ */
+export type MetricExemplarKind =
+  | 'kneeFlexionPeak'
+  | 'overstrideRange'
+  | 'footStrike'
+  | 'stepWidthStrike'
+  | 'trunkLeanRange'
+  /** One bounce half-cycle — the highest and lowest points of the fitted vertical oscillation,
+   * shared by `verticalOscillation`, `verticalOscillationCm` and `verticalRatio`'s NUMERATOR
+   * (all three read the same shape of fit). `cadence` reads that fit too and deliberately emits
+   * nothing: a rate is a property of a sequence, and these two stills depict an amplitude. */
+  | 'bounceCycle'
+  /** One arm-swing half-cycle — the wrist at its highest and its lowest, on ONE side. Two of these
+   * (one per arm) is what makes `armSwingSymmetry` legible: the comparison IS the evidence. */
+  | 'armSwingCycle'
+  /** One stride — two consecutive same-side footstrikes, the interval whose hip-mid horizontal
+   * displacement is `verticalRatio`'s DENOMINATOR. Distinct from `'bounceCycle'`, which is that
+   * same metric's numerator: `verticalRatio` is the one metric whose two exemplars answer
+   * different questions, and this pair is the discriminator a caption reads. */
+  | 'stridePair'
+
+/**
+ * One renderable piece of evidence for a metric: either a single instant, or a ghosted PAIR of
+ * two instants blended into one image. A pair counts as ONE exemplar, because it produces one
+ * image.
+ */
+export interface MetricExemplar {
+  kind: MetricExemplarKind
+  /**
+   * Seconds on the clip's own media clock — the same clock `RobustPoseFrame.timestamp` carries.
+   * On a ghosted pair this is the BASE instant: the one that most directly corresponds to the
+   * reported value.
+   *
+   * **There is deliberately no frame-index field on this type, not even an optional one.**
+   * Heuristics run over the presence-TRIMMED frame array while the rest of the app holds the
+   * UNTRIMMED one, so an index produced here is off by however many leading frames the presence
+   * trim removed — which is `0` on a clip where the subject is present from frame one, and
+   * non-zero on precisely the clips this evidence is most useful for. `trimToPresenceWindow`
+   * slices the same `RobustPoseFrame` OBJECTS, so a timestamp is valid on both sides of that
+   * boundary and an index is not.
+   */
+  timestamp: number
+  /** The GHOST instant, when this exemplar depicts a two-instant range or comparison. ABSENT —
+   * not null — on a single-instant exemplar, so "this metric only exists at one moment" never
+   * reads as "half a pair went missing". */
+  pairedTimestamp?: number
+  /** Present only where the metric measures per side, and only when both instants of a pair share
+   * that side — omitted on `stepWidth`'s deliberately opposite-side pair. */
+  side?: 'left' | 'right'
+  /** 0..1, from `exemplars.ts`'s shared gate. Never below `MIN_EXEMPLAR_QUALITY`. */
+  quality: number
+  /** Short human-readable caption seed, naming what the picture shows. */
+  label: string
+  /** The keypoints whose positions define the region of the frame this exemplar is about — named
+   * by the metric that measured them, never re-derived downstream from `MetricId`, so knowledge
+   * of what a metric measured stays in the module that measures it. */
+  cropKeypoints: KeypointName[]
+}
+
 export interface MetricResult {
   metric: MetricId
   /** null iff no resolvable input at all (including "resolvable but never produced a complete,
@@ -98,6 +167,12 @@ export interface MetricResult {
    * foot-angle measurement) even in its cleanest, highest-confidence result, so its `caveat` is
    * ALWAYS non-null — see `footStrikePattern.ts`. */
   caveat: string | null
+  /** The instants that produced this result, ranked by `quality` and capped at
+   * `MAX_EXEMPLARS_PER_METRIC` (`exemplars.ts`). ABSENT — never an empty array — when nothing
+   * cleared the quality gate, and absent by design for `cadence`, which is a property of a
+   * sequence rather than of any pair of instants. Emitting exemplars never moves `value`,
+   * `confidence`, `viewFit`, `interpolatedFraction`, `frameCoverage`, `sampleSize` or `caveat`. */
+  exemplars?: MetricExemplar[]
 }
 
 export interface TimeseriesPoint {

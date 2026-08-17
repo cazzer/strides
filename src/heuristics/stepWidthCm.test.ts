@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { computeStepWidthCm } from './stepWidthCm'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
+import { buildStrikeFrames } from './__fixtures__/strikeFrames'
 import { buildFrame } from './__fixtures__/testFrames'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 
@@ -209,5 +210,64 @@ describe('computeStepWidthCm', () => {
     expect(result.value).toBeNull()
     expect(result.confidence).toBe(0)
     expect(result.caveat).toBe('No footstrikes could be detected in this clip.')
+    expect(result.exemplars).toBeUndefined()
+  })
+})
+
+describe('computeStepWidthCm exemplars', () => {
+  const OFFSETS = [75, 75, 60, 75, 75, 90, 75]
+
+  it('constructs the same opposite-foot pair its ratio sibling does, over centimetre offsets', () => {
+    const frames = buildStrikeFrames({
+      ankleOffsetsPx: OFFSETS,
+      alternateFeet: true,
+      pixelsPerMeter: 400,
+    })
+
+    const result = computeStepWidthCm(frames, 'front')
+    const [evidence] = result.exemplars!
+
+    expect(result.exemplars).toHaveLength(1)
+    expect(evidence.kind).toBe('stepWidthStrike')
+    expect(evidence.pairedTimestamp).not.toBeUndefined()
+    expect(evidence).not.toHaveProperty('side')
+    expect(evidence.cropKeypoints).toEqual(['right_ankle', 'left_hip', 'right_hip', 'left_ankle'])
+  })
+
+  it('demotes to a single representative strike when every plant is the same foot', () => {
+    const frames = buildStrikeFrames({ ankleOffsetsPx: OFFSETS, pixelsPerMeter: 400 })
+
+    const [evidence] = computeStepWidthCm(frames, 'front').exemplars!
+
+    expect(evidence).not.toHaveProperty('pairedTimestamp')
+    expect(evidence.side).toBe('left')
+  })
+
+  it('gates out every strike whose outward polarity was invented by the sign fallback', () => {
+    // The same `Math.sign(...) || 1` degenerate case `stepWidth.ts` has, gated on the same terms.
+    const frames = buildStrikeFrames({
+      ankleOffsetsPx: OFFSETS,
+      hipSpreadPx: 0,
+      pixelsPerMeter: 400,
+    })
+
+    const result = computeStepWidthCm(frames, 'front')
+
+    expect(result.value).not.toBeNull()
+    expect(result.exemplars).toBeUndefined()
+  })
+
+  it('never offers a strike that carried no real-world scale', () => {
+    // A strike with no usable `pixelsPerMeter` never entered `offsetsCm`, so it has no measured
+    // value to be an exemplar of.
+    const frames = buildStrikeFrames({ ankleOffsetsPx: OFFSETS, pixelsPerMeter: null }).map(
+      (frame, i) => ({ ...frame, pixelsPerMeter: i === 5 ? 400 : null }),
+    )
+
+    const result = computeStepWidthCm(frames, 'front')
+
+    expect(result.sampleSize).toBe(1)
+    expect(result.exemplars).toHaveLength(1)
+    expect(result.exemplars![0].timestamp).toBeCloseTo(5 / 30, 10)
   })
 })

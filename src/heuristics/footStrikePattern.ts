@@ -1,13 +1,20 @@
 import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
-import type { HeuristicsConfig, MetricResult, View } from './types'
+import type { HeuristicsConfig, MetricExemplar, MetricResult, View } from './types'
 import { estimateBodyScale } from './bodyScale'
 import { estimateTravelDirection } from './travelDirection'
 import { resolvePoint } from './keypoints'
 import { detectFootstrikes } from './footstrikes'
 import type { FootstrikeCandidate } from './footstrikes'
 import { computeMetricConfidence } from './confidence'
+import {
+  cropKeypoints,
+  describeDistribution,
+  scoreExemplarInstant,
+  selectExemplars,
+} from './exemplars'
+import type { ExemplarDistribution } from './exemplars'
 import { median } from './mathUtils'
 
 /**
@@ -25,6 +32,14 @@ const ANKLE_NAME: Record<'left' | 'right', KeypointName> = {
 const KNEE_NAME: Record<'left' | 'right', KeypointName> = {
   left: 'left_knee',
   right: 'right_knee',
+}
+
+/** Exemplar crop context only — a foot-strike picture that omits the foot is useless. These four
+ * are MediaPipe-only names, so they resolve to nothing on MoveNet and are simply dropped there;
+ * the crop stays well-defined from the ankle/knee seed alone. */
+const FOOT_NAMES: Record<'left' | 'right', KeypointName[]> = {
+  left: ['left_heel', 'left_foot_index'],
+  right: ['right_heel', 'right_foot_index'],
 }
 
 export type FootStrikeClass = 'heel' | 'midfoot' | 'forefoot'
@@ -55,6 +70,46 @@ export function classifyFootStrike(ratio: number, midfootBandRatio: number): Foo
   if (ratio > midfootBandRatio) return 'heel'
   if (ratio < -midfootBandRatio) return 'forefoot'
   return 'midfoot'
+}
+
+interface StrikeSample {
+  frame: RobustPoseFrame
+  side: 'left' | 'right'
+  ratio: number
+}
+
+/**
+ * Up to two SINGLE-instant exemplars — the strikes nearest the reported median, ranked. Single is
+ * correct, not a degraded pair: this metric only exists at the moment of strike, so there is no
+ * honest second instant to ghost against, and the exemplar simply carries no `pairedTimestamp`
+ * rather than a null one that would read as a missing half. Two singles is how this metric spends
+ * its two-exemplar budget.
+ */
+function buildExemplars(
+  samples: StrikeSample[],
+  distribution: ExemplarDistribution,
+  midfootBandRatio: number,
+): MetricExemplar[] {
+  const exemplars: MetricExemplar[] = []
+  for (const sample of samples) {
+    const seed = [ANKLE_NAME[sample.side], KNEE_NAME[sample.side]]
+    const quality = scoreExemplarInstant(
+      { frame: sample.frame, seed, value: sample.ratio },
+      'representative',
+      distribution,
+    )
+    if (quality === null) continue
+
+    exemplars.push({
+      kind: 'footStrike',
+      timestamp: sample.frame.timestamp,
+      side: sample.side,
+      quality,
+      label: `${classifyFootStrike(sample.ratio, midfootBandRatio)}-like footstrike, ${sample.side} foot`,
+      cropKeypoints: cropKeypoints(seed, FOOT_NAMES[sample.side], [sample.frame]),
+    })
+  }
+  return exemplars
 }
 
 function nullResult(
@@ -125,6 +180,8 @@ export function computeFootStrikePattern(
 
   let interpolatedCount = 0
   const offsetRatios: number[] = []
+  // Index-parallel to `offsetRatios`, not to `candidates` — the `continue` above skips strikes.
+  const strikeSamples: StrikeSample[] = []
   for (const candidate of candidates) {
     const frame = frames[candidate.frameIndex]
     const ankle = resolvePoint(frame, ANKLE_NAME[candidate.side])
@@ -133,7 +190,9 @@ export function computeFootStrikePattern(
 
     const dx = ankle.x - knee.x
     const horizontalOffsetPx = travelDirectionKnown ? dx * travelDirection : dx
-    offsetRatios.push(horizontalOffsetPx / torsoLengthPx)
+    const ratio = horizontalOffsetPx / torsoLengthPx
+    offsetRatios.push(ratio)
+    strikeSamples.push({ frame, side: candidate.side, ratio })
     if (ankle.interpolated || knee.interpolated) interpolatedCount += 1
   }
 
@@ -184,6 +243,14 @@ export function computeFootStrikePattern(
     )
   }
 
+  const exemplars = selectExemplars(
+    buildExemplars(
+      strikeSamples,
+      describeDistribution(offsetRatios),
+      config.footStrikeMidfootBandRatio,
+    ),
+  )
+
   return {
     metric: 'footStrikePattern',
     value,
@@ -194,5 +261,6 @@ export function computeFootStrikePattern(
     frameCoverage,
     sampleSize: usableStrikeCount,
     caveat: caveats.join(' '),
+    ...(exemplars && { exemplars }),
   }
 }

@@ -1,3 +1,4 @@
+import type { MetricId } from '../heuristics/types'
 import type { VideoSource } from '../video/types'
 import type {
   AnalysisPhase,
@@ -5,7 +6,7 @@ import type {
   VideoAnalysisError,
   VideoAnalysisState,
 } from './types'
-import { fuseFormHeuristicsResults } from './fuseHeuristics'
+import { fuseFormHeuristicsResults, fusionSourceIndices } from './fuseHeuristics'
 
 /**
  * One uploaded clip's full session: its stable identity (assigned at upload time, never an array
@@ -51,6 +52,13 @@ function aggregateError(clips: ClipSession[]): VideoAnalysisError | null {
   return clips.find((c) => c.analysis.phase === 'error')?.analysis.error ?? null
 }
 
+/** The one gate on a fused result existing at all: every clip finished, so every clip has a
+ * `heuristics` to contribute. Shared by the aggregate below and the source-index map beside it so
+ * the two can never disagree about whether there is anything to fuse. */
+function allClipsReady(clips: ClipSession[]): boolean {
+  return clips.length > 0 && clips.every((c) => c.analysis.phase === 'ready')
+}
+
 /**
  * Combines every clip's independently-driven `VideoAnalysisState` into one aggregate, for
  * `ResultsView` (unmodified) to render exactly as it does for a single clip today.
@@ -62,7 +70,7 @@ function aggregateError(clips: ClipSession[]): VideoAnalysisError | null {
  */
 export function computeAggregateAnalysisState(clips: ClipSession[]): VideoAnalysisState {
   const phase = aggregatePhase(clips)
-  const allReady = clips.length > 0 && clips.every((c) => c.analysis.phase === 'ready')
+  const allReady = allClipsReady(clips)
 
   return {
     phase,
@@ -93,6 +101,30 @@ export function computeAggregateAnalysisState(clips: ClipSession[]): VideoAnalys
       for (const clip of clips) clip.analysis.reset()
     },
   }
+}
+
+/**
+ * Which clip each metric of the aggregate's fused `heuristics` was selected from, as indices into
+ * the SAME array passed here. The companion to `computeAggregateAnalysisState`: that one produces
+ * the fused numbers, this one says where each came from, and both read the same `clips` in the
+ * same order, so `clips[indices[metricId]]` is the clip that produced `heuristics[metricId]`.
+ *
+ * The evidence gallery is the consumer: a fused metric's exemplar timestamps are on its *own*
+ * clip's media clock and must be resolved against that clip's `analysis.robustFrames` (crop
+ * geometry) and `videoSource.sourceBlob` (extraction), never against whichever clip is on screen.
+ * Both of those are on `ClipSession` already — `multiClipAnalysis`'s aggregate nulls
+ * `robustFrames` because there is no sane N-clip merge of them, but per-clip frames are intact and
+ * are already consumed that way by `ClipSlot`'s skeleton overlay.
+ *
+ * `null` until every clip is ready, mirroring the aggregate's own gate on `heuristics` exactly
+ * (both call `allClipsReady`): before then there is no fused result to attribute, and a map built
+ * from a partially-analyzed session would name winners that have not been decided yet.
+ */
+export function computeFusionSourceIndices(
+  clips: ClipSession[],
+): Record<MetricId, number> | null {
+  if (!allClipsReady(clips)) return null
+  return fusionSourceIndices(clips.map((c) => c.analysis.heuristics!))
 }
 
 function isDoneWithSharedDetector(clip: ClipSession): boolean {

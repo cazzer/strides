@@ -1,3 +1,4 @@
+import type { MetricId } from '../heuristics/types'
 import type { VideoAnalysisState } from './types'
 import { MetricsPanel } from './MetricsPanel'
 
@@ -13,6 +14,11 @@ export interface ResultsViewProps {
    * button with it, so the composer (`App.tsx`) must move focus somewhere stable first. Same
    * contract as `onTryAgain`. */
   onChooseDifferentVideo: () => void
+  /** Which metrics the evidence gallery produced imagery for. Passed straight through to
+   * `MetricsPanel`, which grows a "See evidence" deep link on those cards. Already derived by
+   * the composer (`MultiClipVideoSession`, which mounts the gallery as this component's sibling)
+   * — this component stays presentational and calls no hook, exactly as before. */
+  evidenceMetrics?: ReadonlySet<MetricId>
 }
 
 function progressLabel(
@@ -35,6 +41,7 @@ export function ResultsView({
   analysis,
   onTryAgain,
   onChooseDifferentVideo,
+  evidenceMetrics,
 }: ResultsViewProps) {
   const { phase, progress, isPausedMidAnalysis, heuristics, error, start } =
     analysis
@@ -130,7 +137,11 @@ export function ResultsView({
 
       {phase === 'ready' && heuristics && (
         <div className="results-view__results space-y-4">
-          <MetricsPanel heuristics={heuristics} scalePassStatus={analysis.scalePass.status} />
+          <MetricsPanel
+            heuristics={heuristics}
+            scalePassStatus={analysis.scalePass.status}
+            evidenceMetrics={evidenceMetrics}
+          />
           {/*
             Save/export (e.g. Google Drive) is explicitly out of scope for this build — this is
             the seam a future ticket hooks into. No auth, no API calls, no stub button: just the

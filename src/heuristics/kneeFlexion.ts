@@ -1,10 +1,19 @@
 import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
-import type { HeuristicsConfig, MetricResult, View } from './types'
+import type { HeuristicsConfig, MetricExemplar, MetricResult, View } from './types'
 import { resolvePoint } from './keypoints'
 import { findLocalExtrema } from './extrema'
+import type { Extremum } from './extrema'
 import { computeMetricConfidence } from './confidence'
+import {
+  cropKeypoints,
+  describeDistribution,
+  pairQuality,
+  scoreExemplarInstant,
+  selectExemplars,
+} from './exemplars'
+import type { ExemplarDistribution } from './exemplars'
 import { median, angleBetweenVectorsDeg } from './mathUtils'
 
 /**
@@ -44,6 +53,86 @@ function nullResult(
 interface FlexionSample {
   t: number
   v: number
+}
+
+interface FlexionPeak {
+  side: 'left' | 'right'
+  frameIndex: number
+  timestamp: number
+  valueDeg: number
+  /** Where this peak sits in its own side's extrema list, so the adjacent extension minimum —
+   * which `findLocalExtrema` already computed and this metric otherwise drops on the floor —
+   * stays reachable without a second scan. */
+  extremaIndex: number
+}
+
+/**
+ * The peak whose flexion is nearest the reported median, ghosted against the adjacent extension
+ * trough on the SAME leg.
+ *
+ * The peak is REPRESENTATIVE, not the largest in the clip: the reported value is the median peak,
+ * so the picture has to be of a typical one. The trough is not itself a measurement — it is what
+ * makes the flexion angle legible, since a bent knee only reads as bent against a straight one —
+ * so it is scored for resolvability only and carries no typicality. A caption must not imply the
+ * trough was measured.
+ *
+ * A peak with no adjacent trough (the extrema list ran out, or a tracking gap put a second peak
+ * next to it) is dropped rather than demoted to a single frame: one still of a bent knee, with
+ * nothing to read the bend against, is not evidence.
+ */
+function buildExemplars(
+  peaks: FlexionPeak[],
+  sideExtrema: Record<'left' | 'right', Extremum[]>,
+  frames: RobustPoseFrame[],
+  distribution: ExemplarDistribution,
+): MetricExemplar[] {
+  const candidates: MetricExemplar[] = []
+  for (const peak of peaks) {
+    const extrema = sideExtrema[peak.side]
+    const trough =
+      adjacentMinimum(extrema, peak.extremaIndex, 1) ??
+      adjacentMinimum(extrema, peak.extremaIndex, -1)
+    if (trough === null) continue
+
+    const { hip, knee, ankle } = LEG_KEYPOINTS[peak.side]
+    const seed = [hip, knee, ankle]
+    const peakQuality = scoreExemplarInstant(
+      { frame: frames[peak.frameIndex], seed, value: peak.valueDeg },
+      'representative',
+      distribution,
+    )
+    const troughQuality = scoreExemplarInstant(
+      { frame: frames[trough.index], seed },
+      'representative',
+      distribution,
+    )
+    if (peakQuality === null || troughQuality === null) continue
+
+    candidates.push({
+      kind: 'kneeFlexionPeak',
+      timestamp: peak.timestamp,
+      pairedTimestamp: trough.timestamp,
+      side: peak.side,
+      quality: pairQuality(peakQuality, troughQuality),
+      label: `Peak knee flexion (${peak.side} leg), ghosted against the same leg near full extension`,
+      cropKeypoints: cropKeypoints(seed, [], [frames[peak.frameIndex], frames[trough.index]]),
+    })
+  }
+
+  // One pair, not two: a second near-median peak would be the same picture of the same runner.
+  candidates.sort((a, b) => b.quality - a.quality)
+  return candidates.slice(0, 1)
+}
+
+function adjacentMinimum(
+  extrema: Extremum[],
+  from: number,
+  step: 1 | -1,
+): Extremum | null {
+  const neighbour = extrema[from + step]
+  // `findLocalExtrema` alternates min/max within a contiguous run but not across a tracking gap,
+  // so the neighbour's kind has to be checked rather than assumed.
+  return neighbour !== undefined && neighbour.kind === 'min' ? neighbour : null
 }
 
 /**
@@ -127,20 +216,26 @@ export function computeKneeFlexion(
 
   const minProminenceAbs = config.kneeFlexionMinProminenceDegrees
 
-  interface FlexionPeak {
-    side: 'left' | 'right'
-    frameIndex: number
-    valueDeg: number
-  }
   const peaks: FlexionPeak[] = []
+  // Kept per side rather than discarded with the minima: the near-full-extension troughs are what
+  // makes a flexion peak legible as a picture, and re-deriving them later would mean a second
+  // extrema scan over the same series.
+  const sideExtrema: Record<'left' | 'right', Extremum[]> = { left: [], right: [] }
   for (const side of ['left', 'right'] as const) {
     const extrema = findLocalExtrema(legSeries[side], minProminenceAbs)
-    for (const extremum of extrema) {
+    sideExtrema[side] = extrema
+    extrema.forEach((extremum, extremaIndex) => {
       // Local maxima of the flexion-degrees series are swing-phase peaks (most bent); local
       // minima are near-full-extension troughs, which aren't the quantity being reported.
-      if (extremum.kind !== 'max') continue
-      peaks.push({ side, frameIndex: extremum.index, valueDeg: extremum.value })
-    }
+      if (extremum.kind !== 'max') return
+      peaks.push({
+        side,
+        frameIndex: extremum.index,
+        timestamp: extremum.timestamp,
+        valueDeg: extremum.value,
+        extremaIndex,
+      })
+    })
   }
 
   if (peaks.length === 0) {
@@ -183,6 +278,10 @@ export function computeKneeFlexion(
     )
   }
 
+  const exemplars = selectExemplars(
+    buildExemplars(peaks, sideExtrema, frames, describeDistribution(flexionValues)),
+  )
+
   return {
     metric: 'kneeFlexion',
     value,
@@ -193,5 +292,6 @@ export function computeKneeFlexion(
     frameCoverage,
     sampleSize,
     caveat: caveats.length > 0 ? caveats.join(' ') : null,
+    ...(exemplars && { exemplars }),
   }
 }

@@ -1,12 +1,21 @@
 import { useCallback, useState } from 'react'
 import type { RefObject } from 'react'
+import type { MetricId } from '../heuristics/types'
 import type { PoseDetector } from '../pose/detector'
 import { FileUpload } from '../video/FileUpload'
 import { ClipSlot } from './ClipSlot'
 import type { ClipPendingLoad } from './ClipSlot'
+import { EvidenceGallery } from './EvidenceGallery'
 import { ResultsView } from './ResultsView'
-import { computeAggregateAnalysisState, nextActiveClipIndex } from './multiClipAnalysis'
+import {
+  computeAggregateAnalysisState,
+  computeFusionSourceIndices,
+  nextActiveClipIndex,
+} from './multiClipAnalysis'
 import type { ClipSession } from './multiClipAnalysis'
+
+/** Stable empty set, so "no gallery yet" never re-renders the cards with a fresh identity. */
+const NO_EVIDENCE_METRICS: ReadonlySet<MetricId> = new Set()
 
 export interface MultiClipVideoSessionProps {
   /** The one shared, stateful pose detector for the whole page — handed to exactly one active
@@ -66,6 +75,12 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
   const [pendingLoads, setPendingLoads] = useState<Record<string, ClipPendingLoad>>({})
   const [clipStates, setClipStates] = useState<Record<string, ClipSession>>({})
   const [activeClipIndex, setActiveClipIndex] = useState(0)
+  // Reported up by the evidence gallery once it knows which metrics it actually produced imagery
+  // for — the same report-up/fan-down shape `ClipSlot` already uses, and the only way the cards
+  // (a sibling subtree) can learn it: whether a metric has evidence is not derivable from
+  // `heuristics`, since an emitted exemplar can still fail to resolve or fail to extract.
+  const [reportedEvidenceMetrics, setReportedEvidenceMetrics] =
+    useState<ReadonlySet<MetricId>>(NO_EVIDENCE_METRICS)
 
   const handleReport = useCallback((clipId: string, session: ClipSession) => {
     setClipStates((prev) => {
@@ -137,6 +152,14 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
   const aggregate = computeAggregateAnalysisState(clips)
   const anyClipVideoReady = clips.some((c) => c.videoSource.status === 'ready')
 
+  // Which clip each FUSED metric was selected from, or null until every clip is ready — the same
+  // gate `aggregate.heuristics !== null` passes, so the gallery can never attribute a result that
+  // has not been fused yet. Deriving `evidenceMetrics` from it rather than storing the reset means
+  // an in-flight new clip drops the cards' deep links in the same render the gallery unmounts.
+  const sourceIndices = computeFusionSourceIndices(clips)
+  const evidenceMetrics =
+    sourceIndices === null ? NO_EVIDENCE_METRICS : reportedEvidenceMetrics
+
   const handleTryAgain = useCallback(() => {
     const errored = clips.find((c) => c.analysis.phase === 'error')
     errored?.analysis.reset()
@@ -148,6 +171,7 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
     setPendingLoads({})
     setClipStates({})
     setActiveClipIndex(0)
+    setReportedEvidenceMetrics(NO_EVIDENCE_METRICS)
     headingRef.current?.focus()
   }, [headingRef])
 
@@ -182,9 +206,30 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
             analysis={aggregate}
             onTryAgain={handleTryAgain}
             onChooseDifferentVideo={handleChooseDifferentVideo}
+            evidenceMetrics={evidenceMetrics}
           />
         )}
       </div>
+      {/*
+        The evidence gallery: a THIRD child of <main> and a sibling of ResultsView, never a child
+        of it. The grid is two-column with a height-capped, separately-scrolling right column, so
+        mounting it inside ResultsView would put the imagery at half page width inside a nested
+        scroll box; `lg:col-span-2` (on the gallery's own root) is what makes a third grid child
+        span both columns instead of landing in column 1 of row 2.
+
+        Everything it needs is already in scope here: `clips` (each carrying its own
+        `videoSource.sourceBlob`/`metadata` and its own non-null `analysis.robustFrames` — the
+        aggregate's are null by design, see `multiClipAnalysis.ts`) and the per-metric winning clip
+        index. It renders nothing until it has images, so the null-guard below is the mount gate,
+        not a visibility one.
+      */}
+      {sourceIndices !== null && (
+        <EvidenceGallery
+          clips={clips}
+          sourceIndices={sourceIndices}
+          onEvidenceMetricsChange={setReportedEvidenceMetrics}
+        />
+      )}
     </main>
   )
 }

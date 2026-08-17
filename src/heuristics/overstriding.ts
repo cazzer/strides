@@ -1,13 +1,23 @@
 import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
-import type { HeuristicsConfig, MetricResult, View } from './types'
+import type { HeuristicsConfig, MetricExemplar, MetricResult, View } from './types'
 import { estimateBodyScale } from './bodyScale'
 import { estimateTravelDirection } from './travelDirection'
 import { resolveMidpoint, resolvePoint } from './keypoints'
 import { detectFootstrikes } from './footstrikes'
 import type { FootstrikeCandidate } from './footstrikes'
 import { computeMetricConfidence } from './confidence'
+import {
+  cropDerivable,
+  cropKeypoints,
+  describeDistribution,
+  isOutlier,
+  pairQuality,
+  scoreExemplarInstant,
+  selectExemplars,
+} from './exemplars'
+import type { ExemplarDistribution } from './exemplars'
 import { median } from './mathUtils'
 
 /**
@@ -20,6 +30,84 @@ const MIN_OVERSTRIDE_SAMPLE_SIZE = 4
 const ANKLE_NAME: Record<'left' | 'right', KeypointName> = {
   left: 'left_ankle',
   right: 'right_ankle',
+}
+
+/** Exemplar crop context only — this metric never reads knee position. A hip-to-ankle box with no
+ * knee in it reads as an empty diagonal. */
+const KNEE_NAME: Record<'left' | 'right', KeypointName> = {
+  left: 'left_knee',
+  right: 'right_knee',
+}
+
+interface StrikeSample {
+  frame: RobustPoseFrame
+  side: 'left' | 'right'
+  ratio: number
+}
+
+/** The points the metric itself reads at a strike: the striking foot, against the hip midline. */
+function seedFor(sample: StrikeSample): KeypointName[] {
+  return [ANKLE_NAME[sample.side], 'left_hip', 'right_hip']
+}
+
+/**
+ * The most- and least-overstriding strike, ghosted into one image — an EXTREME pair, because what
+ * this metric's picture is about is the range of foot placements it measured, not their median.
+ * Both instants must survive the outlier bound first, so the ghost can never be two tracking
+ * glitches; the most extreme SURVIVOR is used, not the raw argmax.
+ */
+function buildExemplars(
+  samples: StrikeSample[],
+  distribution: ExemplarDistribution,
+): MetricExemplar[] {
+  const surviving = samples.filter(
+    (sample) =>
+      cropDerivable(sample.frame, seedFor(sample)) && !isOutlier(sample.ratio, distribution),
+  )
+  if (surviving.length === 0) return []
+
+  let most = surviving[0]
+  let least = surviving[0]
+  for (const sample of surviving) {
+    if (sample.ratio > most.ratio) most = sample
+    if (sample.ratio < least.ratio) least = sample
+  }
+  if (most === least) return []
+
+  const instant = (sample: StrikeSample) => ({
+    frame: sample.frame,
+    seed: seedFor(sample),
+    value: sample.ratio,
+  })
+  const mostQuality = scoreExemplarInstant(instant(most), 'extreme', distribution)
+  const leastQuality = scoreExemplarInstant(instant(least), 'extreme', distribution)
+  if (mostQuality === null || leastQuality === null) return []
+
+  // Base is the more extreme of the two — a range ghost is about its far end (see trunkLean's
+  // identical reasoning).
+  const base =
+    Math.abs(most.ratio - distribution.median) >= Math.abs(least.ratio - distribution.median)
+      ? most
+      : least
+  const ghost = base === most ? least : most
+
+  return [
+    {
+      kind: 'overstrideRange',
+      timestamp: base.frame.timestamp,
+      pairedTimestamp: ghost.frame.timestamp,
+      // Only meaningful when the two strikes happen to be the same foot; the pair is not
+      // constructed to be same-side, so most of the time there is no one side to name.
+      ...(base.side === ghost.side && { side: base.side }),
+      quality: pairQuality(mostQuality, leastQuality),
+      label: 'Furthest-reaching footstrike, ghosted against the closest-landing one',
+      cropKeypoints: cropKeypoints(
+        [...seedFor(base), ...seedFor(ghost)],
+        [KNEE_NAME[base.side], KNEE_NAME[ghost.side]],
+        [base.frame, ghost.frame],
+      ),
+    },
+  ]
 }
 
 function nullResult(
@@ -75,6 +163,10 @@ export function computeOverstriding(
 
   let interpolatedCount = 0
   const overstrideRatios: number[] = []
+  // Index-parallel to `overstrideRatios` — and only to it, never to `candidates`, which still
+  // holds the strikes skipped below. Recovering a ratio's strike as `candidates[i]` would be off
+  // by however many strikes had no resolvable hip.
+  const strikeSamples: StrikeSample[] = []
   for (const candidate of candidates) {
     const frame = frames[candidate.frameIndex]
     const ankle = resolvePoint(frame, ANKLE_NAME[candidate.side])
@@ -83,7 +175,9 @@ export function computeOverstriding(
 
     const dx = ankle.x - hipMid.x
     const horizontalOffsetPx = travelDirectionKnown ? dx * travelDirection : dx
-    overstrideRatios.push(horizontalOffsetPx / torsoLengthPx)
+    const ratio = horizontalOffsetPx / torsoLengthPx
+    overstrideRatios.push(ratio)
+    strikeSamples.push({ frame, side: candidate.side, ratio })
     if (ankle.interpolated || hipMid.interpolated) interpolatedCount += 1
   }
 
@@ -132,6 +226,10 @@ export function computeOverstriding(
     )
   }
 
+  const exemplars = selectExemplars(
+    buildExemplars(strikeSamples, describeDistribution(overstrideRatios)),
+  )
+
   return {
     metric: 'overstriding',
     value,
@@ -142,5 +240,6 @@ export function computeOverstriding(
     frameCoverage,
     sampleSize: usableStrikeCount,
     caveat: caveats.length > 0 ? caveats.join(' ') : null,
+    ...(exemplars && { exemplars }),
   }
 }

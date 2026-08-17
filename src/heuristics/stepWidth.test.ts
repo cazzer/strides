@@ -3,6 +3,7 @@ import { computeStepWidth } from './stepWidth'
 import { detectFootstrikes } from './footstrikes'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
+import { buildStrikeFrames } from './__fixtures__/strikeFrames'
 import { buildFrame } from './__fixtures__/testFrames'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { KeypointName } from '../pose/types'
@@ -241,5 +242,59 @@ describe('computeStepWidth', () => {
 
     expect(result.value).toBeNull()
     expect(result.confidence).toBe(0)
+    expect(result.exemplars).toBeUndefined()
+  })
+})
+
+describe('computeStepWidth exemplars', () => {
+  const OFFSETS = [75, 75, 60, 75, 75, 90, 75]
+
+  it('constructs an opposite-foot pair, which the footstrike list does not hand it', () => {
+    // `detectFootstrikes` merges both legs into one timestamp-ordered list whose entries need not
+    // alternate, and this metric measures each strike independently against the hip midline — so
+    // "left plant next to right plant", which is what a width looks like, has to be built.
+    const frames = buildStrikeFrames({ ankleOffsetsPx: OFFSETS, alternateFeet: true })
+
+    const result = computeStepWidth(frames, 'front')
+    const [evidence] = result.exemplars!
+
+    expect(result.exemplars).toHaveLength(1)
+    expect(evidence.kind).toBe('stepWidthStrike')
+    expect(evidence.pairedTimestamp).not.toBeUndefined()
+    // No single side: the two instants are deliberately opposite feet, so naming one would be
+    // wrong about the other.
+    expect(evidence).not.toHaveProperty('side')
+    expect(evidence.cropKeypoints).toEqual(['right_ankle', 'left_hip', 'right_hip', 'left_ankle'])
+
+    const sides = [evidence.timestamp, evidence.pairedTimestamp!].map(
+      (t) => detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG).find((s) => s.timestamp === t)!.side,
+    )
+    expect(new Set(sides).size).toBe(2)
+  })
+
+  it('demotes to a single representative strike when every plant is the same foot', () => {
+    // One strike against the hip midline is one whole measurement, so a single frame is still
+    // honest here — unlike the range metrics, which have nothing to say from one instant.
+    const frames = buildStrikeFrames({ ankleOffsetsPx: OFFSETS })
+
+    const result = computeStepWidth(frames, 'front')
+    const [evidence] = result.exemplars!
+
+    expect(result.exemplars).toHaveLength(1)
+    expect(evidence).not.toHaveProperty('pairedTimestamp')
+    expect(evidence.side).toBe('left')
+    expect(evidence.cropKeypoints).toEqual(['left_ankle', 'left_hip', 'right_hip'])
+  })
+
+  it('gates out every strike whose outward polarity was invented by the sign fallback', () => {
+    // Hips exactly coincident in x collapses hip-mid onto each hip, so `Math.sign(...) || 1`
+    // silently picks a polarity. Fine for a median over many strikes; not something to caption a
+    // picture "landed on its own side" with.
+    const frames = buildStrikeFrames({ ankleOffsetsPx: OFFSETS, hipSpreadPx: 0 })
+
+    const result = computeStepWidth(frames, 'front')
+
+    expect(result.value).not.toBeNull() // the metric itself is unchanged
+    expect(result.exemplars).toBeUndefined()
   })
 })

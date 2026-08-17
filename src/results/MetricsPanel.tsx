@@ -5,12 +5,17 @@ import { DEFAULT_HEURISTICS_CONFIG } from '../heuristics/types'
 import { classifyFootStrike } from '../heuristics/footStrikePattern'
 import type { FootStrikeClass } from '../heuristics/footStrikePattern'
 import { VerticalOscillationChart } from './VerticalOscillationChart'
+import { EVIDENCE_SECTION_ID_PREFIX } from './EvidenceGallery'
 import {
   HIGH_CONFIDENCE_THRESHOLD,
   LOW_CONFIDENCE_THRESHOLD,
   METRIC_LABELS,
   metricTier,
 } from './metricConfidence'
+
+/** No card grows a deep link unless the gallery says it has one — the default for every call
+ * site that renders the panel without an evidence gallery beside it. */
+const NO_EVIDENCE_METRICS: ReadonlySet<MetricId> = new Set()
 
 export interface MetricsPanelProps {
   heuristics: FormHeuristicsResult
@@ -21,6 +26,16 @@ export interface MetricsPanelProps {
    * absent when the app just ran it). Optional so every call site without a scale pass in
    * play is unchanged. */
   scalePassStatus?: ScalePassStatus
+  /**
+   * Metrics the evidence gallery actually rendered imagery for — the only metrics whose cards
+   * get a "See evidence" link. It arrives from the gallery (a sibling of `ResultsView`, mounted
+   * by `MultiClipVideoSession`) rather than being derived here, because whether a metric HAS
+   * evidence is not knowable from `heuristics` alone: an emitted exemplar can still fail to
+   * resolve to a sampled frame, or fail to extract. Defaults to empty, so a card with no
+   * evidence renders exactly the DOM it rendered before this prop existed — no link, no
+   * placeholder, no layout shift.
+   */
+  evidenceMetrics?: ReadonlySet<MetricId>
 }
 
 const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
@@ -81,6 +96,45 @@ function confidenceLabel(metric: MetricResult): string {
   if (metric.confidence >= HIGH_CONFIDENCE_THRESHOLD) return 'High confidence'
   if (metric.confidence >= LOW_CONFIDENCE_THRESHOLD) return 'Medium confidence'
   return 'Low confidence'
+}
+
+/**
+ * The card's own link into the evidence gallery below the results. A plain in-page anchor: it is
+ * keyboard-reachable and screen-reader-navigable for free, and the gallery section it targets is
+ * `tabIndex={-1}` so following it also moves focus there.
+ *
+ * The arrow is decorative (`aria-hidden`) and the accessible name names the metric — eleven
+ * identically-named "See evidence" links would be useless in a link list, and "See evidence for
+ * Knee flexion" still contains the visible text, as WCAG 2.5.3 requires.
+ */
+function EvidenceDeepLink({ metric }: { metric: MetricId }) {
+  return (
+    <p className="metrics-panel__evidence-link font-sans text-sm">
+      <a
+        href={`#${EVIDENCE_SECTION_ID_PREFIX}${metric}`}
+        aria-label={`See evidence for ${METRIC_LABELS[metric]}`}
+        className="font-semibold underline decoration-2 underline-offset-2 hover:text-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:hover:text-brand-400"
+      >
+        See evidence <span aria-hidden="true">↓</span>
+      </a>
+    </p>
+  )
+}
+
+/**
+ * What rides in `MetricCard`'s existing `chart` slot: the vertical-oscillation waveform on the one
+ * metric that has one, the evidence deep link on every metric the gallery produced imagery for, or
+ * `undefined` — literally no node — when neither applies. That last branch is what keeps a card
+ * without evidence rendering exactly the DOM it rendered before this existed.
+ */
+function cardSlot(chart: ReactNode, link: ReactNode): ReactNode | undefined {
+  if (chart === null && link === null) return undefined
+  return (
+    <>
+      {chart}
+      {link}
+    </>
+  )
 }
 
 interface MetricCardProps {
@@ -186,7 +240,11 @@ function ExcludedEntry({ metric, hint }: ExcludedEntryProps) {
  * `footStrikePattern`'s `caveat` is always non-null (even at its cleanest) since that metric is a
  * documented proxy end to end — it renders on its card whenever it lands in tier 1/2.
  */
-export function MetricsPanel({ heuristics, scalePassStatus = 'idle' }: MetricsPanelProps) {
+export function MetricsPanel({
+  heuristics,
+  scalePassStatus = 'idle',
+  evidenceMetrics = NO_EVIDENCE_METRICS,
+}: MetricsPanelProps) {
   const scalePassInProgress = scalePassStatus === 'pending' || scalePassStatus === 'running'
   const metrics: MetricResult[] = [
     heuristics.verticalOscillation,
@@ -233,13 +291,17 @@ export function MetricsPanel({ heuristics, scalePassStatus = 'idle' }: MetricsPa
             <MetricCard
               key={metric.metric}
               metric={metric}
-              // The chart rides on the metric it charts, by identity — not by array position, so
-              // reordering `metrics` for display reasons can never strand it on the wrong card.
-              chart={
+              // Both the chart and the evidence deep link ride on the metric they belong to, by
+              // identity — not by array position, so reordering `metrics` for display reasons can
+              // never strand either on the wrong card.
+              chart={cardSlot(
                 metric.metric === 'verticalOscillation' ? (
                   <VerticalOscillationChart series={heuristics.verticalOscillation.series} />
-                ) : undefined
-              }
+                ) : null,
+                evidenceMetrics.has(metric.metric) ? (
+                  <EvidenceDeepLink metric={metric.metric} />
+                ) : null,
+              )}
             />
           ) : null,
         )}

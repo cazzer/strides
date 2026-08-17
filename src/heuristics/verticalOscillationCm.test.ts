@@ -636,3 +636,72 @@ describe('computeVerticalOscillationCmMetric', () => {
     })
   })
 })
+
+describe('computeVerticalOscillationCmMetric — bounce exemplar', () => {
+  it('emits one hip-seeded ghosted pair on a clip that produced an amplitude', () => {
+    const frames = sinusoidFixture(872)
+    const exemplars = computeVerticalOscillationCmMetric(frames, 'side').exemplars!
+
+    expect(exemplars).toHaveLength(1)
+    const [exemplar] = exemplars
+    expect(exemplar.kind).toBe('bounceCycle')
+    expect(exemplar.pairedTimestamp).toBeDefined()
+    // Hip-pinned unconditionally — `verticalOscillationSignal` does not reach this metric.
+    expect(exemplar.cropKeypoints.slice(0, 2)).toEqual(['left_hip', 'right_hip'])
+    expect(frames.map((frame_) => frame_.timestamp)).toContain(exemplar.timestamp)
+    expect(frames.map((frame_) => frame_.timestamp)).toContain(exemplar.pairedTimestamp)
+  })
+
+  /**
+   * The awkward part of this metric's exemplar: `selectWeightedMedianFit` reports ONE run's fit,
+   * and the instants have to come from THAT run.
+   *
+   * The fixture is the weighted-median one above — a dominant 40-frame run against a 14-frame
+   * fragment bouncing six times harder at twice the rhythm — with the fragment pushed to the far
+   * end of a long tracking gap. That placement is what makes the test load-bearing: resolve
+   * against the WHOLE clip and both the span centre and the snap target land in the gap, where
+   * there is no footage at all, so the exemplar disappears entirely rather than merely shifting.
+   */
+  it('takes its instants from the WINNING run, not from anywhere else in the clip', () => {
+    const scale = 300
+    const torsoPx = 150
+    const long = Array.from({ length: 40 }, (_, i) =>
+      frame(i / FPS, bouncingHipY(i, 15), torsoPx, scale),
+    )
+    const short = Array.from({ length: 14 }, (_, i) =>
+      frame(
+        4 + i / FPS,
+        HIP_BASE_Y - 45 * Math.sin((2 * Math.PI * 2 * BOUNCE_HZ * i) / FPS),
+        torsoPx,
+        scale,
+      ),
+    )
+    const frames = [...long, frame(40 / FPS, null, torsoPx, scale), ...short]
+
+    const result = computeVerticalOscillationCmMetric(frames, 'side')
+    expect(result.calibration?.integrationRuns).toBe(2)
+    expect(result.calibration?.fit?.sampleCount).toBe(40)
+
+    const [exemplar] = result.exemplars!
+    const winnerEnd = 39 / FPS
+    expect(exemplar.timestamp).toBeLessThanOrEqual(winnerEnd)
+    expect(exemplar.pairedTimestamp!).toBeLessThanOrEqual(winnerEnd)
+  })
+
+  it('emits nothing when the calibration produced no amplitude', () => {
+    const flat = Array.from({ length: RUN_FRAMES }, (_, i) =>
+      frame(i / FPS, HIP_BASE_Y, 150, 300),
+    )
+    const result = computeVerticalOscillationCmMetric(flat, 'side')
+
+    expect(result.value).toBeNull()
+    expect(result.exemplars).toBeUndefined()
+  })
+
+  it('emits nothing when the backend measured no real-world scale', () => {
+    const result = computeVerticalOscillationCmMetric(sinusoidFixture(), 'side')
+
+    expect(result.calibration).toBeNull()
+    expect(result.exemplars).toBeUndefined()
+  })
+})

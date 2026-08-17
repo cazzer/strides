@@ -4,6 +4,7 @@ import type { ScalePassState, VideoAnalysisError, VideoAnalysisState } from './t
 import type { FormHeuristicsResult, MetricId, MetricResult } from '../heuristics/types'
 import {
   computeAggregateAnalysisState,
+  computeFusionSourceIndices,
   nextActiveClipIndex,
 } from './multiClipAnalysis'
 import type { ClipSession } from './multiClipAnalysis'
@@ -218,6 +219,56 @@ describe('computeAggregateAnalysisState', () => {
     agg.start()
     expect(clips[0].analysis.start).not.toHaveBeenCalled()
     expect(clips[1].analysis.start).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('computeFusionSourceIndices', () => {
+  function makeReadyClip(
+    clipId: string,
+    heuristics: FormHeuristicsResult,
+  ): ClipSession {
+    return makeClip(clipId, { phase: 'ready', heuristics })
+  }
+
+  it('indexes into the same array, per metric, agreeing with the aggregate it accompanies', () => {
+    const clips = [
+      makeReadyClip('a', { ...makeHeuristics(0.4), trunkLean: makeMetric('trunkLean', 0.95) }),
+      makeReadyClip('b', makeHeuristics(0.6)),
+    ]
+
+    const indices = computeFusionSourceIndices(clips)!
+    const fused = computeAggregateAnalysisState(clips).heuristics!
+
+    expect(indices.trunkLean).toBe(0)
+    expect(indices.cadence).toBe(1)
+    // The point of the map: `clips[indices[metric]]` is the clip whose own result was selected,
+    // which is what makes that clip's frames and blob the right ones to resolve against.
+    expect(fused.trunkLean.confidence).toBe(
+      clips[indices.trunkLean].analysis.heuristics!.trunkLean.confidence,
+    )
+    expect(fused.cadence.confidence).toBe(
+      clips[indices.cadence].analysis.heuristics!.cadence.confidence,
+    )
+  })
+
+  it('maps every metric to clip 0 for a single ready clip', () => {
+    const indices = computeFusionSourceIndices([makeReadyClip('a', makeHeuristics())])!
+
+    expect(Object.values(indices).every((index) => index === 0)).toBe(true)
+  })
+
+  it('is null until every clip is ready — the same gate the fused aggregate uses', () => {
+    const stillAnalyzing = [
+      makeReadyClip('a', makeHeuristics()),
+      makeClip('b', { phase: 'sampling' }),
+    ]
+
+    expect(computeFusionSourceIndices(stillAnalyzing)).toBeNull()
+    expect(computeAggregateAnalysisState(stillAnalyzing).heuristics).toBeNull()
+  })
+
+  it('is null for a session with no clips', () => {
+    expect(computeFusionSourceIndices([])).toBeNull()
   })
 })
 

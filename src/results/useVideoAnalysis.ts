@@ -8,7 +8,11 @@ import { sampleClipAdaptive } from './sampleClipAdaptive'
 import { runClipAnalysisPipeline } from './runClipAnalysisPipeline'
 import { resolveSamplingRobustnessConfig } from './samplingRobustnessConfig'
 import { resolveScalePassConfig } from './scalePassConfig'
-import { graftScalePassResult, withSubjectDivergenceCaveat } from './scalePassGraft'
+import {
+  dropGraftedExemplars,
+  graftScalePassResult,
+  withSubjectDivergenceCaveat,
+} from './scalePassGraft'
 import { assessScalePassSubjectAgreement } from './scalePassSubjectAgreement'
 import { getScalePassDetector } from '../pose/scalePassDetector'
 import type { ScalePassState, VideoAnalysisState } from './types'
@@ -582,7 +586,9 @@ export function useVideoAnalysis(
         // Whose scale did the pass measure? (#56) Each pass ran person selection independently
         // over its own backend's samples, so a pass that measured scale perfectly may still have
         // measured a bystander's. Divergence caveats the two grafted numbers — it never withholds
-        // them, and on 'agreed'/'no-opinion' the graft is byte-identical to what it always was.
+        // them — and drops their exemplars, which cannot be caveated into honesty the way a number
+        // can (see `dropGraftedExemplars`). On 'agreed'/'no-opinion' the graft is byte-identical to
+        // what it always was.
         const subjectAgreement = assessScalePassSubjectAgreement(
           {
             frames: primaryRobustFrames,
@@ -594,7 +600,7 @@ export function useVideoAnalysis(
         const grafted = graftScalePassResult(primaryHeuristics, scaleHeuristics)
         const displayed =
           subjectAgreement.status === 'diverged'
-            ? withSubjectDivergenceCaveat(grafted)
+            ? dropGraftedExemplars(withSubjectDivergenceCaveat(grafted))
             : grafted
         if (runIdRef.current !== runId) return
         setState((s) => ({

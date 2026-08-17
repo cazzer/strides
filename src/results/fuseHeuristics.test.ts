@@ -9,7 +9,11 @@ import type {
   ScaleCalibratedVerticalOscillation,
   ViewDetectionResult,
 } from '../heuristics/types'
-import { fuseFormHeuristicsResults, fusionProvenanceCaveat } from './fuseHeuristics'
+import {
+  fuseFormHeuristicsResults,
+  fusionProvenanceCaveat,
+  fusionSourceIndices,
+} from './fuseHeuristics'
 
 function makeMetric<M extends MetricId>(
   metric: M,
@@ -265,5 +269,102 @@ describe('fuseFormHeuristicsResults', () => {
 
     expect(fused.trunkLean.value).toBe(11)
     expect(fused.trunkLean.caveat).toBe('Combined from clip 1 of 2.')
+  })
+})
+
+// A winner per metric, chosen so no clip wins everything and no clip wins nothing — the map and
+// the fuse agreeing on an all-clip-0 fixture would prove nothing.
+const WINNER_BY_METRIC: Record<MetricId, number> = {
+  verticalOscillation: 2,
+  verticalRatio: 0,
+  verticalOscillationCm: 3,
+  trunkLean: 1,
+  overstriding: 3,
+  cadence: 0,
+  kneeFlexion: 2,
+  armSwingSymmetry: 1,
+  footStrikePattern: 3,
+  stepWidth: 2,
+  stepWidthCm: 1,
+}
+
+const METRIC_KEYS = Object.keys(WINNER_BY_METRIC) as MetricId[]
+
+/**
+ * One clip of a 4-clip fixture. Every metric's `value` is the clip's own index, so the FUSED
+ * value names the clip it was selected from without reading a caveat — which is what makes the
+ * agreement assertion below independent of the prose.
+ */
+function makeIndexedClip(clipIndex: number): FormHeuristicsResult {
+  const confidence = (metric: MetricId): number =>
+    WINNER_BY_METRIC[metric] === clipIndex ? 0.9 : 0.1 + clipIndex * 0.05
+  const value = clipIndex
+  return makeResult(0.5, {
+    verticalOscillation: makeVerticalOscillation(confidence('verticalOscillation'), { value }),
+    verticalRatio: makeMetric('verticalRatio', confidence('verticalRatio'), {
+      value,
+      unit: 'percent',
+    }),
+    verticalOscillationCm: makeVerticalOscillationCm(confidence('verticalOscillationCm'), {
+      value,
+    }),
+    trunkLean: makeMetric('trunkLean', confidence('trunkLean'), { value, unit: 'degrees' }),
+    overstriding: makeMetric('overstriding', confidence('overstriding'), { value }),
+    cadence: makeMetric('cadence', confidence('cadence'), { value, unit: 'stepsPerMinute' }),
+    kneeFlexion: makeMetric('kneeFlexion', confidence('kneeFlexion'), { value, unit: 'degrees' }),
+    armSwingSymmetry: makeMetric('armSwingSymmetry', confidence('armSwingSymmetry'), {
+      value,
+      unit: 'percent',
+    }),
+    footStrikePattern: makeMetric('footStrikePattern', confidence('footStrikePattern'), { value }),
+    stepWidth: makeMetric('stepWidth', confidence('stepWidth'), { value, unit: 'percent' }),
+    stepWidthCm: makeMetric('stepWidthCm', confidence('stepWidthCm'), {
+      value,
+      unit: 'centimeters',
+    }),
+  })
+}
+
+describe('fusionSourceIndices', () => {
+  it('names the same winner fuseFormHeuristicsResults selected, for every metric', () => {
+    const clips = [0, 1, 2, 3].map(makeIndexedClip)
+
+    const indices = fusionSourceIndices(clips)
+    const fused = fuseFormHeuristicsResults(clips)
+
+    // The map itself is the fixture's own answer...
+    expect(indices).toEqual(WINNER_BY_METRIC)
+    for (const key of METRIC_KEYS) {
+      // ...and the fused object independently agrees: its value IS the winning clip's index, so
+      // the two comparators cannot have diverged without this failing.
+      expect(fused[key].value).toBe(indices[key])
+      // The machine-readable index and the prose caveat name the same clip, 0- vs 1-based.
+      expect(fused[key].caveat).toBe(fusionProvenanceCaveat(indices[key], clips.length))
+    }
+  })
+
+  it('maps every metric to clip 0 for a single clip, leaving the fuse by reference', () => {
+    const solo = makeResult(0.5)
+
+    expect(fusionSourceIndices([solo])).toEqual(
+      Object.fromEntries(METRIC_KEYS.map((key) => [key, 0])),
+    )
+    expect(fuseFormHeuristicsResults([solo])).toBe(solo)
+  })
+
+  it('follows the same tie-break as the fuse — the earlier clip wins', () => {
+    const clip0 = makeResult(0.5, {
+      trunkLean: makeMetric('trunkLean', 0.7, { value: 11, unit: 'degrees' }),
+    })
+    const clip1 = makeResult(0.5, {
+      trunkLean: makeMetric('trunkLean', 0.7, { value: 22, unit: 'degrees' }),
+    })
+
+    expect(fusionSourceIndices([clip0, clip1]).trunkLean).toBe(0)
+    expect(fuseFormHeuristicsResults([clip0, clip1]).trunkLean.value).toBe(11)
+  })
+
+  it('throws on an empty array, like the fuse it mirrors', () => {
+    expect(() => fusionSourceIndices([])).toThrow()
   })
 })

@@ -271,3 +271,20 @@ describe('computeCadence', () => {
     expect(result.caveat).toMatch(/hip position/i)
   })
 })
+
+describe('computeCadence — emits no exemplars, deliberately', () => {
+  /**
+   * Design D7. Cadence reads the SAME hip-bounce fit `verticalOscillation` emits a bounce pair
+   * from, so borrowing that pair is one line away and would render byte-identical images under two
+   * different numbers — a picture of an amplitude captioned as a rate. This test exists so that
+   * "fix" fails loudly instead of shipping.
+   */
+  it('reports a value on a clean clip and still emits nothing', () => {
+    const frames = generateSyntheticGait({ ...BASE_PARAMS, view: 'side' })
+    const result = computeCadence(frames, 'side')
+
+    expect(result.value).not.toBeNull()
+    expect(result.exemplars).toBeUndefined()
+    expect(Object.keys(result)).not.toContain('exemplars')
+  })
+})

@@ -6,6 +6,14 @@ import { estimateBodyScale } from './bodyScale'
 import { resolvePoint } from './keypoints'
 import { findLocalExtrema } from './extrema'
 import { computeMetricConfidence } from './confidence'
+import {
+  cropKeypoints,
+  describeDistribution,
+  pairQuality,
+  scoreExemplarInstant,
+  selectExemplars,
+} from './exemplars'
+import type { MetricExemplar } from './types'
 import { median } from './mathUtils'
 
 /**
@@ -23,6 +31,14 @@ const SHOULDER_NAME: Record<'left' | 'right', KeypointName> = {
 const WRIST_NAME: Record<'left' | 'right', KeypointName> = {
   left: 'left_wrist',
   right: 'right_wrist',
+}
+
+/** Context only (design D2): the elbow is the joint the swing bends at, so a shoulder-to-wrist
+ * crop without it reads as a bare diagonal. Optional by contract — `cropKeypoints` drops it if it
+ * resolves nowhere in the pair's own frames. */
+const ELBOW_NAME: Record<'left' | 'right', KeypointName> = {
+  left: 'left_elbow',
+  right: 'right_elbow',
 }
 
 function nullResult(
@@ -43,9 +59,31 @@ function nullResult(
   }
 }
 
+/**
+ * One findLocalExtrema-confirmed half-swing, kept whole rather than collapsed to its amplitude.
+ *
+ * It carries the two FRAMES, not a per-extremum interpolated flag: the shared exemplar gate
+ * (`exemplars.ts`) scores a `RobustPoseFrame` — `cropDerivable` and `detectionFactor` both read
+ * `frame.keypoints` — so a boolean could neither derive a crop nor be scored. Same conclusion #62
+ * reached for `IntegrationRun.frames`.
+ *
+ * **The field names resolve a sign trap.** The series is `wrist.y − shoulder.y` in image-y, which
+ * grows DOWNWARD, so the series' MINIMUM is the wrist at its HIGHEST on screen. Naming these by
+ * body position rather than by extremum kind means a caption cannot say the exact opposite of the
+ * truth while passing every type check — the same hazard `bounceInstants.ts` documents at length.
+ */
+interface HalfSwing {
+  /** Peak-to-trough wrist-relative-to-shoulder excursion, px. */
+  amplitudePx: number
+  /** Frame where the wrist sat highest on screen — the series minimum. */
+  wristHighFrame: RobustPoseFrame
+  /** Frame where it sat lowest — the series maximum, half a swing away. */
+  wristLowFrame: RobustPoseFrame
+}
+
 interface SideSwing {
-  /** Raw pixel half-cycle amplitudes, one per findLocalExtrema-confirmed swing. */
-  amplitudesPx: number[]
+  /** One entry per findLocalExtrema-confirmed swing, in time order. */
+  halfSwings: HalfSwing[]
   /** Frames where this side's shoulder AND wrist both resolved. */
   resolvedCount: number
   /** Of resolvedCount, how many had either point flagged interpolated. */
@@ -81,16 +119,93 @@ function computeSideSwing(
 
   const extrema = findLocalExtrema(series, minProminenceAbs)
 
-  // Pair consecutive opposite-kind extrema into half-cycle amplitudes. The same-kind skip is
+  // Pair consecutive opposite-kind extrema into half-cycles. The same-kind skip is
   // load-bearing: two runs separated by an unrecoverable gap could both end/start on the same
   // kind, and pairing those would fabricate an amplitude that was never observed.
-  const amplitudesPx: number[] = []
+  const halfSwings: HalfSwing[] = []
   for (let i = 1; i < extrema.length; i += 1) {
-    if (extrema[i].kind === extrema[i - 1].kind) continue
-    amplitudesPx.push(Math.abs(extrema[i].value - extrema[i - 1].value))
+    const [previous, current] = [extrema[i - 1], extrema[i]]
+    if (current.kind === previous.kind) continue
+    // `Extremum.index` indexes the series passed to `findLocalExtrema`, and that series is
+    // `frames.map(...)` — index-parallel to `frames`, including its `null` entries.
+    const [minimum, maximum] =
+      current.kind === 'min' ? [current, previous] : [previous, current]
+    halfSwings.push({
+      amplitudePx: Math.abs(current.value - previous.value),
+      wristHighFrame: frames[minimum.index],
+      wristLowFrame: frames[maximum.index],
+    })
   }
 
-  return { amplitudesPx, resolvedCount, interpolatedCount }
+  return { halfSwings, resolvedCount, interpolatedCount }
+}
+
+/**
+ * Up to one ghosted pair per side: the wrist at the top and the bottom of that side's
+ * median-amplitude half-swing. Two of them, one per arm, is what makes an ASYMMETRY metric legible
+ * as a picture — one arm's swing only means anything next to the other's, so this metric spends
+ * its whole two-exemplar budget on the comparison rather than on two views of one arm.
+ *
+ * **Each side is judged against its OWN distribution.** The metric compares two per-side medians,
+ * so ranking a left swing against a pooled left+right spread would score it on the very asymmetry
+ * the metric exists to report — a genuinely typical left swing on an asymmetric runner would read
+ * as an outlier and gate itself out.
+ *
+ * **Base is the wrist-high frame**, design D1's instant A for this row. D11's rule — base is the
+ * instant closest to (representative) or furthest from (extreme) the metric's own median — cannot
+ * decide it here: both instants belong to ONE half-swing and therefore carry the identical value,
+ * that swing's amplitude. Same shape of gap #62 recorded for the bounce pair, resolved the same
+ * way: fall back to the row's own naming.
+ */
+function buildSideExemplar(side: 'left' | 'right', swing: SideSwing): MetricExemplar[] {
+  const distribution = describeDistribution(swing.halfSwings.map((s) => s.amplitudePx))
+
+  // The swing whose amplitude sits closest to this side's own median — the amplitude the metric
+  // reports for this side, so this is the swing the number is most directly about. `<` rather than
+  // `<=` keeps the earliest of any tie, which a symmetric fixture produces routinely.
+  let selected: HalfSwing | null = null
+  let bestCost = Infinity
+  for (const halfSwing of swing.halfSwings) {
+    const cost = Math.abs(halfSwing.amplitudePx - distribution.median)
+    if (cost < bestCost) {
+      selected = halfSwing
+      bestCost = cost
+    }
+  }
+  if (selected === null) return []
+
+  const seed = [SHOULDER_NAME[side], WRIST_NAME[side]]
+  const instant = (frame: RobustPoseFrame) => ({
+    frame,
+    seed,
+    value: selected.amplitudePx,
+  })
+  const highQuality = scoreExemplarInstant(
+    instant(selected.wristHighFrame),
+    'representative',
+    distribution,
+  )
+  const lowQuality = scoreExemplarInstant(
+    instant(selected.wristLowFrame),
+    'representative',
+    distribution,
+  )
+  if (highQuality === null || lowQuality === null) return []
+
+  return [
+    {
+      kind: 'armSwingCycle',
+      timestamp: selected.wristHighFrame.timestamp,
+      pairedTimestamp: selected.wristLowFrame.timestamp,
+      side,
+      quality: pairQuality(highQuality, lowQuality),
+      label: `Top and bottom of one ${side}-arm swing, ghosted together`,
+      cropKeypoints: cropKeypoints(seed, [ELBOW_NAME[side]], [
+        selected.wristHighFrame,
+        selected.wristLowFrame,
+      ]),
+    },
+  ]
 }
 
 /**
@@ -138,7 +253,7 @@ export function computeArmSwingSymmetry(
     )
   }
 
-  if (left.amplitudesPx.length === 0 || right.amplitudesPx.length === 0) {
+  if (left.halfSwings.length === 0 || right.halfSwings.length === 0) {
     return nullResult(
       viewFitEntry.fit,
       'Arm positions were tracked, but no complete arm-swing cycle was detected on one or both sides.',
@@ -146,8 +261,8 @@ export function computeArmSwingSymmetry(
     )
   }
 
-  const leftValue = median(left.amplitudesPx) / torsoLengthPx
-  const rightValue = median(right.amplitudesPx) / torsoLengthPx
+  const leftValue = median(left.halfSwings.map((s) => s.amplitudePx)) / torsoLengthPx
+  const rightValue = median(right.halfSwings.map((s) => s.amplitudePx)) / torsoLengthPx
   const maxValue = Math.max(leftValue, rightValue)
   // maxValue === 0 shouldn't be reachable here: findLocalExtrema only confirms an extremum once
   // the series has moved at least minProminenceAbs (> 0) from its predecessor, so any amplitude
@@ -160,8 +275,8 @@ export function computeArmSwingSymmetry(
     (left.resolvedCount + right.resolvedCount)
 
   const sampleSize = Math.min(
-    left.amplitudesPx.length,
-    right.amplitudesPx.length,
+    left.halfSwings.length,
+    right.halfSwings.length,
   )
 
   const confidence = computeMetricConfidence({
@@ -185,6 +300,13 @@ export function computeArmSwingSymmetry(
     )
   }
 
+  // One candidate per side, gated and ranked together: the budget is per-metric, so gating each
+  // arm separately would apply the cap twice and could keep two pictures of one arm.
+  const exemplars = selectExemplars([
+    ...buildSideExemplar('left', left),
+    ...buildSideExemplar('right', right),
+  ])
+
   return {
     metric: 'armSwingSymmetry',
     value,
@@ -195,5 +317,6 @@ export function computeArmSwingSymmetry(
     frameCoverage,
     sampleSize,
     caveat: caveats.length > 0 ? caveats.join(' ') : null,
+    ...(exemplars && { exemplars }),
   }
 }
