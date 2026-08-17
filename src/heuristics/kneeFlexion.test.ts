@@ -109,5 +109,44 @@ describe('computeKneeFlexion', () => {
     expect(result.confidence).toBe(0)
     expect(result.sampleSize).toBe(0)
     expect(result.caveat).not.toBeNull()
+    expect(result.exemplars).toBeUndefined()
+  })
+})
+
+describe('computeKneeFlexion exemplars', () => {
+  it('ghosts a peak against the adjacent extension trough on the same leg', () => {
+    const frames = buildKneeFlexionFrames(3)
+
+    const result = computeKneeFlexion(frames, 'side')
+    const [evidence] = result.exemplars!
+
+    // One pair, not two: a second near-median peak would be the same picture of the same runner.
+    expect(result.exemplars).toHaveLength(1)
+    expect(evidence.kind).toBe('kneeFlexionPeak')
+    expect(evidence.side).toBe('left')
+    // Frame 6 is the middle of the first 90-degree hold; frame 19 is the end of the following
+    // 0-degree hold, i.e. the extension trough `findLocalExtrema` computes and this metric used
+    // to drop on the floor.
+    expect(evidence.timestamp).toBeCloseTo(6 / 30, 10)
+    expect(evidence.pairedTimestamp).toBeCloseTo(19 / 30, 10)
+    // Every peak is exactly 90 degrees, so there is no spread to judge typicality against and the
+    // score is the detection factor alone.
+    expect(evidence.quality).toBe(1)
+    expect(evidence.cropKeypoints).toEqual(['left_hip', 'left_knee', 'left_ankle'])
+  })
+
+  it('names the trough as a real extension instant, not the peak itself', () => {
+    const frames = buildKneeFlexionFrames(3)
+
+    const [evidence] = computeKneeFlexion(frames, 'side').exemplars!
+    const troughFrame = frames.find((f) => f.timestamp === evidence.pairedTimestamp)!
+    const peakFrame = frames.find((f) => f.timestamp === evidence.timestamp)!
+
+    // The knee is collinear with hip and ankle at the trough (0 degrees of flexion) and a right
+    // angle out from them at the peak — a bend only reads as a bend against a straight leg.
+    const kneeX = (frame: typeof peakFrame) =>
+      frame.keypoints.find((k) => k.name === 'left_knee')!.x
+    expect(kneeX(troughFrame)).toBe(LEFT_HIP.x)
+    expect(kneeX(peakFrame)).toBe(LEFT_HIP.x + 100)
   })
 })

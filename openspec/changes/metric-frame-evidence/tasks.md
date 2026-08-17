@@ -27,37 +27,50 @@ Parallelism: §1 and §4 start together. §2, §3 and §5 all start once §1 lan
 
 ## 1. `MetricResult.exemplars` and the six event-sampled metrics (#61)
 
-- [ ] 1.1 `src/heuristics/types.ts`: define `MetricExemplar` and add
+- [x] 1.1 `src/heuristics/types.ts`: define `MetricExemplar` and add
   `exemplars?: MetricExemplar[]` to `MetricResult`. Carry `timestamp`, optional `pairedTimestamp`,
   `kind`, optional `side`, `quality`, `label`, `cropKeypoints`. **No frame-index field of any
   kind** — the invariant is enforced by the type (design D4).
-- [ ] 1.2 Add the shared gate helper: `resolutionFactor` × `typicalityFactor`, the `3·MAD` outlier
+- [x] 1.2 Add the shared gate helper: `resolutionFactor` × `typicalityFactor`, the `3·MAD` outlier
   bound, `MIN_EXEMPLAR_QUALITY = 0.5`, `MAX_EXEMPLARS_PER_METRIC = 2` (design D3). One
   implementation, imported by every metric — not copied per module.
-- [ ] 1.3 `kneeFlexion.ts`: stop dropping minima at `:141`; add `timestamp: extremum.timestamp` to
+  Landed as `src/heuristics/exemplars.ts`. Two corrections to D3, both applied deliberately:
+  hard reject 1 is "the crop cannot be derived from the RESOLVABLE seed" (i.e. no seed keypoint
+  resolves), not "any seed keypoint is unrecoverable" — the literal rule contradicts D2, which
+  unions the resolvable seed, and would discard instants four of these six metrics successfully
+  measured. And `resolutionFactor` counts per KEYPOINT rather than per resolved input, because
+  `resolveMidpoint` reports `interpolated: true` for a one-sided pair even when that side was
+  detected, which would drive a two-midpoint metric to a flat 0 on 17-22% of real frames.
+- [x] 1.3 `kneeFlexion.ts`: stop dropping minima at `:141`; add `timestamp: extremum.timestamp` to
   the `FlexionPeak` literal at `:142`; emit peak-nearest-the-median paired with its adjacent
   same-leg extension minimum. Rank with `legInterpolated[side][frameIndex]` (`:111-113`, read `:158`).
-- [ ] 1.4 `overstriding.ts`: carry each surviving candidate alongside its `overstrideRatios` entry
+  Ranking reads the peak frame's own keypoint statuses instead, per 1.2's correction.
+- [x] 1.4 `overstriding.ts`: carry each surviving candidate alongside its `overstrideRatios` entry
   (the array is index-parallel to survivors only — `continue` at `:82`); emit most- vs
   least-overstriding as an **extreme** pair, after the outlier bound.
-- [ ] 1.5 `footStrikePattern.ts`: emit up to **two single-instant** exemplars — the strikes nearest
+- [x] 1.5 `footStrikePattern.ts`: emit up to **two single-instant** exemplars — the strikes nearest
   the median `offsetRatios` value. Caption via the already-exported `classifyFootStrike` (`:54-58`).
   The type must express a single without a null-second-timestamp hack.
-- [ ] 1.6 `stepWidth.ts`: construct the pair — among **adjacent opposite-side** entries in the
+- [x] 1.6 `stepWidth.ts`: construct the pair — among **adjacent opposite-side** entries in the
   timestamp-ordered candidate list, the pair minimising mean `|offset − median|`. Demote to a single
   representative strike when no opposite-side adjacency exists. Hard-reject the `outwardSign`
   degenerate case at `:113` rather than ranking it.
-- [ ] 1.7 `stepWidthCm.ts`: same construction over `offsetsCm` (`:149`); a strike with no usable
-  `pixelsPerMeter` is not a candidate.
-- [ ] 1.8 `trunkLean.ts`: capture `frame.timestamp` (already in scope) alongside each `leanValues`
+- [x] 1.7 `stepWidthCm.ts`: same construction over `offsetsCm` (`:149`); a strike with no usable
+  `pixelsPerMeter` is not a candidate. Its `Math.sign(...) || 1` at `:147` is hard-rejected on the
+  same terms as `stepWidth.ts:113` — D3 names only the latter, but the fallback is identical.
+- [x] 1.8 `trunkLean.ts`: capture `frame.timestamp` (already in scope) alongside each `leanValues`
   push at `:85`; emit max-lean vs most-upright as an **extreme** pair, after the outlier bound.
-- [ ] 1.9 **Invariant regression test**: on a fixture whose presence window is strictly narrower
+- [x] 1.9 **Invariant regression test**: on a fixture whose presence window is strictly narrower
   than the clip, an exemplar timestamp resolved against the **untrimmed** `robustFrames` finds the
   same frame object the heuristic saw in the **trimmed** array. First-class, not incidental.
-- [ ] 1.10 Prove no number moved: every existing metric test passes unmodified except where it
+  `exemplars.test.ts`, "the exemplar timestamp invariant across the presence trim" — the fixture
+  drops 4 leading frames, and the test asserts the index disagreement is exactly that.
+- [x] 1.10 Prove no number moved: every existing metric test passes unmodified except where it
   asserts on the new field. Do **not** widen `FootstrikeCandidate` or `Extremum` — both already
   carry `timestamp`, and 9 whole-object `toEqual`s depend on their current shapes.
-- [ ] 1.11 `npm test`, `tsc -b`, `eslint` clean.
+  Verified: `git diff` on the test files is purely additive (zero removed lines), and neither
+  `footstrikes.ts` nor `extrema.ts` was touched.
+- [x] 1.11 `npm test`, `tsc -b`, `eslint` clean.
 
 ## 2. Spectral fit phase and the vertical-oscillation family (#62)
 

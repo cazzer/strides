@@ -1,10 +1,21 @@
+import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
-import type { HeuristicsConfig, MetricResult, View } from './types'
+import type { HeuristicsConfig, MetricExemplar, MetricResult, View } from './types'
 import { estimateBodyScale } from './bodyScale'
 import { estimateTravelDirection } from './travelDirection'
 import { resolveMidpoint } from './keypoints'
 import { computeMetricConfidence } from './confidence'
+import {
+  cropDerivable,
+  cropKeypoints,
+  describeDistribution,
+  isOutlier,
+  pairQuality,
+  scoreExemplarInstant,
+  selectExemplars,
+} from './exemplars'
+import type { ExemplarDistribution } from './exemplars'
 import { median } from './mathUtils'
 
 /**
@@ -14,6 +25,83 @@ import { median } from './mathUtils'
  * from real footage; cheaply tunable here if it turns out to be wrong.
  */
 const MIN_TRUNK_LEAN_SAMPLE_SIZE = 10
+
+/** The points the metric itself reads at an instant — a torso is exactly this segment. */
+const EXEMPLAR_SEED_KEYPOINTS: KeypointName[] = [
+  'left_shoulder',
+  'right_shoulder',
+  'left_hip',
+  'right_hip',
+]
+/** The head is how a viewer reads "upright"; a shoulders-to-hips box alone doesn't show it. */
+const EXEMPLAR_CONTEXT_KEYPOINTS: KeypointName[] = ['nose', 'left_ear', 'right_ear']
+
+interface LeanSample {
+  frame: RobustPoseFrame
+  value: number
+}
+
+/**
+ * The most forward-leaning frame ghosted against the most upright one — an EXTREME pair, since
+ * this metric's picture is the range it measured, not its median.
+ *
+ * The outlier bound does the load-bearing work here: the extremes of a per-frame distribution are,
+ * on real footage, the frames most likely to be tracking glitches, so anything beyond it is
+ * dropped from consideration entirely and the most extreme SURVIVOR is used instead. A clip whose
+ * lean never varies has no range to show and emits nothing rather than ghosting a frame against
+ * itself.
+ */
+function buildExemplars(
+  samples: LeanSample[],
+  distribution: ExemplarDistribution,
+): MetricExemplar[] {
+  const surviving = samples.filter(
+    (sample) =>
+      cropDerivable(sample.frame, EXEMPLAR_SEED_KEYPOINTS) &&
+      !isOutlier(sample.value, distribution),
+  )
+  if (surviving.length === 0) return []
+
+  let mostForward = surviving[0]
+  let mostUpright = surviving[0]
+  for (const sample of surviving) {
+    if (sample.value > mostForward.value) mostForward = sample
+    if (sample.value < mostUpright.value) mostUpright = sample
+  }
+  if (mostForward === mostUpright) return []
+
+  const instant = (sample: LeanSample) => ({
+    frame: sample.frame,
+    seed: EXEMPLAR_SEED_KEYPOINTS,
+    value: sample.value,
+  })
+  const forwardQuality = scoreExemplarInstant(instant(mostForward), 'extreme', distribution)
+  const uprightQuality = scoreExemplarInstant(instant(mostUpright), 'extreme', distribution)
+  if (forwardQuality === null || uprightQuality === null) return []
+
+  // Base is the more extreme of the two, per the blend plan: a range ghost is *about* its far end,
+  // so that is the frame drawn at full opacity. Usually the forward-lean frame, but not always —
+  // a clip that spends most of itself leaning forward puts the upright frame further from the
+  // median, and it is that frame the picture is really about.
+  const forwardDistance = Math.abs(mostForward.value - distribution.median)
+  const uprightDistance = Math.abs(mostUpright.value - distribution.median)
+  const base = forwardDistance >= uprightDistance ? mostForward : mostUpright
+  const ghost = base === mostForward ? mostUpright : mostForward
+
+  return [
+    {
+      kind: 'trunkLeanRange',
+      timestamp: base.frame.timestamp,
+      pairedTimestamp: ghost.frame.timestamp,
+      quality: pairQuality(forwardQuality, uprightQuality),
+      label: 'Most forward trunk lean, ghosted against the most upright frame',
+      cropKeypoints: cropKeypoints(EXEMPLAR_SEED_KEYPOINTS, EXEMPLAR_CONTEXT_KEYPOINTS, [
+        base.frame,
+        ghost.frame,
+      ]),
+    },
+  ]
+}
 
 function nullResult(
   viewFit: MetricResult['viewFit'],
@@ -61,6 +149,9 @@ export function computeTrunkLean(
 
   let interpolatedCount = 0
   const leanValues: number[] = []
+  // Index-parallel to `leanValues`, carrying the identity `leanValues` alone can't: which frame a
+  // lean came from, and how much of that frame's torso was interpolated rather than detected.
+  const leanSamples: LeanSample[] = []
   for (const frame of frames) {
     const shoulderMid = resolveMidpoint(
       frame,
@@ -83,6 +174,7 @@ export function computeTrunkLean(
 
     if (shoulderMid.interpolated || hipMid.interpolated) interpolatedCount += 1
     leanValues.push(forwardLeanDeg)
+    leanSamples.push({ frame, value: forwardLeanDeg })
   }
 
   if (leanValues.length === 0) {
@@ -123,6 +215,10 @@ export function computeTrunkLean(
     )
   }
 
+  const exemplars = selectExemplars(
+    buildExemplars(leanSamples, describeDistribution(leanValues)),
+  )
+
   return {
     metric: 'trunkLean',
     value,
@@ -133,5 +229,6 @@ export function computeTrunkLean(
     frameCoverage,
     sampleSize: leanValues.length,
     caveat: caveats.length > 0 ? caveats.join(' ') : null,
+    ...(exemplars && { exemplars }),
   }
 }

@@ -3,6 +3,7 @@ import { classifyFootStrike, computeFootStrikePattern } from './footStrikePatter
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
+import { buildStrikeFrames } from './__fixtures__/strikeFrames'
 import { buildFrame } from './__fixtures__/testFrames'
 
 const BASE_PARAMS = {
@@ -162,6 +163,66 @@ describe('computeFootStrikePattern', () => {
     expect(noBodyScale.value).toBeNull()
     expect(noBodyScale.caveat).not.toBeNull()
     expect(noBodyScale.caveat).toMatch(/approximation|proxy/i)
+  })
+})
+
+describe('computeFootStrikePattern exemplars', () => {
+  // Ankle-x offsets from the knee (which the fixture parks under hip-mid) / 150px torso ->
+  // ratios 0.5, 0.5, 0.4, 0.5, 0.5, 0.6, 0.5; strike k lands at t = (10k + 5) / 30.
+  const OFFSETS = [75, 75, 60, 75, 75, 90, 75]
+
+  it('emits up to two SINGLE-instant exemplars, never a pair', () => {
+    const frames = buildStrikeFrames({ ankleOffsetsPx: OFFSETS })
+
+    const result = computeFootStrikePattern(frames, 'side')
+
+    // This metric only exists at the moment of strike, so there is no honest second instant to
+    // ghost against — and the absent `pairedTimestamp` says so without a null standing in.
+    expect(result.exemplars).toHaveLength(2)
+    for (const evidence of result.exemplars!) {
+      expect(evidence.kind).toBe('footStrike')
+      expect(evidence).not.toHaveProperty('pairedTimestamp')
+      expect(evidence.side).toBe('left')
+      expect(frames.some((frame) => frame.timestamp === evidence.timestamp)).toBe(true)
+    }
+  })
+
+  it('captions each exemplar with the same classification the metric itself uses', () => {
+    const frames = buildStrikeFrames({ ankleOffsetsPx: OFFSETS })
+
+    const [evidence] = computeFootStrikePattern(frames, 'side').exemplars!
+
+    expect(evidence.label).toContain(
+      classifyFootStrike(0.5, DEFAULT_HEURISTICS_CONFIG.footStrikeMidfootBandRatio),
+    )
+    expect(evidence.label).toContain('left')
+  })
+
+  it('adds the heel and toe to the crop only where the backend actually resolves them', () => {
+    // MoveNet emits no heel/foot_index at all, so a crop that trusted one would anchor on
+    // nothing; MediaPipe does, and a foot-strike picture that omits the foot is useless.
+    const withoutFeet = computeFootStrikePattern(
+      buildStrikeFrames({ ankleOffsetsPx: OFFSETS }),
+      'side',
+    )
+    const withFeet = computeFootStrikePattern(
+      buildStrikeFrames({ ankleOffsetsPx: OFFSETS, withFeetKeypoints: true }),
+      'side',
+    )
+
+    expect(withoutFeet.exemplars![0].cropKeypoints).toEqual(['left_ankle', 'left_knee'])
+    expect(withFeet.exemplars![0].cropKeypoints).toEqual([
+      'left_ankle',
+      'left_knee',
+      'left_heel',
+      'left_foot_index',
+    ])
+  })
+
+  it('emits nothing when no footstrike is measurable', () => {
+    expect(
+      computeFootStrikePattern([buildFrame({}), buildFrame({})], 'side').exemplars,
+    ).toBeUndefined()
   })
 })
 
