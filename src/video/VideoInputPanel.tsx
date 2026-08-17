@@ -85,6 +85,12 @@ export function VideoInputPanel({ videoSource, children }: VideoInputPanelProps)
           replaced element with auto width/height under max constraints shrinks
           aspect-preserving, so the element box always equals the frame box and the
           `SkeletonOverlay` stretched over it stays aligned at any scale.
+
+          The 150 is one of four hardcoded header-height values, and its stated derivation is
+          already stale: there is no main column any more. `strides-kyu.7` names this exact line
+          and replaces all four with the header's measured height, so it is deliberately left
+          alone here rather than half-fixed. The CAP still does its real job in the meantime —
+          it is what keeps this box a sane size rather than a 4K one.
         */}
         <video
           ref={videoRef}
