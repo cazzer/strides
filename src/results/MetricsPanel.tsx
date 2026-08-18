@@ -212,6 +212,19 @@ function MetricCard({ metric, chart, evidence, clipCount }: MetricCardProps) {
     </p>
   )
 
+  const caveat = metric.caveat ? (
+    <p
+      role="note"
+      className={
+        isCaveated
+          ? 'metrics-panel__caveat font-sans text-sm border border-brand-600 dark:border-brand-400 p-2 text-neutral-800 dark:text-neutral-200'
+          : 'metrics-panel__caveat font-sans text-xs text-neutral-500 dark:text-neutral-400'
+      }
+    >
+      {metric.caveat}
+    </p>
+  ) : null
+
   return (
     <article
       className={`metrics-panel__card border-2 border-black dark:border-white p-5 space-y-2 ${
@@ -248,6 +261,8 @@ function MetricCard({ metric, chart, evidence, clipCount }: MetricCardProps) {
         <>
           {description}
           {confidence}
+          {caveat}
+          {chart}
         </>
       ) : (
         <div className="@container/card">
@@ -259,27 +274,28 @@ function MetricCard({ metric, chart, evidence, clipCount }: MetricCardProps) {
                 statement about the value, so it belongs with the prose that explains the value.
                 `space-y-2` matches the rhythm the article applies to its own children, so the
                 gap under the description is the same in both branches. */}
-            <div className="space-y-2 @lg/card:min-w-0 @lg/card:flex-1">
-              {description}
-              {confidence}
+            {/* `contents` while narrow, a real column once wide. The text column has to
+                DISSOLVE at narrow widths: its children and the imagery are then siblings of one
+                flex container, which is the only way `order` can interleave them. Without it the
+                imagery can sit before the whole column or after it, never between the description
+                and the chart — and after it means a phone shows the picture below a tall graph,
+                which breaks "the picture and the number it explains SHALL be visible together". */}
+            <div className="contents @lg/card:block @lg/card:space-y-2 @lg/card:min-w-0 @lg/card:flex-1">
+              <div className="order-1 space-y-2 @lg/card:order-none @lg/card:contents">
+                {description}
+                {confidence}
+              </div>
+              <div className="order-3 space-y-2 @lg/card:order-none @lg/card:contents">
+                {caveat}
+                {chart}
+              </div>
             </div>
-            <CardEvidence evidence={evidence} clipCount={clipCount} />
+            <div className="order-2 @lg/card:order-none @lg/card:contents">
+              <CardEvidence evidence={evidence} clipCount={clipCount} />
+            </div>
           </div>
         </div>
       )}
-      {metric.caveat && (
-        <p
-          role="note"
-          className={
-            isCaveated
-              ? 'metrics-panel__caveat font-sans text-sm border border-brand-600 dark:border-brand-400 p-2 text-neutral-800 dark:text-neutral-200'
-              : 'metrics-panel__caveat font-sans text-xs text-neutral-500 dark:text-neutral-400'
-          }
-        >
-          {metric.caveat}
-        </p>
-      )}
-      {chart}
     </article>
   )
 }

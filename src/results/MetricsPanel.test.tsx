@@ -778,6 +778,81 @@ describe('MetricsPanel — evidence inside the card', () => {
     expect(confidenceBeforeBlock).toBe(true)
   })
 
+  it('puts the caveat and the chart in the text column, not below the two-column block', () => {
+    // Needs a series (so the chart renders at all) and a caveat (so both movers are present).
+    const heuristics = {
+      ...makeHighConfidenceResult(),
+      verticalOscillation: makeVerticalOscillation(
+        { caveat: 'The bounce rhythm in this clip wasn’t perfectly steady.' },
+        [
+          { timestamp: 0, value: 0.1 },
+          { timestamp: 0.5, value: 0.12 },
+          { timestamp: 1, value: 0.09 },
+        ],
+      ),
+    }
+    render(
+      <MetricsPanel heuristics={heuristics} evidence={[evidenceFor('verticalOscillation')]} />,
+    )
+    const card = screen.getByRole('article', { name: 'Vertical oscillation' })
+    const description = card.querySelector('.metrics-panel__description')!
+    const chart = card.querySelector('.vertical-oscillation-chart')
+    const caveat = card.querySelector('.metrics-panel__caveat')
+    const block = card.querySelector('.metrics-panel__evidence')!
+    expect(chart).not.toBeNull()
+    expect(caveat).not.toBeNull()
+
+    // The text column is whichever ancestor holds the description AND is a child of the flex row
+    // the imagery also sits in. Asserted by CONTAINMENT rather than direct parentage: narrow-width
+    // interleaving needs the column's children wrapped in orderable groups, so `parentElement`
+    // is an implementation detail while "is inside the text column" is the actual guarantee.
+    const row = block.closest('.flex')!.parentElement === null ? null : block.closest('.flex')!
+    const column = [...row!.children].find((c) => c.contains(description))!
+    expect(column).toBeDefined()
+
+    // The chart is the tall element. Below the block it left the text column a mostly-empty
+    // half-card beside a short thumbnail; in the column it fills that space.
+    expect(column.contains(chart!)).toBe(true)
+    // The caveat rides along so the reading order survives the move — caveat then chart, as it
+    // was when both sat below the block. Moving only the chart would have flipped them.
+    expect(column.contains(caveat!)).toBe(true)
+    const caveatBeforeChart =
+      (caveat!.compareDocumentPosition(chart!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    expect(caveatBeforeChart).toBe(true)
+
+    // …and the imagery is NOT in that column — it is the other side of the row.
+    expect(column.contains(block)).toBe(false)
+  })
+
+  it('interleaves the imagery between the confidence and the chart while the card is narrow', () => {
+    // The narrow-width guarantee the spec states as "the picture and the number it explains SHALL
+    // be visible together": on a phone the image must not be pushed below a tall chart. jsdom has
+    // no layout, so this asserts the MECHANISM — the text column dissolves to `contents` at narrow
+    // and its two halves carry orders that bracket the imagery's.
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidence={[evidenceFor('trunkLean')]}
+      />,
+    )
+    const card = screen.getByRole('article', { name: 'Trunk lean' })
+    const description = card.querySelector('.metrics-panel__description')!
+    const block = card.querySelector('.metrics-panel__evidence')!
+    const row = block.closest('.flex')!
+    const column = [...row.children].find((c) => c.contains(description))!
+
+    // Dissolves at narrow, becomes a column once wide.
+    expect(column.className).toContain('contents')
+    expect(column.className).toContain('@lg/card:block')
+
+    const textGroup = [...column.children].find((c) => c.contains(description))!
+    const imageGroup = [...row.children].find((c) => c.contains(block))!
+    expect(textGroup.className).toContain('order-1')
+    expect(imageGroup.className).toContain('order-2')
+    // …and every ordered group returns to source order once the card is wide.
+    expect(imageGroup.className).toContain('@lg/card:order-none')
+  })
+
   it('splits narrow-vs-wide on the CARD’s own width, never the viewport’s', () => {
     render(
       <MetricsPanel
