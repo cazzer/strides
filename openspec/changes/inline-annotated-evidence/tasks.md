@@ -119,20 +119,20 @@ evidence surface at all.
 
 ## 4. Embed evidence inline in the metric card (`strides-ac9.2`)
 
-- [ ] 4.1 Render evidence inside `MetricCard` (`MetricsPanel.tsx:158-197`), after the description
+- [x] 4.1 Render evidence inside `MetricCard` (`MetricsPanel.tsx:158-197`), after the description
   (`:176-178`).
-- [ ] 4.2 Below the description when the **card** is narrow, beside it when the **card** is wide —
+- [x] 4.2 Below the description when the **card** is narrow, beside it when the **card** is wide —
   a per-card container query, never `md:` (design D6; the grid at `:288` is already `@container`).
-- [ ] 4.3 Verify at 1-, 2- and 3-column card-grid densities.
-- [ ] 4.4 Thumbnail sizing in CSS only; no re-extraction at a second resolution.
-- [ ] 4.5 A card with no evidence renders exactly as today: no placeholder, no empty frame, no layout
+- [x] 4.3 Verify at 1-, 2- and 3-column card-grid densities.
+- [x] 4.4 Thumbnail sizing in CSS only; no re-extraction at a second resolution.
+- [x] 4.5 A card with no evidence renders exactly as today: no placeholder, no empty frame, no layout
   shift. Preserve `cardSlot`'s `undefined` branch (`:130-138`) as the mechanism.
-- [ ] 4.6 Canvas element adopted into the DOM via `replaceChildren`, as the gallery did
+- [x] 4.6 Canvas element adopted into the DOM via `replaceChildren`, as the gallery did
   (`EvidenceGallery.tsx:296-316`).
-- [ ] 4.7 Caption and alt text still identify the metric, the side where per-side, and that a ghosted
+- [x] 4.7 Caption and alt text still identify the metric, the side where per-side, and that a ghosted
   pair is one runner at two instants — and, on a multi-clip session, which clip the evidence came
   from (`multi-clip-analysis/spec.md:176`).
-- [ ] 4.8 `npm test` and `tsc -b` clean.
+- [x] 4.8 `npm test` and `tsc -b` clean.
 
 ## 5. Retire the standalone evidence gallery and its deep-link channel (`strides-ac9.3`)
 
