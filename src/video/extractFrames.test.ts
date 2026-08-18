@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MetricId } from '../heuristics/types'
 import type {
   ClipEvidencePlan,
@@ -13,6 +13,17 @@ import { stubCanvas2DContext } from '../test/canvasTestUtils'
 import type { FakeCanvasRenderingContext2D } from '../test/canvasTestUtils'
 import { makeVideoSeekable } from '../test/videoTestUtils'
 import { stubRequestVideoFrameCallback } from '../test/videoFrameCallbackTestUtils'
+const { resolveEvidenceSeekOffsetSecondsMock } = vi.hoisted(() => ({
+  resolveEvidenceSeekOffsetSecondsMock: vi.fn(),
+}))
+
+// The derivation itself is tested against controlled containers in `evidenceSeekOffset.test.ts`;
+// mocked here so this file keeps asserting WIRING (does the derived number reach the seek) rather
+// than re-testing edit-list parsing through a fake blob that carries no container at all.
+vi.mock('./evidenceSeekOffset', () => ({
+  resolveEvidenceSeekOffsetSeconds: resolveEvidenceSeekOffsetSecondsMock,
+}))
+
 import {
   EVIDENCE_OUTPUT_MAX_SIDE_PX,
   extractClipEvidence,
@@ -20,6 +31,11 @@ import {
   extractSessionEvidence,
   waitForPresentedFrame,
 } from './extractFrames'
+
+beforeEach(() => {
+  resolveEvidenceSeekOffsetSecondsMock.mockReset()
+  resolveEvidenceSeekOffsetSecondsMock.mockResolvedValue(0)
+})
 
 /**
  * A WIRING smoke test, deliberately: everything decidable about evidence frames is decided in
@@ -407,6 +423,99 @@ describe('extractClipEvidence', () => {
 
     createSpy.mockRestore()
     revokeSpy.mockRestore()
+  })
+
+  /**
+   * Makes EVERY `<video>` — including the detached one `extractClipEvidence` mints for itself,
+   * which no test can reach to patch individually — report decoded data and dispatch `seeked` on
+   * a `currentTime` assignment. The per-element `makeVideoSeekable` above cannot serve here for
+   * exactly that reason: the element under test is created inside the function under test.
+   */
+  function makeAllVideosSeekable(): { seeked: number[]; restore: () => void } {
+    const proto = HTMLMediaElement.prototype
+    const originals = (['readyState', 'currentTime'] as const).map((key) => ({
+      key,
+      descriptor: Object.getOwnPropertyDescriptor(proto, key),
+    }))
+    const times = new WeakMap<HTMLMediaElement, number>()
+    // Recorded in the setter, not from a `seeked` listener: the element is detached, so its events
+    // never reach `document` and there is no handle on it to listen to directly.
+    const seeked: number[] = []
+    Object.defineProperty(proto, 'readyState', {
+      configurable: true,
+      get: () => 2, // HAVE_CURRENT_DATA — short-circuits `waitForDecodedData`.
+    })
+    Object.defineProperty(proto, 'currentTime', {
+      configurable: true,
+      get(this: HTMLMediaElement) {
+        return times.get(this) ?? 0
+      },
+      set(this: HTMLMediaElement, value: number) {
+        times.set(this, value)
+        seeked.push(value)
+        this.dispatchEvent(new Event('seeked'))
+      },
+    })
+    const restore = () => {
+      for (const { key, descriptor } of originals) {
+        if (descriptor === undefined) delete (proto as unknown as Record<string, unknown>)[key]
+        else Object.defineProperty(proto, key, descriptor)
+      }
+    }
+    return { seeked, restore }
+  }
+
+  /**
+   * The seek calibration is DERIVED from the clip's own bytes, not read off a constant (gh #69):
+   * the value is per clip (its own edit list) and per sampler (0 whenever the `<video>` path ran),
+   * so no single number can be right. This asserts the derived value actually reaches the seek.
+   */
+  it('seeks by the offset derived from this clip, not by a constant', async () => {
+    stubCanvas2DContext()
+    const { seeked, restore } = makeAllVideosSeekable()
+    const createSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:evidence')
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    resolveEvidenceSeekOffsetSecondsMock.mockResolvedValue(-0.08)
+
+    try {
+      const sourceBlob = new Blob(['x'])
+      const evidence = await extractClipEvidence({
+        sourceBlob,
+        plan: planWith({ trunkLean: [PAIR] }),
+      })
+
+      expect(resolveEvidenceSeekOffsetSecondsMock).toHaveBeenCalledWith(sourceBlob)
+      expect(evidence.trunkLean.status).toBe('extracted')
+      expect(seeked).toEqual([
+        PAIR.base.timestamp - 0.08,
+        PAIR.ghost!.timestamp - 0.08,
+      ])
+    } finally {
+      restore()
+      createSpy.mockRestore()
+      revokeSpy.mockRestore()
+    }
+  })
+
+  it('lets an explicit offset win, and never derives one it was handed', async () => {
+    stubCanvas2DContext()
+    const { seeked, restore } = makeAllVideosSeekable()
+    const createSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:evidence')
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+
+    try {
+      await extractClipEvidence(
+        { sourceBlob: new Blob(['x']), plan: planWith({ trunkLean: [PAIR] }) },
+        { seekOffsetSeconds: 0 },
+      )
+
+      expect(resolveEvidenceSeekOffsetSecondsMock).not.toHaveBeenCalled()
+      expect(seeked).toEqual([PAIR.base.timestamp, PAIR.ghost!.timestamp])
+    } finally {
+      restore()
+      createSpy.mockRestore()
+      revokeSpy.mockRestore()
+    }
   })
 
   it('extracts clips strictly one at a time', async () => {

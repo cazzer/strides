@@ -9,6 +9,7 @@ import type {
 import { evidenceOutputSide } from '../results/evidenceFrames'
 import { planEvidenceAnnotations } from '../results/evidenceAnnotations'
 import { drawEvidenceAnnotation } from './drawEvidenceAnnotations'
+import { resolveEvidenceSeekOffsetSeconds } from './evidenceSeekOffset'
 
 /**
  * The IMPURE half of evidence-frame extraction: take the plan `evidenceFrames.ts` produced and
@@ -79,15 +80,19 @@ export const EVIDENCE_OUTPUT_MAX_SIDE_PX = 640
  * The PTS calibration hook (design D6/R1). `sequentialSampling` defaults on, so most MP4s sample
  * through WebCodecs, where a frame's timestamp is raw `sample.cts / sample.timescale` with no
  * edit-list adjustment — while `HTMLVideoElement.currentTime` *is* edit-list-adjusted. Seeking to
- * a `robustFrames` timestamp can therefore land a frame or two off, and the failure is
- * plausible-looking rather than obvious.
+ * a `robustFrames` timestamp therefore lands late by the clip's own `elst media_time`, and the
+ * failure is plausible-looking rather than obvious: #68 ground-truthed it at +2 frames on all
+ * three test clips.
  *
  * This offset is added to a planned timestamp **at seek time only**. It is never written back into
  * `robustFrames[].timestamp`, which is the sampling layer's own truth and is correct in its own
- * domain, and it is never measured or guessed here — #68 ground-truths it against
- * `ffmpeg -i clip -ss <t> -frames:v 1` and reports a number. Until then it is zero, which is the
- * correct value for every WebM/webcam clip regardless (those sample through `<video>` playback and
- * already use `mediaTime`).
+ * domain.
+ *
+ * **This constant is the fallback, not the answer.** The real value is per clip AND per sampler,
+ * so `extractClipEvidence` derives it from the clip's own bytes
+ * (`evidenceSeekOffset.ts`) rather than reading a number from here. Zero remains correct for every
+ * clip that has no correction to make — every WebM/webcam blob and every MP4 whose container does
+ * not shift the two clocks — which is why it stays the default an explicit caller inherits.
  */
 export const DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS = 0
 
@@ -98,6 +103,10 @@ export interface EvidenceExtractionOptions {
   /**
    * Per-clip seek-time calibration, in seconds (see `DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS`).
    * Applied to every planned timestamp before seeking and nowhere else.
+   *
+   * Omitted is not "zero": `extractClipEvidence` derives the clip's own value when this is absent,
+   * and only an explicitly-passed number overrides that. Tests and callers that must pin the seek
+   * exactly pass `0`.
    */
   seekOffsetSeconds?: number
   /** Cap on the drawn canvas side (see `EVIDENCE_OUTPUT_MAX_SIDE_PX`). */
@@ -444,6 +453,10 @@ function extractionFailed(plan: ClipEvidencePlan): ClipEvidence {
  * shape as `sampleClip(video, ...)`. Readiness is not re-checked here; `extractClipEvidence` below
  * is the entry point that owns loading.
  *
+ * `options.seekOffsetSeconds` falls back to `DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS` here rather
+ * than being derived: this entry point is handed an element, not a blob, so it has nothing to
+ * derive from. `extractClipEvidence` is the one that owns the bytes and therefore the derivation.
+ *
  * Metrics are extracted in the plan's own key order, and every metric that planned at least one
  * image but produced none reports `'extraction-failed'` rather than an empty list.
  *
@@ -501,10 +514,20 @@ async function decodeClipEvidence(
   plan: ClipEvidencePlan,
   options: EvidenceExtractionOptions,
 ): Promise<ClipEvidence> {
-  const resolved = resolveOptions(options)
   // Re-checked AFTER the queue has granted a turn, not only before the call joined it: a pass
-  // abandoned while it waited must not then go on to open the decoder it was queued for.
-  if (resolved.signal?.aborted) return extractionFailed(plan)
+  // abandoned while it waited must not then go on to open the decoder it was queued for — nor
+  // read the blob for the calibration below, which is why this sits ahead of that too.
+  if (options.signal?.aborted) return extractionFailed(plan)
+
+  // Derived from THIS clip's bytes, not read off a constant — see `evidenceSeekOffset.ts`. An
+  // explicit option still wins, so a caller (and every unit test) can pin the seek exactly.
+  // Resolved here rather than in `resolveOptions` because it is async and because it needs the
+  // blob, which only this function has.
+  const seekOffsetSeconds =
+    options.seekOffsetSeconds ??
+    (await resolveEvidenceSeekOffsetSeconds(sourceBlob))
+  const withOffset: EvidenceExtractionOptions = { ...options, seekOffsetSeconds }
+  const resolved = resolveOptions(withOffset)
 
   const url = URL.createObjectURL(sourceBlob)
   const video = document.createElement('video')
@@ -517,7 +540,7 @@ async function decodeClipEvidence(
   try {
     const ready = await waitForDecodedData(video, resolved.loadTimeoutMs)
     if (!ready) return extractionFailed(plan)
-    return await extractPlannedFrames(video, plan, options)
+    return await extractPlannedFrames(video, plan, withOffset)
   } finally {
     // Drop the decoder before the URL: revoking first leaves the element holding a reference to a
     // now-unresolvable blob.
