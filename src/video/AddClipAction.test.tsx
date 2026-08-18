@@ -137,7 +137,12 @@ describe('AddClipAction', () => {
     const stop = await screen.findByRole('button', { name: /stop recording/i })
     // Mid-recording the disclosure refuses to collapse — doing so unmounts `WebcamCapture`, which
     // stops the tracks and discards the take.
-    expect(trigger()).toBeDisabled()
+    //
+    // `waitFor`, not a bare assertion: the Stop button appearing is `WebcamCapture`'s OWN state,
+    // while the trigger's disabled state is this component's, reached separately by the
+    // `onRecordingStateChange` callback. The two are not guaranteed to land in one commit, so
+    // asserting synchronously off `findByRole` races the propagation — measured flaky 2 runs in 3.
+    await waitFor(() => expect(trigger()).toBeDisabled())
     fireEvent.keyDown(screen.getByRole('group', { name: /add a clip/i }), { key: 'Escape' })
     expect(screen.getByRole('group', { name: /add a clip/i })).toBeInTheDocument()
 
