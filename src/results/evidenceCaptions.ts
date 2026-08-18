@@ -16,21 +16,23 @@ function formatSeconds(seconds: number): string {
 }
 
 /**
- * The caption a reader actually needs: what the picture shows, and — for a ghost — the fact that
- * the two overlapping bodies are ONE runner at two instants. That sentence is not decoration: a
- * double exposure of a person against themself is trivially misread as two people, and this
- * feature's whole claim is "here is your own run", not "here is a crowd".
+ * The caption a reader actually needs: what the picture shows, and when in the clip it happened.
  *
  * `plan.label` is the metric's own words for the instant (it already names the side where the
  * measurement has one), so the caption never re-derives what a metric measured from its id — and
  * never restates the card's own number, which the honesty requirement forbids: what is drawn is a
  * per-instant measurement, not the aggregate the card reports.
+ *
+ * A ghosted pair gets no sentence disclaiming that it is one runner rather than two people. Every
+ * paired label this repo emits already says one instant is *ghosted against* another, which names a
+ * single subject at two moments; the disclaimer restated it at four times the length, under an image
+ * that is now a thumbnail in a card rather than the gallery figure it was written for. `altFor`
+ * below keeps the framing, because alt text is read with none of that card around it.
  */
 export function captionFor(plan: EvidenceFramePlan): string {
   const parts = [`${plan.label}.`]
   if (plan.ghost !== null) {
     parts.push(
-      'The two overlapping positions are the same runner at two instants of the same run, blended into one image — not two people.',
       `${formatSeconds(plan.base.timestamp)} and ${formatSeconds(plan.ghost.timestamp)} into the clip.`,
     )
   } else if (plan.demotedFromPair) {
