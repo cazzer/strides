@@ -31,6 +31,18 @@ openspec archive <name> --yes   # folds the delta into openspec/specs/, do this 
   cleaner to REMOVE the old one (with Reason/Migration) and ADD a new one under a fresh name,
   rather than fighting the validator over a MODIFIED block that no longer resembles the
   original.
+- **A MODIFIED block REPLACES the whole requirement body, so two in-flight changes that MODIFY
+  the same requirement will clobber each other — last archive wins, silently.** Hit for real on
+  2026-08-18: `navbar-clip-shell` and `inline-annotated-evidence` both carried a MODIFIED
+  "Evidence frames are planned purely, then extracted from a detached video element", each
+  authored independently against the same original, so **neither was a superset** and no archive
+  order alone was correct. Before archiving a batch, diff the changes' delta headers against each
+  other, not just against `openspec/specs/`. The fix is to archive the older-worded one first,
+  then **reconcile the second change's MODIFIED block against the now-current spec** (carry the
+  first one's edits forward into it) before archiving it — a MODIFIED delta is only meaningful
+  stated against the spec it will actually be applied to. `openspec validate --strict` will not
+  catch this: both blocks validate fine, and the loss is invisible in the archive output's
+  `~ 1 modified` line.
 
 ## Live-browser verification harness
 
@@ -64,14 +76,52 @@ npm run dev -- --port 5173 --strictPort &
   side-view track clip, the standard one for before/after comparisons, fetched live from Pexels
   so this button needs network. `/demo 2/i` loads the local front-approach clip
   (`src/video/demo-clips/park-approach.mp4`). The rendered labels are *Demo 1 (side view)* and
-  *Demo 2 (front view)* (`src/video/VideoInputPanel.tsx`) — `'Try a demo video'` survives only as
-  `DemoVideoButton`'s unused default prop and matching on it finds nothing, so ignore that string
-  wherever older notes below still quote it. Alternative: Upload tab + `input[type=file]` +
-  `setInputFiles(path)` for a different clip.
+  *Demo 2 (front view)*, now in **`src/video/ClipPicker.tsx`** (they moved out of
+  `VideoInputPanel.tsx` with the shell restructure — see "The app shell" below) — `'Try a demo
+  video'` survives only as `DemoVideoButton`'s unused default prop and matching on it finds
+  nothing, so ignore that string wherever older notes below still quote it. Alternative: Upload
+  tab + `input[type=file]` + `setInputFiles(path)` for a different clip.
+- **For clips 2..N, the same buttons live behind the header's add-a-clip action**, not in the page
+  body. The full-page picker only renders at zero clips. See "The app shell" below.
 - Analysis starts **automatically** once the clip is ready and the detector has loaded — no
   button click needed. Wait for `page.getByText(/analyzing|processing results/i)` then
   `page.getByText(/analysis complete/i)` (the latter can take 10-90s depending on clip
   length/resolution and whether the detector is cold).
+
+**Never conceal a clip's `<video>` — it costs ~20% of sampled frames on the playback path**
+(2026-08-17, `strides-kyu.13`). Measured on Demo 2, playback arm
+(`{"sequentialSampling":{"enabled":false}}`), 5 trials/arm, one session, real GPU,
+`sampling.path` asserted `'playback'` on all 30 trials:
+
+| arm | painted area | detectedFrames |
+|---|---|---|
+| visible, full size (control) | 124,256 px | 61 [56..62] |
+| visible, repeat at a different size | 182,756 px | 61 [49..62] |
+| visible, 67.5×120 CSS px | 8,100 px | 62 [56..63] |
+| visible, 33.75×**60** CSS px | 2,025 px | 62 [56..63] |
+| offscreen + `inert` (0 px on screen) | 0 px | **49 [48..52]** |
+| offscreen + `inert`, repeat | 0 px | **47 [46..55]** |
+
+**There is no threshold.** Painted area varies 61× across the three passing arms with throughput
+flat at 61-62; the discontinuity is binary — on screen or not. A genuinely visible element at
+**60 CSS px** keeps full throughput. Both controls held within the same session (the negative
+reproduced twice, the positive twice at two sizes), so the null in the tiny arms is real rather
+than a blind instrument.
+
+Two things that make this easy to misdiagnose:
+- **Demo 1 is BLIND to it.** At 25 fps there is ~40 ms of per-frame slack to absorb the added
+  cost, and Demo 1 reads 47 → 47 at every concealment rung. **Demo 2 on the playback arm is the
+  only combination that observes it** — healthy **63-65**, broken **47-49**. Any gate measured
+  only on Demo 1, or only on the default sampler, reads green straight through this failure.
+- **A cold-start ramp looks like it and is not.** On the playback arm a first trial reads low and
+  then climbs *monotonically* to a **64** steady state; a concealment regression reads **flat
+  47-49 throughout**. The clincher is the default (sequential) arm, which shows **no ramp at
+  all** — only the real-time playback sampler pays wall-clock cost in lost samples. Run both arms
+  before calling a low first trial a regression.
+
+The default WebCodecs path is untouched by any of this (Demo 1 53 → 53, Demo 2 99 → 99,
+bit-identical). The loss lands only where `canUseSequentialDecode` returns false — WebM and
+webcam recordings.
 
 **Reading results — `analysisDiagnostics`, not screen-scraped card text:**
 
@@ -510,7 +560,11 @@ artifact on the approach clip. There's a regression test for exactly that case
 (`verticalOscillationCm.test.ts`).
 
 Expected live values (real GPU, 3 trials/clip, measured 2026-08-12 on the same machine before and
-after the estimator swap):
+after the estimator swap). ⚠️ **The track row's `4.78–4.79` is STALE as a present-day anchor** — it
+was measured with MediaPipe as the PRIMARY backend, before the background scale-pass graft path and
+before #54/#55's person selection. On today's default MoveNet-primary path the anchor is
+**4.4215 cm**; see "Regression anchor" at the end of the metric-frame-evidence section below. The
+rest of this table stands as the record of that estimator swap:
 
 | clip | VO_cm (extrema, before) | VO_cm (fit, after) | fit.sinusoidR2 | fit.frequencyHz ×60 vs cadence | sampleSize | driftRatio | torsoMeters | medianPxPerM |
 |---|---|---|---|---|---|---|---|---|
@@ -665,15 +719,100 @@ carries `skip_specs: true` — the sizing requirement drafted for it is **withdr
 measurement shows it is unsatisfiable on this repo's own footage and weakening it to fit would be
 editing a criterion to match a result.
 
-## Metric frame evidence — the gallery, measured live (2026-08-17, epic #59 / ticket #68)
+## The app shell — clips live in the header strip (2026-08-18, epic `strides-kyu`)
 
-The results page now carries a **"What the analysis looked at"** gallery: for each metric the app
-re-pulls the frames it actually measured out of the clip after analysis and shows them, ghosting two
-instants into one image where the metric's meaning is a delta (`EvidenceGallery.tsx`,
-`evidenceFrames.ts` plans purely, `extractFrames.ts` produces pixels). Everything below was measured
-in headless Chromium on real GPU (`ANGLE Metal Renderer: Apple M4 Pro`, never SwiftShader), 3 trials
-per clip, across Demo 1, Demo 2 and `e2e/fixtures/multiperson-track.mp4`, plus one two-clip session.
-Full tables: `openspec/changes/archive/2026-08-17-metric-frame-evidence/design.md` **D14**.
+**Clips are no longer a page column.** The two-column `lg:grid` layout is gone: clips left the page
+body entirely and now render as a **strip in the application header** (`role="banner"`), one entry
+per clip (`ClipStripEntry.tsx`, `clipStripStatus.ts`), while the results own the page as its main
+content. Spec: `openspec/specs/multi-clip-analysis/spec.md` and `openspec/specs/results-view/spec.md`;
+archived change `openspec/changes/archive/2026-08-17-navbar-clip-shell/`.
+
+What this changes for anything driving or reading the app:
+
+- **Clip `<video>` elements stay mounted and playable while hidden.** Sampling reads frames off a
+  live, playing element, so hiding is visual only — never conditionally rendered, never behind a
+  mount gate. **The strip thumbnail IS the live element while that clip's analysis is in flight**,
+  reverting to a static poster (`posterFrame.ts`, `useClipPoster.ts`) once it reaches a terminal
+  phase. That is not cosmetic: see the concealment/throughput finding in the harness section above
+  for why the analysing clip must stay genuinely on screen.
+- **Playback loops only while a clip is presented.** Reaching `phase: 'ready'` no longer starts a
+  loop on its own — an unpresented clip stays paused. A clip is presented by opening its preview
+  (`ClipPreviewDialog.tsx`), which reveals that clip's own element with its skeleton overlay.
+- **Per-clip progress is rendered from each clip's own analysis state**, not from the session
+  aggregate — verified live at 36 of 37 snapshots showing genuinely differing per-clip conditions.
+  Session status stays a single announced line.
+- **The in-body "Add another clip" block is gone**, replaced by an add-a-clip action in the header
+  (`AddClipAction.tsx`), an in-flow disclosure that grows the header downward rather than an
+  overlay. Asserted structurally: once a clip is loaded, `main` contains no `input[type=file]` and
+  no text matching `/add (another|a) clip/i`.
+- **Recording and demo clips are now reachable for clips 2..N** — they were not. Every `addClip`
+  records a `pendingLoad`, so the new slot's own picker (gated on `status === 'empty'`) never
+  rendered, leaving upload as the only route past clip 1. Both verified live: recording a second
+  clip reaches `'Clip 2 of 2: Analyzed'`, and the Demo 2 button reaches
+  `'Combined from clip 2 of 2.'`
+- **`ClipPicker.tsx` owns the zero-clip state** as a full-page picker, and holds the demo buttons.
+- **The `86px` / `150px` header constants are gone.** Three of the four hardcoded offsets left with
+  the restructure; the surviving `max-h-[calc(100vh-150px)]` was a *false* dependency and was
+  removed rather than re-derived. Nothing in `src/` reads a hardcoded header height now.
+
+**Open, not decided — `strides-49e`.** `MetricsPanel.tsx` still renders the card grid as
+`<div className="@container grid gap-4 @lg:grid-cols-2 @3xl:grid-cols-3">`. An element with
+`container-type: inline-size` establishes a query container for its *descendants* and cannot query
+itself, so those two utilities have never matched and the card grid has always been **one column at
+every viewport width** (measured: 1104 px wide at a 1440 viewport, still one column). Pre-existing,
+not a regression from this epic. The fix is one wrapper div, but it is a visible layout change with
+a product decision inside it — today's full-width cards are why inline evidence sits beside the
+description on a desktop, which is the behaviour the evidence epic was asked for. **Left open
+deliberately; do not "fix" it as a typo.**
+
+## Metric frame evidence — inline, annotated, measured live (2026-08-17/18, epic #59 and `strides-ac9`)
+
+**Each metric card carries its own evidence, inline.** For every metric the app re-pulls the frames
+it actually measured out of the clip after analysis and renders them as small **annotated
+thumbnails inside that metric's own card**, ghosting two instants into one image where the metric's
+meaning is a delta. The picture and the number it explains are on screen together.
+
+**The standalone gallery is gone.** There is no "What the analysis looked at" section below the
+results, and no deep link from a card to one — `EvidenceGallery.tsx` was deleted (`strides-ac9.3`).
+Ignore any older note below or elsewhere that describes a gallery section, a gallery figure, or a
+"See evidence" link; several `src/` doc comments still say "gallery" and are stale in the same way.
+
+Current modules: `evidenceFrames.ts` plans purely, `evidenceAnnotations.ts` derives every annotation
+mark's geometry purely, `extractFrames.ts` produces pixels, `drawEvidenceAnnotations.ts` paints the
+marks, `EvidenceCanvas.tsx` renders, `useSessionEvidence.ts` drives extraction for the session,
+`evidenceCaptions.ts` writes the captions, `evidenceSeekOffset.ts` calibrates the seek.
+
+Everything below was measured in headless Chromium on real GPU
+(`ANGLE Metal Renderer: Apple M4 Pro`, never SwiftShader), 3 trials per clip, across Demo 1, Demo 2
+and `e2e/fixtures/multiperson-track.mp4`, plus two-clip sessions. Full tables:
+`openspec/changes/archive/2026-08-17-metric-frame-evidence/design.md` **D14** and
+`openspec/changes/archive/2026-08-17-inline-annotated-evidence/design.md`.
+
+**Evidence images ARE annotated now — and the ban that survived is the one that matters.** The
+images are no longer plain photographic crops: they carry the **detected joints** and the
+**per-metric measurement geometry** (the actual construction each metric measured — calipers,
+stride ticks, arcs, hip-mid crosses, travel-direction arrowheads). The earlier prohibition on
+drawing *any* annotation over an extracted image was **deliberately reversed** for the runner's own
+detected and measured geometry. **The adjacent ban survives and was strengthened**: an annotation
+SHALL NOT overlay a reference or ideal posture — the only delta shown is the runner against
+themself. That distinction is the whole point, so keep the two apart when reading the spec: drawing
+what *was measured* is now required; drawing what *should have happened* is still forbidden.
+Requirements: "Evidence thumbnails annotate the runner's own measured geometry and never a reference
+posture" and "An annotation depicts what was measured at the depicted instant, never the card's
+reported value" in `openspec/specs/results-view/spec.md`.
+
+Annotation geometry is decided in the **pure** layer, not in a draw call — the unit suite runs where
+`getContext('2d')` returns `null` by deliberate choice, so any geometry decided inside a draw call is
+geometry no test can reach. There is **no text** in any annotation: no `fillText`/`strokeText`/
+`measureText`/`font` in any annotation or extraction module, and zero text visible across ~15
+inspected images.
+
+**Legibility, measured by looking at every image at its real inline size.** The cyan joint layer and
+the amber measurement layer are cleanly distinguishable at the 112 px inline size, and the joints
+land on the right body throughout. Honest limit: the VO/VO_cm bounce delta (two guides 15-20 px
+apart on a 640 px canvas, so ~3 px displayed) and the arc/caliper end-ticks **do not resolve** at
+112 px — the gestalt reads, the fine marks do not. Best image on any clip is `verticalRatio`'s
+`stridePair`.
 
 **A third dev-only console line, `[evidence-coverage]`.** Same contract as the two
 `[analysis-diagnostics]` lines — `import.meta.env.DEV`-gated, `JSON.parse`able, matched exclusively
@@ -683,24 +822,29 @@ object URL or data URI — verified by scanning 38 captured lines). It reports, 
 pairedTimestamp, demotedFromPair, cropSidePx}]}` or `{status:'no-evidence', reason}` where reason is
 `not-emitted | all-gated-out | metric-excluded | frames-unavailable | extraction-failed`. Plus
 `sourceIndices`, the per-metric winning clip index. `[analysis-diagnostics]` is untouched — same six
-top-level keys, ~5.6 kB, no exemplar data — and `vite build` output contains **zero** occurrences of
-any of these prefixes.
+top-level keys, ~5.5-5.6 kB, no exemplar data — and `vite build` output contains **zero** occurrences
+of any of these prefixes. **This contract survived the move to inline annotated evidence unchanged**
+and was re-verified on four clips: still the same six top-level keys, still no canvas/blob/dataUrl/
+exemplar/crop, and the shipped JS still carries zero dev-only prefixes. It is still the right way to
+read coverage — do not screen-scrape the cards.
 
 **Take the LAST `[evidence-coverage]` line, not the first.** The design says "once per run"; that is
 not what happens. On a MoveNet-primary run the background MediaPipe scale pass grafts
 `verticalOscillationCm` into the fused heuristics *after* `phase: 'ready'`, which changes the
-gallery's input signature, correctly triggers a re-extraction, and emits a second line. Observed on
+evidence input signature, correctly triggers a re-extraction, and emits a second line. Observed on
 Demo 1: line 1 has `verticalOscillationCm: metric-excluded`, line 2 has it `planned`. Whether a
 harness sees one line or two is a race against the scale pass.
 
-**Coverage, identical on every trial** (✅ = images produced; count is images, a ghosted pair being 1):
+**Coverage** (✅ = images produced; count is images, a ghosted pair being 1). Demo 1 and Demo 2 are
+**exact and reproduce on every trial**, re-confirmed independently by both epics' live verification.
+**multiperson is NOT** — see the caveat under the table:
 
 | metric | Demo 1 | Demo 2 | multiperson |
 |---|---|---|---|
 | `verticalOscillation` | ✅ 1 | ✅ 1 | ✅ 1 |
 | `verticalRatio` | ✅ 2 | excluded | ✅ 2 |
 | `verticalOscillationCm` | ✅ 1 (post-graft) | ✅ 1 | ✅ 1 |
-| `trunkLean` | **`all-gated-out`** | excluded | ✅ 1 |
+| `trunkLean` | **`all-gated-out`** | excluded | **`all-gated-out`** |
 | `overstriding` | **`all-gated-out`** | excluded | **`all-gated-out`** |
 | `cadence` | `not-emitted` by design | `not-emitted` | `not-emitted` |
 | `kneeFlexion` | ✅ 1 | excluded | ✅ 1 |
@@ -708,14 +852,27 @@ harness sees one line or two is a race against the scale pass.
 | `footStrikePattern` | ✅ 2 | excluded | ✅ 2 |
 | `stepWidth` | excluded | ✅ 1 | excluded |
 | `stepWidthCm` | excluded | excluded | excluded |
-| **totals** | **7 images / 5 sections** | **5 / 4** | **8 / 6** |
+| **totals** | **7 images / 5 sections** | **5 / 4** | **range, see below** |
+
+**`trunkLean` on multiperson is now correctly `all-gated-out`, not ✅ 1.** It is rejected by the
+far-apart-pair guard (`EVIDENCE_MAX_PAIR_CROP_GROWTH = 2.5`, `evidenceFrames.ts`) — its pair's crop
+growth is **3.375**, and the ghost it used to produce was unreadable. Gated out on all 3 trials.
+
+**Record multiperson as a RANGE, not a number: observed 7/5, 4/3, 4/3 across trials.** That clip's
+analysis is **not run-to-run deterministic**, so its coverage totals move between trials. The
+per-metric multiperson column above is the highest-coverage trial (7 images / 5 sections); the
+lower trials drop further metrics, and which ones is not pinned per-metric here. `trunkLean`'s
+`all-gated-out` is the one multiperson cell confirmed identical on every trial. Do not treat a 4/3
+reading there as a regression without checking against this range first.
 
 `excluded` = `metric-excluded`, the tier-3 gate (the metric has no card, so there is nothing to hang
 evidence on) — not the exemplar gate. **Zero `extraction-failed` on any run.** `cadence` deliberately
 never emits (design D7). `stepWidthCm` produced nothing anywhere, for a reason outside this feature:
 it is tier-3 on all three clips.
 
-**The PTS drift is real and it is +2 frames on every MP4.** `sequentialSampling` defaults on, so most
+**The PTS drift was real and it is now FIXED — a per-clip, per-sampler offset ships.** The
+measurement below stands as the diagnosis; the conclusion that followed it ("stays 0, do not fix it
+by picking a number") does not. `sequentialSampling` defaults on, so most
 MP4s sample through WebCodecs, where `robustFrames[].timestamp` is raw `sample.cts / sample.timescale`
 (`mp4Demux.ts:174`) with **no edit-list adjustment**, while `HTMLVideoElement.currentTime` **is**
 adjusted. Ground-truthed by rebuilding each exemplar's exact crop from the source with
@@ -734,14 +891,38 @@ frame actually drawn:
 33.7 dB, ~15 dB clear. That path uses `requestVideoFrameCallback`'s `mediaTime`, already in
 `currentTime`'s domain.
 
-**`DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS` stays 0 — do not "fix" it by picking a number.** The correct
-value is per-clip (0.080 / 0.033367 / 0.033333 s on the three test clips) **and** per-sampler (must
-be exactly 0 for every WebM/webcam clip and every MP4 where `canUseSequentialDecode` says no).
-`EvidenceGallery` knows neither the edit list nor which sampler ran, so any single constant is wrong
-on two of three test clips and on every non-WebCodecs clip — strictly worse than 0. Follow-up **#69**
-carries the evidence and the two candidate fixes (plumb a per-clip offset using
-`containerTiming.ts`'s existing `elst` parser, or align the domains at the demuxer). Cost of leaving
-it: the pictured frame is 80 ms late on Demo 1 (~12% of a step cycle) and 33 ms on the 60 fps clips.
+**The offset is now DERIVED PER CLIP, not configured — `src/video/evidenceSeekOffset.ts`.** The
+reasoning that once argued for leaving it at 0 was right about the diagnosis and wrong about the
+remedy: the correct value genuinely is per-clip (it is that clip's own edit list) **and** per-sampler
+(exactly 0 for every WebM/webcam clip and every MP4 `canUseSequentialDecode` turns down), so no
+single constant works — but both facts are recoverable from the clip's own bytes.
+`resolveEvidenceSeekOffsetSeconds(blob)` re-derives them using the same two predicates the analysis
+run itself used (`resolveSamplingRobustnessConfig().sequentialSampling.enabled` and
+`canUseSequentialDecode(blob)`, both pure functions of the blob and the environment), reads the
+`elst` via `containerTiming.ts`, caches per `Blob`, and returns **0** for any edit list that is not a
+single constant shift. `extractFrames.ts` applies it at seek time and **never mutates
+`robustFrames[].timestamp`** — that array is correct in its own domain.
+`DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS` still exists and is still `0`, but it is now only the
+fallback when no per-clip value is supplied.
+
+**Why it was fixed rather than accepted: 31% of a torso.** Misregistration was measured in output
+pixels — `‖p(t + offset) − p(t)‖` for every joint an annotation draws, scaled to the output canvas —
+not in frames, because pixels are what decides whether a drawn skeleton floats off the body. Demo 1
+came in at a **median 64.4 output px = 31% of a torso length**; Demo 2 at a median 7.2 px. Unannotated
+photographs hid that; annotated ones would have looked broken while the numbers were right.
+**Zero by construction after the fix.** Measured per-clip offsets, all exact: Demo 1 **−0.08**
+(2/25), Demo 2 **−0.03336666666666667** (2002/60000), multiperson **−0.03333333333333333**
+(512/15360). The webcam gap the assessment could not reach was later closed directly: a live
+`getUserMedia` + `MediaRecorder` capture (`video/webm;codecs=vp9`, 205 samples,
+`sampling.path 'playback'` — the rVFC branch that must not shift) returned **exactly 0** on both
+extraction passes.
+
+**One residual, and it is not the arithmetic: δ = −1 frame on the multiperson clip only**
+(`strides-ac9.12`, **open**). δ = 0 on both demo clips. It reproduces with a **pure Chromium seek and
+no app involved**, so it is not an app race: Chromium quantises to integer microseconds, and this
+clip's stored timestamp sits ~1 µs above the double-subtraction result, putting the flip inside a
+~0.6 µs window just above the frame's presentation timestamp. The arithmetic is correct and lands
+**on** the frame boundary by construction. **Explicitly not to be fixed with an epsilon.**
 
 **The extreme-role `1.5·MAD` risk fired — and only for `overstriding`.** An extreme instant's
 typicality is `|v − median| / (3·MAD)`, so clearing `MIN_EXEMPLAR_QUALITY = 0.5` needs
@@ -765,44 +946,59 @@ fallback never fired, so it explains nothing here.
   proof: `maxDevMads = 1.389`, **zero** instants ≥1.5 MAD — unreachable at any `detectionFactor`.
   Demo 2's `least` sits at exactly **1.000 MAD**, the textbook tightly-bimodal ceiling for a
   left/right-alternating footstrike distribution. `MIN_EXEMPLAR_QUALITY` was **not** touched.
-- **`trunkLean` is NOT the same problem.** It reaches 0.716/0.893 where it renders and ships on the
-  multiperson clip. Its Demo 1 failure is `detectionFactor = 0` on the argmax instant (t = 4.28 s,
-  all four torso seed keypoints interpolated), while 18 other instants clear 1.5 MAD.
+- **`trunkLean` is NOT the same problem.** Its pair quality reaches 0.716/0.893 — it clears this
+  gate comfortably where `overstriding` cannot. Its Demo 1 failure is `detectionFactor = 0` on the
+  argmax instant (t = 4.28 s, all four torso seed keypoints interpolated), while 18 other instants
+  clear 1.5 MAD. **On multiperson it now emits no image either, but for an unrelated reason** — it
+  passes this quality gate at 0.893 and is then rejected by the far-apart-pair crop-growth guard
+  (see the coverage table above). Do not read its `all-gated-out` there as a MAD failure.
 - **Second defect, separable and cheaper to fix:** `buildExemplars` in both metrics takes the raw
   argmax among outlier-bound survivors and *then* scores it, with no fallback to the next-most-extreme
   instant. Coverage therefore hinges on one frame. Proof: the same Demo 1 clip under
   `{ sequentialSampling: { enabled: false } }` samples a different set, the argmax lands on a
   well-tracked frame, and `trunkLean` **emits at quality 0.664**. Both in follow-up **#70**.
 
-**Two ghosts are unreadable; most are good** (every image was pulled out of the DOM and looked at).
-Best: `verticalRatio`'s `stridePair` (two footstrikes, whole body, the stride gap *is* the picture),
-`stepWidth` on Demo 2, the `footStrikePattern` singles. Findings, reported not fixed (**#71**):
-- **`trunkLean` on multiperson is a whole-frame crop.** Its two extremes are 1.25 s apart, the runner
-  crosses the frame between them, `computeEvidenceCropRect` unions both torso boxes, squares, and
-  hits the `min(frameWidth, frameHeight)` cap → **side 1080 on a 1920×1080 clip**. The runner shows
-  twice, tiny, at opposite edges, in an image that is mostly fence and crowd. D12 demotes a pair
-  that is too *similar*; nothing guards a pair that is too *far apart*.
-- **`armSwingSymmetry` on Demo 2 includes a bystander, every trial.** The `EVIDENCE_CROP_MIN_SIDE_PX
-  = 320` floor inflates the small limb box until it swallows a man in a yellow shirt standing to the
-  right, who reads as a second body in an image whose caption insists "not two people". Systematic in
-  cause, clip-specific in particulars. **Do not just move the 320** — it came from display reasoning,
-  not from this clip.
-- **A bounce ghost reads as horizontal translation on a side view.** `verticalOscillation` on Demo 1
-  is two clearly-separated horizontal positions; the vertical delta is the smaller displacement. The
-  same exemplar on the front-approach Demo 2 reads well (two heads stacked vertically). Correct
-  frames, correct crop, camera-angle limit — recorded so nobody re-derives it as a crop bug.
+**Image-quality findings — two of the three original defects are now closed** (every image was pulled
+out of the DOM and looked at, both epics, full-res and at the real 112 px inline size):
+- **`trunkLean` on multiperson was a whole-frame crop — FIXED.** Its two extremes are 1.25 s apart,
+  the runner crosses the frame between them, `computeEvidenceCropRect` unioned both torso boxes,
+  squared, and hit the `min(frameWidth, frameHeight)` cap → side 1080 on a 1920×1080 clip, showing
+  the runner twice and tiny at opposite edges of an image that was mostly fence and crowd.
+  Annotation made it unmistakable rather than merely odd: 27 of 28 off-canvas drawn ops across all
+  three clips were this one case. Closed by the far-apart-pair guard
+  (`EVIDENCE_MAX_PAIR_CROP_GROWTH = 2.5`, `isTooFarApartPair`) — the pair is now gated out instead
+  of ghosted, and the **largest crop on that clip is 509 px**. Note the guard is the complement of
+  D12, which demotes a pair that is too *similar*.
+- **`armSwingSymmetry` on Demo 2 includes a bystander, every trial — still open.**
+  `EVIDENCE_CROP_MIN_SIDE_PX = 320` (still 320, `evidenceFrames.ts`) inflates the small limb box
+  until it swallows a man in a yellow shirt standing to the right, who reads as a second body in an
+  image whose caption insists "not two people". Systematic in cause, clip-specific in particulars.
+  **Do not just move the 320** — it came from display reasoning, not from this clip.
+- **A bounce ghost read as horizontal translation on a side view — materially improved.**
+  `verticalOscillation` on Demo 1 is two clearly-separated horizontal positions with the vertical
+  delta the smaller displacement; the same exemplar on the front-approach Demo 2 always read well.
+  Annotation improved it: two dashed guides now make the vertical delta explicit. It is a
+  camera-angle limit with correct frames and a correct crop, not a crop bug — but the guides are
+  ~3 px apart at the 112 px inline size, so the improvement is real at full resolution and marginal
+  inline.
 
-**N-clip provenance works.** Two-clip session (Demo 2 via the demo button, multiperson added through
-*Add another clip*): 8 sections, 11 images, and every rendered *"From clip N of 2."* caption matched
-`sourceIndices` one-for-one. `verticalOscillationCm` had a planned exemplar on both clips and
-correctly took the fusion winner's, not "any clip that has it."
+Also confirmed by looking: joints land on the right body throughout, and the annotation painter
+order is correct (hips render *under* the amber cross rather than over it).
 
-**No analysis wall-clock regression, and the gallery's own cost is after `ready`.** Same machine,
-same session, `goto` → "Analysis complete", 3 trials/arm, baseline `896f775` in a throwaway
-worktree: Demo 1 **5698 ms** [5539..5910] → **5747 ms** [5550..6290]; Demo 2 **3146 ms**
-[3072..3157] → **3020 ms** [3002..3086]. Noise, both directions. Extraction then adds 3.5–3.8 s
-(Demo 1), 3.5 s (Demo 2), 4.5 s (multiperson) between "Analysis complete" and a settled gallery,
-during which the results are already fully readable.
+**N-clip provenance works.** Re-measured on a two-clip session (Demo 2 via the demo button,
+multiperson added through the header add-a-clip action): **10 images / 7 sections**, and every
+rendered *"From clip N of 2."* caption matched `sourceIndices` one-for-one.
+`verticalOscillationCm` had a planned exemplar on both clips and correctly took the fusion winner's,
+not "any clip that has it." (The pre-annotation measurement of the same check was 11 images /
+8 sections, against the then-current coverage.)
+
+**No analysis wall-clock regression, and evidence's own cost lands after `ready`.** Re-measured
+against pre-epic baseline `2a3f009`, 6 trials/arm: **+1.4% on both demo clips** — noise, no
+regression. The earlier #59 measurement agreed (baseline `896f775`, 3 trials/arm: Demo 1 5698 ms
+[5539..5910] → 5747 ms [5550..6290]; Demo 2 3146 ms [3072..3157] → 3020 ms [3002..3086], noise in
+both directions). Extraction then adds roughly 3.5–3.8 s (Demo 1), 3.5 s (Demo 2), 4.5 s
+(multiperson) between "Analysis complete" and settled imagery, during which the results are already
+fully readable.
 
 **Regression anchor re-measured, and CLAUDE.md's own VO_cm number is stale.** The track clip now
 reports **VO_cm 4.4215 cm**, not the 4.78–4.79 recorded in the "MediaPipe metric calibration" section
@@ -814,6 +1010,10 @@ PRIMARY backend**, before the background scale-pass graft path and before #54/#5
 on today's default MoveNet-primary + grafted-scale-pass path the anchor is **4.4215 cm**. The
 cross-check the anchor really tests still holds exactly: `fit.frequencyHz × 60` = 91.2 ==
 `cadence.value` 91.2.
+
+**Re-confirmed 2026-08-18, after both the navbar shell and the inline-annotation epics**: the anchor
+still reads `4.421467928439415` cm with `fit 1.52 × 60 = 91.2 == cadence 91.2`, and
+`subjectAgreement` 52/53. Neither epic moved a number.
 
 **Probe recipes used, if this needs re-measuring.** Both were added, measured and reverted per the
 add-measure-revert cycle. (1) `[evidence-seek]`: one dev-only `console.log` in

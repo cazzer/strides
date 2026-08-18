@@ -54,8 +54,9 @@ single-instant meaning. A blurred double exposure of two identical frames is wor
 still.
 
 Extraction SHALL use a **second, detached** video element created from the clip's own source blob,
-never the visible element, which is loop-playing once analysis is ready. It SHALL hold at most one
-detached decoder open at a time, extracting every instant for one clip in a single pass before moving
+never the clip's own presented element, whose playback state belongs to the reader (it may be paused
+on an arbitrary frame, or loop-playing while its preview is open). It SHALL hold at most one detached
+decoder open at a time, extracting every instant for one clip in a single pass before moving
 to the next. It SHALL own and release the object URL it creates, and SHALL NOT reuse or release the
 one the video source hook holds privately. After a seek reports completion it SHALL wait for the new
 frame to be presented before drawing, since seek completion does not imply the new frame is
@@ -72,9 +73,10 @@ reported at all, the clip's frames are unavailable, or extraction failed).
 
 #### Scenario: Extraction happens after analysis and never disturbs the visible playback
 
-- **WHEN** an analysis run reaches `phase: 'ready'` and the visible video begins looping
+- **WHEN** an analysis run reaches `phase: 'ready'`, whether or not the clip's own element is
+  currently presented and playing
 - **THEN** evidence extraction runs against a separate detached element created from the clip's
-  source blob, the visible element's playback state is untouched, and analysis wall-clock time is
+  source blob, the clip's own element's playback state is untouched, and analysis wall-clock time is
   unchanged from a run with no extraction
 
 #### Scenario: A webcam clip reporting an infinite duration still yields a valid plan
