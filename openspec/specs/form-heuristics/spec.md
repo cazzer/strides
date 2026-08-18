@@ -1255,11 +1255,28 @@ that boundary and indices are not.
 
 An exemplar SHALL additionally carry: a `quality` score in `[0, 1]` (see "Exemplar instants are
 ranked and gated by a per-instance quality score"), a `kind` discriminating what the instant depicts,
-a `side` where the metric is per-side, a short human-readable `label` for captioning, and the
-`cropKeypoints` — the keypoint names whose positions define the region of the frame this exemplar is
-about. `cropKeypoints` SHALL be named by the metric that emitted the exemplar, not re-derived
-downstream from the `MetricId`, so that knowledge of what a metric measured lives only in the module
-that measures it.
+a `side` where the metric is per-side and **both** instants share that side, a short human-readable
+`label` for captioning, and the `cropKeypoints` — the keypoint names whose positions define the
+region of the frame this exemplar is about. `cropKeypoints` SHALL be named by the metric that emitted
+the exemplar, not re-derived downstream from the `MetricId`, so that knowledge of what a metric
+measured lives only in the module that measures it.
+
+A metric whose exemplar pairs two instants that need **not** share a side SHALL additionally state
+the side each instant's own measurement was about, per instant. `side` cannot express this: it is a
+pair-level claim, present only when both instants share a side, so on a deliberately opposite-side
+pair it is absent — and with it goes any way for a consumer to know which limb each half of the
+evidence was measured from. Two metrics are in this position, and for both the mixed pair is the
+common case rather than an edge: step width constructs its pair from adjacent **opposite-foot**
+strikes, and overstriding pairs its furthest-reaching strike with its closest-landing one, which
+nothing constrains to one foot.
+
+That per-instant side SHALL be **stated by the metric that took the measurement**, and a consumer
+SHALL NOT infer it from the order of `cropKeypoints`. The measured limb's keypoint does happen to be
+ordered first in both metrics' crop sets, but that ordering is a private consequence of how those two
+modules concatenate their per-instant seeds, is not part of this contract, and would invert silently
+if either module reordered a seed. An instant whose side no metric stated SHALL be represented as an
+explicit absence rather than defaulted to a side: a mark anchored on a guessed limb is a confident
+picture of a measurement nobody took.
 
 A metric SHALL emit **at most two** exemplars, ranked by `quality` descending, where a two-instant
 ghosted pair counts as one exemplar. A metric with no instant clearing the gate SHALL omit the field
@@ -1298,6 +1315,21 @@ Emitting exemplars SHALL NOT change any metric's `value`, `confidence`, `viewFit
   exists
 - **THEN** the exemplar carries no `pairedTimestamp` at all, rather than a null one that would read
   as a missing half of a pair
+
+#### Scenario: An opposite-side pair states each instant's own side
+
+- **WHEN** a metric emits a paired exemplar whose two instants were measured on different sides of
+  the body — step width's constructed opposite-foot pair, or an overstride range whose two extreme
+  strikes fall on different feet
+- **THEN** the exemplar carries no single pair-level `side`, and each instant separately names the
+  side its own measurement was taken on, so the two differ
+
+#### Scenario: A per-instant side is never inferred from keypoint ordering
+
+- **WHEN** a consumer needs to know which side one instant of an exemplar was measured on
+- **THEN** it reads only what the metric stated — falling back to the pair-level `side`, whose own
+  contract covers both instants whenever it is present — and an exemplar with neither resolves to an
+  explicit absence, even where `cropKeypoints` happens to lead with one side's keypoint
 
 ### Requirement: Exemplar instants are ranked and gated by a per-instance quality score
 
