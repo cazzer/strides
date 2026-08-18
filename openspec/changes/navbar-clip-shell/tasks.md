@@ -108,14 +108,14 @@
 
 ## 6. Header add-a-clip action (`strides-kyu.6`)
 
-- [ ] 6.1 One action in the header offering **both** record and upload — plus the demo clips, which
+- [x] 6.1 One action in the header offering **both** record and upload — plus the demo clips, which
       are unreachable for clips 2..N today. Present the same picker the zero-clip state presents
       full-page (design.md D6).
-- [ ] 6.2 Preserve `FileUpload`'s `multiple` fan-out (`FileUpload.tsx:44`): one picker interaction,
+- [x] 6.2 Preserve `FileUpload`'s `multiple` fan-out (`FileUpload.tsx:44`): one picker interaction,
       one clip per selected file.
-- [ ] 6.3 Remove the in-body "Add another clip" block (`MultiClipVideoSession.tsx:194-201`).
-- [ ] 6.4 Keyboard reachable, with an accessible name saying what it does.
-- [ ] 6.5 `npm test` and `tsc -b` clean.
+- [x] 6.3 Remove the in-body "Add another clip" block (`MultiClipVideoSession.tsx:194-201`).
+- [x] 6.4 Keyboard reachable, with an accessible name saying what it does.
+- [x] 6.5 `npm test` and `tsc -b` clean.
 
 ## 7. Header offset (`strides-kyu.7`)
 

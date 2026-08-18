@@ -1,8 +1,8 @@
 import { useCallback, useRef, useState } from 'react'
 import type { PoseDetector } from '../pose/detector'
+import { AddClipAction } from '../video/AddClipAction'
 import { ClipLoadStatus } from '../video/ClipLoadStatus'
 import { ClipPicker } from '../video/ClipPicker'
-import { FileUpload } from '../video/FileUpload'
 import { releaseClipPoster } from '../video/posterFrame'
 import { ClipSlot } from './ClipSlot'
 import type { ClipPendingLoad } from './ClipSlot'
@@ -233,7 +233,14 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   return (
     <>
       <header className="sticky top-0 z-10 border-b-2 border-black dark:border-white bg-white dark:bg-black px-4 sm:px-6 py-4">
-        <div className="flex items-center gap-4 sm:gap-6">
+        {/*
+          `flex-wrap` exists for the add-a-clip panel and nothing else: it is the one item allowed
+          to take a line of its own (`basis-full`), which is what keeps it BELOW the strip instead
+          of over it. The three items on the first line are unaffected — the strip is `flex-1`
+          (`flex-basis: 0`), so it shrinks rather than wrapping and never displaces the wordmark or
+          the trigger.
+        */}
+        <div className="flex flex-wrap items-center gap-4 sm:gap-6">
           <div className="shrink-0">
             <h1
               ref={headingRef}
@@ -291,6 +298,14 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
               ))}
             </ul>
           )}
+
+          {/*
+            The picker, collapsed. Gated on exactly the complement of the body picker's own gate
+            below, so the two presentations are mutually exclusive by construction — there is never
+            a moment with two file inputs, two Upload tabs or two pairs of demo buttons on the page
+            for a test or a reader to pick between.
+          */}
+          {anyClipVideoReady && <AddClipAction onSource={addClip} />}
         </div>
       </header>
 
@@ -331,14 +346,13 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
           />
         )}
 
-        {anyClipVideoReady && (
-          <div className="space-y-2 border-t-2 border-black dark:border-white pt-4">
-            <p className="font-sans text-sm font-semibold uppercase tracking-wide">
-              Add another clip
-            </p>
-            <FileUpload onSelected={(file) => addClip(file)} />
-          </div>
-        )}
+        {/*
+          The in-body "Add another clip" block used to mount here. It is gone, not moved:
+          `video-input` requires that no add-a-clip affordance remain in the page body, and what
+          was here offered upload alone — the header's `AddClipAction` offers recording and the
+          demo clips as well, which were unreachable for clips 2..N while that block was the only
+          way in.
+        */}
 
         {/*
           The standalone evidence gallery used to mount here, as a sibling of `ResultsView`. It no

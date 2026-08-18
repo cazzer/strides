@@ -110,7 +110,8 @@ function canonicalVideos(): HTMLVideoElement[] {
 
 /**
  * Chooses a file through whichever file input is currently on the page — the full-page
- * `ClipPicker` while no clip is loaded, the "Add another clip" block once one is.
+ * `ClipPicker` while no clip is loaded, the header action's picker once one is (see
+ * `addAnotherClip`, which opens it).
  *
  * The `await act(async () => {})` afterwards is load-bearing and its absence reads as a hang, not
  * a failed assertion: every clip (the first one now included) is created by `addClip` and loaded
@@ -122,6 +123,19 @@ function canonicalVideos(): HTMLVideoElement[] {
 async function chooseFile(file: File) {
   fireEvent.change(screen.getByLabelText(/choose a video file/i), { target: { files: [file] } })
   await act(async () => {})
+}
+
+/**
+ * Adds a clip through the HEADER's add-a-clip action, which is the only way in once a clip is
+ * loaded. Both extra steps are the point rather than ceremony: the action presents the entire
+ * `ClipPicker` (record, upload and both demo clips), and Record is its default tab, so a test that
+ * wants a file has to ask for the Upload one. What this replaces was a bare `<FileUpload>` in the
+ * page body, which offered no record path and no demo clips at all.
+ */
+async function addAnotherClip(file: File) {
+  fireEvent.click(await screen.findByRole('button', { name: /add a clip/i }))
+  fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+  await chooseFile(file)
 }
 
 function makePoster(): ClipPoster {
@@ -246,13 +260,62 @@ describe('MultiClipVideoSession', () => {
     // that never gets there leaves the reader a way forward rather than an empty page.
     expect(canonicalVideos()).toHaveLength(1)
     expect(screen.getByRole('button', { name: /demo 1 \(side view\)/i })).toBeInTheDocument()
+    // The two presentations are complements, so the header action is absent for exactly as long as
+    // the full-page picker is present. Otherwise the page would carry two Upload tabs, two file
+    // inputs and two pairs of demo buttons at once.
+    expect(screen.queryByRole('button', { name: /add a clip/i })).not.toBeInTheDocument()
 
     markVideoReady(canonicalVideos()[0])
 
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /demo 1 \(side view\)/i })).not.toBeInTheDocument(),
     )
-    expect(screen.getByText(/add another clip/i)).toBeInTheDocument()
+
+    // The picker collapsed INTO the header, and `video-input` requires it leave nothing behind:
+    // "No add-a-clip affordance SHALL remain in the page body."
+    const collapsed = screen.getByRole('button', { name: /add a clip/i })
+    expect(screen.getByRole('banner')).toContainElement(collapsed)
+    const main = screen.getByRole('main')
+    expect(main.querySelector('input[type=file]')).toBeNull()
+    expect(main.textContent).not.toMatch(/add (another|a) clip/i)
+  })
+
+  it('adds clip 2 from a demo button — a path that had no way in at all while the body block was upload-only', async () => {
+    // Not a relocation test. Every `addClip` records a `pendingLoad` that the new `ClipSlot`
+    // consumes on mount, so the new slot's own picker (gated on `status === 'empty'`) never
+    // rendered — the demo buttons and the record path were unreachable for clips 2..N, and upload
+    // was the only way in. This is the fix, exercised through the session.
+    const demoBlob = new Blob(['demo'], { type: 'video/mp4' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, blob: () => Promise.resolve(demoBlob) }),
+    )
+
+    render(<MultiClipVideoSession detector={null} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+
+    fireEvent.click(await screen.findByRole('button', { name: /add a clip/i }))
+    fireEvent.click(screen.getByRole('button', { name: /demo 2 \(front view\)/i }))
+
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
+    // Same `pendingLoad` path as an uploaded clip, so it is indistinguishable downstream: it gets
+    // its own strip entry, numbered in clip-session order.
+    expect(
+      screen.getByRole('button', { name: /clip 2 of 2:/i }),
+    ).toBeInTheDocument()
+    // The picker collapsed again once it had handed the source over, rather than sitting open in
+    // the header on top of a webcam preview nobody asked for.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /add a clip/i })).toHaveAttribute(
+        'aria-expanded',
+        'false',
+      ),
+    )
+
+    vi.unstubAllGlobals()
   })
 
   it('shows each clip its own progress in the header strip, and hosts the working clip’s element on screen', async () => {
@@ -275,8 +338,7 @@ describe('MultiClipVideoSession', () => {
     markVideoReady(canonicalVideos()[0])
     await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
 
-    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
-    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
     markVideoReady(canonicalVideos()[1])
 
@@ -327,8 +389,7 @@ describe('MultiClipVideoSession', () => {
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
     markVideoReady(canonicalVideos()[0])
-    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
-    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
     markVideoReady(canonicalVideos()[1])
 
@@ -453,9 +514,8 @@ describe('MultiClipVideoSession', () => {
     markVideoReady(canonicalVideos()[0])
     await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
 
-    // Add clip 2 via the session-level "Add another clip" picker while clip 1 is still sampling.
-    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
-    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    // Add clip 2 via the header's add-a-clip action while clip 1 is still sampling.
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
     markVideoReady(canonicalVideos()[1])
 
@@ -491,9 +551,7 @@ describe('MultiClipVideoSession', () => {
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
     markVideoReady(canonicalVideos()[0])
-    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
-
-    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
 
     const removeButtons = screen.getAllByRole('button', { name: /remove clip/i })
@@ -516,9 +574,7 @@ describe('MultiClipVideoSession', () => {
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
     markVideoReady(canonicalVideos()[0])
-    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
-
-    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
     markVideoReady(canonicalVideos()[1])
     await waitForPosters(2)
@@ -553,9 +609,7 @@ describe('MultiClipVideoSession', () => {
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
     markVideoReady(canonicalVideos()[0])
-    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
-
-    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
     markVideoReady(canonicalVideos()[1])
     await waitForPosters(2)
@@ -606,8 +660,7 @@ describe('MultiClipVideoSession', () => {
     await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
 
     // Add clip 2 while clip 1 is still mid-analysis -- it queues, waiting for the shared detector.
-    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
-    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
     markVideoReady(canonicalVideos()[1])
     await waitFor(() =>
