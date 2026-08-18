@@ -21,8 +21,9 @@ import type { ClipSession } from './multiClipAnalysis'
  * Evidence extraction, owned by a hook rather than by whichever component happens to display the
  * pictures.
  *
- * It was `EvidenceGallery`'s until `strides-ac9.2` moved the imagery into the metric cards. The
- * move forced the split for a reason that is pure DOM and easy to miss: the extractor hands back
+ * It was `EvidenceGallery`'s until `strides-ac9.2` moved the imagery into the metric cards and
+ * `strides-ac9.3` deleted that component. The move forced the split for a reason that is pure DOM
+ * and easy to miss: the extractor hands back
  * canvas ELEMENTS, and a node has exactly one parent, so two surfaces cannot adopt the same canvas
  * — the second `replaceChildren` steals it and leaves the first showing an empty box. Exactly one
  * component may render a given canvas, so the thing that PRODUCES canvases cannot be one of the

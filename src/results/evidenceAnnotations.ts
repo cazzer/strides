@@ -50,7 +50,7 @@ import type {
 /**
  * Metrics whose exemplars arrive by GRAFT from the background MediaPipe scale pass, while the only
  * `RobustPoseFrame[]` any consumer holds is the PRIMARY pass's (`scalePassGraft.ts:43-50`;
- * `EvidenceGallery` hands `planClipEvidence` `clip.analysis.robustFrames`, MoveNet's). Their joint
+ * `useSessionEvidence` hands `planClipEvidence` `clip.analysis.robustFrames`, MoveNet's). Their joint
  * positions AND their hip polarity are therefore resolved off a primary-pass frame snapped within
  * tolerance — never the MediaPipe frame the metric actually measured.
  *

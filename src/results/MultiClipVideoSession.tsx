@@ -346,7 +346,7 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
           surfaces cannot coexist — the extractor hands back canvas ELEMENTS, a node has exactly
           one parent, and whichever surface adopted a canvas second would silently steal it and
           leave the first showing an empty box. The cards are the evidence surface now.
-          `EvidenceGallery.tsx` itself survives, unmounted, until `strides-ac9.3` retires it.
+          `EvidenceGallery.tsx` was retired by `strides-ac9.3`; `useSessionEvidence` owns extraction now.
         */}
       </main>
     </>

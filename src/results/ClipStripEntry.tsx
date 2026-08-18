@@ -250,7 +250,7 @@ function ConditionBar({ status }: { status: ClipStripStatus }) {
 }
 
 /**
- * Adopts the poster's own `<canvas>` node — the same posture `EvidenceGallery` takes, and for the
+ * Adopts the poster's own `<canvas>` node — the same posture `EvidenceCanvas` takes, and for the
  * same reason: the poster is a live canvas held in memory for the session, never a data URL or a
  * blob, so a renderer takes the node itself and releases nothing (its owner, `useClipPoster`, does
  * that).

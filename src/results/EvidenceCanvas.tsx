@@ -23,7 +23,7 @@ export interface EvidenceCanvasProps {
  * at every width and at every size (design D13) — a card carrying one thumbnail and a card carrying
  * two read as the same set.
  *
- * Lifted out of `EvidenceGallery.tsx` unchanged by `strides-ac9.2`, so the metric card adopts the
+ * Lifted out of the since-deleted `EvidenceGallery.tsx` unchanged by `strides-ac9.2`, so the metric card adopts the
  * node exactly as the gallery does rather than reimplementing the one mechanism that must not drift.
  */
 export function EvidenceCanvas({ canvas, alt, className = '' }: EvidenceCanvasProps) {

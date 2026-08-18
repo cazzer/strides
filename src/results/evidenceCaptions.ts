@@ -4,7 +4,7 @@ import { METRIC_LABELS } from './metricConfidence'
 /**
  * The words that go around an evidence image, wherever it renders.
  *
- * Lifted out of `EvidenceGallery.tsx` unchanged (inline-annotated-evidence, `strides-ac9.2`) so the
+ * Lifted out of the since-deleted `EvidenceGallery.tsx` unchanged (inline-annotated-evidence, `strides-ac9.2`) so the
  * metric card and the gallery caption the same picture with the same sentence rather than each
  * growing its own copy. The gallery is scheduled for deletion (`strides-ac9.3`); these strings are
  * not, and the spec's migration note keeps them "verbatim in intent", so they live here rather than
