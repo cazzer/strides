@@ -764,11 +764,18 @@ describe('MetricsPanel — evidence inside the card', () => {
     const after =
       (description!.compareDocumentPosition(block!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
     expect(after).toBe(true)
-    // …and before the confidence label, which stays the card's last word about the number.
+    // …and the confidence label sits in the SAME column as the description, directly under it,
+    // rather than below the whole two-column block. So it precedes the imagery in document order
+    // and shares a parent with the description — the property that actually places it on screen.
     const confidence = card.querySelector('.metrics-panel__confidence')
-    const beforeConfidence =
-      (block!.compareDocumentPosition(confidence!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
-    expect(beforeConfidence).toBe(true)
+    expect(confidence).not.toBeNull()
+    expect(confidence!.parentElement).toBe(description!.parentElement)
+    const confidenceAfterDescription =
+      (description!.compareDocumentPosition(confidence!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    expect(confidenceAfterDescription).toBe(true)
+    const confidenceBeforeBlock =
+      (confidence!.compareDocumentPosition(block!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    expect(confidenceBeforeBlock).toBe(true)
   })
 
   it('splits narrow-vs-wide on the CARD’s own width, never the viewport’s', () => {
@@ -904,7 +911,7 @@ describe('MetricsPanel — evidence inside the card', () => {
     // Same image box on both, so a two-image card and a one-image card read at one scale.
     const boxes = [...figures].map((f) => f.querySelector('[role=img]')!.parentElement!.className)
     expect(boxes[0]).toBe(boxes[1])
-    expect(boxes[0]).toContain('w-28')
+    expect(boxes[0]).toContain('w-36')
     // …and both captions span the block rather than the thumbnail.
     expect(
       [...figures].every((f) =>

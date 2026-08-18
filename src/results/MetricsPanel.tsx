@@ -152,12 +152,12 @@ function CardEvidence({
           than side by side. One fixed IMAGE width for every item is the display-side half of
           reading as one set — the crop planner fixes the aspect ratio, this fixes the apparent
           scale — while the caption spans the whole block, because a sentence set to the width of a
-          7rem thumbnail is a column of two-word lines at every card width. */}
+          9rem thumbnail is a column of two-word lines at every card width. */}
       <ul className="space-y-3">
         {evidence.items.map((item, index) => (
           <li key={`${item.plan.base.timestamp}-${index}`}>
             <figure className="metrics-panel__evidence-figure space-y-1">
-              <div className="w-28 max-w-full">
+              <div className="w-36 max-w-full">
                 <EvidenceCanvas canvas={item.canvas} alt={altFor(item.plan)} />
               </div>
               <figcaption className="metrics-panel__evidence-caption font-sans text-[11px] leading-snug text-neutral-600 dark:text-neutral-400">
@@ -206,6 +206,12 @@ function MetricCard({ metric, chart, evidence, clipCount }: MetricCardProps) {
     </p>
   )
 
+  const confidence = (
+    <p className="metrics-panel__confidence font-sans text-sm">
+      <strong>{confidenceLabel(metric)}</strong>
+    </p>
+  )
+
   return (
     <article
       className={`metrics-panel__card border-2 border-black dark:border-white p-5 space-y-2 ${
@@ -239,18 +245,28 @@ function MetricCard({ metric, chart, evidence, clipCount }: MetricCardProps) {
         confused with the panel-level container it nests inside.
       */}
       {evidence === undefined ? (
-        description
+        <>
+          {description}
+          {confidence}
+        </>
       ) : (
         <div className="@container/card">
           <div className="flex flex-col gap-3 @lg/card:flex-row @lg/card:items-start @lg/card:gap-4">
-            <div className="@lg/card:min-w-0 @lg/card:flex-1">{description}</div>
+            {/* The confidence label rides in the SAME column as the description rather than
+                below the whole two-column block. Left where it was, a one-line label sat under
+                the tall evidence column and read as a footnote to the picture instead of to the
+                number — and on a wide card it left an obvious hole beside the thumbnail. It is a
+                statement about the value, so it belongs with the prose that explains the value.
+                `space-y-2` matches the rhythm the article applies to its own children, so the
+                gap under the description is the same in both branches. */}
+            <div className="space-y-2 @lg/card:min-w-0 @lg/card:flex-1">
+              {description}
+              {confidence}
+            </div>
             <CardEvidence evidence={evidence} clipCount={clipCount} />
           </div>
         </div>
       )}
-      <p className="metrics-panel__confidence font-sans text-sm">
-        <strong>{confidenceLabel(metric)}</strong>
-      </p>
       {metric.caveat && (
         <p
           role="note"
