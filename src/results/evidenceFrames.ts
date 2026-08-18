@@ -92,6 +92,48 @@ export const EVIDENCE_GHOST_OPACITY = 0.5
 export const EVIDENCE_NEAR_IDENTICAL_IOU = 0.98
 
 /**
+ * The most a pair may enlarge its own crop, relative to the crop the better-framed of its two
+ * instants would get on its own. `EVIDENCE_NEAR_IDENTICAL_IOU` above rejects a pair that is too
+ * SIMILAR; this rejects one that is too far APART. Both defend the same thing — that the image
+ * shows a delta a reader can see — from opposite directions.
+ *
+ * **Why a growth RATIO and not a separation.** The failure this exists for (gh #71) is a runner
+ * crossing the frame between two instants: `computeEvidenceCropRect` unions both boxes, squares by
+ * the long side, and the subject ends up a smudge at each edge of a picture that is mostly
+ * background. What makes that unreadable is not how far the two boxes are apart, it is how far
+ * apart they are RELATIVE TO THE SUBJECT — so the measure is the crop the pair needs divided by
+ * the crop one instant needs, which is exactly the factor by which ghosting shrinks the subject on
+ * screen. Dimensionless, so it needs no per-clip unit; and self-cancelling under both of
+ * `computeCropRect`'s clamps, since a floor or a cap that binds on the pair's crop binds on the
+ * single's too.
+ *
+ * **2.5, from the framing contract and bracketed by measurement.** A single frames its subject to
+ * span `1 / EVIDENCE_CROP_PADDING_MULTIPLIER` = 62.5% of the image's side; growth `R` shrinks that
+ * to `62.5% / R`. Requiring the better-framed instant to still span a QUARTER of the side gives
+ * `0.625 / 0.25 = 2.5`. A quarter is the display floor: these images render as small as a 112 px
+ * card thumbnail (`strides-ac9.2`), where a quarter is ~28 px of subject — about the least at
+ * which a human figure is still a figure.
+ *
+ * Both sides of that number are pinned by images that were extracted from real clips and looked
+ * at, not by taste (`strides-ac9.11`, 3 trials, bit-identical). It must exceed 2.190 —
+ * `kneeFlexion` on `e2e/fixtures/multiperson-track.mp4`, two clearly legible runner positions —
+ * and must not reach 3.375, the same clip's `trunkLean`, which is #71's whole-frame crop. The
+ * eleven other pairs measured across the three test clips sit at 1.000–2.068, so nothing measured
+ * lands between those two: moving this number is a decision to reclassify one of those images.
+ *
+ * **What it is NOT.** Not elapsed time between the instants: on that same data the good
+ * `stridePair` on Demo 1 unions to 1164 px and the broken `trunkLean` to 1144 px, so absolute
+ * separation orders the two backwards, and time does the same (0.56 s good, 1.667 s bad) only by
+ * coincidence of these clips — a stationary subject 1.667 s apart ghosts perfectly and a sprinter
+ * 0.3 s apart does not. Not "the crop hit the frame cap" either, though that is the visible
+ * symptom here: `computeCropRect`'s cap binds on every crop on a small source, so a cap test would
+ * delete every ghost on a 320x240 webcam clip. And not box overlap — IoU is already 0 on eight of
+ * the thirteen measured pairs, including all five on Demo 1, because non-overlap is what a ghost
+ * is FOR.
+ */
+export const EVIDENCE_MAX_PAIR_CROP_GROWTH = 2.5
+
+/**
  * Metrics that emit no exemplars by design, so their absence is a decision rather than this run's
  * candidates all being gated out. `cadence` is a property of a SEQUENCE — two stills of a bounce
  * peak and trough depict an amplitude, which is the number the vertical-oscillation card reports
@@ -558,6 +600,69 @@ export function computeEvidenceCropRect(
   )
 }
 
+/**
+ * How much bigger the crop a pair needs is than the crop the BETTER-FRAMED of its two instants
+ * needs alone — the factor by which ghosting shrinks the subject in the finished image. `1` when
+ * ghosting costs nothing; see `EVIDENCE_MAX_PAIR_CROP_GROWTH` for why this is the quantity.
+ *
+ * `max` of the two single crops, never `min`. The question a reader's eye asks is whether the
+ * best-framed instant is still legible, not whether the worst one is: a pair whose two instants
+ * are legitimately different sizes (a leg near the camera at one instant and far at the other)
+ * would read as catastrophically degraded against its smaller half while the larger half carries
+ * the picture perfectly well. Measured, not asserted — on Demo 1's `kneeFlexion`, whose two boxes
+ * are 303 px and 553 px tall, the `min` reading is 3.498 and the `max` reading 1.915, and the
+ * image is legible; the `min` reading would rank it as WORSE than #71's broken `trunkLean` at
+ * 3.375, which it plainly is not.
+ *
+ * `null` where there is nothing to compare — an unusable frame size, or a degenerate single crop.
+ * A ratio that cannot be formed must never be read as a small one.
+ */
+export function evidencePairCropGrowth(
+  baseBox: BoundingBoxPx,
+  ghostBox: BoundingBoxPx,
+  frameSize: EvidenceFrameSize,
+): number | null {
+  if (!isUsableFrameSize(frameSize)) return null
+  const union = unionBoxes([baseBox, ghostBox])
+  if (union === null) return null
+  // The same call `computeEvidenceCropRect` makes, so the numerator is the crop this pair will
+  // actually be drawn through rather than a re-derivation of it that could drift.
+  const cropSide = (box: BoundingBoxPx) =>
+    computeCropRect(
+      box,
+      frameSize.width,
+      frameSize.height,
+      EVIDENCE_CROP_PADDING_MULTIPLIER,
+      EVIDENCE_CROP_MIN_SIDE_PX,
+    ).side
+  const soloSide = Math.max(cropSide(baseBox), cropSide(ghostBox))
+  if (!Number.isFinite(soloSide) || soloSide <= 0) return null
+  return cropSide(union) / soloSide
+}
+
+/**
+ * Whether ghosting these two instants together would shrink the subject past legibility — the
+ * symmetric counterpart to `isNearIdenticalPair`, and the guard gh #71 was filed for.
+ *
+ * A pair that fails this is DROPPED rather than demoted to its base, unlike a near-identical one,
+ * and that asymmetry is deliberate. Demotion is honest only when the surviving frame still shows
+ * what the exemplar's own `label` claims — which holds for a near-identical pair, whose two
+ * instants ARE the same picture, and fails here: every paired label this repo emits is a statement
+ * about two instants ("Most forward trunk lean, ghosted against the most upright frame",
+ * "Opposite-foot plants either side of the hip midline", "Top and bottom of one left-arm swing"),
+ * and none of them survives losing half the pair. A far-apart pair has two perfectly good instants
+ * that simply cannot share a frame; keeping one of them under a caption written for both would
+ * caption a measurement that the picture does not show.
+ */
+export function isTooFarApartPair(
+  baseBox: BoundingBoxPx,
+  ghostBox: BoundingBoxPx,
+  frameSize: EvidenceFrameSize,
+): boolean {
+  const growth = evidencePairCropGrowth(baseBox, ghostBox, frameSize)
+  return growth !== null && growth >= EVIDENCE_MAX_PAIR_CROP_GROWTH
+}
+
 /** The sampled frames one exemplar resolves to. `ghost` is `null` for a single-instant exemplar
  * and for a pair whose ghost half did not snap. */
 export interface ResolvedExemplarFrames {
@@ -661,6 +766,9 @@ function instantPlan(
  * the measured region is even inside the crop at that instant), or when the two per-frame boxes
  * are near-identical.
  *
+ * A pair too far APART is dropped outright instead, never demoted — see `isTooFarApartPair`, which
+ * holds both the criterion and the reason the two verdicts differ.
+ *
  * `travelDirection` is threaded in rather than derived per exemplar because it is a property of
  * the CLIP: `planClipEvidence` computes it once and every item of every metric carries the same
  * value. The default keeps this function independently callable — it is exported and unit-tested
@@ -700,6 +808,19 @@ export function planExemplarFrames(
       isNearIdenticalPair(baseBox, ghostBox))
 
   if (pairCollapsed && !SINGLE_INSTANT_KINDS.has(exemplar.kind)) return null
+
+  // Too far apart drops outright, for every kind — it is never demoted the way a collapsed pair
+  // is, and `isTooFarApartPair` carries the reason. Reached only once the collapse rules have
+  // passed, which is not an ordering preference: a collapsed pair has no second box to measure a
+  // separation against, and a near-identical one is by definition at growth ~1 anyway.
+  if (
+    isPair &&
+    !pairCollapsed &&
+    ghostBox !== null &&
+    isTooFarApartPair(baseBox, ghostBox, frameSize)
+  ) {
+    return null
+  }
 
   const ghost = pairCollapsed ? null : resolved.ghost
   const drawnFrames =
