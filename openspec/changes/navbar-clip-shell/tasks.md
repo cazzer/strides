@@ -119,12 +119,38 @@
 
 ## 7. Header offset (`strides-kyu.7`)
 
-- [ ] 7.1 Remove all four hardcoded header-height values: `MultiClipVideoSession.tsx:182,203` and
-      `VideoInputPanel.tsx:132`, plus whatever the restructure leaves behind.
-- [ ] 7.2 Offsets track the header's actually-rendered height, including strip-present vs
-      strip-absent (design.md D7).
-- [ ] 7.3 Verified at narrow and wide viewports.
-- [ ] 7.4 `npm test` and `tsc -b` clean.
+- [x] 7.1 Remove all four hardcoded header-height values. **Only ONE survived to this ticket.**
+      `strides-kyu.3` took both `MultiClipVideoSession.tsx` values with the two-column grid, and the
+      `lg:col-span-2` that 3.1 parked here went with `EvidenceGallery.tsx` when `strides-ac9.3`
+      retired it. A repo-wide grep for `86px`/`150px`/`100vh-`/`lg:top-[`/`max-h-[calc` leaves
+      exactly `VideoInputPanel.tsx`'s `max-h-[calc(100vh-150px)]`, now `max-h-screen`.
+- [x] 7.2 Offsets track the header's actually-rendered height (design.md D7) — **satisfied by there
+      being no such offset left, not by a measuring mechanism.** D7 says "the spec states the
+      observable, not the mechanism", and the observable is now unconditional. The one surviving
+      value was a *false* dependency, not a stale one: the element it caps is the concealed clip
+      host, which has been `fixed; top: 0; left: -200vw` since `strides-kyu.3` — anchored to the
+      viewport's top edge and out of flow, so the sticky header is never above it and never takes
+      room from it. Subtracting a header height there is meaningless at any header height, so the
+      cap became the viewport itself. Measured rather than reasoned from the CSS: at 390/640/1440
+      the add-a-clip panel moves the header +238.0/+198.0/+198.0 px and the concealed box's rect is
+      **bit-identical** either side (390: `x -778, y 2, w 385.98, h 686.22`; 640/1440: `x -1278/-2878,
+      y 2, w 506.25, h 900`), with `max-height` resolving to `900px` == `innerHeight`. Building a
+      `ResizeObserver`-fed custom property no consumer reads was rejected on that evidence.
+- [x] 7.3 Verified at narrow and wide viewports — 390, 640 and 1440 px, real GPU
+      (`ANGLE Metal Renderer: Apple M4 Pro`). Header height measured in all three states:
+      zero clips **66** (390) / **86** (640, 1440) — the tagline is `hidden sm:block`, so the old
+      hardcoded 86 was already wrong on a phone before the strip existed; strip populated **129.8**
+      at every width; add-a-clip panel open **367.8** (390) / **327.8** (640, 1440).
+      P0 (`strides-kyu.13`) re-checked in pixels, not class names: with the panel OPEN and the
+      element mid-sampling on the **playback** path, the strip's live `<video>` rect was screenshotted
+      on its own and shows the runner painting (t = 0.906 s, `paused: false`, rect 92x68 at 302,22,
+      longest painted side 92 > the 60 floor). `scripts/ab-person-selection.mjs`, playback arm,
+      demo2, 5 trials, its own server: `sampling.path playback` (so the override took),
+      `sampling.detectedFrames` **64 [60..65]**, `missingFrames 0` — inside the healthy 63-65 band,
+      clear of the 47-49 broken band.
+- [x] 7.4 `npm test` and `tsc -b` clean — 84 files / 1209 tests passed (baseline unchanged),
+      `tsc -b` no errors, `eslint .` no issues, `playwright test` 1 passed / 0 failed on a dedicated
+      port (5203, `reuseExistingServer: false`; 5173 is held by a foreign checkout).
 
 ## 8. Tests (`strides-kyu.8`)
 
