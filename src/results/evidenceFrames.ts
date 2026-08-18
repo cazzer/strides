@@ -92,6 +92,48 @@ export const EVIDENCE_GHOST_OPACITY = 0.5
 export const EVIDENCE_NEAR_IDENTICAL_IOU = 0.98
 
 /**
+ * The most a pair may enlarge its own crop, relative to the crop the better-framed of its two
+ * instants would get on its own. `EVIDENCE_NEAR_IDENTICAL_IOU` above rejects a pair that is too
+ * SIMILAR; this rejects one that is too far APART. Both defend the same thing — that the image
+ * shows a delta a reader can see — from opposite directions.
+ *
+ * **Why a growth RATIO and not a separation.** The failure this exists for (gh #71) is a runner
+ * crossing the frame between two instants: `computeEvidenceCropRect` unions both boxes, squares by
+ * the long side, and the subject ends up a smudge at each edge of a picture that is mostly
+ * background. What makes that unreadable is not how far the two boxes are apart, it is how far
+ * apart they are RELATIVE TO THE SUBJECT — so the measure is the crop the pair needs divided by
+ * the crop one instant needs, which is exactly the factor by which ghosting shrinks the subject on
+ * screen. Dimensionless, so it needs no per-clip unit; and self-cancelling under both of
+ * `computeCropRect`'s clamps, since a floor or a cap that binds on the pair's crop binds on the
+ * single's too.
+ *
+ * **2.5, from the framing contract and bracketed by measurement.** A single frames its subject to
+ * span `1 / EVIDENCE_CROP_PADDING_MULTIPLIER` = 62.5% of the image's side; growth `R` shrinks that
+ * to `62.5% / R`. Requiring the better-framed instant to still span a QUARTER of the side gives
+ * `0.625 / 0.25 = 2.5`. A quarter is the display floor: these images render as small as a 112 px
+ * card thumbnail (`strides-ac9.2`), where a quarter is ~28 px of subject — about the least at
+ * which a human figure is still a figure.
+ *
+ * Both sides of that number are pinned by images that were extracted from real clips and looked
+ * at, not by taste (`strides-ac9.11`, 3 trials, bit-identical). It must exceed 2.190 —
+ * `kneeFlexion` on `e2e/fixtures/multiperson-track.mp4`, two clearly legible runner positions —
+ * and must not reach 3.375, the same clip's `trunkLean`, which is #71's whole-frame crop. The
+ * eleven other pairs measured across the three test clips sit at 1.000–2.068, so nothing measured
+ * lands between those two: moving this number is a decision to reclassify one of those images.
+ *
+ * **What it is NOT.** Not elapsed time between the instants: on that same data the good
+ * `stridePair` on Demo 1 unions to 1164 px and the broken `trunkLean` to 1144 px, so absolute
+ * separation orders the two backwards, and time does the same (0.56 s good, 1.667 s bad) only by
+ * coincidence of these clips — a stationary subject 1.667 s apart ghosts perfectly and a sprinter
+ * 0.3 s apart does not. Not "the crop hit the frame cap" either, though that is the visible
+ * symptom here: `computeCropRect`'s cap binds on every crop on a small source, so a cap test would
+ * delete every ghost on a 320x240 webcam clip. And not box overlap — IoU is already 0 on eight of
+ * the thirteen measured pairs, including all five on Demo 1, because non-overlap is what a ghost
+ * is FOR.
+ */
+export const EVIDENCE_MAX_PAIR_CROP_GROWTH = 2.5
+
+/**
  * Metrics that emit no exemplars by design, so their absence is a decision rather than this run's
  * candidates all being gated out. `cadence` is a property of a SEQUENCE — two stills of a bounce
  * peak and trough depict an amplitude, which is the number the vertical-oscillation card reports
@@ -191,6 +233,16 @@ export interface EvidenceInstantPlan {
    * x — the degenerate case `stepWidth` records and hard-rejects (`stepWidth.ts:230`). Guessing a
    * side here would be a false statement about which way the runner's foot crossed. */
   outwardSign: EvidenceOutwardSigns | null
+  /**
+   * Which side of the body THIS instant's measurement was about — `null` where the metric is not
+   * per-side at all, or where it is but did not say. Resolved by `resolveInstantSide`; never
+   * guessed, and never defaulted to a side.
+   *
+   * Distinct from `EvidenceFramePlan.side`, which is present only when BOTH instants share a side.
+   * `overstriding` and `stepWidth` both pair instants that need not be the same foot, so on their
+   * pairs — the common case for both — the frame-level field is absent while this one is not.
+   */
+  side: 'left' | 'right' | null
 }
 
 /** One renderable image: a base frame, optionally a ghost composited over it, and the square crop
@@ -365,6 +417,22 @@ export function resolveInstantKeypoints(
  * one side would make `sideHip.x - hipMid.x` identically zero and the sign meaningless, which is
  * the exact bug that file was fixed for.
  *
+ * **"Verbatim" holds for the PRIMARY pass only — it is FALSE for the two GRAFTED metrics.**
+ * `stepWidthCm` and `verticalOscillationCm` arrive from the background MediaPipe scale pass
+ * (`scalePassGraft.ts:43-50`), which carries its exemplars' timestamps but NOT its
+ * `RobustPoseFrame[]`: "the only frames any consumer holds are the primary pass's". Every caller
+ * of this function passes a primary-pass (MoveNet) frame snapped to the grafted timestamp, so for
+ * those two metrics the polarity below is recomputed from a DIFFERENT detector's estimate of the
+ * same instant, not from the frame the metric measured. At a near-frontal step-width strike the
+ * two hips sit a few pixels apart and the two detectors can order them oppositely, so the sign
+ * here can be the inverse of the one `stepWidth.ts:222` used — which would label a crossover
+ * strike as landing on its own side, contradicting that file's own crossover caveat (`:273-277`).
+ *
+ * The annotation layer therefore refuses to orient any mark for a grafted metric — see
+ * `GRAFTED_METRICS` in `evidenceAnnotations.ts`, which is where that decision is recorded. This
+ * function keeps returning the value, because it is still the correct polarity for the frame it
+ * was handed; what is not correct is attributing it to a grafted metric's measurement.
+ *
  * `null` rather than the metric's `|| 1` fallback where the sign is zero. The metric needs a
  * number to finish an arithmetic expression and records the frame as `degenerate` so the exemplar
  * is rejected; a plan has no such obligation and an annotation must simply not claim a direction
@@ -384,6 +452,39 @@ export function resolveOutwardSigns(
   const right = Math.sign(hips.right.x - hipMidX)
   if (left === 0 || right === 0) return null
   return { left: left as 1 | -1, right: right as 1 | -1 }
+}
+
+/**
+ * Which side of the body one instant of an exemplar was measured on — RESOLVED from what the
+ * metric stated, never inferred from anything positional.
+ *
+ * Two fields, in priority order, because they answer two different questions:
+ *
+ * 1. `measuredSide`/`pairedMeasuredSide` — the per-INSTANT fact, emitted by the metric that took
+ *    the measurement. The narrower statement, so it wins where present.
+ * 2. `side` — the PAIR-level fact, whose own contract is "present only where the metric measures
+ *    per side, and only when both instants of a pair share that side". Its presence therefore
+ *    licenses attributing it to either instant; this is a reading of a documented invariant, not a
+ *    guess. It is what every same-side metric (`kneeFlexionPeak`, `stridePair`, `armSwingCycle`,
+ *    `footStrike`) supplies, and why those metrics needed no change to be answerable here.
+ *
+ * `null` — an explicit absence — when neither is present. The alternative, defaulting to a side,
+ * would point a caliper at the wrong foot with nothing downstream able to tell.
+ *
+ * **What this deliberately does NOT do is read `cropKeypoints`.** The measured ankle is ordered
+ * first in both `overstriding`'s and `stepWidth`'s crop sets today, so the side is technically
+ * recoverable from position 0 of that array — but that ordering is a private consequence of two
+ * modules concatenating `seedFor(base)` before `seedFor(ghost)`, is asserted by no test as a
+ * contract, and would silently invert the moment either module reordered a seed. A wrong side here
+ * is not a visible failure; it is a caliper confidently drawn to the other foot.
+ */
+export function resolveInstantSide(
+  exemplar: MetricExemplar,
+  role: 'base' | 'ghost',
+): 'left' | 'right' | null {
+  const measured =
+    role === 'base' ? exemplar.measuredSide : exemplar.pairedMeasuredSide
+  return measured ?? exemplar.side ?? null
 }
 
 /**
@@ -499,6 +600,69 @@ export function computeEvidenceCropRect(
   )
 }
 
+/**
+ * How much bigger the crop a pair needs is than the crop the BETTER-FRAMED of its two instants
+ * needs alone — the factor by which ghosting shrinks the subject in the finished image. `1` when
+ * ghosting costs nothing; see `EVIDENCE_MAX_PAIR_CROP_GROWTH` for why this is the quantity.
+ *
+ * `max` of the two single crops, never `min`. The question a reader's eye asks is whether the
+ * best-framed instant is still legible, not whether the worst one is: a pair whose two instants
+ * are legitimately different sizes (a leg near the camera at one instant and far at the other)
+ * would read as catastrophically degraded against its smaller half while the larger half carries
+ * the picture perfectly well. Measured, not asserted — on Demo 1's `kneeFlexion`, whose two boxes
+ * are 303 px and 553 px tall, the `min` reading is 3.498 and the `max` reading 1.915, and the
+ * image is legible; the `min` reading would rank it as WORSE than #71's broken `trunkLean` at
+ * 3.375, which it plainly is not.
+ *
+ * `null` where there is nothing to compare — an unusable frame size, or a degenerate single crop.
+ * A ratio that cannot be formed must never be read as a small one.
+ */
+export function evidencePairCropGrowth(
+  baseBox: BoundingBoxPx,
+  ghostBox: BoundingBoxPx,
+  frameSize: EvidenceFrameSize,
+): number | null {
+  if (!isUsableFrameSize(frameSize)) return null
+  const union = unionBoxes([baseBox, ghostBox])
+  if (union === null) return null
+  // The same call `computeEvidenceCropRect` makes, so the numerator is the crop this pair will
+  // actually be drawn through rather than a re-derivation of it that could drift.
+  const cropSide = (box: BoundingBoxPx) =>
+    computeCropRect(
+      box,
+      frameSize.width,
+      frameSize.height,
+      EVIDENCE_CROP_PADDING_MULTIPLIER,
+      EVIDENCE_CROP_MIN_SIDE_PX,
+    ).side
+  const soloSide = Math.max(cropSide(baseBox), cropSide(ghostBox))
+  if (!Number.isFinite(soloSide) || soloSide <= 0) return null
+  return cropSide(union) / soloSide
+}
+
+/**
+ * Whether ghosting these two instants together would shrink the subject past legibility — the
+ * symmetric counterpart to `isNearIdenticalPair`, and the guard gh #71 was filed for.
+ *
+ * A pair that fails this is DROPPED rather than demoted to its base, unlike a near-identical one,
+ * and that asymmetry is deliberate. Demotion is honest only when the surviving frame still shows
+ * what the exemplar's own `label` claims — which holds for a near-identical pair, whose two
+ * instants ARE the same picture, and fails here: every paired label this repo emits is a statement
+ * about two instants ("Most forward trunk lean, ghosted against the most upright frame",
+ * "Opposite-foot plants either side of the hip midline", "Top and bottom of one left-arm swing"),
+ * and none of them survives losing half the pair. A far-apart pair has two perfectly good instants
+ * that simply cannot share a frame; keeping one of them under a caption written for both would
+ * caption a measurement that the picture does not show.
+ */
+export function isTooFarApartPair(
+  baseBox: BoundingBoxPx,
+  ghostBox: BoundingBoxPx,
+  frameSize: EvidenceFrameSize,
+): boolean {
+  const growth = evidencePairCropGrowth(baseBox, ghostBox, frameSize)
+  return growth !== null && growth >= EVIDENCE_MAX_PAIR_CROP_GROWTH
+}
+
 /** The sampled frames one exemplar resolves to. `ghost` is `null` for a single-instant exemplar
  * and for a pair whose ghost half did not snap. */
 export interface ResolvedExemplarFrames {
@@ -580,14 +744,16 @@ export function isNearIdenticalPair(
  */
 function instantPlan(
   frame: RobustPoseFrame,
-  cropKeypoints: KeypointName[],
+  exemplar: MetricExemplar,
+  role: 'base' | 'ghost',
   opacity: number,
 ): EvidenceInstantPlan {
   return {
     timestamp: frame.timestamp,
     opacity,
-    keypoints: resolveInstantKeypoints(frame, cropKeypoints),
+    keypoints: resolveInstantKeypoints(frame, exemplar.cropKeypoints),
     outwardSign: resolveOutwardSigns(frame),
+    side: resolveInstantSide(exemplar, role),
   }
 }
 
@@ -599,6 +765,9 @@ function instantPlan(
  * the same frame, when the ghost frame has no resolvable crop keypoint (so there is no evidence
  * the measured region is even inside the crop at that instant), or when the two per-frame boxes
  * are near-identical.
+ *
+ * A pair too far APART is dropped outright instead, never demoted — see `isTooFarApartPair`, which
+ * holds both the criterion and the reason the two verdicts differ.
  *
  * `travelDirection` is threaded in rather than derived per exemplar because it is a property of
  * the CLIP: `planClipEvidence` computes it once and every item of every metric carries the same
@@ -640,6 +809,19 @@ export function planExemplarFrames(
 
   if (pairCollapsed && !SINGLE_INSTANT_KINDS.has(exemplar.kind)) return null
 
+  // Too far apart drops outright, for every kind — it is never demoted the way a collapsed pair
+  // is, and `isTooFarApartPair` carries the reason. Reached only once the collapse rules have
+  // passed, which is not an ordering preference: a collapsed pair has no second box to measure a
+  // separation against, and a near-identical one is by definition at growth ~1 anyway.
+  if (
+    isPair &&
+    !pairCollapsed &&
+    ghostBox !== null &&
+    isTooFarApartPair(baseBox, ghostBox, frameSize)
+  ) {
+    return null
+  }
+
   const ghost = pairCollapsed ? null : resolved.ghost
   const drawnFrames =
     ghost === null ? [resolved.base] : [resolved.base, ghost]
@@ -656,15 +838,11 @@ export function planExemplarFrames(
     ...(exemplar.side === undefined ? {} : { side: exemplar.side }),
     quality: exemplar.quality,
     label: exemplar.label,
-    base: instantPlan(
-      resolved.base,
-      exemplar.cropKeypoints,
-      EVIDENCE_BASE_OPACITY,
-    ),
+    base: instantPlan(resolved.base, exemplar, 'base', EVIDENCE_BASE_OPACITY),
     ghost:
       ghost === null
         ? null
-        : instantPlan(ghost, exemplar.cropKeypoints, EVIDENCE_GHOST_OPACITY),
+        : instantPlan(ghost, exemplar, 'ghost', EVIDENCE_GHOST_OPACITY),
     crop,
     travelDirection,
     demotedFromPair: isPair && ghost === null,

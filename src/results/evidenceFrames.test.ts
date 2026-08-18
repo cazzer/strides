@@ -6,6 +6,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { RobustPoseFrame } from '../pose/robustness/types'
+import type { BoundingBoxPx } from '../pose/backends/movenetCrop'
+import { computeCropRect } from '../pose/backends/movenetCrop'
 import type { VideoMetadata } from '../video/types'
 import { buildFrame } from '../heuristics/__fixtures__/testFrames'
 import { MIN_EXEMPLAR_QUALITY } from '../heuristics/exemplars'
@@ -27,19 +29,23 @@ import {
   EVIDENCE_CROP_MIN_SIDE_PX,
   EVIDENCE_CROP_PADDING_MULTIPLIER,
   EVIDENCE_GHOST_OPACITY,
+  EVIDENCE_MAX_PAIR_CROP_GROWTH,
   EVIDENCE_NEAR_IDENTICAL_IOU,
   boundingBoxOfPoints,
   computeEvidenceCropRect,
   evidenceOutputSide,
+  evidencePairCropGrowth,
   evidenceSnapToleranceSeconds,
   evidenceTravelDirection,
   frameCropBox,
   isNearIdenticalPair,
+  isTooFarApartPair,
   planClipEvidence,
   planExemplarFrames,
   planMetricEvidence,
   resolveExemplarFrames,
   resolveInstantKeypoints,
+  resolveInstantSide,
   resolveOutwardSigns,
   snapToSampledFrame,
   summarizeEvidenceCoverage,
@@ -75,6 +81,21 @@ function hipFrame(
     },
     timestamp,
   )
+}
+
+/**
+ * Two hip frames far enough apart to be unmistakably two positions and close enough that
+ * `isTooFarApartPair` does not reject them — the band every paired-plan test below needs, and one
+ * that is easy to wander out of by accident, since none of those tests is about separation.
+ *
+ * The arithmetic, so a future edit can stay inside it: `hipFrame`'s default pair is 100 px wide, so
+ * two of them `s` px apart union to `100 + s`, and against a solo crop pinned at the 320 px floor
+ * the growth is `max((100 + s) × 1.6, 320) / 320`. `EVIDENCE_MAX_PAIR_CROP_GROWTH` = 2.5 therefore
+ * bites at exactly `s = 400`; these sit at `s = 200`, growth 1.5, with the two boxes still a full
+ * box-width clear of each other (IoU 0, so they are not near-identical either).
+ */
+function separatedPair(ghostY: number): RobustPoseFrame[] {
+  return [hipFrame(0, 500, 540), hipFrame(0.1, 700, ghostY)]
 }
 
 /**
@@ -614,6 +635,144 @@ describe('isNearIdenticalPair', () => {
   })
 })
 
+describe('evidencePairCropGrowth / isTooFarApartPair', () => {
+  /** `w`×`h`, with its left edge `left` px in. Heights are what dominate a human box, so these are
+   * written the way a torso or a leg really sits. */
+  const box = (left: number, w: number, h: number) => ({
+    minX: left,
+    minY: 400,
+    maxX: left + w,
+    maxY: 400 + h,
+  })
+
+  /**
+   * The three pairs `strides-ac9.11` measured live and then LOOKED at, reproduced to the pixel from
+   * the `[pair-geometry]` probe (real GPU, 3 trials, bit-identical). Between them they bracket the
+   * threshold from both sides with images whose readability is a matter of record, not of taste.
+   */
+  // gh #71: `trunkLean` on `e2e/fixtures/multiperson-track.mp4`, 1920×1080 — the whole-frame crop.
+  // Two torso boxes, 34×79 and 53×131, unioning to 1144 px of mostly chain-link fence.
+  const BROKEN = [box(300, 34, 79), box(1410, 53, 131)] as const
+  // Demo 1's `verticalRatio` `stridePair`, 3840×2160 — the ghost #71 singles out as the BEST of
+  // them all ("the stride gap IS the picture"), and the widest legible union measured anywhere.
+  const STRIDE_PAIR = [box(300, 143, 551), box(1159, 305, 563)] as const
+  // Demo 1's `kneeFlexion`, 3840×2160 — legible, and lopsided: 303 px tall at one instant and
+  // 553 px at the other.
+  const LOPSIDED = [box(200, 296, 303), box(1034, 225, 553)] as const
+
+  it('reproduces the measured growth of all three live pairs', () => {
+    expect(evidencePairCropGrowth(BROKEN[0], BROKEN[1], HD)).toBeCloseTo(3.375, 3)
+    // 2.0675, which is what the probe's 3-decimal `2.068` was rounded from.
+    expect(
+      evidencePairCropGrowth(STRIDE_PAIR[0], STRIDE_PAIR[1], UHD),
+    ).toBeCloseTo(2.0675, 4)
+    expect(evidencePairCropGrowth(LOPSIDED[0], LOPSIDED[1], UHD)).toBeCloseTo(
+      1.915,
+      3,
+    )
+  })
+
+  it('rejects the broken pair and keeps both legible ones', () => {
+    expect(isTooFarApartPair(BROKEN[0], BROKEN[1], HD)).toBe(true)
+    expect(isTooFarApartPair(STRIDE_PAIR[0], STRIDE_PAIR[1], UHD)).toBe(false)
+    expect(isTooFarApartPair(LOPSIDED[0], LOPSIDED[1], UHD)).toBe(false)
+    // The threshold sits in the gap those three leave, and nothing measured lands between 2.068
+    // and 3.375 — so moving it is a decision to reclassify one of these images, not a tweak.
+    expect(EVIDENCE_MAX_PAIR_CROP_GROWTH).toBe(2.5)
+  })
+
+  it('measures separation RELATIVE to the subject, not in pixels or seconds', () => {
+    // Why the criterion is not "how far apart are they". The LEGIBLE pair has the LARGER absolute
+    // union — 1164 px against the broken pair's 1144 — because its subject is four times taller.
+    // A separation threshold, and the elapsed-time proxy that stands in for one, both order these
+    // two backwards.
+    const brokenUnion = BROKEN[1].maxX - BROKEN[0].minX
+    const strideUnion = STRIDE_PAIR[1].maxX - STRIDE_PAIR[0].minX
+    expect(strideUnion).toBeGreaterThan(brokenUnion)
+    expect(
+      evidencePairCropGrowth(STRIDE_PAIR[0], STRIDE_PAIR[1], UHD),
+    ).toBeLessThan(evidencePairCropGrowth(BROKEN[0], BROKEN[1], HD)!)
+  })
+
+  it('takes the LARGER of the two single crops, so a lopsided pair is judged on its better half', () => {
+    // Against its SMALLER half the legible `kneeFlexion` pair reads ~3.50 — worse than the broken
+    // one's 3.375 — so a `min` reading does not merely blur the boundary, it inverts it.
+    const soloSide = (b: BoundingBoxPx) =>
+      computeCropRect(
+        b,
+        UHD.width,
+        UHD.height,
+        EVIDENCE_CROP_PADDING_MULTIPLIER,
+        EVIDENCE_CROP_MIN_SIDE_PX,
+      ).side
+    const union: BoundingBoxPx = {
+      minX: LOPSIDED[0].minX,
+      minY: Math.min(LOPSIDED[0].minY, LOPSIDED[1].minY),
+      maxX: LOPSIDED[1].maxX,
+      maxY: Math.max(LOPSIDED[0].maxY, LOPSIDED[1].maxY),
+    }
+    const minReading =
+      soloSide(union) /
+      Math.min(soloSide(LOPSIDED[0]), soloSide(LOPSIDED[1]))
+    expect(minReading).toBeGreaterThan(
+      evidencePairCropGrowth(BROKEN[0], BROKEN[1], HD)!,
+    )
+    // Order cannot matter: `max` is symmetric, and which instant is base is the metric's choice.
+    expect(evidencePairCropGrowth(LOPSIDED[1], LOPSIDED[0], UHD)).toEqual(
+      evidencePairCropGrowth(LOPSIDED[0], LOPSIDED[1], UHD),
+    )
+  })
+
+  it('is 1 when ghosting costs nothing', () => {
+    const still = box(300, 400, 400)
+    expect(evidencePairCropGrowth(still, { ...still }, UHD)).toBeCloseTo(1, 10)
+  })
+
+  it('fires at the threshold and not a hair below it', () => {
+    // 400×400 boxes on 4K, where neither the floor nor the cap binds: growth is exactly
+    // `(400 + separation) / 400`, so 600 px apart is 2.5 on the nose.
+    expect(
+      evidencePairCropGrowth(box(300, 400, 400), box(900, 400, 400), UHD),
+    ).toBeCloseTo(2.5, 10)
+    expect(isTooFarApartPair(box(300, 400, 400), box(900, 400, 400), UHD)).toBe(
+      true,
+    )
+    expect(isTooFarApartPair(box(300, 400, 400), box(880, 400, 400), UHD)).toBe(
+      false,
+    )
+  })
+
+  it('cannot fire on a source too small to crop, where the cap binds on both sides', () => {
+    // `computeCropRect` caps every crop at `min(frameWidth, frameHeight)`, so on a small clip the
+    // pair's crop and the single's are the SAME rect and the ratio collapses to 1. A criterion
+    // written on the cap itself — the visible symptom of #71 — would instead delete every ghost on
+    // every webcam clip.
+    const tiny: EvidenceFrameSize = { width: 320, height: 240 }
+    expect(
+      evidencePairCropGrowth(BROKEN[0], BROKEN[1], tiny),
+    ).toBeCloseTo(1, 10)
+    expect(isTooFarApartPair(BROKEN[0], BROKEN[1], tiny)).toBe(false)
+  })
+
+  it('cannot fire on two small boxes the 320 px floor already frames together', () => {
+    // Both crops sit on the floor, so ghosting cost nothing a single would not also have paid.
+    // Charging the pair for the floor would make this a "subject too small" guard — a different
+    // question, about a framing decision the demoted single would inherit anyway.
+    expect(
+      evidencePairCropGrowth(box(300, 40, 60), box(400, 40, 60), HD),
+    ).toBeCloseTo(1, 10)
+    expect(isTooFarApartPair(box(300, 40, 60), box(400, 40, 60), HD)).toBe(false)
+  })
+
+  it('is null, never a small number, where no ratio can be formed', () => {
+    const [a, b] = [box(300, 400, 400), box(900, 400, 400)]
+    expect(evidencePairCropGrowth(a, b, { width: 0, height: 1080 })).toBeNull()
+    expect(evidencePairCropGrowth(a, b, { width: NaN, height: 1080 })).toBeNull()
+    // ...and a ratio that could not be formed must not read as "close enough to keep" either.
+    expect(isTooFarApartPair(a, b, { width: 0, height: 1080 })).toBe(false)
+  })
+})
+
 describe('planExemplarFrames', () => {
   const frames = sampledFrames()
 
@@ -648,7 +807,7 @@ describe('planExemplarFrames', () => {
   })
 
   it('plans a pair as base at full opacity and ghost at half', () => {
-    const paired = [hipFrame(0, 500, 540), hipFrame(0.1, 900, 540)]
+    const paired = separatedPair(540)
     const plan = planExemplarFrames(
       'trunkLean',
       exemplar({ timestamp: 0, pairedTimestamp: 0.1 }),
@@ -674,7 +833,7 @@ describe('planExemplarFrames', () => {
   it('resolves annotation inputs for BOTH instants of a pair, at each instant', () => {
     // Two genuinely different hip positions: an annotation of the ghost that reused the base's
     // positions would draw the second body's marks on the first body.
-    const paired = [hipFrame(0, 500, 540), hipFrame(0.1, 900, 620)]
+    const paired = separatedPair(620)
     const plan = planExemplarFrames(
       'trunkLean',
       exemplar({ timestamp: 0, pairedTimestamp: 0.1 }),
@@ -692,6 +851,122 @@ describe('planExemplarFrames', () => {
     // And the per-frame sign is per-frame, resolved from each instant's own hips.
     expect(plan?.base.outwardSign).toEqual(resolveOutwardSigns(paired[0]))
     expect(plan?.ghost?.outwardSign).toEqual(resolveOutwardSigns(paired[1]))
+  })
+
+  it('gives each half of a stepWidth pair its own, DIFFERENT foot', () => {
+    // The pair `stepWidth` builds is opposite-footed by construction, so the frame-level `side` is
+    // absent and cannot answer this — which is the whole reason the per-instant field exists.
+    const paired = separatedPair(620)
+    const plan = planExemplarFrames(
+      'stepWidth',
+      exemplar({
+        kind: 'stepWidthStrike',
+        timestamp: 0,
+        pairedTimestamp: 0.1,
+        measuredSide: 'left',
+        pairedMeasuredSide: 'right',
+      }),
+      paired,
+      HD,
+      0.05,
+    )
+    expect(plan?.base.side).toBe('left')
+    expect(plan?.ghost?.side).toBe('right')
+    expect(plan?.base.side).not.toBe(plan?.ghost?.side)
+    // ...and the frame-level field is still absent, because the pair still has no ONE side.
+    expect('side' in plan!).toBe(false)
+  })
+
+  it('gives each half of an overstride pair its own foot', () => {
+    const paired = separatedPair(620)
+    const plan = planExemplarFrames(
+      'overstriding',
+      exemplar({
+        kind: 'overstrideRange',
+        timestamp: 0,
+        pairedTimestamp: 0.1,
+        measuredSide: 'right',
+        pairedMeasuredSide: 'left',
+      }),
+      paired,
+      HD,
+      0.05,
+    )
+    expect(plan?.base.side).toBe('right')
+    expect(plan?.ghost?.side).toBe('left')
+  })
+
+  it('carries an explicit absence, never a default side, when the metric named none', () => {
+    // `null` rather than `undefined` or a quietly-chosen `'left'`: a caliper anchored on a guessed
+    // foot is a confident picture of a measurement nobody took, and nothing downstream could tell.
+    const paired = separatedPair(620)
+    const plan = planExemplarFrames(
+      'trunkLean',
+      exemplar({ timestamp: 0, pairedTimestamp: 0.1 }),
+      paired,
+      HD,
+      0.05,
+    )
+    expect(plan?.base.side).toBeNull()
+    expect(plan?.ghost?.side).toBeNull()
+  })
+
+  it('falls back to the pair-level `side`, which by contract covers both instants', () => {
+    // Every same-side metric (`kneeFlexionPeak`, `stridePair`, `armSwingCycle`, `footStrike`)
+    // supplies only `side`, whose own contract is "only when both instants share that side" — so
+    // attributing it to each instant reads a documented invariant rather than guessing, and those
+    // four metrics needed no change to become answerable.
+    const paired = separatedPair(620)
+    const plan = planExemplarFrames(
+      'kneeFlexion',
+      exemplar({
+        kind: 'kneeFlexionPeak',
+        timestamp: 0,
+        pairedTimestamp: 0.1,
+        side: 'right',
+      }),
+      paired,
+      HD,
+      0.05,
+    )
+    expect(plan?.base.side).toBe('right')
+    expect(plan?.ghost?.side).toBe('right')
+  })
+
+  it('prefers the per-instant side over the pair-level one, being the narrower claim', () => {
+    // `overstriding` emits both whenever its two strikes happen to share a foot. They agree there;
+    // this pins which one is authoritative if they ever could not.
+    expect(
+      resolveInstantSide(
+        exemplar({ side: 'left', measuredSide: 'right', pairedMeasuredSide: 'left' }),
+        'base',
+      ),
+    ).toBe('right')
+    expect(resolveInstantSide(exemplar({ side: 'left' }), 'ghost')).toBe('left')
+    expect(resolveInstantSide(exemplar(), 'base')).toBeNull()
+  })
+
+  it('never reads the side off `cropKeypoints` ordering', () => {
+    // The measured ankle IS ordered first in both metrics' crop sets today, so an inference from
+    // position 0 would pass every other test in this file. It is a private consequence of
+    // `seedFor(base)` being concatenated ahead of `seedFor(ghost)`, not a contract — so a crop set
+    // that leads with the OTHER foot must still resolve to what the metric actually said.
+    const contradicting = exemplar({
+      kind: 'stepWidthStrike',
+      cropKeypoints: ['right_ankle', 'left_hip', 'right_hip', 'left_ankle'],
+      measuredSide: 'left',
+    })
+    expect(resolveInstantSide(contradicting, 'base')).toBe('left')
+    // ...and stripped of the stated side it resolves to nothing, rather than to `'right'`.
+    expect(
+      resolveInstantSide(
+        exemplar({
+          kind: 'stepWidthStrike',
+          cropKeypoints: ['right_ankle', 'left_hip', 'right_hip', 'left_ankle'],
+        }),
+        'base',
+      ),
+    ).toBeNull()
   })
 
   it('carries an unrecoverable keypoint as unrecoverable rather than dropping or moving it', () => {
@@ -784,6 +1059,58 @@ describe('planExemplarFrames', () => {
         ),
       ).toBeNull()
     }
+  })
+
+  it('drops a far-apart pair for EVERY kind, including the ones a collapse would demote', () => {
+    // The asymmetry with the near-identical rule above, asserted rather than described: a
+    // near-identical `stepWidthStrike` demotes to its base, a far-apart one does not. Its label
+    // ('Opposite-foot plants either side of the hip midline') is a statement about two instants,
+    // and here both instants are real and simply cannot share a frame — so keeping one under that
+    // caption would picture a measurement the image does not show.
+    const paired = [hipFrame(0, 400, 540), hipFrame(0.1, 1400, 540)]
+    expect(
+      frameCropBox(paired[0], [...HIP_SEED]) &&
+        frameCropBox(paired[1], [...HIP_SEED]) &&
+        isTooFarApartPair(
+          frameCropBox(paired[0], [...HIP_SEED])!,
+          frameCropBox(paired[1], [...HIP_SEED])!,
+          HD,
+        ),
+    ).toBe(true)
+    for (const kind of [
+      'stepWidthStrike',
+      'footStrike',
+      'trunkLeanRange',
+      'overstrideRange',
+      'bounceCycle',
+      'armSwingCycle',
+      'stridePair',
+      'kneeFlexionPeak',
+    ] satisfies MetricExemplarKind[]) {
+      expect(
+        planExemplarFrames(
+          'trunkLean',
+          exemplar({ kind, timestamp: 0, pairedTimestamp: 0.1 }),
+          paired,
+          HD,
+          0.05,
+        ),
+      ).toBeNull()
+    }
+  })
+
+  it('leaves a SINGLE-instant exemplar alone however wide its frame', () => {
+    // The guard is about what ghosting costs, so an exemplar with no ghost can never reach it —
+    // including one whose own box is small enough that a pair built from it would be rejected.
+    const plan = planExemplarFrames(
+      'footStrikePattern',
+      exemplar({ kind: 'footStrike', timestamp: 0, side: 'left' }),
+      [hipFrame(0, 400, 540, 40), hipFrame(0.1, 1400, 540, 40)],
+      HD,
+      0.05,
+    )
+    expect(plan?.ghost).toBeNull()
+    expect(plan?.demotedFromPair).toBe(false)
   })
 
   it('keeps a pair whose boxes overlap just below the threshold', () => {

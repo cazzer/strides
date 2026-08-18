@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { DemoVideoButton } from './DemoVideoButton'
 import { FileUpload } from './FileUpload'
 import { WebcamCapture } from './WebcamCapture'
@@ -11,6 +11,17 @@ export interface ClipPickerProps {
    * per call therefore gets one clip per file for free.
    */
   onSource: (source: Blob | File, opts?: { frameRateHint?: number }) => void
+  /**
+   * Notifies a host that the Record tab is mid-recording, so it can refuse to tear this picker
+   * down underneath it. The picker already guards its OWN destructive control for this reason (the
+   * tab bar disables switching mid-recording); a host that can collapse the whole picker — the
+   * header's add-a-clip disclosure — owns a strictly more destructive one, and unmounting
+   * `WebcamCapture` mid-recording stops the tracks and discards the take with nothing to undo it.
+   *
+   * Optional, and unobserved by the zero-clip full-page presentation, which has no way to collapse
+   * itself and therefore nothing to guard.
+   */
+  onRecordingStateChange?: (isRecording: boolean) => void
 }
 
 type Tab = 'record' | 'upload'
@@ -29,9 +40,20 @@ type Tab = 'record' | 'upload'
  * It is deliberately unaware of `VideoSource`: it hands a caller the bytes the user chose and has
  * no opinion about which clip — or which of several clips — they become.
  */
-export function ClipPicker({ onSource }: ClipPickerProps) {
+export function ClipPicker({ onSource, onRecordingStateChange }: ClipPickerProps) {
   const [activeTab, setActiveTab] = useState<Tab>('record')
   const [isRecording, setIsRecording] = useState(false)
+
+  // Memoized because `WebcamCapture` reports through an effect keyed on this identity
+  // (`WebcamCapture.tsx:71-75`) — a fresh function each render would re-run that effect on every
+  // render of this picker.
+  const handleRecordingStateChange = useCallback(
+    (recording: boolean) => {
+      setIsRecording(recording)
+      onRecordingStateChange?.(recording)
+    },
+    [onRecordingStateChange],
+  )
 
   return (
     <>
@@ -71,7 +93,7 @@ export function ClipPicker({ onSource }: ClipPickerProps) {
           onRecorded={(blob, opts) =>
             onSource(blob, { frameRateHint: opts.frameRateHint ?? undefined })
           }
-          onRecordingStateChange={setIsRecording}
+          onRecordingStateChange={handleRecordingStateChange}
         />
       )}
 

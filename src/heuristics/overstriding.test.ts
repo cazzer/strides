@@ -95,6 +95,17 @@ describe('computeOverstriding exemplars', () => {
     // extreme against — neutral rather than confident.
     expect(evidence.quality).toBe(0.5)
     expect(evidence.side).toBe('left') // both instants happen to be the same foot here
+    // Stated per instant regardless, because this metric always knows it — unlike `side`, whose
+    // presence is a property of how the pair happened to fall rather than of what was measured.
+    // The mixed-foot pair, where `side` is absent and these two are the ONLY carriers of foot
+    // identity, is asserted at the plan layer (`evidenceFrames.test.ts`) rather than here: on an
+    // alternating-foot clip this metric's most/least strikes are always opposite-signed about a
+    // near-zero median, which puts them under the 1.5-MAD typicality ramp — and any fixture wide
+    // enough to clear the ramp trips `isOutlier`'s 3-MAD reject instead. Both squeeze from the
+    // same MAD, so no offset series reaches a mixed-foot exemplar through `selectExemplars`;
+    // reaching one here would mean tuning numbers against a gate rather than testing the emission.
+    expect(evidence.measuredSide).toBe('left')
+    expect(evidence.pairedMeasuredSide).toBe('left')
   })
 
   it('crops around the striking foot and the hip midline, with the knee as context', () => {

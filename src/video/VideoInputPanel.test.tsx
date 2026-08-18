@@ -1,5 +1,5 @@
 import { createRef } from 'react'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { VideoInputPanel } from './VideoInputPanel'
 import type { VideoSource } from './types'
@@ -34,26 +34,21 @@ describe('VideoInputPanel', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('shows a processing indicator while loading', () => {
-    render(
-      <VideoInputPanel videoSource={makeVideoSource({ status: 'loading' })} />,
+  // The loading line and the load-error alert moved to `ClipLoadStatus` (see its own test file)
+  // when this component's element moved into a 96x72 header strip entry — a message nobody can
+  // read is not a message. What must NOT come with it is anything readable at all:
+  it('renders nothing but the element host — no readable text can live inside a strip entry', () => {
+    const { container } = render(
+      <VideoInputPanel
+        videoSource={makeVideoSource({
+          status: 'error',
+          error: { kind: 'unsupported-format', message: 'Format not supported.' },
+        })}
+      />,
     )
-    expect(screen.getByRole('status').textContent).toMatch(/processing/i)
-  })
-
-  it('shows the error message and a working try-again button', () => {
-    const videoSource = makeVideoSource({
-      status: 'error',
-      error: { kind: 'unsupported-format', message: 'Format not supported.' },
-    })
-    render(<VideoInputPanel videoSource={videoSource} />)
-
-    expect(screen.getByRole('alert').textContent).toMatch(
-      /format not supported/i,
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: /try again/i }))
-    expect(videoSource.reset).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(container.textContent).toBe('')
   })
 
   it('renders no reset button when ready -- "Choose a different video" moved to the results column', () => {
@@ -129,5 +124,48 @@ describe('VideoInputPanel', () => {
     // Still one element, still mounted, still the node the pipeline's ref points at.
     expect(container.querySelectorAll('video')).toHaveLength(1)
     expect(video.isConnected).toBe(true)
+  })
+
+  it('drops the off-viewport offset when the element has to be on screen', () => {
+    const { container } = render(
+      <VideoInputPanel videoSource={makeVideoSource({ status: 'ready' })} onScreen />,
+    )
+    const host = container.querySelector('video')!.parentElement!
+    const hostClasses = host.className.split(/\s+/)
+
+    // The whole point: nothing pushes it out of the viewport, and it fills its strip entry
+    // instead. `strides-kyu.13` measured a ~20-24% sampled-frame loss for the concealed
+    // placement on the playback path, with no size threshold — on screen or not is the only
+    // variable, so `onScreen` must not be cosmetically different, it must be genuinely visible.
+    expect(hostClasses).not.toContain('fixed')
+    expect(hostClasses).not.toContain('left-[-200vw]')
+    expect(hostClasses).toContain('absolute')
+    expect(hostClasses).toContain('inset-0')
+
+    // Everything the concealed placement guarantees still holds here.
+    for (const forbidden of ['hidden', 'invisible', 'collapse', 'w-0', 'h-0', 'size-0']) {
+      expect(hostClasses).not.toContain(forbidden)
+    }
+    expect(host).toHaveAttribute('inert')
+    expect(container.querySelectorAll('video')).toHaveLength(1)
+  })
+
+  it('keeps the same element across the concealed <-> on-screen transition', () => {
+    // The one thing that would make all of the above moot: a placement change that remounts the
+    // node. `results-view`'s "Clip video elements stay mounted and playable while hidden" requires
+    // the DOM element the pipeline holds to survive every visibility transition, and only a CSS
+    // change can do that.
+    const videoSource = makeVideoSource({ status: 'ready' })
+    const { container, rerender } = render(
+      <VideoInputPanel videoSource={videoSource} />,
+    )
+    const before = container.querySelector('video')!
+
+    rerender(<VideoInputPanel videoSource={videoSource} onScreen />)
+    expect(container.querySelector('video')).toBe(before)
+
+    rerender(<VideoInputPanel videoSource={videoSource} />)
+    expect(container.querySelector('video')).toBe(before)
+    expect(before.isConnected).toBe(true)
   })
 })

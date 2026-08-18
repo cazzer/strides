@@ -99,6 +99,12 @@ function buildExemplars(
       // Only meaningful when the two strikes happen to be the same foot; the pair is not
       // constructed to be same-side, so most of the time there is no one side to name.
       ...(base.side === ghost.side && { side: base.side }),
+      // Which foot each half of the picture was measured from, emitted unconditionally because
+      // this metric always knows it — unlike `side` above, whose presence is a property of how the
+      // pair happened to fall. Without it a mixed-foot pair (the usual case) reaches the evidence
+      // layer with no way to tell which ankle the offset was taken from.
+      measuredSide: base.side,
+      pairedMeasuredSide: ghost.side,
       quality: pairQuality(mostQuality, leastQuality),
       label: 'Furthest-reaching footstrike, ghosted against the closest-landing one',
       cropKeypoints: cropKeypoints(

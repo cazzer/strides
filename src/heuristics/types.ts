@@ -117,6 +117,30 @@ export interface MetricExemplar {
   /** Present only where the metric measures per side, and only when both instants of a pair share
    * that side — omitted on `stepWidth`'s deliberately opposite-side pair. */
   side?: 'left' | 'right'
+  /**
+   * Which side of the body the metric's own measurement at `timestamp` was about — the striking
+   * foot, for the two footstrike metrics whose pair is built from OPPOSITE feet.
+   *
+   * `side` above is a PAIR-level claim and cannot express this: it exists only when both instants
+   * share a side, so on the pair `stepWidth` deliberately constructs (`selectOppositeSidePair`) and
+   * on the mixed-foot pair `overstriding` usually produces, it is absent — and with it goes any way
+   * for a consumer to know which ankle each half of the image was measured from. That is not a
+   * cosmetic loss: a caliper drawn from the hip midline to the OTHER foot's ankle depicts a
+   * measurement that was never taken.
+   *
+   * Emitted by the metric that measured it, never inferred downstream. In particular it is NOT
+   * recoverable from `cropKeypoints` ordering: the measured ankle does happen to be ordered first
+   * today, but that is a private detail of two modules' `seedFor` concatenation, and reading it
+   * would make "which foot was measured" a silent function of an array order nothing tests.
+   *
+   * Omitted where `side` already answers the question for every instant of the exemplar — a
+   * consumer falls back to `side`, which by its own contract applies to both instants whenever it
+   * is present. Where both are present they agree; this one wins, being the narrower statement.
+   */
+  measuredSide?: 'left' | 'right'
+  /** The same fact for `pairedTimestamp`. Meaningless — and absent — on a single-instant
+   * exemplar, for the same reason `pairedTimestamp` itself is. */
+  pairedMeasuredSide?: 'left' | 'right'
   /** 0..1, from `exemplars.ts`'s shared gate. Never below `MIN_EXEMPLAR_QUALITY`. */
   quality: number
   /** Short human-readable caption seed, naming what the picture shows. */

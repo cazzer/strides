@@ -92,7 +92,10 @@ function buildExemplars(
           timestamp: base.frame.timestamp,
           pairedTimestamp: ghost.frame.timestamp,
           // No `side`: the two instants are deliberately opposite feet, so naming one would be
-          // wrong about the other.
+          // wrong about the other. Each instant names its OWN foot instead — which is exactly the
+          // fact a per-instant consumer needs and the one `side` structurally cannot carry here.
+          measuredSide: base.side,
+          pairedMeasuredSide: ghost.side,
           quality: pairQuality(firstQuality, secondQuality),
           label: 'Opposite-foot plants either side of the hip midline',
           cropKeypoints: cropKeypoints(

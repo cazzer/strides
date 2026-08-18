@@ -68,63 +68,89 @@
 
 ## 4. Clip strip with per-clip progress (`strides-kyu.4`)
 
-- [ ] 4.1 Render the strip in the header beside the wordmark, one entry per clip, in clip-session
+- [x] 4.1 Render the strip in the header beside the wordmark, one entry per clip, in clip-session
       order (the same order fusion's source index and the "Combined from clip N of TOTAL" copy use).
-- [ ] 4.2 Each entry renders that clip's poster, with a neutral placeholder while the poster is
+- [x] 4.2 Each entry renders that clip's poster, with a neutral placeholder while the poster is
       `null`.
-- [ ] 4.3 Per-clip progress read from that clip's own `VideoAnalysisState`
+- [x] 4.3 Per-clip progress read from that clip's own `VideoAnalysisState`
       (`MultiClipVideoSession.tsx:76`'s `clipStates`) — **not** from `computeAggregateAnalysisState`.
       No new state machine.
-- [ ] 4.4 Distinguish sampling / processing / ready / error / queued by more than colour. Derive
+- [x] 4.4 Distinguish sampling / processing / ready / error / queued by more than colour. Derive
       *queued* from the already-computed `activeClipId` (`MultiClipVideoSession.tsx:146-150`) — no
       new plumbing (design.md D3).
-- [ ] 4.5 Expose each entry's condition and progress to assistive technology as text, with **at most
+- [x] 4.5 Expose each entry's condition and progress to assistive technology as text, with **at most
       one** live region announcing clip progress for the whole session (design.md D3).
-- [ ] 4.6 Overflow by scrolling the strip, not by wrapping the header.
-- [ ] 4.7 Keep the session `role="status"` line and its scale-pass narration intact — "The centimetre
+- [x] 4.6 Overflow by scrolling the strip, not by wrapping the header.
+- [x] 4.7 Keep the session `role="status"` line and its scale-pass narration intact — "The centimetre
       card reflects scale-pass progress" still requires it (design.md D3).
-- [ ] 4.8 `npm test` and `tsc -b` clean.
+- [x] 4.8 `npm test` and `tsc -b` clean.
 
 ## 5. Clip preview modal (`strides-kyu.5`)
 
-- [ ] 5.1 Activating a strip entry presents that clip's **already-mounted** element. The element does
+- [x] 5.1 Activating a strip entry presents that clip's **already-mounted** element. The element does
       not move in the DOM and `videoRef.current` keeps its identity across open → close
       (design.md D4).
-- [ ] 5.2 Reuse `SkeletonOverlay` unchanged, on the same gate it uses today (`phase === 'ready' &&
+- [x] 5.2 Reuse `SkeletonOverlay` unchanged, on the same gate it uses today (`phase === 'ready' &&
       robustFrames && metadata`). A preview opened before that renders the video with no overlay.
-- [ ] 5.3 Implement presentation-scoped looping: loop iff `phase === 'ready'` ∧ no scale pass in
+- [x] 5.3 Implement presentation-scoped looping: loop iff `phase === 'ready'` ∧ no scale pass in
       flight ∧ presented — as one declarative condition, extending the existing effect at
       `useVideoAnalysis.ts:385-396` rather than adding an imperative caller (design.md D1).
-- [ ] 5.4 Dismissing clears `loop` and stops playback, so no hidden clip decodes.
-- [ ] 5.5 Keep the unconditional loop clear at the top of `start()` (`useVideoAnalysis.ts:212-214`)
+- [x] 5.4 Dismissing clears `loop` and stops playback, so no hidden clip decodes.
+- [x] 5.5 Keep the unconditional loop clear at the top of `start()` (`useVideoAnalysis.ts:212-214`)
       and the scale pass's un-looped replay (`:478-482`) — both are sampling guarantees, not
       presentation concerns.
-- [ ] 5.6 Presenting/dismissing a clip whose analysis or scale pass is in flight writes **nothing**
+- [x] 5.6 Presenting/dismissing a clip whose analysis or scale pass is in flight writes **nothing**
       to `loop`, `currentTime`, `paused`, or `muted`. Test on the playback path specifically — the
       default WebCodecs path will not reveal a violation (design.md D1, risk R3).
-- [ ] 5.7 `aria-modal`, focus trap, Escape to dismiss, focus returned to the originating entry,
+- [x] 5.7 `aria-modal`, focus trap, Escape to dismiss, focus returned to the originating entry,
       overlay canvas stays `aria-hidden`.
-- [ ] 5.8 `npm test` and `tsc -b` clean.
+- [x] 5.8 `npm test` and `tsc -b` clean.
 
 ## 6. Header add-a-clip action (`strides-kyu.6`)
 
-- [ ] 6.1 One action in the header offering **both** record and upload — plus the demo clips, which
+- [x] 6.1 One action in the header offering **both** record and upload — plus the demo clips, which
       are unreachable for clips 2..N today. Present the same picker the zero-clip state presents
       full-page (design.md D6).
-- [ ] 6.2 Preserve `FileUpload`'s `multiple` fan-out (`FileUpload.tsx:44`): one picker interaction,
+- [x] 6.2 Preserve `FileUpload`'s `multiple` fan-out (`FileUpload.tsx:44`): one picker interaction,
       one clip per selected file.
-- [ ] 6.3 Remove the in-body "Add another clip" block (`MultiClipVideoSession.tsx:194-201`).
-- [ ] 6.4 Keyboard reachable, with an accessible name saying what it does.
-- [ ] 6.5 `npm test` and `tsc -b` clean.
+- [x] 6.3 Remove the in-body "Add another clip" block (`MultiClipVideoSession.tsx:194-201`).
+- [x] 6.4 Keyboard reachable, with an accessible name saying what it does.
+- [x] 6.5 `npm test` and `tsc -b` clean.
 
 ## 7. Header offset (`strides-kyu.7`)
 
-- [ ] 7.1 Remove all four hardcoded header-height values: `MultiClipVideoSession.tsx:182,203` and
-      `VideoInputPanel.tsx:132`, plus whatever the restructure leaves behind.
-- [ ] 7.2 Offsets track the header's actually-rendered height, including strip-present vs
-      strip-absent (design.md D7).
-- [ ] 7.3 Verified at narrow and wide viewports.
-- [ ] 7.4 `npm test` and `tsc -b` clean.
+- [x] 7.1 Remove all four hardcoded header-height values. **Only ONE survived to this ticket.**
+      `strides-kyu.3` took both `MultiClipVideoSession.tsx` values with the two-column grid, and the
+      `lg:col-span-2` that 3.1 parked here went with `EvidenceGallery.tsx` when `strides-ac9.3`
+      retired it. A repo-wide grep for `86px`/`150px`/`100vh-`/`lg:top-[`/`max-h-[calc` leaves
+      exactly `VideoInputPanel.tsx`'s `max-h-[calc(100vh-150px)]`, now `max-h-screen`.
+- [x] 7.2 Offsets track the header's actually-rendered height (design.md D7) — **satisfied by there
+      being no such offset left, not by a measuring mechanism.** D7 says "the spec states the
+      observable, not the mechanism", and the observable is now unconditional. The one surviving
+      value was a *false* dependency, not a stale one: the element it caps is the concealed clip
+      host, which has been `fixed; top: 0; left: -200vw` since `strides-kyu.3` — anchored to the
+      viewport's top edge and out of flow, so the sticky header is never above it and never takes
+      room from it. Subtracting a header height there is meaningless at any header height, so the
+      cap became the viewport itself. Measured rather than reasoned from the CSS: at 390/640/1440
+      the add-a-clip panel moves the header +238.0/+198.0/+198.0 px and the concealed box's rect is
+      **bit-identical** either side (390: `x -778, y 2, w 385.98, h 686.22`; 640/1440: `x -1278/-2878,
+      y 2, w 506.25, h 900`), with `max-height` resolving to `900px` == `innerHeight`. Building a
+      `ResizeObserver`-fed custom property no consumer reads was rejected on that evidence.
+- [x] 7.3 Verified at narrow and wide viewports — 390, 640 and 1440 px, real GPU
+      (`ANGLE Metal Renderer: Apple M4 Pro`). Header height measured in all three states:
+      zero clips **66** (390) / **86** (640, 1440) — the tagline is `hidden sm:block`, so the old
+      hardcoded 86 was already wrong on a phone before the strip existed; strip populated **129.8**
+      at every width; add-a-clip panel open **367.8** (390) / **327.8** (640, 1440).
+      P0 (`strides-kyu.13`) re-checked in pixels, not class names: with the panel OPEN and the
+      element mid-sampling on the **playback** path, the strip's live `<video>` rect was screenshotted
+      on its own and shows the runner painting (t = 0.906 s, `paused: false`, rect 92x68 at 302,22,
+      longest painted side 92 > the 60 floor). `scripts/ab-person-selection.mjs`, playback arm,
+      demo2, 5 trials, its own server: `sampling.path playback` (so the override took),
+      `sampling.detectedFrames` **64 [60..65]**, `missingFrames 0` — inside the healthy 63-65 band,
+      clear of the 47-49 broken band.
+- [x] 7.4 `npm test` and `tsc -b` clean — 84 files / 1209 tests passed (baseline unchanged),
+      `tsc -b` no errors, `eslint .` no issues, `playwright test` 1 passed / 0 failed on a dedicated
+      port (5203, `reuseExistingServer: false`; 5173 is held by a foreign checkout).
 
 ## 8. Tests (`strides-kyu.8`)
 

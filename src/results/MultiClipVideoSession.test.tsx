@@ -1,4 +1,3 @@
-import { createRef } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PoseDetector } from '../pose/detector'
@@ -111,7 +110,8 @@ function canonicalVideos(): HTMLVideoElement[] {
 
 /**
  * Chooses a file through whichever file input is currently on the page — the full-page
- * `ClipPicker` while no clip is loaded, the "Add another clip" block once one is.
+ * `ClipPicker` while no clip is loaded, the header action's picker once one is (see
+ * `addAnotherClip`, which opens it).
  *
  * The `await act(async () => {})` afterwards is load-bearing and its absence reads as a hang, not
  * a failed assertion: every clip (the first one now included) is created by `addClip` and loaded
@@ -123,6 +123,19 @@ function canonicalVideos(): HTMLVideoElement[] {
 async function chooseFile(file: File) {
   fireEvent.change(screen.getByLabelText(/choose a video file/i), { target: { files: [file] } })
   await act(async () => {})
+}
+
+/**
+ * Adds a clip through the HEADER's add-a-clip action, which is the only way in once a clip is
+ * loaded. Both extra steps are the point rather than ceremony: the action presents the entire
+ * `ClipPicker` (record, upload and both demo clips), and Record is its default tab, so a test that
+ * wants a file has to ask for the Upload one. What this replaces was a bare `<FileUpload>` in the
+ * page body, which offered no record path and no demo clips at all.
+ */
+async function addAnotherClip(file: File) {
+  fireEvent.click(await screen.findByRole('button', { name: /add a clip/i }))
+  fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+  await chooseFile(file)
 }
 
 function makePoster(): ClipPoster {
@@ -192,8 +205,7 @@ afterEach(() => {
 
 describe('MultiClipVideoSession', () => {
   it('starts with zero clips and a full-page picker', () => {
-    const headingRef = createRef<HTMLHeadingElement>()
-    render(<MultiClipVideoSession detector={null} headingRef={headingRef} />)
+    render(<MultiClipVideoSession detector={null} />)
 
     // A genuinely empty session, not "one slot whose videoSource.status is 'empty'": there is no
     // clip, so there is no video element to be empty.
@@ -206,9 +218,8 @@ describe('MultiClipVideoSession', () => {
   })
 
   it('single clip (N=1): auto-starts and reaches Analysis complete once ready', async () => {
-    const headingRef = createRef<HTMLHeadingElement>()
     const detector = makeFakeDetector()
-    render(<MultiClipVideoSession detector={detector} headingRef={headingRef} />)
+    render(<MultiClipVideoSession detector={detector} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run.mp4', { type: 'video/mp4' }))
@@ -220,8 +231,7 @@ describe('MultiClipVideoSession', () => {
   })
 
   it('one source, one clip: selecting several files at once creates one clip per file', async () => {
-    const headingRef = createRef<HTMLHeadingElement>()
-    render(<MultiClipVideoSession detector={null} headingRef={headingRef} />)
+    render(<MultiClipVideoSession detector={null} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     fireEvent.change(screen.getByLabelText(/choose a video file/i), {
@@ -241,8 +251,7 @@ describe('MultiClipVideoSession', () => {
   })
 
   it('the picker stays on the page while a clip is still loading, and is replaced once one is ready', async () => {
-    const headingRef = createRef<HTMLHeadingElement>()
-    render(<MultiClipVideoSession detector={null} headingRef={headingRef} />)
+    render(<MultiClipVideoSession detector={null} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run.mp4', { type: 'video/mp4' }))
@@ -251,13 +260,232 @@ describe('MultiClipVideoSession', () => {
     // that never gets there leaves the reader a way forward rather than an empty page.
     expect(canonicalVideos()).toHaveLength(1)
     expect(screen.getByRole('button', { name: /demo 1 \(side view\)/i })).toBeInTheDocument()
+    // The two presentations are complements, so the header action is absent for exactly as long as
+    // the full-page picker is present. Otherwise the page would carry two Upload tabs, two file
+    // inputs and two pairs of demo buttons at once.
+    expect(screen.queryByRole('button', { name: /add a clip/i })).not.toBeInTheDocument()
 
     markVideoReady(canonicalVideos()[0])
 
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /demo 1 \(side view\)/i })).not.toBeInTheDocument(),
     )
-    expect(screen.getByText(/add another clip/i)).toBeInTheDocument()
+
+    // The picker collapsed INTO the header, and `video-input` requires it leave nothing behind:
+    // "No add-a-clip affordance SHALL remain in the page body."
+    const collapsed = screen.getByRole('button', { name: /add a clip/i })
+    expect(screen.getByRole('banner')).toContainElement(collapsed)
+    const main = screen.getByRole('main')
+    expect(main.querySelector('input[type=file]')).toBeNull()
+    expect(main.textContent).not.toMatch(/add (another|a) clip/i)
+  })
+
+  it('adds clip 2 from a demo button — a path that had no way in at all while the body block was upload-only', async () => {
+    // Not a relocation test. Every `addClip` records a `pendingLoad` that the new `ClipSlot`
+    // consumes on mount, so the new slot's own picker (gated on `status === 'empty'`) never
+    // rendered — the demo buttons and the record path were unreachable for clips 2..N, and upload
+    // was the only way in. This is the fix, exercised through the session.
+    const demoBlob = new Blob(['demo'], { type: 'video/mp4' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, blob: () => Promise.resolve(demoBlob) }),
+    )
+
+    render(<MultiClipVideoSession detector={null} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+
+    fireEvent.click(await screen.findByRole('button', { name: /add a clip/i }))
+    fireEvent.click(screen.getByRole('button', { name: /demo 2 \(front view\)/i }))
+
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
+    // Same `pendingLoad` path as an uploaded clip, so it is indistinguishable downstream: it gets
+    // its own strip entry, numbered in clip-session order.
+    expect(
+      screen.getByRole('button', { name: /clip 2 of 2:/i }),
+    ).toBeInTheDocument()
+    // The picker collapsed again once it had handed the source over, rather than sitting open in
+    // the header on top of a webcam preview nobody asked for.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /add a clip/i })).toHaveAttribute(
+        'aria-expanded',
+        'false',
+      ),
+    )
+
+    vi.unstubAllGlobals()
+  })
+
+  it('shows each clip its own progress in the header strip, and hosts the working clip’s element on screen', async () => {
+    // Clip 1's primary pass hangs, so the session sits in the one state this whole ticket is
+    // about: one clip sampling, one clip queued behind the shared detector.
+    sampleClipMock
+      .mockImplementationOnce(() => ({
+        promise: new Promise(() => {}),
+        handle: { stop: vi.fn() },
+      }))
+      .mockImplementation(() => ({
+        promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+        handle: { stop: vi.fn() },
+      }))
+
+    render(<MultiClipVideoSession detector={makeFakeDetector()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
+
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
+    markVideoReady(canonicalVideos()[1])
+
+    // One entry per clip, in clip-session order -- the same order fusion's source index and the
+    // "Combined from clip N of TOTAL" copy number clips by.
+    const strip = screen.getByRole('list', { name: /clips/i })
+    const entries = await waitFor(() => {
+      const found = strip.querySelectorAll('[data-clip-condition]')
+      expect(found).toHaveLength(2)
+      return found
+    })
+
+    // Each entry reports its OWN state. `computeAggregateAnalysisState` would have averaged these
+    // into one number that describes neither clip.
+    await waitFor(() =>
+      expect(entries[0].getAttribute('data-clip-condition')).toBe('sampling'),
+    )
+    expect(entries[1].getAttribute('data-clip-condition')).toBe('queued')
+    expect(entries[0].textContent).toMatch(/clip 1 of 2: analyzing/i)
+    expect(entries[1].textContent).toMatch(/clip 2 of 2: queued/i)
+
+    // Exactly one live region for the whole session's clip progress, on the clip that is working
+    // (design.md D3). The other entry is readable but silent.
+    expect(strip.querySelectorAll('[role="status"]')).toHaveLength(1)
+    expect(entries[0].querySelector('[role="status"]')).not.toBeNull()
+
+    // THE CORRECTNESS REQUIREMENT (`strides-kyu.13`). The clip being sampled hosts its real
+    // element on screen inside its own entry; the queued one's is concealed off screen. jsdom
+    // cannot see that a concealed element stops presenting frames — this asserts the placement
+    // that a live browser then has to confirm in pixels.
+    const hostOf = (entry: Element) => entry.querySelector('video')!.parentElement!
+    expect(hostOf(entries[0]).className).toContain('absolute')
+    expect(hostOf(entries[0]).className).not.toContain('fixed')
+    expect(hostOf(entries[1]).className).toContain('fixed')
+
+    // Both elements are inside their own entry in either placement: the strip never withholds an
+    // element, so moving between the two is a class change and never a remount.
+    expect(entries[0]).toContainElement(entries[0].querySelector('video'))
+    expect(entries[1]).toContainElement(entries[1].querySelector('video'))
+  })
+
+  it('previews one clip at a time: nothing loops until presented, and dismissing stops it again', async () => {
+    // design.md D1 / `results-view` "Clip playback loops only while that clip is presented". Two
+    // ready clips with no preview open must BOTH be stopped: an always-on loop would decode and
+    // composite N videos nobody can see for the life of the session.
+    render(<MultiClipVideoSession detector={makeFakeDetector()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
+    markVideoReady(canonicalVideos()[1])
+
+    const videos = canonicalVideos()
+    for (const video of videos) vi.spyOn(video, 'play').mockResolvedValue(undefined)
+    const pauses = videos.map((video) => vi.spyOn(video, 'pause').mockImplementation(() => {}))
+    await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
+
+    // Both ready, neither presented, neither looping.
+    expect(videos.map((v) => v.loop)).toEqual([false, false])
+
+    const entryButton = (n: number) =>
+      screen.getByRole('button', { name: new RegExp(`clip ${n} of 2:`, 'i') })
+
+    fireEvent.click(entryButton(2))
+    // Exactly one clip loops, and it is the one that was activated.
+    expect(videos.map((v) => v.loop)).toEqual([false, true])
+    expect(screen.getByRole('dialog')).toHaveAccessibleName(/clip 2 of 2/i)
+
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(videos.map((v) => v.loop)).toEqual([false, false])
+    expect(pauses[1]).toHaveBeenCalled()
+    expect(pauses[0]).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    // Focus is back on the entry that opened it.
+    expect(document.activeElement).toBe(entryButton(2))
+  })
+
+  it('the preview presents the clip’s already-mounted element, overlay and all', async () => {
+    render(<MultiClipVideoSession detector={makeFakeDetector()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
+
+    const video = canonicalVideos()[0]
+    vi.spyOn(video, 'play').mockResolvedValue(undefined)
+    vi.spyOn(video, 'pause').mockImplementation(() => {})
+
+    fireEvent.click(screen.getByRole('button', { name: /clip 1 of 1:/i }))
+
+    // No second element for the clip, and the existing one has not been remounted — the modal
+    // formed around it (`results-view`, "Revealing a clip does not change which element analysis
+    // holds"). Asserted on the node, not on a selector match.
+    expect(canonicalVideos()).toHaveLength(1)
+    expect(canonicalVideos()[0]).toBe(video)
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toContainElement(video)
+    // The overlay came along, still hidden from assistive technology.
+    const overlay = dialog.querySelector('canvas')
+    expect(overlay).not.toBeNull()
+    expect(overlay).toHaveAttribute('aria-hidden', 'true')
+    // On screen, in the dialog's stage — the concealed placement would defeat the whole preview.
+    expect(video.parentElement!.className).toContain('absolute')
+    expect(video.parentElement!.className).not.toContain('fixed')
+
+    fireEvent.click(screen.getByRole('button', { name: /close preview/i }))
+    expect(canonicalVideos()).toHaveLength(1)
+    expect(canonicalVideos()[0]).toBe(video)
+  })
+
+  it('a preview opened mid-analysis shows the video without an overlay, and writes nothing', async () => {
+    // The observational guard: a reader inspecting a clip mid-analysis is reasonable, and is made
+    // safe by presentation writing nothing while the pipeline owns the element.
+    sampleClipMock.mockImplementation(() => ({
+      promise: new Promise(() => {}),
+      handle: { stop: vi.fn() },
+    }))
+
+    render(<MultiClipVideoSession detector={makeFakeDetector()} />)
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
+
+    const video = canonicalVideos()[0]
+    const play = vi.spyOn(video, 'play').mockResolvedValue(undefined)
+    const pause = vi.spyOn(video, 'pause').mockImplementation(() => {})
+    const before = { loop: video.loop, muted: video.muted, currentTime: video.currentTime }
+
+    fireEvent.click(screen.getByRole('button', { name: /clip 1 of 1:/i }))
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toContainElement(video)
+    expect(dialog.querySelector('canvas')).toBeNull() // no frames yet, so no overlay
+    // The element stays `inert` while the pipeline owns it: the native controls write into the
+    // very playback state a run in flight depends on.
+    expect(video.parentElement).toHaveAttribute('inert')
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+
+    expect(play).not.toHaveBeenCalled()
+    expect(pause).not.toHaveBeenCalled()
+    expect(video.loop).toBe(before.loop)
+    expect(video.muted).toBe(before.muted)
+    expect(video.currentTime).toBe(before.currentTime)
   })
 
   it('serializes the shared detector: the second clip stays queued until the first clip fully finishes', async () => {
@@ -277,9 +505,8 @@ describe('MultiClipVideoSession', () => {
         handle: { stop: vi.fn() },
       }))
 
-    const headingRef = createRef<HTMLHeadingElement>()
     const detector = makeFakeDetector()
-    render(<MultiClipVideoSession detector={detector} headingRef={headingRef} />)
+    render(<MultiClipVideoSession detector={detector} />)
 
     // Load clip 1 through the full-page picker -- its primary pass starts sampling and hangs.
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
@@ -287,9 +514,8 @@ describe('MultiClipVideoSession', () => {
     markVideoReady(canonicalVideos()[0])
     await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
 
-    // Add clip 2 via the session-level "Add another clip" picker while clip 1 is still sampling.
-    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
-    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    // Add clip 2 via the header's add-a-clip action while clip 1 is still sampling.
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
     markVideoReady(canonicalVideos()[1])
 
@@ -320,15 +546,12 @@ describe('MultiClipVideoSession', () => {
   })
 
   it('removes clips one by one, and removing the last one returns to the picker', async () => {
-    const headingRef = createRef<HTMLHeadingElement>()
-    render(<MultiClipVideoSession detector={null} headingRef={headingRef} />)
+    render(<MultiClipVideoSession detector={null} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
     markVideoReady(canonicalVideos()[0])
-    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
-
-    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
 
     const removeButtons = screen.getAllByRole('button', { name: /remove clip/i })
@@ -346,15 +569,12 @@ describe('MultiClipVideoSession', () => {
 
   it('releases the removed clip’s poster in `removeClip` itself, and leaves the survivor’s alone', async () => {
     const posters = posterPerFile()
-    const headingRef = createRef<HTMLHeadingElement>()
-    render(<MultiClipVideoSession detector={null} headingRef={headingRef} />)
+    render(<MultiClipVideoSession detector={null} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
     markVideoReady(canonicalVideos()[0])
-    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
-
-    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
     markVideoReady(canonicalVideos()[1])
     await waitForPosters(2)
@@ -384,15 +604,12 @@ describe('MultiClipVideoSession', () => {
 
   it('releases every clip’s poster in `handleChooseDifferentVideo` itself when the session resets', async () => {
     const posters = posterPerFile()
-    const headingRef = createRef<HTMLHeadingElement>()
-    render(<MultiClipVideoSession detector={null} headingRef={headingRef} />)
+    render(<MultiClipVideoSession detector={null} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
     markVideoReady(canonicalVideos()[0])
-    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
-
-    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
     markVideoReady(canonicalVideos()[1])
     await waitForPosters(2)
@@ -433,9 +650,8 @@ describe('MultiClipVideoSession', () => {
         }
       })
 
-    const headingRef = createRef<HTMLHeadingElement>()
     const detector = makeFakeDetector()
-    render(<MultiClipVideoSession detector={detector} headingRef={headingRef} />)
+    render(<MultiClipVideoSession detector={detector} />)
 
     // Load clip 1 -- its primary pass starts sampling and hangs, holding the shared detector.
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
@@ -444,8 +660,7 @@ describe('MultiClipVideoSession', () => {
     await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
 
     // Add clip 2 while clip 1 is still mid-analysis -- it queues, waiting for the shared detector.
-    await waitFor(() => expect(screen.getByText(/add another clip/i)).toBeInTheDocument())
-    await chooseFile(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
     await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
     markVideoReady(canonicalVideos()[1])
     await waitFor(() =>

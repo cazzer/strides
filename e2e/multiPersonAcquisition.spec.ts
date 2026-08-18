@@ -40,7 +40,16 @@ test('multi-person clip: analysis completes and reports diagnostics with personO
   await page.getByRole('button', { name: 'Upload' }).click()
   await page.locator('input[type=file]').setInputFiles(FIXTURE_PATH)
 
-  await page.getByText(/analyzing|processing results/i).waitFor({ timeout: 30_000 })
+  // Per-clip progress moved out of the session status line and onto each clip's own header strip
+  // entry (`strides-kyu.4`), carrying the identical strings. `.first()` because the strings are
+  // now per clip rather than per session: with one clip there is exactly one node, but the wait
+  // should not become a strict-mode violation the day this fixture grows a second one.
+  await page
+    .getByText(/analyzing|processing results/i)
+    .first()
+    .waitFor({ timeout: 30_000 })
+  // Still exactly one node, and deliberately so: "Analysis complete." is a SESSION fact and stays
+  // in `ResultsView`'s single status line — no strip entry is allowed to repeat it.
   await page.getByText(/analysis complete/i).waitFor({ timeout: 90_000 })
 
   const diagnostics = await diagnosticsPromise

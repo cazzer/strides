@@ -270,6 +270,12 @@ describe('computeStepWidth exemplars', () => {
       (t) => detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG).find((s) => s.timestamp === t)!.side,
     )
     expect(new Set(sides).size).toBe(2)
+
+    // ...and each instant names its OWN foot, which is what `side` structurally cannot say here.
+    // Without this a consumer has the two timestamps and no way to know which ankle either was
+    // measured from — recoverable only by reading `cropKeypoints` order, which is not a contract.
+    expect([evidence.measuredSide, evidence.pairedMeasuredSide]).toEqual(sides)
+    expect(evidence.measuredSide).not.toBe(evidence.pairedMeasuredSide)
   })
 
   it('demotes to a single representative strike when every plant is the same foot', () => {

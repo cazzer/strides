@@ -1,6 +1,6 @@
-import type { MetricId } from '../heuristics/types'
 import type { VideoAnalysisState } from './types'
 import { MetricsPanel } from './MetricsPanel'
+import type { MetricCardEvidence } from './MetricsPanel'
 
 export interface ResultsViewProps {
   analysis: VideoAnalysisState
@@ -14,37 +14,32 @@ export interface ResultsViewProps {
    * button with it, so the composer (`App.tsx`) must move focus somewhere stable first. Same
    * contract as `onTryAgain`. */
   onChooseDifferentVideo: () => void
-  /** Which metrics the evidence gallery produced imagery for. Passed straight through to
-   * `MetricsPanel`, which grows a "See evidence" deep link on those cards. Already derived by
-   * the composer (`MultiClipVideoSession`, which mounts the gallery as this component's sibling)
-   * — this component stays presentational and calls no hook, exactly as before. */
-  evidenceMetrics?: ReadonlySet<MetricId>
-}
-
-function progressLabel(
-  phase: VideoAnalysisState['phase'],
-  progress: number,
-): string {
-  if (phase === 'sampling') {
-    return `Analyzing… ${Math.round(progress * 100)}%`
-  }
-  return 'Processing results…'
+  /** The imagery each metric was measured from. Passed straight through to `MetricsPanel`, which
+   * renders each metric's thumbnails inside that metric's own card. Already extracted by the
+   * composer (`MultiClipVideoSession`, which owns `useSessionEvidence`) — this component stays
+   * presentational and calls no hook, exactly as before. */
+  evidence?: readonly MetricCardEvidence[]
+  /** How many clips the session holds, so a card can say which one its evidence came from. */
+  clipCount?: number
 }
 
 /**
  * Presentational composition of the analysis controls and results — mirrors
  * `QualityWarningBanner`'s pattern of taking already-derived props and never calling hooks
- * itself. Renders the "Analyze" button, a progress readout while sampling/processing, and once
- * `phase === 'ready'`, the metrics panel (which itself renders the vertical-oscillation chart).
+ * itself. Renders the "Analyze" button, the session status line, and once `phase === 'ready'`,
+ * the metrics panel (which itself renders the vertical-oscillation chart).
+ *
+ * Per-clip sampling progress is NOT here — it moved onto each clip's own header strip entry
+ * (`clipStripStatus.ts`), because this component only ever saw the aggregate's mean across clips.
  */
 export function ResultsView({
   analysis,
   onTryAgain,
   onChooseDifferentVideo,
-  evidenceMetrics,
+  evidence,
+  clipCount,
 }: ResultsViewProps) {
-  const { phase, progress, isPausedMidAnalysis, heuristics, error, start } =
-    analysis
+  const { phase, heuristics, error, start } = analysis
   // A 'done' scale pass includes the measured-but-unfittable graft, where a grafted metric's
   // value is still null and the panel lists it as not measured — saying a metric "was added"
   // there would be false. Shared with the 'failed' branch: for the reader both outcomes are the
@@ -94,14 +89,20 @@ export function ResultsView({
         </button>
       </div>
 
-      {(phase === 'sampling' || phase === 'processing') && (
-        <p role="status">
-          {progressLabel(phase, progress)}
-          {isPausedMidAnalysis &&
-            ' — paused, resume playback to continue analyzing'}
-        </p>
-      )}
+      {/*
+        The per-clip progress readout that used to sit here is gone, MOVED rather than deleted: it
+        was rendered from `computeAggregateAnalysisState`'s MEAN progress across clips, which is
+        exactly the wrong summary — only one clip holds the shared detector at a time, so an
+        average hides which clip is actually working. Each clip now shows its own `phase`/`progress`
+        on its own header strip entry, carrying the identical strings (`Analyzing… 42%`,
+        `Processing results…`, and the paused suffix) on the clip they belong to. See
+        `clipStripStatus.ts` and design.md D3.
 
+        The `role="status"` line below is a SESSION fact and stays. "The centimetre card reflects
+        scale-pass progress" requires it be always-visible, and both `e2e/multiPersonAcquisition`
+        and `scripts/ab-person-selection.mjs` wait on its "Analysis complete." — which is also why
+        no strip entry is allowed to say those two words.
+      */}
       {phase === 'ready' && (
         <p role="status">
           Analysis complete.
@@ -140,7 +141,8 @@ export function ResultsView({
           <MetricsPanel
             heuristics={heuristics}
             scalePassStatus={analysis.scalePass.status}
-            evidenceMetrics={evidenceMetrics}
+            evidence={evidence}
+            clipCount={clipCount}
           />
           {/*
             Save/export (e.g. Google Drive) is explicitly out of scope for this build — this is

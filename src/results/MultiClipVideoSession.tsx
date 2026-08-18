@@ -1,14 +1,14 @@
-import { useCallback, useState } from 'react'
-import type { RefObject } from 'react'
-import type { MetricId } from '../heuristics/types'
+import { useCallback, useRef, useState } from 'react'
 import type { PoseDetector } from '../pose/detector'
+import { AddClipAction } from '../video/AddClipAction'
+import { ClipLoadStatus } from '../video/ClipLoadStatus'
 import { ClipPicker } from '../video/ClipPicker'
-import { FileUpload } from '../video/FileUpload'
 import { releaseClipPoster } from '../video/posterFrame'
 import { ClipSlot } from './ClipSlot'
 import type { ClipPendingLoad } from './ClipSlot'
-import { EvidenceGallery } from './EvidenceGallery'
 import { ResultsView } from './ResultsView'
+import { useSessionEvidence } from './useSessionEvidence'
+import type { EvidenceSection } from './useSessionEvidence'
 import {
   computeAggregateAnalysisState,
   computeFusionSourceIndices,
@@ -16,17 +16,14 @@ import {
 } from './multiClipAnalysis'
 import type { ClipSession } from './multiClipAnalysis'
 
-/** Stable empty set, so "no gallery yet" never re-renders the cards with a fresh identity. */
-const NO_EVIDENCE_METRICS: ReadonlySet<MetricId> = new Set()
+/** Stable empty list, so "extraction has not settled yet" never hands the cards a fresh
+ * identity on every render. */
+const NO_EVIDENCE: readonly EvidenceSection[] = []
 
 export interface MultiClipVideoSessionProps {
   /** The one shared, stateful pose detector for the whole page — handed to exactly one active
    * clip at a time (see `nextActiveClipIndex`); every other clip gets `null`. */
   detector: PoseDetector | null
-  /** Owned by `App.tsx` (the page heading lives in its header, outside this component) — "choose
-   * a different video" moves focus there once this whole session resets, the same fix already
-   * applied for the single-clip flow this generalizes. */
-  headingRef: RefObject<HTMLHeadingElement | null>
 }
 
 function makeClipId(): string {
@@ -75,8 +72,25 @@ function sameClipSession(previous: ClipSession | undefined, next: ClipSession): 
  * `ClipSlot` per clip, hands the shared detector to exactly one of them (the serialization
  * mitigation — see this change's design.md D5/D6), and feeds the unmodified `ResultsView` the
  * fused aggregate from `computeAggregateAnalysisState`.
+ *
+ * ### Why this component renders the page header
+ *
+ * The clip strip lives in the header, and each strip entry hosts that clip's real `<video>` while
+ * its analysis is in flight — a correctness requirement, not a layout one (`strides-kyu.13`, and
+ * see `VideoInputPanel`). The elements therefore have to be rendered INTO the header by whatever
+ * owns the clip list, and that is this component. Lifting the header up to `App.tsx` and passing
+ * the strip down is not equivalent: a portal target is `null` on the first render, and an element
+ * positioned over a separately-rendered entry lands under the sticky header at the slightest
+ * mistake — both of which produce a silently concealed element that measures like a failure while
+ * every class name looks right. So the header moved down here, and `App.tsx` keeps only the pose
+ * detector.
  */
-export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSessionProps) {
+export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) {
+  // "Choose a different video" (a whole-session reset) unmounts the results and returns the page
+  // to the picker, so the button's focus needs to land on something that survives the transition —
+  // the page heading, the one thing on the page that is always there. Same fix already applied
+  // once for the single-clip flow (WebcamCapture, #4).
+  const headingRef = useRef<HTMLHeadingElement>(null)
   // Seeded EMPTY, and that is the whole point: a session with no clips is now representable, so
   // the zero-clip state is genuinely "no clips" rather than "one slot whose videoSource.status is
   // 'empty'". Every clip, the first one included, is now created by `addClip` and loaded through a
@@ -87,12 +101,11 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
   const [pendingLoads, setPendingLoads] = useState<Record<string, ClipPendingLoad>>({})
   const [clipStates, setClipStates] = useState<Record<string, ClipSession>>({})
   const [activeClipIndex, setActiveClipIndex] = useState(0)
-  // Reported up by the evidence gallery once it knows which metrics it actually produced imagery
-  // for — the same report-up/fan-down shape `ClipSlot` already uses, and the only way the cards
-  // (a sibling subtree) can learn it: whether a metric has evidence is not derivable from
-  // `heuristics`, since an emitted exemplar can still fail to resolve or fail to extract.
-  const [reportedEvidenceMetrics, setReportedEvidenceMetrics] =
-    useState<ReadonlySet<MetricId>>(NO_EVIDENCE_METRICS)
+  // Which clip's preview is open, or `null`. Session-level rather than per-slot because it is a
+  // mutually exclusive choice: exactly one clip can be presented at a time, and "presented" is the
+  // third conjunct of every clip's loop condition (design.md D1), so two open previews would mean
+  // two clips decoding at once — precisely what scoping the loop to presentation exists to stop.
+  const [presentedClipId, setPresentedClipId] = useState<string | null>(null)
 
   const handleReport = useCallback((clipId: string, session: ClipSession) => {
     setClipStates((prev) => {
@@ -100,6 +113,8 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
       return { ...prev, [clipId]: session }
     })
   }, [])
+
+  const dismissPreview = useCallback(() => setPresentedClipId(null), [])
 
   const addClip = useCallback((source: Blob | File, opts?: { frameRateHint?: number }) => {
     const id = makeClipId()
@@ -124,6 +139,11 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
       // to unmounting the slot. `reset()` is idempotent and cheap for a clip that was never active
       // (idle) or already terminal (ready/error), so it's called unconditionally rather than only
       // for the clip that happens to be active right now.
+      // A preview of the clip being removed cannot survive it — its stage is that clip's own
+      // element, which is about to unmount. Cleared before anything else so no render ever sees a
+      // `presentedClipId` pointing at a clip that is no longer in the session.
+      setPresentedClipId((current) => (current === id ? null : current))
+
       clipStates[id]?.analysis.reset()
 
       // Frees the poster's pixels in this same tick, for the same reason `reset()` is called here
@@ -175,12 +195,16 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
   const anyClipVideoReady = clips.some((c) => c.videoSource.status === 'ready')
 
   // Which clip each FUSED metric was selected from, or null until every clip is ready — the same
-  // gate `aggregate.heuristics !== null` passes, so the gallery can never attribute a result that
-  // has not been fused yet. Deriving `evidenceMetrics` from it rather than storing the reset means
-  // an in-flight new clip drops the cards' deep links in the same render the gallery unmounts.
+  // gate `aggregate.heuristics !== null` passes, so a card can never attribute a picture to a
+  // result that has not been fused yet.
   const sourceIndices = computeFusionSourceIndices(clips)
-  const evidenceMetrics =
-    sourceIndices === null ? NO_EVIDENCE_METRICS : reportedEvidenceMetrics
+  // The session's ONE evidence extraction. It lives here, not inside the results subtree, because
+  // the images it produces are canvas ELEMENTS and a node has one parent: whoever owns extraction
+  // must not also be the thing that parents the canvases, or a second surface would silently steal
+  // them. A second caller of this hook would mean a second cache, a second batch and a second
+  // decoder — so there is exactly one, here.
+  const evidenceState = useSessionEvidence(clips, sourceIndices)
+  const evidence = evidenceState.status === 'settled' ? evidenceState.sections : NO_EVIDENCE
 
   const handleTryAgain = useCallback(() => {
     const errored = clips.find((c) => c.analysis.phase === 'error')
@@ -202,78 +226,143 @@ export function MultiClipVideoSession({ detector, headingRef }: MultiClipVideoSe
     setPendingLoads({})
     setClipStates({})
     setActiveClipIndex(0)
-    setReportedEvidenceMetrics(NO_EVIDENCE_METRICS)
+    setPresentedClipId(null)
     headingRef.current?.focus()
   }, [clipStates, headingRef])
 
   return (
-    <main className="mx-auto max-w-6xl px-4 sm:px-6 py-10 space-y-8">
-      {/*
-        Every clip's slot, always mounted — but no longer a column of the page. A slot's `<video>`
-        is positioned off screen by `VideoInputPanel` (see the hard constraint there); what stays
-        in the body and visible is everything a reader still has to be able to act on: the
-        loading line, the load-error alert and its Try again, the queued hint, and Remove. Moving
-        the whole slot off screen would silently destroy the error surface `video-input`'s "Clear
-        error messages for permission and format failures" requires be visible, and the Remove
-        control — while keeping every unit test green, since jsdom sees the DOM and not the CSS.
-      */}
-      {clipIds.map((id) => (
-        <ClipSlot
-          key={id}
-          clipId={id}
-          pendingLoad={pendingLoads[id] ?? null}
-          detector={id === activeClipId ? detector : null}
-          onReport={handleReport}
-          onRemove={removeClip}
-        />
-      ))}
+    <>
+      <header className="sticky top-0 z-10 border-b-2 border-black dark:border-white bg-white dark:bg-black px-4 sm:px-6 py-4">
+        {/*
+          `flex-wrap` exists for the add-a-clip panel and nothing else: it is the one item allowed
+          to take a line of its own (`basis-full`), which is what keeps it BELOW the strip instead
+          of over it. The three items on the first line are unaffected — the strip is `flex-1`
+          (`flex-basis: 0`), so it shrinks rather than wrapping and never displaces the wordmark or
+          the trigger.
+        */}
+        <div className="flex flex-wrap items-center gap-4 sm:gap-6">
+          <div className="shrink-0">
+            <h1
+              ref={headingRef}
+              tabIndex={-1}
+              className="font-display text-2xl font-bold tracking-tight focus:outline-none"
+            >
+              Strides
+            </h1>
+            {/*
+              Dropped below `sm`. The tagline is ~250 px wide and this block does not shrink, so
+              on a phone it left the strip about 90 px — narrower than a single 96 px entry, which
+              clipped the working clip's element at the strip's edge. That is not merely untidy:
+              an entry scrolled or clipped out of the strip's bounds is a partially concealed
+              element, and concealment is what costs sampled frames. The wordmark stays at every
+              width; the sentence is the part a narrow viewport can afford to lose.
+            */}
+            <p className="hidden font-sans text-sm text-neutral-600 sm:block dark:text-neutral-400">
+              Browser-based running form analysis.
+            </p>
+          </div>
 
-      {/*
-        The picker-vs-results gate is `anyClipVideoReady`, NOT `clipIds.length`: a clip that is
-        still loading, or that failed to load, is not a *loaded* clip, so the picker stays on the
-        page beside that clip's own error alert rather than leaving the reader with an error and
-        no way forward.
-      */}
-      {!anyClipVideoReady && (
-        <section className="space-y-4" aria-label="Add a clip">
-          <ClipPicker onSource={addClip} />
-        </section>
-      )}
+          {/*
+            The clip strip. Every clip's slot is mounted HERE, in the header, and each entry hosts
+            that clip's own `<video>` — on screen and painting while it is being sampled, concealed
+            off screen once nothing is reading it (`VideoInputPanel`). That placement is the
+            correctness fix `strides-kyu.13` measured: concealment costs ~20-24% of the sampled
+            frames on the playback path, at any size, by any mechanism.
 
-      {anyClipVideoReady && (
-        <ResultsView
-          analysis={aggregate}
-          onTryAgain={handleTryAgain}
-          onChooseDifferentVideo={handleChooseDifferentVideo}
-          evidenceMetrics={evidenceMetrics}
-        />
-      )}
+            `overflow-x-auto` with `shrink-0` entries: a crowded strip scrolls within its own
+            bounds instead of wrapping the header onto a second line. `min-w-0` is what lets it
+            actually shrink inside the flex row rather than pushing the wordmark off screen. An
+            entry scrolled out of view would be a concealed entry, so `ClipStripEntry` scrolls the
+            working clip back into view when it starts.
+          */}
+          {clipIds.length > 0 && (
+            <ul
+              aria-label="Clips"
+              className="clip-strip flex min-w-0 flex-1 items-start gap-3 overflow-x-auto py-1"
+            >
+              {clipIds.map((id, index) => (
+                <ClipSlot
+                  key={id}
+                  clipId={id}
+                  pendingLoad={pendingLoads[id] ?? null}
+                  detector={id === activeClipId ? detector : null}
+                  index={index}
+                  total={clipIds.length}
+                  isActiveClip={id === activeClipId}
+                  isPresented={id === presentedClipId}
+                  onPresent={setPresentedClipId}
+                  onDismiss={dismissPreview}
+                  onReport={handleReport}
+                  onRemove={removeClip}
+                />
+              ))}
+            </ul>
+          )}
 
-      {anyClipVideoReady && (
-        <div className="space-y-2 border-t-2 border-black dark:border-white pt-4">
-          <p className="font-sans text-sm font-semibold uppercase tracking-wide">
-            Add another clip
-          </p>
-          <FileUpload onSelected={(file) => addClip(file)} />
+          {/*
+            The picker, collapsed. Gated on exactly the complement of the body picker's own gate
+            below, so the two presentations are mutually exclusive by construction — there is never
+            a moment with two file inputs, two Upload tabs or two pairs of demo buttons on the page
+            for a test or a reader to pick between.
+          */}
+          {anyClipVideoReady && <AddClipAction onSource={addClip} />}
         </div>
-      )}
+      </header>
 
-      {/*
-        The evidence gallery: a sibling of ResultsView, never a child of it — everything it needs
-        is already in scope here: `clips` (each carrying its own `videoSource.sourceBlob`/
-        `metadata` and its own non-null `analysis.robustFrames` — the aggregate's are null by
-        design, see `multiClipAnalysis.ts`) and the per-metric winning clip index. It renders
-        nothing until it has images, so the null-guard below is the mount gate, not a visibility
-        one. Its own root still carries `lg:col-span-2`, a no-op now that <main> is no longer a
-        grid; `strides-kyu.4` and the header-offset ticket clean up what the grid left behind.
-      */}
-      {sourceIndices !== null && (
-        <EvidenceGallery
-          clips={clips}
-          sourceIndices={sourceIndices}
-          onEvidenceMetricsChange={setReportedEvidenceMetrics}
-        />
-      )}
-    </main>
+      <main className="mx-auto max-w-6xl px-4 sm:px-6 py-10 space-y-8">
+        {/*
+          What a reader has to be able to READ about a clip cannot live in a 96x72 strip entry: the
+          load-error alert and its Try again in particular, which `video-input`'s "Clear error
+          messages for permission and format failures" requires be visible. So the element went to
+          the strip and this stayed in the body, rendered from the state each slot reports up.
+          `ClipLoadStatus` renders nothing at all for a clip that is neither loading nor broken.
+        */}
+        {clipIds.map((id) => {
+          const session = clipStates[id]
+          return session ? (
+            <ClipLoadStatus key={id} videoSource={session.videoSource} />
+          ) : null
+        })}
+
+        {/*
+          The picker-vs-results gate is `anyClipVideoReady`, NOT `clipIds.length`: a clip that is
+          still loading, or that failed to load, is not a *loaded* clip, so the picker stays on the
+          page beside that clip's own error alert rather than leaving the reader with an error and
+          no way forward.
+        */}
+        {!anyClipVideoReady && (
+          <section className="space-y-4" aria-label="Add a clip">
+            <ClipPicker onSource={addClip} />
+          </section>
+        )}
+
+        {anyClipVideoReady && (
+          <ResultsView
+            analysis={aggregate}
+            onTryAgain={handleTryAgain}
+            onChooseDifferentVideo={handleChooseDifferentVideo}
+            evidence={evidence}
+            clipCount={clips.length}
+          />
+        )}
+
+        {/*
+          The in-body "Add another clip" block used to mount here. It is gone, not moved:
+          `video-input` requires that no add-a-clip affordance remain in the page body, and what
+          was here offered upload alone — the header's `AddClipAction` offers recording and the
+          demo clips as well, which were unreachable for clips 2..N while that block was the only
+          way in.
+        */}
+
+        {/*
+          The standalone evidence gallery used to mount here, as a sibling of `ResultsView`. It no
+          longer does: the imagery moved into the metric cards (`strides-ac9.2`), and the two
+          surfaces cannot coexist — the extractor hands back canvas ELEMENTS, a node has exactly
+          one parent, and whichever surface adopted a canvas second would silently steal it and
+          leave the first showing an empty box. The cards are the evidence surface now.
+          `EvidenceGallery.tsx` was retired by `strides-ac9.3`; `useSessionEvidence` owns extraction now.
+        */}
+      </main>
+    </>
   )
 }

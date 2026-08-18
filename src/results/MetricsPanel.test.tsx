@@ -1,8 +1,10 @@
 import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { EVIDENCE_SECTION_ID_PREFIX } from './EvidenceGallery'
 import { MetricsPanel } from './MetricsPanel'
+import type { MetricCardEvidence } from './MetricsPanel'
+import type { EvidenceFramePlan, EvidenceInstantPlan } from './evidenceFrames'
 import { SCALE_PASS_PROVENANCE_CAVEAT } from './scalePassGraft'
+import type { ExtractedEvidenceFrame } from '../video/extractFrames'
 import type {
   FormHeuristicsResult,
   MetricId,
@@ -689,86 +691,254 @@ describe('MetricsPanel', () => {
   })
 })
 
-describe('MetricsPanel — the evidence deep link', () => {
-  it('renders no link anywhere when the prop is omitted, which is every pre-gallery call site', () => {
+function instant(timestamp: number, opacity = 1): EvidenceInstantPlan {
+  return { timestamp, opacity, keypoints: [], outwardSign: null, side: null }
+}
+
+function framePlan(
+  metric: MetricId,
+  overrides: Partial<EvidenceFramePlan> = {},
+): EvidenceFramePlan {
+  return {
+    metric,
+    kind: 'footStrike',
+    quality: 0.8,
+    label: 'heel-like footstrike, left foot',
+    side: 'left',
+    base: instant(0.4),
+    ghost: null,
+    crop: { x: 0, y: 0, side: 200 },
+    travelDirection: 1,
+    demotedFromPair: false,
+    ...overrides,
+  }
+}
+
+function extracted(plan: EvidenceFramePlan): ExtractedEvidenceFrame {
+  return { plan, canvas: document.createElement('canvas') }
+}
+
+function evidenceFor(
+  metric: MetricId,
+  plans: EvidenceFramePlan[] = [framePlan(metric)],
+  clipIndex = 0,
+): MetricCardEvidence {
+  return { metric, clipIndex, items: plans.map(extracted) }
+}
+
+describe('MetricsPanel — evidence inside the card', () => {
+  it('renders no imagery anywhere when the prop is omitted, which is every call site without an analysed session', () => {
     const { container } = render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
-    expect(container.querySelectorAll('.metrics-panel__evidence-link')).toHaveLength(0)
-    expect(screen.queryByRole('link')).not.toBeInTheDocument()
+    expect(container.querySelectorAll('.metrics-panel__evidence')).toHaveLength(0)
+    expect(container.querySelectorAll('canvas')).toHaveLength(0)
   })
 
-  it('links only the metrics the gallery says it has imagery for', () => {
+  it('puts each metric’s imagery inside that metric’s own card, and nowhere else', () => {
     render(
       <MetricsPanel
         heuristics={makeHighConfidenceResult()}
-        evidenceMetrics={new Set<MetricId>(['trunkLean', 'kneeFlexion'])}
+        evidence={[evidenceFor('trunkLean'), evidenceFor('kneeFlexion')]}
       />,
     )
-    expect(screen.getAllByRole('link')).toHaveLength(2)
-    expect(
-      screen.getByRole('link', { name: 'See evidence for Trunk lean' }),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole('link', { name: 'See evidence for Knee flexion' }),
-    ).toBeInTheDocument()
+    const trunk = screen.getByRole('article', { name: 'Trunk lean' })
+    expect(within(trunk).getByRole('img', { name: /trunk lean/i })).toBeInTheDocument()
+    const knee = screen.getByRole('article', { name: 'Knee flexion' })
+    expect(within(knee).getByRole('img', { name: /knee flexion/i })).toBeInTheDocument()
+
+    const other = screen.getByRole('article', { name: 'Overstriding' })
+    expect(other.querySelectorAll('.metrics-panel__evidence')).toHaveLength(0)
   })
 
-  it('points at that metric’s own gallery section, and is keyboard-reachable as a plain anchor', () => {
+  it('renders the imagery after the description, which is where the eye goes next', () => {
     render(
       <MetricsPanel
         heuristics={makeHighConfidenceResult()}
-        evidenceMetrics={new Set<MetricId>(['trunkLean'])}
-      />,
-    )
-    const link = screen.getByRole('link', { name: 'See evidence for Trunk lean' })
-    expect(link).toHaveAttribute('href', `#${EVIDENCE_SECTION_ID_PREFIX}trunkLean`)
-    // A real <a href> — focusable with no tabIndex of its own, and visibly labelled.
-    expect(link.tagName).toBe('A')
-    expect(link).toHaveTextContent('See evidence')
-  })
-
-  it('renders the link inside the metric’s own card, not somewhere else on the panel', () => {
-    render(
-      <MetricsPanel
-        heuristics={makeHighConfidenceResult()}
-        evidenceMetrics={new Set<MetricId>(['trunkLean'])}
+        evidence={[evidenceFor('trunkLean')]}
       />,
     )
     const card = screen.getByRole('article', { name: 'Trunk lean' })
-    expect(within(card).getByRole('link', { name: /see evidence/i })).toBeInTheDocument()
-    const otherCard = screen.getByRole('article', { name: 'Overstriding' })
-    expect(within(otherCard).queryByRole('link')).not.toBeInTheDocument()
+    const description = card.querySelector('.metrics-panel__description')
+    const block = card.querySelector('.metrics-panel__evidence')
+    expect(description).not.toBeNull()
+    expect(block).not.toBeNull()
+    const after =
+      (description!.compareDocumentPosition(block!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    expect(after).toBe(true)
+    // …and before the confidence label, which stays the card's last word about the number.
+    const confidence = card.querySelector('.metrics-panel__confidence')
+    const beforeConfidence =
+      (block!.compareDocumentPosition(confidence!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    expect(beforeConfidence).toBe(true)
+  })
+
+  it('splits narrow-vs-wide on the CARD’s own width, never the viewport’s', () => {
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidence={[evidenceFor('trunkLean')]}
+      />,
+    )
+    const card = screen.getByRole('article', { name: 'Trunk lean' })
+    // A named container on the card's own content, and the row that queries it — two nodes,
+    // because an element with `container-type` cannot query itself.
+    const container = card.querySelector('.\\@container\\/card')
+    expect(container).not.toBeNull()
+    const row = container!.firstElementChild
+    expect(row!.className).toContain('flex-col')
+    expect(row!.className).toContain('@lg/card:flex-row')
+    // No viewport breakpoint anywhere in the placement decision.
+    expect(row!.className).not.toMatch(/(^|\s)(sm|md|lg|xl):/)
+  })
+
+  it('adopts the extractor’s own canvas rather than re-encoding it, and offers no download', () => {
+    const frame = extracted(framePlan('trunkLean'))
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidence={[{ metric: 'trunkLean', clipIndex: 0, items: [frame] }]}
+      />,
+    )
+    const host = screen.getByRole('img', { name: /trunk lean/i })
+    expect(host.firstElementChild).toBe(frame.canvas)
+    expect(host.querySelector('img')).toBeNull()
+    expect(screen.queryByRole('link')).not.toBeInTheDocument()
+    expect(document.querySelector('[download]')).toBeNull()
+  })
+
+  it('says a ghosted image is one runner at two instants, never two people', () => {
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidence={[
+          evidenceFor('trunkLean', [
+            framePlan('trunkLean', {
+              kind: 'trunkLeanRange',
+              side: undefined,
+              label: 'Most forward trunk lean, ghosted against the most upright frame',
+              base: instant(0.2, 1),
+              ghost: instant(0.6, 0.5),
+            }),
+          ]),
+        ]}
+      />,
+    )
+    const card = screen.getByRole('article', { name: 'Trunk lean' })
+    const caption = within(card).getByText(/same runner at two instants/i)
+    expect(caption).toHaveTextContent('not two people')
+    expect(caption).toHaveTextContent('0.20 s and 0.60 s into the clip')
+    expect(
+      within(card).getByRole('img', {
+        name: /Trunk lean: Most forward trunk lean.*Two frames of the same runner blended into one image\./i,
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('names the side in the alt text where the metric is per-side', () => {
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidence={[evidenceFor('footStrikePattern')]}
+      />,
+    )
+    expect(
+      screen.getByRole('img', {
+        name: 'Foot strike pattern (left side): heel-like footstrike, left foot. A single frame from the clip.',
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('never captions a thumbnail with the card’s own reported number', () => {
+    const heuristics = makeHighConfidenceResult()
+    render(
+      <MetricsPanel heuristics={heuristics} evidence={[evidenceFor('trunkLean')]} />,
+    )
+    const card = screen.getByRole('article', { name: 'Trunk lean' })
+    const value = card.querySelector('.metrics-panel__value')!.textContent!
+    const caption = card.querySelector('.metrics-panel__evidence-caption')!.textContent!
+    expect(value).not.toBe('')
+    expect(caption).not.toContain(value)
+  })
+
+  it('says which clip the evidence came from once a session holds more than one', () => {
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidence={[evidenceFor('trunkLean', [framePlan('trunkLean')], 1)]}
+        clipCount={2}
+      />,
+    )
+    const card = screen.getByRole('article', { name: 'Trunk lean' })
+    expect(within(card).getByText('From clip 2 of 2.')).toBeInTheDocument()
+  })
+
+  it('asks no clip question on a single-clip session', () => {
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidence={[evidenceFor('trunkLean')]}
+        clipCount={1}
+      />,
+    )
+    expect(screen.queryByText(/From clip/i)).not.toBeInTheDocument()
+  })
+
+  it('renders both images of a two-exemplar metric at one size, as one set', () => {
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidence={[
+          evidenceFor('footStrikePattern', [
+            framePlan('footStrikePattern'),
+            framePlan('footStrikePattern', {
+              side: 'right',
+              label: 'heel-like footstrike, right foot',
+              base: instant(0.8),
+            }),
+          ]),
+        ]}
+      />,
+    )
+    const card = screen.getByRole('article', { name: 'Foot strike pattern' })
+    const figures = card.querySelectorAll('.metrics-panel__evidence-figure')
+    expect(figures).toHaveLength(2)
+    // Same image box on both, so a two-image card and a one-image card read at one scale.
+    const boxes = [...figures].map((f) => f.querySelector('[role=img]')!.parentElement!.className)
+    expect(boxes[0]).toBe(boxes[1])
+    expect(boxes[0]).toContain('w-28')
+    // …and both captions span the block rather than the thumbnail.
+    expect(
+      [...figures].every((f) =>
+        f.querySelector('.metrics-panel__evidence-caption')!.className.includes('text-[11px]'),
+      ),
+    ).toBe(true)
   })
 
   it('keeps a card without evidence byte-identical to the one it rendered before', () => {
     const heuristics = makeHighConfidenceResult()
     const before = render(<MetricsPanel heuristics={heuristics} />)
-    const withoutLink = screen
-      .getByRole('article', { name: 'Overstriding' })
-      .outerHTML
+    const withoutEvidence = screen.getByRole('article', { name: 'Overstriding' }).outerHTML
     before.unmount()
 
-    render(
-      <MetricsPanel
-        heuristics={heuristics}
-        evidenceMetrics={new Set<MetricId>(['trunkLean'])}
-      />,
+    render(<MetricsPanel heuristics={heuristics} evidence={[evidenceFor('trunkLean')]} />)
+    expect(screen.getByRole('article', { name: 'Overstriding' }).outerHTML).toBe(
+      withoutEvidence,
     )
-    expect(screen.getByRole('article', { name: 'Overstriding' }).outerHTML).toBe(withoutLink)
   })
 
-  it('keeps the vertical-oscillation chart when that card also gains a link', () => {
+  it('keeps the vertical-oscillation chart when that card also gains imagery', () => {
     render(
       <MetricsPanel
         heuristics={makeHighConfidenceResult()}
-        evidenceMetrics={new Set<MetricId>(['verticalOscillation'])}
+        evidence={[evidenceFor('verticalOscillation')]}
       />,
     )
     const card = screen.getByRole('article', { name: 'Vertical oscillation' })
-    expect(within(card).getByRole('img', { name: /vertical oscillation/i })).toBeInTheDocument()
-    expect(within(card).getByRole('link', { name: /see evidence/i })).toBeInTheDocument()
+    // The chart's own figure, and the evidence thumbnail, both present and distinct.
+    expect(card.querySelector('.metrics-panel__evidence')).not.toBeNull()
+    expect(within(card).getAllByRole('img').length).toBeGreaterThan(1)
   })
 
-  it('cannot link a tier-3 metric, which renders no card to hang a link on (design D10)', () => {
+  it('gives a tier-3 metric no imagery, since it renders no card to hang it on (design D10)', () => {
     const heuristics = makeHighConfidenceResult()
     heuristics.cadence = makeMetric({
       metric: 'cadence',
@@ -778,12 +948,10 @@ describe('MetricsPanel — the evidence deep link', () => {
       caveat: 'Not measurable.',
     })
 
-    render(
-      <MetricsPanel
-        heuristics={heuristics}
-        evidenceMetrics={new Set<MetricId>(['cadence'])}
-      />,
+    const { container } = render(
+      <MetricsPanel heuristics={heuristics} evidence={[evidenceFor('cadence')]} />,
     )
-    expect(screen.queryByRole('link')).not.toBeInTheDocument()
+    expect(container.querySelectorAll('.metrics-panel__evidence')).toHaveLength(0)
+    expect(container.querySelectorAll('canvas')).toHaveLength(0)
   })
 })

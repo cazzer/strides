@@ -33,7 +33,7 @@ import type { VideoMetadata } from './types'
  * ### No serialization
  *
  * The poster is a `<canvas>`, never a data URL, blob or object URL, and it is never persisted. The
- * epic deliberately has no export path (see `EvidenceGallery.tsx`'s `EvidenceCanvas`); a renderer
+ * epic deliberately has no export path (see `EvidenceCanvas.tsx`); a renderer
  * adopts the node itself.
  */
 

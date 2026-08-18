@@ -615,13 +615,114 @@ describe('useVideoAnalysis', () => {
     const video = document.createElement('video')
     const videoSource = makeVideoSource({ videoRef: { current: video } })
     const detector = makeFakeDetector()
-    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+    // Presented: the third conjunct of the loop condition. Without it 'ready' alone arms nothing
+    // -- see 'reaching ready while not presented leaves the clip paused' below.
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, true))
 
     await waitFor(() => expect(result.current.phase).toBe('ready'))
     // With the default fixtures the scale pass runs and concludes 'failed' (no scale measured)
     // -- the loop arms the moment the pass reaches a terminal status, not at 'ready' itself.
     await waitFor(() => expect(video.loop).toBe(true))
     expect(video.muted).toBe(true)
+  })
+
+  it('reaching ready while not presented leaves the clip paused, with no loop armed', async () => {
+    // `results-view`, "Reaching the ready phase while not presented leaves the clip paused": with
+    // clips in a strip whose elements are concealed unless something is reading them, an
+    // unconditional loop would decode N videos nobody can see for the life of the session.
+    sampleClipMock.mockImplementation(() => ({
+      promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+      handle: makeFakeHandle(),
+    }))
+
+    const video = document.createElement('video')
+    const play = vi.spyOn(video, 'play').mockResolvedValue(undefined)
+    const videoSource = makeVideoSource({ videoRef: { current: video } })
+    const detector = makeFakeDetector()
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+    await waitFor(() => expect(result.current.scalePass.status).toBe('failed'))
+
+    expect(video.loop).toBe(false)
+    // Two play() calls, both the pipeline's own (primary sampling, then the scale pass's replay).
+    // A third would be the loop-restart, which must not have happened.
+    expect(play).toHaveBeenCalledTimes(2)
+  })
+
+  it('presenting a ready clip arms the loop, and dismissing clears it and stops playback', async () => {
+    sampleClipMock.mockImplementation(() => ({
+      promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+      handle: makeFakeHandle(),
+    }))
+
+    const video = document.createElement('video')
+    vi.spyOn(video, 'play').mockResolvedValue(undefined)
+    const pause = vi.spyOn(video, 'pause').mockImplementation(() => {})
+    const videoSource = makeVideoSource({ videoRef: { current: video } })
+    const detector = makeFakeDetector()
+    const { result, rerender } = renderHook(
+      ({ presented }: { presented: boolean }) =>
+        useVideoAnalysis(videoSource, detector, presented),
+      { initialProps: { presented: false } },
+    )
+
+    await waitFor(() => expect(result.current.scalePass.status).toBe('failed'))
+    expect(video.loop).toBe(false)
+
+    act(() => rerender({ presented: true }))
+    expect(video.loop).toBe(true)
+    expect(video.currentTime).toBe(0)
+
+    act(() => rerender({ presented: false }))
+    expect(video.loop).toBe(false)
+    expect(pause).toHaveBeenCalled()
+  })
+
+  it('presenting a clip mid-analysis writes nothing to its playback state', async () => {
+    // The observational guard (`results-view`, "Presenting a clip mid-analysis does not disturb
+    // the run"). The default WebCodecs path never touches the element at all, so a violation is
+    // invisible until a WebM/webcam clip falls back to the playback path -- which is why this is
+    // asserted on the writes themselves rather than on a frame count.
+    let resolveSamples!: (samples: unknown[]) => void
+    sampleClipMock.mockImplementation(() => ({
+      promise: new Promise((resolve) => {
+        resolveSamples = resolve
+      }),
+      handle: makeFakeHandle(),
+    }))
+
+    const video = document.createElement('video')
+    const videoSource = makeVideoSource({ videoRef: { current: video } })
+    const detector = makeFakeDetector()
+    const { result, rerender } = renderHook(
+      ({ presented }: { presented: boolean }) =>
+        useVideoAnalysis(videoSource, detector, presented),
+      { initialProps: { presented: false } },
+    )
+
+    await waitFor(() => expect(result.current.phase).toBe('sampling'))
+
+    // Start watching only once the run owns the element, so the run's own setup writes (which are
+    // legitimate) are not counted against presentation.
+    const play = vi.spyOn(video, 'play').mockResolvedValue(undefined)
+    const pause = vi.spyOn(video, 'pause').mockImplementation(() => {})
+    const before = { loop: video.loop, muted: video.muted, currentTime: video.currentTime }
+
+    act(() => rerender({ presented: true }))
+    act(() => rerender({ presented: false }))
+
+    expect(play).not.toHaveBeenCalled()
+    expect(pause).not.toHaveBeenCalled()
+    expect(video.loop).toBe(before.loop)
+    expect(video.muted).toBe(before.muted)
+    expect(video.currentTime).toBe(before.currentTime)
+
+    // ...and the run still completes exactly as it would have.
+    await act(async () => {
+      resolveSamples([{ timestamp: 0, frame: null }])
+    })
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
   })
 
   it('mutes the video before restarting playback for the loop', async () => {
@@ -639,7 +740,7 @@ describe('useVideoAnalysis', () => {
 
     const videoSource = makeVideoSource({ videoRef: { current: video } })
     const detector = makeFakeDetector()
-    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, true))
 
     await waitFor(() => expect(result.current.phase).toBe('ready'))
     // Three play() calls per run now: primary sampling's own (auto-start on mount), the scale
@@ -660,7 +761,10 @@ describe('useVideoAnalysis', () => {
     const video = document.createElement('video')
     const videoSource = makeVideoSource({ videoRef: { current: video } })
     const detector = makeFakeDetector()
-    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+    // Presented throughout, so the clear below is genuinely unconditional rather than a side
+    // effect of the presentation conjunct dropping: `start()` clears the loop regardless, because
+    // a looping video never fires the `ended` event sampling resolves on.
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, true))
 
     await waitFor(() => expect(result.current.phase).toBe('ready'))
     // The loop arms once the scale pass concludes ('failed' with these default fixtures).
@@ -940,7 +1044,7 @@ describe('useVideoAnalysis', () => {
       const video = document.createElement('video')
       const videoSource = makeVideoSource({ videoRef: { current: video } })
       const detector = makeFakeDetector()
-      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, true))
 
       await waitFor(() => expect(result.current.phase).toBe('ready'))
 
@@ -949,7 +1053,8 @@ describe('useVideoAnalysis', () => {
       expect(sampleClipMock).toHaveBeenCalledTimes(1)
       expect(getScalePassDetectorMock).not.toHaveBeenCalled()
       expect(result.current.heuristics).toBe(FAKE_SCALE_HEURISTICS)
-      // A skipped pass never blocks the loop -- it arms straight from the ready commit.
+      // A skipped pass never blocks the loop -- on a presented clip it arms straight from the
+      // ready commit.
       expect(video.loop).toBe(true)
     })
 
@@ -960,7 +1065,7 @@ describe('useVideoAnalysis', () => {
       const video = document.createElement('video')
       const videoSource = makeVideoSource({ videoRef: { current: video } })
       const detector = makeFakeDetector()
-      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, true))
 
       await waitFor(() => expect(result.current.phase).toBe('ready'))
 
@@ -1116,7 +1221,9 @@ describe('useVideoAnalysis', () => {
       const video = document.createElement('video')
       const videoSource = makeVideoSource({ videoRef: { current: video } })
       const detector = makeFakeDetector()
-      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+      // Presented throughout: it is the SCALE PASS, not the absence of a preview, that must keep
+      // the loop un-armed here.
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, true))
 
       await waitFor(() => expect(result.current.scalePass.status).toBe('running'))
       // The pass replays the clip for sampling: muted, and NOT looping (sampleClip needs the
