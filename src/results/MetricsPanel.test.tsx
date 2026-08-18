@@ -887,7 +887,7 @@ describe('MetricsPanel — evidence inside the card', () => {
     expect(document.querySelector('[download]')).toBeNull()
   })
 
-  it('says a ghosted image is one runner at two instants, never two people', () => {
+  it('captions a ghosted image with its label and timestamps and no two-people disclaimer', () => {
     render(
       <MetricsPanel
         heuristics={makeHighConfidenceResult()}
@@ -905,9 +905,10 @@ describe('MetricsPanel — evidence inside the card', () => {
       />,
     )
     const card = screen.getByRole('article', { name: 'Trunk lean' })
-    const caption = within(card).getByText(/same runner at two instants/i)
-    expect(caption).toHaveTextContent('not two people')
+    const caption = within(card).getByText(/ghosted against the most upright frame/i)
     expect(caption).toHaveTextContent('0.20 s and 0.60 s into the clip')
+    expect(caption).not.toHaveTextContent('not two people')
+    expect(caption).not.toHaveTextContent(/same runner/i)
     expect(
       within(card).getByRole('img', {
         name: /Trunk lean: Most forward trunk lean.*Two frames of the same runner blended into one image\./i,

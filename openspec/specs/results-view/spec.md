@@ -940,9 +940,17 @@ ratio the planning requirement fixes, so a card carrying two thumbnails and a ca
 as the same set.
 
 Each thumbnail SHALL be captioned well enough to be interpretable on its own: which metric it is
-evidence for, which side where the metric is per-side, and — for a blended image — that the two
-visible positions are the **same runner at two instants**, never two people. Each SHALL carry a text
-alternative describing what it shows, since the image itself carries no text. Where more than one clip
+evidence for, which side where the metric is per-side, and — for a blended image — which two instants
+were blended, in the metric's own words, and when in the clip they occurred. The caption SHALL NOT
+additionally state that the two visible positions are one runner rather than two people. Every blended
+label this system emits already says one instant is *ghosted against* another, which names a single
+subject at two moments; a second sentence restating it is boilerplate in a card that already carries a
+description, a value, a confidence line and a caveat, and captions were written for a standalone
+gallery figure that no longer exists.
+
+Each thumbnail SHALL carry a text alternative describing what it shows, since the image itself carries
+no text. The text alternative MAY state the one-runner framing the caption omits, because alt text is
+read out of context and reaches a reader who has none of the card around it. Where more than one clip
 is present, the card SHALL indicate which clip its evidence came from.
 
 The rendered image SHALL be the extracted canvas element itself, adopted into the document. The
@@ -969,8 +977,10 @@ SHALL NOT weaken any of those.
 #### Scenario: A ghosted thumbnail says it is one runner, not two people
 
 - **WHEN** a card's evidence is a blended pair
-- **THEN** its caption states that both positions are the same runner at two moments of the same run,
-  and its text alternative names the metric and, where the metric is per-side, the side
+- **THEN** its caption conveys the one-runner framing through the metric's own label alone — one
+  instant *ghosted against* another — followed by when in the clip the two instants occurred, and
+  carries no further sentence spelling out that the image is not two people; its text alternative
+  names the metric and, where the metric is per-side, the side
 
 #### Scenario: No gallery and no deep link remain
 
