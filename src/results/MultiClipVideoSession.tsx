@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState } from 'react'
-import type { MetricId } from '../heuristics/types'
 import type { PoseDetector } from '../pose/detector'
 import { ClipLoadStatus } from '../video/ClipLoadStatus'
 import { ClipPicker } from '../video/ClipPicker'
@@ -7,8 +6,9 @@ import { FileUpload } from '../video/FileUpload'
 import { releaseClipPoster } from '../video/posterFrame'
 import { ClipSlot } from './ClipSlot'
 import type { ClipPendingLoad } from './ClipSlot'
-import { EvidenceGallery } from './EvidenceGallery'
 import { ResultsView } from './ResultsView'
+import { useSessionEvidence } from './useSessionEvidence'
+import type { EvidenceSection } from './useSessionEvidence'
 import {
   computeAggregateAnalysisState,
   computeFusionSourceIndices,
@@ -16,8 +16,9 @@ import {
 } from './multiClipAnalysis'
 import type { ClipSession } from './multiClipAnalysis'
 
-/** Stable empty set, so "no gallery yet" never re-renders the cards with a fresh identity. */
-const NO_EVIDENCE_METRICS: ReadonlySet<MetricId> = new Set()
+/** Stable empty list, so "extraction has not settled yet" never hands the cards a fresh
+ * identity on every render. */
+const NO_EVIDENCE: readonly EvidenceSection[] = []
 
 export interface MultiClipVideoSessionProps {
   /** The one shared, stateful pose detector for the whole page — handed to exactly one active
@@ -105,12 +106,6 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   // third conjunct of every clip's loop condition (design.md D1), so two open previews would mean
   // two clips decoding at once — precisely what scoping the loop to presentation exists to stop.
   const [presentedClipId, setPresentedClipId] = useState<string | null>(null)
-  // Reported up by the evidence gallery once it knows which metrics it actually produced imagery
-  // for — the same report-up/fan-down shape `ClipSlot` already uses, and the only way the cards
-  // (a sibling subtree) can learn it: whether a metric has evidence is not derivable from
-  // `heuristics`, since an emitted exemplar can still fail to resolve or fail to extract.
-  const [reportedEvidenceMetrics, setReportedEvidenceMetrics] =
-    useState<ReadonlySet<MetricId>>(NO_EVIDENCE_METRICS)
 
   const handleReport = useCallback((clipId: string, session: ClipSession) => {
     setClipStates((prev) => {
@@ -200,12 +195,16 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   const anyClipVideoReady = clips.some((c) => c.videoSource.status === 'ready')
 
   // Which clip each FUSED metric was selected from, or null until every clip is ready — the same
-  // gate `aggregate.heuristics !== null` passes, so the gallery can never attribute a result that
-  // has not been fused yet. Deriving `evidenceMetrics` from it rather than storing the reset means
-  // an in-flight new clip drops the cards' deep links in the same render the gallery unmounts.
+  // gate `aggregate.heuristics !== null` passes, so a card can never attribute a picture to a
+  // result that has not been fused yet.
   const sourceIndices = computeFusionSourceIndices(clips)
-  const evidenceMetrics =
-    sourceIndices === null ? NO_EVIDENCE_METRICS : reportedEvidenceMetrics
+  // The session's ONE evidence extraction. It lives here, not inside the results subtree, because
+  // the images it produces are canvas ELEMENTS and a node has one parent: whoever owns extraction
+  // must not also be the thing that parents the canvases, or a second surface would silently steal
+  // them. A second caller of this hook would mean a second cache, a second batch and a second
+  // decoder — so there is exactly one, here.
+  const evidenceState = useSessionEvidence(clips, sourceIndices)
+  const evidence = evidenceState.status === 'settled' ? evidenceState.sections : NO_EVIDENCE
 
   const handleTryAgain = useCallback(() => {
     const errored = clips.find((c) => c.analysis.phase === 'error')
@@ -228,7 +227,6 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
     setClipStates({})
     setActiveClipIndex(0)
     setPresentedClipId(null)
-    setReportedEvidenceMetrics(NO_EVIDENCE_METRICS)
     headingRef.current?.focus()
   }, [clipStates, headingRef])
 
@@ -328,7 +326,8 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
             analysis={aggregate}
             onTryAgain={handleTryAgain}
             onChooseDifferentVideo={handleChooseDifferentVideo}
-            evidenceMetrics={evidenceMetrics}
+            evidence={evidence}
+            clipCount={clips.length}
           />
         )}
 
@@ -342,20 +341,13 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
         )}
 
         {/*
-          The evidence gallery: a sibling of ResultsView, never a child of it — everything it needs
-          is already in scope here: `clips` (each carrying its own `videoSource.sourceBlob`/
-          `metadata` and its own non-null `analysis.robustFrames` — the aggregate's are null by
-          design, see `multiClipAnalysis.ts`) and the per-metric winning clip index. It renders
-          nothing until it has images, so the null-guard below is the mount gate, not a visibility
-          one.
+          The standalone evidence gallery used to mount here, as a sibling of `ResultsView`. It no
+          longer does: the imagery moved into the metric cards (`strides-ac9.2`), and the two
+          surfaces cannot coexist — the extractor hands back canvas ELEMENTS, a node has exactly
+          one parent, and whichever surface adopted a canvas second would silently steal it and
+          leave the first showing an empty box. The cards are the evidence surface now.
+          `EvidenceGallery.tsx` itself survives, unmounted, until `strides-ac9.3` retires it.
         */}
-        {sourceIndices !== null && (
-          <EvidenceGallery
-            clips={clips}
-            sourceIndices={sourceIndices}
-            onEvidenceMetricsChange={setReportedEvidenceMetrics}
-          />
-        )}
       </main>
     </>
   )

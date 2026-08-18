@@ -1,6 +1,6 @@
-import type { MetricId } from '../heuristics/types'
 import type { VideoAnalysisState } from './types'
 import { MetricsPanel } from './MetricsPanel'
+import type { MetricCardEvidence } from './MetricsPanel'
 
 export interface ResultsViewProps {
   analysis: VideoAnalysisState
@@ -14,11 +14,13 @@ export interface ResultsViewProps {
    * button with it, so the composer (`App.tsx`) must move focus somewhere stable first. Same
    * contract as `onTryAgain`. */
   onChooseDifferentVideo: () => void
-  /** Which metrics the evidence gallery produced imagery for. Passed straight through to
-   * `MetricsPanel`, which grows a "See evidence" deep link on those cards. Already derived by
-   * the composer (`MultiClipVideoSession`, which mounts the gallery as this component's sibling)
-   * — this component stays presentational and calls no hook, exactly as before. */
-  evidenceMetrics?: ReadonlySet<MetricId>
+  /** The imagery each metric was measured from. Passed straight through to `MetricsPanel`, which
+   * renders each metric's thumbnails inside that metric's own card. Already extracted by the
+   * composer (`MultiClipVideoSession`, which owns `useSessionEvidence`) — this component stays
+   * presentational and calls no hook, exactly as before. */
+  evidence?: readonly MetricCardEvidence[]
+  /** How many clips the session holds, so a card can say which one its evidence came from. */
+  clipCount?: number
 }
 
 /**
@@ -34,7 +36,8 @@ export function ResultsView({
   analysis,
   onTryAgain,
   onChooseDifferentVideo,
-  evidenceMetrics,
+  evidence,
+  clipCount,
 }: ResultsViewProps) {
   const { phase, heuristics, error, start } = analysis
   // A 'done' scale pass includes the measured-but-unfittable graft, where a grafted metric's
@@ -138,7 +141,8 @@ export function ResultsView({
           <MetricsPanel
             heuristics={heuristics}
             scalePassStatus={analysis.scalePass.status}
-            evidenceMetrics={evidenceMetrics}
+            evidence={evidence}
+            clipCount={clipCount}
           />
           {/*
             Save/export (e.g. Google Drive) is explicitly out of scope for this build — this is
