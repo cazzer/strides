@@ -141,13 +141,23 @@ export function VideoInputPanel({
         pause detection and for `strides-kyu.5`'s preview, while a full-width control bar over a
         72 px thumbnail would cover most of the frame the sampler is reading.
 
-        Concealed: `max-h` keeps the whole frame (portrait clips especially) inside the viewport,
-        and a replaced element with auto width/height under max constraints shrinks
-        aspect-preserving. The 150 is one of the hardcoded header-height values `strides-kyu.7`
-        replaces with the header's measured height, so it is deliberately left alone here rather
-        than half-fixed — and its stated derivation is now doubly stale, since this clip's own
-        strip entry is what grew the header. The CAP still does its real job in the meantime: it is
-        what keeps this box a sane size rather than a 4K one.
+        Concealed: `max-h` is what keeps this box a sane size rather than a 4K one, and a replaced
+        element with auto width/height under max constraints shrinks aspect-preserving, so portrait
+        clips especially stay whole.
+
+        The bound is the viewport with NOTHING subtracted for the header (`strides-kyu.7`). This
+        host is `fixed; top: 0` — anchored to the viewport's top edge and out of flow — so the
+        sticky header is never above it and never takes room from it. The header's height is not a
+        term in this element's geometry at any viewport width, with or without a clip strip, with
+        the add-a-clip panel open or shut; measured, not reasoned from the CSS (`strides-kyu.7`'s
+        live check moved the header 86 -> 130 -> 405 px and read this box's rect unchanged).
+
+        It used to read `100vh - 150px`, the 150 hand-derived as "86px header plus padding" back
+        when this element sat in the page BODY under the sticky header and had to fit in what was
+        left. It has not been below the header since `strides-kyu.3`, and the header has since
+        grown a clip strip and a disclosure panel, so the subtraction was both stale and pointing
+        at a dependency that no longer exists. Making the cap TRACK the header would have been the
+        same error mechanised: the term is not out of date, it is false.
       */}
       <video
         ref={videoRef}
@@ -159,7 +169,7 @@ export function VideoInputPanel({
             ? interactive
               ? 'block h-full w-full bg-black object-contain'
               : 'block h-full w-full bg-black object-contain [&::-webkit-media-controls]:hidden'
-            : 'block w-auto h-auto max-w-full max-h-[calc(100vh-150px)] bg-black'
+            : 'block w-auto h-auto max-w-full max-h-screen bg-black'
         }
       />
       {status !== 'empty' && children}
