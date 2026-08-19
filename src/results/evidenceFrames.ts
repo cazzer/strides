@@ -83,7 +83,11 @@ export const EVIDENCE_BASE_OPACITY = 1
  * onto a transparent canvas makes the result `α·ghost + (1 − α)·base`, so this is a **65/35 split in
  * the base's favour** — the compositing input and the resulting weight are different numbers, which
  * is what the `ALPHA`/`OPACITY` split in these two names is recording. Keep it below
- * `EVIDENCE_GHOST_MARK_OPACITY`: the photograph must be fainter than the marks drawn on it.
+ * `EVIDENCE_GHOST_MARK_OPACITY`, so the ghost's photograph is fainter than the DETECTED marks drawn
+ * on it. Its interpolated marks are already fainter still — a ghost interpolated joint paints at
+ * `INTERPOLATED_OPACITY × EVIDENCE_GHOST_MARK_OPACITY`, below this — so the bound is about the marks
+ * a reader is meant to trust, not about every mark. Both bounds are pinned in
+ * `evidenceFrames.test.ts`.
  *
  * **Why not symmetric.** The caption names one instant *ghosted against* another and the annotation
  * layer draws the base's marks solid and the ghost's weak — both by requirement. A 50/50 photograph

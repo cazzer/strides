@@ -24,9 +24,10 @@ import type {
  * ### The `globalAlpha` trap
  *
  * `drawInstant` sets `ctx.globalAlpha = instant.opacity` (`extractFrames.ts`) and `extractFrame`
- * never resets it, so this function is handed a context sitting at the GHOST's blend value (0.5) on
- * every ghosted pair. Inheriting that would halve the BASE marks too — a silent, plausible-looking
- * defect, which is why it is a spec scenario rather than a comment. Every draw below sets
+ * never resets it, so this function is handed a context sitting at the ghost's PHOTOGRAPHIC blend
+ * alpha (`EVIDENCE_GHOST_BLEND_ALPHA`) on every ghosted pair — which is neither the ghost's mark
+ * opacity nor a half. Inheriting it would scale the BASE marks by it too — a silent,
+ * plausible-looking defect, which is why it is a spec scenario rather than a comment. Every draw below sets
  * `globalAlpha` from its own op's already-composed opacity, and the pass brackets itself with an
  * explicit reset at both ends. The current value is never read.
  *

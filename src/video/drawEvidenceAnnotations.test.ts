@@ -270,8 +270,8 @@ describe('drawEvidenceAnnotation', () => {
         (paint) => paint.alpha === DETECTED_OPACITY,
       )
       expect(atFullOpacity).toHaveLength(baseDetectedOps.length)
-      // The halved reading this test exists to reject: had the leaked 0.5 applied, every one of
-      // those marks would have painted at 0.5 and none at 1.
+      // The weakened reading this test exists to reject: had the leaked blend alpha applied, every
+      // one of those marks would have painted at it and none at 1.
       expect(Math.max(...paints.map((paint) => paint.alpha))).toBe(
         DETECTED_OPACITY,
       )

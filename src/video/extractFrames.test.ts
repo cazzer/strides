@@ -25,6 +25,7 @@ vi.mock('./evidenceSeekOffset', () => ({
 }))
 
 import {
+  DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS,
   EVIDENCE_OUTPUT_MAX_SIDE_PX,
   extractClipEvidence,
   extractPlannedFrames,
@@ -211,6 +212,11 @@ function recordDraws(
 function compositeWeights(draws: RecordedDraw[]): Map<number, number> {
   const weights = new Map<number, number>()
   for (const draw of draws.filter((d) => d.call === 'drawImage')) {
+    // The reducer models one compositing mode. Under `'copy'` the same log really yields 100% of
+    // the last draw, so replaying it as source-over would report a split that never happened.
+    if (draw.composite !== 'source-over') {
+      throw new Error(`compositeWeights models source-over, got ${draw.composite}`)
+    }
     for (const [time, weight] of weights) {
       weights.set(time, weight * (1 - draw.alpha))
     }
@@ -220,6 +226,16 @@ function compositeWeights(draws: RecordedDraw[]): Map<number, number> {
     )
   }
   return weights
+}
+
+/**
+ * The `currentTime` an instant is drawn at, derived the way `drawInstant` derives its seek target
+ * rather than assumed equal to the timestamp. The two coincide only while the default offset is
+ * zero; hard-coding the bare timestamp would break these assertions the day it isn't, for a reason
+ * that has nothing to do with what they test.
+ */
+function drawnTimeOf(instant: EvidenceInstantPlan): number {
+  return Math.max(0, instant.timestamp + DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS)
 }
 
 describe('extractPlannedFrames', () => {
@@ -245,13 +261,13 @@ describe('extractPlannedFrames', () => {
       {
         call: 'drawImage',
         alpha: EVIDENCE_BASE_OPACITY,
-        sourceTime: PAIR.base.timestamp,
+        sourceTime: drawnTimeOf(PAIR.base),
         composite: 'source-over',
       },
       {
         call: 'drawImage',
         alpha: EVIDENCE_GHOST_BLEND_ALPHA,
-        sourceTime: PAIR.ghost!.timestamp,
+        sourceTime: drawnTimeOf(PAIR.ghost!),
         composite: 'source-over',
       },
     ])
@@ -285,8 +301,8 @@ describe('extractPlannedFrames', () => {
 
     const weights = compositeWeights(draws)
     expect(Object.fromEntries(weights)).toEqual({
-      [PAIR.base.timestamp]: 1 - EVIDENCE_GHOST_BLEND_ALPHA,
-      [PAIR.ghost!.timestamp]: EVIDENCE_GHOST_BLEND_ALPHA,
+      [drawnTimeOf(PAIR.base)]: 1 - EVIDENCE_GHOST_BLEND_ALPHA,
+      [drawnTimeOf(PAIR.ghost!)]: EVIDENCE_GHOST_BLEND_ALPHA,
     })
     // Sums to one: nothing of the canvas is left unpainted, and neither draw was dropped.
     expect([...weights.values()].reduce((sum, weight) => sum + weight, 0)).toBe(1)
@@ -304,8 +320,8 @@ describe('extractPlannedFrames', () => {
     // marks solid, so the photograph underneath must not pick the other one — or nobody
     // (`strides-c37`). Flattening the emphasis means deleting a test that says why not to.
     const weights = compositeWeights(draws)
-    expect(weights.get(PAIR.base.timestamp)!).toBeGreaterThan(
-      weights.get(PAIR.ghost!.timestamp)!,
+    expect(weights.get(drawnTimeOf(PAIR.base))!).toBeGreaterThan(
+      weights.get(drawnTimeOf(PAIR.ghost!))!,
     )
   })
 

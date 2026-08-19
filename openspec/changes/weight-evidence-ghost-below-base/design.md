@@ -143,7 +143,7 @@ only makes the same pixels readable).
 |---|---|---|---|
 | **0.50** | two bodies at identical weight; neither is the subject | the head is a doubled face, the second arm as strong as the first — the reported symptom | two equally-weighted runners; the image reads as two people |
 | 0.40 | base measurably firmer (deeper blue shorts, crisper shoe) but at true 144 px it is a look-twice difference, not a glance-level foreground | base's face begins to win; ghost arm still competes | base slightly stronger; marginal at true size |
-| **0.35** | base clearly the foreground at a glance; ghost still a complete legible body — head, arms, shorts, both legs | one coherent runner with a translucent second arm/shoulder and second leg | base clearly primary; ghost unmistakably a second body |
+| **0.35** | base clearly the foreground at a glance; on `verticalOscillation` (dark fence behind the ghost) the ghost is still a complete legible body — head, arms, shorts, both legs. **Not uniform across this clip's exemplars — see D10** | one coherent runner with a translucent second arm/shoulder and second leg | base clearly primary; ghost unmistakably a second body |
 | 0.30 | base solid; ghost clearly secondary, still legible everywhere | base solid; ghost arm and leg still visible | base solid; ghost noticeably faint but still a body |
 | 0.25 | base very solid; the ghost's torso over the bright seats is washing out — heading toward a smudge | base near-single-image; the ghost's overlapped forearm is faint | **fails** — the ghost's light top against the light fence nearly disappears at true size |
 
@@ -208,3 +208,56 @@ file it is in, and reviewed line by line rather than find-and-replaced. Fixture 
 annotation tests take `BLEND_ALPHA` (they are `EvidenceInstantPlan.opacity`, a photographic field);
 expectation sites that multiply by `DETECTED_OPACITY`/`INTERPOLATED_OPACITY` take `MARK_OPACITY`. T3
 guards `frameOpacityFor`; nothing guards a fixture, which is why the classification was done by hand.
+
+## D10. What the UX review found afterwards — the floor is reached on one exemplar
+
+The sweep (D5/D6) chose α from a judgement per *clip*. A UX review then re-drove all three clips
+against a **rendered α = 0.50 control** — not against memory — and recovered each pair's two source
+photographs per-pixel by solving the two composites as two equations, so "which body is which" was
+anchored numerically rather than by eye. It confirmed the verdict on all 12 ghosted exemplars: the
+base is the foreground body at 144 px and the solid cyan skeleton sits on it. That run got
+multiperson at 7/5 coverage, the top of its documented range, so it saw more ghosted exemplars than
+D6's run did.
+
+It also found the floor is **not uniform within a clip**, which D6's per-clip cells obscured.
+
+**The demo1 cell in D6 overstates its own measurement, and is corrected there.** "A complete legible
+body — head, arms, shorts, both legs" is true of demo1 `verticalOscillation`, whose ghost sits over a
+dark fence. It is false of demo1 **`kneeFlexion`**, whose ghost sits at the right edge over bright
+grass and red track: at true 144 px it is a faint torso smear plus a three-dot amber stick with no
+leg under it — the spec's "ghost stays visible as a body" scenario failing on a single exemplar.
+Measured on the ghost's own pixels: its shin darkens the track by 24.5 levels (35 at α = 0.50), its
+shorts tint the grass by +10 (+15 at α = 0.50). The content and the annotation placement are both
+correct — the recovered ghost layer shows a perfectly legible leg with the amber line on it — so what
+erases it is the weighting against a high-luminance background.
+
+**This is not a reason to raise α.** The discriminator is the background luminance the ghost happens
+to lie on, which α cannot see — exactly what D2 predicts. Raising α to rescue this exemplar would
+give back the emphasis on the other eleven. If it is worth closing it is a per-exemplar decision, not
+a different number.
+
+Second, milder instance: demo2 **`stepWidth`**, where the two instants overlap. At 144 px the ghost
+reads as whitish patches on the base's own thighs rather than a second position, so the second
+instant the caption promises is carried entirely by the marks. The α = 0.50 control was only
+marginally better, so most of this is the approach clip's overlap geometry rather than the weighting.
+
+**Ghost survival, measured** — median per-pixel contribution of ghost-only content in the shipped
+composite, and the share of ghost pixels still above a 12-level (8-bit) visibility floor:
+
+| clip | exemplars | median ghost signal | still visible |
+|---|---|---|---|
+| demo1 | VO / VR-stride / VOcm / `kneeFlexion` | 16.3 / 17.1 / 17.1 / 19.4 | 84–89% |
+| demo2 | VO / armSwing L / armSwing R / `stepWidth` | 21.0 / 22.6 / 23.3 / 18.7 | 85–92% |
+| multiperson | VO / VR-stride / VOcm / `kneeFlexion` | 27.2 / 24.1 / 29.6 / 20.2 | 86–94% |
+
+demo1 is the weakest column, which matches both the eye and the finding above.
+
+**Both findings exist only at 144 px.** At 320–640 px every exemplar passes both tests comfortably,
+`kneeFlexion` included — judged at full resolution neither would have been filed. That is the
+strongest evidence available that this feature has to be judged at the size it renders at, and it is
+why D5's rule fixed the judging size before any image was looked at.
+
+Two further UX observations, both confirmed pre-existing and unmoved by this change, filed separately
+rather than fixed here: amber marks over bright backgrounds run to low contrast (demo1 `kneeFlexion`
+7.9:1, demo2 `stepWidth` 2.9:1, multiperson stride 1.7:1 — all within 0.1 of the α = 0.50 control),
+and `altFor`'s text alternative does not convey the visual emphasis this change introduces.

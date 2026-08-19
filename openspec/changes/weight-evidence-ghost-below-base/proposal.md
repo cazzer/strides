@@ -55,8 +55,9 @@ annotation geometry, and `EVIDENCE_CROP_MIN_SIDE_PX`.
 - Affected specs: `results-view` (one ADDED requirement; nothing modified — no existing sentence
   asserts the photograph is symmetric).
 - Affected code: `src/results/evidenceFrames.ts`, `src/results/evidenceAnnotations.ts`,
-  `src/video/extractFrames.ts` (documentation only), `src/test/canvasTestUtils.ts`, and the four
-  test files that reference the old constant.
+  `src/video/extractFrames.ts` and `src/video/drawEvidenceAnnotations.ts` (both documentation only —
+  each carried a statement that the inherited `globalAlpha` is a half), `src/test/canvasTestUtils.ts`,
+  and the four test files that reference the old constant.
 - **Every ghosted image on every metric changes**, not just `verticalOscillation` — 12 ghosted
   exemplars across the three test clips at the time of measurement. No unghosted image changes at
   all: a single-instant exemplar draws one `drawImage` at `EVIDENCE_BASE_OPACITY`, which is
