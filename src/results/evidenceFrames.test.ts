@@ -28,7 +28,7 @@ import {
   EVIDENCE_BASE_OPACITY,
   EVIDENCE_CROP_MIN_SIDE_PX,
   EVIDENCE_CROP_PADDING_MULTIPLIER,
-  EVIDENCE_GHOST_OPACITY,
+  EVIDENCE_GHOST_BLEND_ALPHA,
   EVIDENCE_MAX_PAIR_CROP_GROWTH,
   EVIDENCE_NEAR_IDENTICAL_IOU,
   boundingBoxOfPoints,
@@ -821,7 +821,7 @@ describe('planExemplarFrames', () => {
     })
     expect(plan?.ghost).toMatchObject({
       timestamp: 0.1,
-      opacity: EVIDENCE_GHOST_OPACITY,
+      opacity: EVIDENCE_GHOST_BLEND_ALPHA,
     })
     expect(plan?.demotedFromPair).toBe(false)
     // One rect, unioned across both drawn frames.

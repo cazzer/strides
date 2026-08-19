@@ -73,16 +73,43 @@ export const EVIDENCE_CROP_PADDING_MULTIPLIER = 1.6
  */
 export const EVIDENCE_CROP_MIN_SIDE_PX = 320
 
-/** The base instant is drawn first, at full opacity. */
+/**
+ * The base instant is drawn first, at full opacity — in BOTH jobs below, which is why this is one
+ * constant and not two. Two constants that must always be equal are a coupling waiting to break.
+ */
 export const EVIDENCE_BASE_OPACITY = 1
 /**
- * The ghost is composited over the base at half opacity, making the result a symmetric 50/50
- * double exposure: on a static camera the identical background reproduces exactly while the two
- * body positions each render at half weight. Unequal opacities make the ghost read as a mistake
- * rather than a second instant. One fixed pair for every metric — a per-metric opacity table would
- * be taste with no evidence behind it.
+ * The `globalAlpha` the ghost PHOTOGRAPH is composited at, over an already-drawn base. `source-over`
+ * onto a transparent canvas makes the result `α·ghost + (1 − α)·base`, so this is a **65/35 split in
+ * the base's favour** — the compositing input and the resulting weight are different numbers, which
+ * is what the `ALPHA`/`OPACITY` split in these two names is recording. Keep it below
+ * `EVIDENCE_GHOST_MARK_OPACITY`: the photograph must be fainter than the marks drawn on it.
+ *
+ * **Why not symmetric.** The caption names one instant *ghosted against* another and the annotation
+ * layer draws the base's marks solid and the ghost's weak — both by requirement. A 50/50 photograph
+ * under those two picks no winner, and a reader resolves the contradiction from whatever cue is
+ * strongest in that image, which is not reliably the base (`strides-c37`).
+ *
+ * **Why not lower.** On a static camera the shared background reproduces at `α + (1 − α) = 1`
+ * whatever this is, while each body's contrast against it scales with that body's own weight. Fading
+ * the ghost therefore fades it against a background that never fades, and the floor is a function of
+ * each clip's own subject-against-background contrast rather than of this number alone.
+ *
+ * Measured, not chosen: five arms (0.50 / 0.40 / 0.35 / 0.30 / 0.25) composited from one extraction
+ * per clip and judged on every ghosted exemplar of all three test clips **at the 144 px size the
+ * card actually renders** — not at full resolution, where 0.40 also looks emphatic and 0.25 still
+ * looks fine. 0.40's emphasis does not survive the 640→144 downscale; 0.25 loses the ghost entirely
+ * on the lowest-contrast clip. Full sweep:
+ * `openspec/changes/weight-evidence-ghost-below-base/design.md`.
  */
-export const EVIDENCE_GHOST_OPACITY = 0.5
+export const EVIDENCE_GHOST_BLEND_ALPHA = 0.35
+/**
+ * The frame-level multiplier on the ghost's ANNOTATION marks — a different decision from
+ * `EVIDENCE_GHOST_BLEND_ALPHA` above, deliberately carried by its own constant so that moving the
+ * photographic weight cannot silently move the marks. Read only by `evidenceAnnotations.ts`; this
+ * module never applies it.
+ */
+export const EVIDENCE_GHOST_MARK_OPACITY = 0.5
 
 /**
  * Intersection-over-union above which a pair's two per-frame boxes are treated as the same
@@ -842,7 +869,7 @@ export function planExemplarFrames(
     ghost:
       ghost === null
         ? null
-        : instantPlan(ghost, exemplar, 'ghost', EVIDENCE_GHOST_OPACITY),
+        : instantPlan(ghost, exemplar, 'ghost', EVIDENCE_GHOST_BLEND_ALPHA),
     crop,
     travelDirection,
     demotedFromPair: isPair && ghost === null,

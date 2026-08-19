@@ -379,7 +379,10 @@ async function drawInstant(
 
 /**
  * One planned image. The base is drawn first at full opacity and the ghost composited over it at
- * half, making the result a symmetric 50/50 double exposure of one runner at two instants. The
+ * the plan's blend alpha, making the result a double exposure of one runner at two instants that is
+ * deliberately WEIGHTED TOWARD THE BASE — `source-over` onto a transparent canvas gives
+ * `α·ghost + (1 − α)·base`, and `EVIDENCE_GHOST_BLEND_ALPHA` is below a half so the base reads as
+ * the foreground body the caption and the solid annotation both already name (`strides-c37`). The
  * annotation layer goes on last, over both.
  *
  * `null` on any failure, including a ghost that fails after its base already drew: a range or
@@ -419,8 +422,9 @@ async function extractFrame(
   // cap, so the marks and the pixels are scaled by one number by construction (design D3).
   //
   // The context reaching this call is dirty: `drawInstant` left `ctx.globalAlpha` at the last
-  // instant's blend value, 0.5 on a ghosted pair. `drawEvidenceAnnotation` resets it explicitly and
-  // drives every mark from the op's own composed opacity; nothing here relies on the value above.
+  // instant's blend value — `EVIDENCE_GHOST_BLEND_ALPHA` on a ghosted pair, which is not the ghost's
+  // MARK opacity and is not a half. `drawEvidenceAnnotation` resets it explicitly and drives every
+  // mark from the op's own composed opacity; nothing here relies on the value above.
   drawEvidenceAnnotation(
     ctx,
     planEvidenceAnnotations(item, options.maxOutputSidePx),

@@ -14,7 +14,8 @@ import {
 } from './skeletonGeometry'
 import {
   EVIDENCE_BASE_OPACITY,
-  EVIDENCE_GHOST_OPACITY,
+  EVIDENCE_GHOST_BLEND_ALPHA,
+  EVIDENCE_GHOST_MARK_OPACITY,
   evidenceOutputSide,
   evidenceSnapToleranceSeconds,
   planExemplarFrames,
@@ -334,7 +335,7 @@ describe('per-metric mark sets', () => {
         kind: 'kneeFlexionPeak',
         side: 'left',
         base: instant(leg(300, 350)),
-        ghost: instant(leg(302, 304), { opacity: EVIDENCE_GHOST_OPACITY }),
+        ghost: instant(leg(302, 304), { opacity: EVIDENCE_GHOST_BLEND_ALPHA }),
       }),
       MAX_OUTPUT_SIDE,
     )
@@ -431,7 +432,7 @@ describe('per-metric mark sets', () => {
           side: 'left',
         }),
         ghost: instant([...hips(410), pos('left_ankle', 296, 566)], {
-          opacity: EVIDENCE_GHOST_OPACITY,
+          opacity: EVIDENCE_GHOST_BLEND_ALPHA,
           outwardSign: { left: -1, right: 1 },
           side: 'left',
         }),
@@ -514,7 +515,7 @@ describe('per-metric mark sets', () => {
         kind: 'bounceCycle',
         base: instant([pos('left_hip', 300, 400), pos('right_hip', 340, 400)]),
         ghost: instant([pos('left_hip', 300, 430), pos('right_hip', 340, 430)], {
-          opacity: EVIDENCE_GHOST_OPACITY,
+          opacity: EVIDENCE_GHOST_BLEND_ALPHA,
         }),
       }),
       MAX_OUTPUT_SIDE,
@@ -565,7 +566,7 @@ describe('per-metric mark sets', () => {
         side: 'left',
         base: instant([pos('left_hip', 280, 400), pos('right_hip', 320, 400)]),
         ghost: instant([pos('left_hip', 480, 410), pos('right_hip', 520, 400)], {
-          opacity: EVIDENCE_GHOST_OPACITY,
+          opacity: EVIDENCE_GHOST_BLEND_ALPHA,
         }),
       }),
       MAX_OUTPUT_SIDE,
@@ -692,7 +693,7 @@ describe('polarity', () => {
           side: 'left',
         }),
         ghost: instant([...hips, ...feet], {
-          opacity: EVIDENCE_GHOST_OPACITY,
+          opacity: EVIDENCE_GHOST_BLEND_ALPHA,
           outwardSign: { left: -1, right: 1 },
           side: 'right',
         }),
@@ -810,7 +811,7 @@ describe('the joint layer', () => {
         metric: 'verticalOscillation',
         kind: 'bounceCycle',
         base: instant(points),
-        ghost: instant(points, { opacity: EVIDENCE_GHOST_OPACITY }),
+        ghost: instant(points, { opacity: EVIDENCE_GHOST_BLEND_ALPHA }),
       }),
       MAX_OUTPUT_SIDE,
     )
@@ -823,10 +824,10 @@ describe('the joint layer', () => {
     expect(jointOpacity('left_hip', 'base')).toBe(DETECTED_OPACITY)
     expect(jointOpacity('right_hip', 'base')).toBe(INTERPOLATED_OPACITY)
     expect(jointOpacity('left_hip', 'ghost')).toBe(
-      DETECTED_OPACITY * EVIDENCE_GHOST_OPACITY,
+      DETECTED_OPACITY * EVIDENCE_GHOST_MARK_OPACITY,
     )
     expect(jointOpacity('right_hip', 'ghost')).toBe(
-      INTERPOLATED_OPACITY * EVIDENCE_GHOST_OPACITY,
+      INTERPOLATED_OPACITY * EVIDENCE_GHOST_MARK_OPACITY,
     )
 
     // An edge takes the weaker of its endpoints, then the frame multiplier — the `Math.min` rule
@@ -834,7 +835,7 @@ describe('the joint layer', () => {
     const ghostBone = annotation.ops
       .filter(isBone)
       .find((op) => op.instant === 'ghost')
-    expect(ghostBone?.opacity).toBe(INTERPOLATED_OPACITY * EVIDENCE_GHOST_OPACITY)
+    expect(ghostBone?.opacity).toBe(INTERPOLATED_OPACITY * EVIDENCE_GHOST_MARK_OPACITY)
 
     // ...and so does a measurement mark built from a tolerant midpoint of the two.
     const ghostMarker = byRole(
@@ -843,7 +844,40 @@ describe('the joint layer', () => {
       'ghost',
     )[0] as EvidenceMarkerOp
     expect(ghostMarker.opacity).toBe(
-      INTERPOLATED_OPACITY * EVIDENCE_GHOST_OPACITY,
+      INTERPOLATED_OPACITY * EVIDENCE_GHOST_MARK_OPACITY,
+    )
+  })
+
+  it('takes the ghost multiplier from the instant’s role, never from the plan’s photographic blend alpha', () => {
+    // A third value, equal to neither constant: if the multiplier were read off the plan the way
+    // one shared constant used to let it be, every number below would move with it. That coupling
+    // is what put a solid skeleton on a body the photograph gave no reason to read as the subject
+    // (`strides-c37`), so it is pinned rather than left to the two constants happening to differ.
+    const photographicAlpha = 0.11
+    const points: EvidenceKeypointPosition[] = [
+      pos('left_hip', 300, 400),
+      pos('right_hip', 340, 400, 'interpolated'),
+    ]
+    const annotation = planEvidenceAnnotations(
+      plan({
+        metric: 'verticalOscillation',
+        kind: 'bounceCycle',
+        base: instant(points),
+        ghost: instant(points, { opacity: photographicAlpha }),
+      }),
+      MAX_OUTPUT_SIDE,
+    )
+
+    const ghostJoint = (name: KeypointName) =>
+      annotation.ops
+        .filter(isJoint)
+        .find((op) => op.name === name && op.instant === 'ghost')?.opacity
+
+    expect(ghostJoint('left_hip')).toBe(
+      DETECTED_OPACITY * EVIDENCE_GHOST_MARK_OPACITY,
+    )
+    expect(ghostJoint('right_hip')).toBe(
+      INTERPOLATED_OPACITY * EVIDENCE_GHOST_MARK_OPACITY,
     )
   })
 
@@ -965,7 +999,7 @@ describe('the honesty rule', () => {
         metric: 'trunkLean',
         kind: 'trunkLeanRange',
         base: instant(TORSO),
-        ghost: instant(TORSO, { opacity: EVIDENCE_GHOST_OPACITY }),
+        ghost: instant(TORSO, { opacity: EVIDENCE_GHOST_BLEND_ALPHA }),
       }),
     },
     {
@@ -1043,7 +1077,7 @@ describe('the honesty rule', () => {
         base: instant([pos('left_hip', 300, 400), pos('right_hip', 340, 400)]),
         ghost: instant(
           [pos('left_hip', 300, 430), pos('right_hip', 340, 430)],
-          { opacity: EVIDENCE_GHOST_OPACITY },
+          { opacity: EVIDENCE_GHOST_BLEND_ALPHA },
         ),
       }),
     },
@@ -1056,7 +1090,7 @@ describe('the honesty rule', () => {
         base: instant([pos('left_hip', 280, 400), pos('right_hip', 320, 400)]),
         ghost: instant(
           [pos('left_hip', 480, 400), pos('right_hip', 520, 400)],
-          { opacity: EVIDENCE_GHOST_OPACITY },
+          { opacity: EVIDENCE_GHOST_BLEND_ALPHA },
         ),
       }),
     },
