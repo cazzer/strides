@@ -108,8 +108,13 @@ function formatValue(metric: MetricResult): string {
 // The 'Low confidence' branch is live on cards since exclude-only-unmeasurable-metrics: a
 // measured, view-workable metric below LOW_CONFIDENCE_THRESHOLD renders as a caveated card with
 // this label, where #37's tier rule used to exclude it from the grid entirely.
+//
+// There is deliberately no `value === null` branch. `metricTier` sends every null-valued metric
+// to tier 3, and only a tier-1/tier-2 metric is ever rendered as a card, so this function is
+// unreachable with a null value — a branch here could only ever be dead code that reads as a
+// live case. It also used to return "Not measurable", which now says something quite different
+// from `ExcludedEntry`'s "Not measurable for this clip." fallback.
 function confidenceLabel(metric: MetricResult): string {
-  if (metric.value === null) return 'Not measurable'
   if (metric.confidence >= HIGH_CONFIDENCE_THRESHOLD) return 'High confidence'
   if (metric.confidence >= LOW_CONFIDENCE_THRESHOLD) return 'Medium confidence'
   return 'Low confidence'
@@ -244,18 +249,25 @@ function MetricCard({ metric, chart, evidence, clipCount }: MetricCardProps) {
         this feature existed — no wrapper, no reserved space, no layout shift. The whole
         narrow/wide apparatus only exists on cards that actually have a picture to place.
 
-        The breakpoint is the CARD's own width, never the viewport's. `MetricsPanel`'s grid is one,
-        two or three across depending on the width available to the panel, so a card on a 27-inch
-        display at three-column density is a NARROW card: a `md:` rule would put the thumbnail
-        beside a description with no room for it, and would look right on the reviewer's laptop at
-        two-column density.
+        The breakpoint is the CARD's own width, never the viewport's — a `md:` rule would key the
+        split to a number that says nothing about the space the thumbnail actually has. The panel's
+        card grid is deliberately ONE column at every width (see the grid at the bottom of this
+        file), so today the card is as wide as the panel; keying off the card anyway is what makes
+        this rule survive a future density change instead of silently placing a thumbnail beside a
+        description with no room for it.
+
+        That single column is an intentional layout decision (`strides-49e`, decided 2026-08-29),
+        not an oversight: full-width cards are precisely what gives the description enough room for
+        the evidence to sit BESIDE it on a desktop, which is the behaviour the inline-evidence work
+        was asked for. At two- or three-column density a desktop card is ~500 px / ~311 px wide, the
+        query below correctly stacks the thumbnail, and "beside the description on a desktop" stops
+        happening anywhere above a phone. The grid's dead `@lg:grid-cols-2`/`@3xl:grid-cols-3`
+        utilities were deleted rather than made to fire. Do not reintroduce them.
 
         Two nested elements, not one: an element with `container-type` establishes a container for
         its DESCENDANTS and cannot query itself, so `@container/card` and `@lg/card:flex-row` must
-        sit on different nodes. (The grid at the bottom of this file has that exact bug — it
-        carries `@container` and `@lg:grid-cols-2` on one element and has therefore never left one
-        column. Reported separately; not fixed here.) The container is named so it can never be
-        confused with the panel-level container it nests inside.
+        sit on different nodes. The container is named so it can never be confused with any
+        panel-level container it might nest inside.
       */}
       {evidence === undefined ? (
         <>
@@ -369,20 +381,29 @@ export function MetricsPanel({
   ]
   const excluded = metrics.filter((metric) => metricTier(metric) === 'excluded')
   const caveatedCount = metrics.filter((metric) => metricTier(metric) === 'caveated').length
-  const normalCount = metrics.length - caveatedCount - excluded.length
+  // The counts NEST, they do not partition: a caveated metric was measured, and one of its own
+  // cards is on screen showing a number. Counting it only under "with caveats" made the line
+  // disagree with the screen — a 2/3/6 run rendered "2 metrics measured" beside five cards that
+  // each showed a value. `measuredCount` is therefore every metric that got a card, tier 1 and
+  // tier 2 alike, with the caveated share reported parenthetically INSIDE it.
+  const measuredCount = metrics.length - excluded.length
 
   // One quiet line so a user who never scrolls the (height-capped) results pane still learns
   // that some metrics carry caveats or were excluded — the deleted LowConfidenceBanner's one
   // real job. Rendered only when there's something to say; an all-normal run stays clean.
   // "With caveats" now spans the whole sub-0.7 confidence range, since the caveated tier lost
   // its 0.4 floor (exclude-only-unmeasurable-metrics).
+  //
+  // "not measurable", not "not measured": the excluded section lists metrics whose value was
+  // computed and then set aside because the camera angle cannot support the measurement
+  // (`viewFit: 'unsuitable'`), so "not measured" is false for them. The heading below carries
+  // the same word for the same reason.
   const summaryParts = [
-    `${normalCount} metric${normalCount === 1 ? '' : 's'} measured`,
-    ...(caveatedCount > 0
-      ? [`${caveatedCount} with caveat${caveatedCount === 1 ? '' : 's'}`]
-      : []),
+    `${measuredCount} metric${measuredCount === 1 ? '' : 's'} measured${
+      caveatedCount > 0 ? ` (${caveatedCount} with caveat${caveatedCount === 1 ? '' : 's'})` : ''
+    }`,
     ...(excluded.length > 0
-      ? [`${excluded.length} not measured for this clip (listed below)`]
+      ? [`${excluded.length} not measurable for this clip (listed below)`]
       : []),
   ]
 
@@ -393,7 +414,9 @@ export function MetricsPanel({
           {summaryParts.join(' · ')}
         </p>
       )}
-      <div className="@container grid gap-4 @lg:grid-cols-2 @3xl:grid-cols-3">
+      {/* One column, at every viewport width — a decision, not an omission. See the note in
+          `MetricCard` above on why full-width cards are the layout the evidence work needs. */}
+      <div className="grid gap-4">
         {metrics.map((metric) =>
           metricTier(metric) !== 'excluded' ? (
             <MetricCard
@@ -423,7 +446,7 @@ export function MetricsPanel({
             id="metrics-panel-excluded-heading"
             className="font-display text-lg font-bold tracking-tight"
           >
-            Not measured for this clip
+            Not measurable for this clip
           </h3>
           <ul className="space-y-3">
             {excluded.map((metric) => (
