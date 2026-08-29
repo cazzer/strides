@@ -11,7 +11,7 @@ import type { ViewPlausibility } from './types'
 const CONFIG = DEFAULT_HEURISTICS_CONFIG
 
 // Thresholds this module ramps between, restated so the expected numbers below are readable:
-//   BSR: side at/below 0.30, front at/above 0.55  -> undecided band 0.25 wide
+//   BSR: side at/below 0.30, front at/above 0.45  -> undecided band 0.15 wide
 //   SER: front at/below 0.40, side at/above 0.80  -> undecided band 0.40 wide
 
 describe('computeViewPlausibility', () => {
@@ -34,10 +34,11 @@ describe('computeViewPlausibility', () => {
 
   it('rules side out entirely on the front-approach demo clip’s own measured signals', () => {
     // The clip that motivated this module (park-approach.mp4, measured live, 3 trials,
-    // bit-identical): BSR 0.5507, SER 0.3389. `detectView` reports confidence 0.0771 there,
-    // because BSR clears the front bar by only 0.13% and that scalar measures distance past a
-    // threshold. It is NOT evidence that the clip might be a side view: side needs BSR <= 0.30
-    // (measured 0.55) AND SER >= 0.80 (measured 0.34), and fails both by more than 2x. Every
+    // bit-identical): BSR 0.5507, SER 0.3389. `detectView` reported confidence 0.0771 there when
+    // this module was written, because the front bar then sat at 0.55 and that scalar measures
+    // distance past a threshold; `compare-view-confidence-across-labels` has since moved the bar
+    // to 0.45 and it reads ~0.53. Either way it is NOT evidence that the clip might be a side
+    // view: side needs BSR <= 0.30 (measured 0.55) AND SER >= 0.80 (measured 0.34). Every
     // metric gated on this must therefore see front, undiluted — degrading `armSwingSymmetry`
     // toward its `ambiguous` row here would delete a metric whose evidence images plainly show
     // both arms.
@@ -46,12 +47,13 @@ describe('computeViewPlausibility', () => {
     expect(plausibility).toEqual({ side: 0, front: 1, ambiguous: 0 })
   })
 
-  it('is continuous across the front bar — the 0.13% that flips the label barely moves the gate', () => {
-    // The defect this module exists to remove: at BSR 0.5499 the label is 'ambiguous' and every
-    // front-primary metric is hard-excluded; at 0.5507 the label is 'front' and the same metrics
-    // read full confidence. The plausibility moves by 0.3% across that same step.
-    const justUnder = computeViewPlausibility(0.5499, 0.3389, CONFIG)
-    const justOver = computeViewPlausibility(0.5507, 0.3389, CONFIG)
+  it('is continuous across the front bar — the hair’s breadth that flips the label barely moves the gate', () => {
+    // The defect this module exists to remove, restated at wherever the bar currently sits (0.45
+    // since `compare-view-confidence-across-labels`): a hair under it the label is 'ambiguous' and
+    // every front-primary metric is hard-excluded; a hair over it the label is 'front' and the
+    // same metrics read full confidence. The plausibility barely moves across that same step.
+    const justUnder = computeViewPlausibility(0.4499, 0.3389, CONFIG)
+    const justOver = computeViewPlausibility(0.4507, 0.3389, CONFIG)
 
     expect(justUnder.side).toBe(0)
     expect(justUnder.front).toBeCloseTo(justOver.front, 2)
@@ -69,9 +71,9 @@ describe('computeViewPlausibility', () => {
   })
 
   it('splits mass between one view and ambiguous when one signal sits in the undecided band', () => {
-    // BSR 0.50 is 0.05 short of the front bar, i.e. 80% of the way across the 0.25-wide band;
+    // BSR 0.42 is 0.03 short of the front bar, i.e. 80% of the way across the 0.15-wide band;
     // SER 0.30 is fully front. Side is still ruled out, so the doubt lands on 'ambiguous'.
-    const plausibility = computeViewPlausibility(0.5, 0.3, CONFIG)
+    const plausibility = computeViewPlausibility(0.42, 0.3, CONFIG)
 
     expect(plausibility.side).toBe(0)
     expect(plausibility.front).toBeCloseTo(0.8, 10)
@@ -79,9 +81,9 @@ describe('computeViewPlausibility', () => {
   })
 
   it('degrades in both directions when both signals sit mid-band', () => {
-    // BSR 0.425 and SER 0.60 are each dead-centre of their undecided band. Neither view is
+    // BSR 0.375 and SER 0.60 are each dead-centre of their undecided band. Neither view is
     // favoured and half the mass is honest ambiguity.
-    const plausibility = computeViewPlausibility(0.425, 0.6, CONFIG)
+    const plausibility = computeViewPlausibility(0.375, 0.6, CONFIG)
 
     expect(plausibility.side).toBeCloseTo(0.25, 10)
     expect(plausibility.front).toBeCloseTo(0.25, 10)

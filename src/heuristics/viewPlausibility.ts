@@ -27,10 +27,11 @@ export const AMBIGUOUS_VIEW_PLAUSIBILITY: ViewPlausibility = {
  * this introduces no tunable of its own. Saturating AT the far view's threshold rather than some
  * distance past it is deliberate: `sideViewMaxBilateralSpreadRatio` etc. are declared as the
  * points at which a signal votes for a view, so a value that has cleared one is full support for
- * it by the config's own definition. (`viewDetection.ts`'s `marginAwayFromZero` instead saturates
- * at 2x the threshold, which for BSR sits roughly twice the anatomical maximum of the signal —
- * see this module's design doc. That scale problem is confined to `confidence` and does not reach
- * here.)
+ * it by the config's own definition. (`viewDetection.ts`'s `confidence` asks a different question
+ * — how far past its OWN threshold a signal sits, on the way to what a dead-on view of that kind
+ * reads — so its `signalMargin` saturates at an ideal-camera value rather than at the far view's
+ * threshold. Both endpoints are now reachable there too; the `2x the threshold` saturation that
+ * put the front BSR margin at roughly twice the anatomical maximum was `strides-2iw` and is gone.)
  *
  * A degenerate config whose two thresholds cross (or coincide) collapses to a step at
  * `fullSupport` rather than dividing by zero.

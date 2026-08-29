@@ -350,20 +350,21 @@ describe('computeFormHeuristics', () => {
   })
 
   it('keeps a marginally-committed front view’s front-primary metrics at full front fit', () => {
-    // The front-approach demo clip's shape: BSR barely over the front bar (0.56 vs 0.55), SER far
+    // The front-approach demo clip's shape: BSR barely over the front bar (0.46 vs 0.45), SER far
     // from side view's (0.26 vs 0.80). `detectView`'s margin-based confidence reads very low
-    // there, but side is ruled out twice over, so nothing about the metrics should move: this is
+    // there — BSR is 0.01 into a 0.11-wide ramp, so ~0.09, averaged with a ~0.33 SER margin —
+    // but side is ruled out twice over, so nothing about the metrics should move: this is
     // the case where multiplying confidence by that low number would delete `armSwingSymmetry`
     // and `stepWidth` on a clip that plainly shows both arms.
     const frames = withBilateralSpread(
       generateSyntheticGait({ ...PARAMS, strideAmplitudePx: 20 }),
-      0.56 * 150,
+      0.46 * 150,
     )
 
     const result = computeFormHeuristics(frames)
 
     expect(result.view.view).toBe('front')
-    expect(result.view.confidence).toBeLessThan(0.2)
+    expect(result.view.confidence).toBeLessThan(0.25)
     expect(result.view.plausibility).toEqual({ side: 0, front: 1, ambiguous: 0 })
     expect(result.armSwingSymmetry.viewFit).toBe('primary')
     expect(result.stepWidth.viewFit).toBe('primary')
@@ -383,12 +384,12 @@ describe('computeFormHeuristics', () => {
   })
 
   it('reports, rather than excludes, a front-primary metric when only side is ruled out', () => {
-    // BSR 0.50 — past side view's bar but 0.05 short of front's, so the label stays 'ambiguous' —
+    // BSR 0.42 — past side view's bar but 0.03 short of front's, so the label stays 'ambiguous' —
     // with a fully front-like SER. The old gate hard-excluded `armSwingSymmetry` here as
     // structurally unmeasurable, on the strength of a side view the geometry rules out.
     const frames = withBilateralSpread(
       generateSyntheticGait({ ...PARAMS, strideAmplitudePx: 20 }),
-      0.5 * 150,
+      0.42 * 150,
     )
 
     const result = computeFormHeuristics(frames)
@@ -427,13 +428,13 @@ describe('computeFormHeuristics', () => {
   })
 
   it('degrades in both directions on a genuinely ambiguous clip', () => {
-    // Both signals dead-centre of their undecided bands: BSR 0.425, SER ~0.6. Half the mass is
+    // Both signals dead-centre of their undecided bands: BSR 0.375, SER ~0.6. Half the mass is
     // honest ambiguity and the rest splits evenly, so neither view's primary metrics are granted
     // a measurable fit — the same outcome the flat ambiguous row gives today, reached without
     // pretending the clip is one label.
     const frames = withBilateralSpread(
       generateSyntheticGait({ ...PARAMS, strideAmplitudePx: 45 }),
-      0.425 * 150,
+      0.375 * 150,
     )
 
     const result = computeFormHeuristics(frames)
