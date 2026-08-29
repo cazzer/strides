@@ -1274,8 +1274,9 @@ pair-level claim, present only when both instants share a side, so on a delibera
 pair it is absent — and with it goes any way for a consumer to know which limb each half of the
 evidence was measured from. Two metrics are in this position, and for both the mixed pair is the
 common case rather than an edge: step width constructs its pair from adjacent **opposite-foot**
-strikes, and overstriding pairs its furthest-reaching strike with its closest-landing one, which
-nothing constrains to one foot.
+strikes, and overstriding pairs a far-reaching strike with a close-landing one — one drawn from
+each end of its range, where each end is filled by the best-scoring surviving candidate at that
+end and extremeness is only a tie-break — which nothing constrains to one foot.
 
 That per-instant side SHALL be **stated by the metric that took the measurement**, and a consumer
 SHALL NOT infer it from the order of `cropKeypoints`. The measured limb's keypoint does happen to be
