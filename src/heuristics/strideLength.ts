@@ -13,6 +13,13 @@ export type StrideLengthFailureReason =
   | 'travel-direction-unknown'
   | 'too-few-footstrikes'
   | 'no-usable-pairs'
+  /** Every candidate pair was rejected by step 4a's period gate — footstrikes were detected and
+   * paired, but none of the pairs lasted a plausible single stride at the clip's own fitted step
+   * rhythm. Distinct from `'no-usable-pairs'` (which is about DISPLACEMENT: pairs that didn't
+   * advance in the direction of travel) and only ever returned when a `stepFrequencyHz` reference
+   * was supplied AND at least one pair was actually rejected on timing — so it always carries real
+   * information rather than being a rename of the older reason. */
+  | 'no-period-consistent-pairs'
 
 /**
  * One same-side consecutive-footstrike pair that survived step 4 below, kept whole rather than
@@ -41,6 +48,13 @@ export type StrideLengthResult =
       strideLengthPx: number
       pairCount: number
       candidatePairCount: number
+      /** How many candidate pairs step 4a rejected as period-inconsistent — pairs whose elapsed
+       * TIME could not be one stride at the supplied `stepFrequencyHz`. Always `0` when no
+       * reference was supplied. Invariant: `pairCount + periodRejectedPairCount <=
+       * candidatePairCount`; the remainder is the pre-existing hip-unresolvable / non-advancing
+       * drop. Reported separately from that remainder because the two mean different things to a
+       * reader — a period-rejected pair was read perfectly cleanly, it just wasn't a stride. */
+      periodRejectedPairCount: number
       /** Every kept pair, in detection order (all of the left side's, then all of the right's).
        * `pairs.length === pairCount` and `strideLengthPx === median(pairs.map(displacementPx))`,
        * both by construction. */
@@ -48,7 +62,79 @@ export type StrideLengthResult =
     }
   | { ok: false; reason: StrideLengthFailureReason }
 
+/**
+ * Optional references the extractor can use but never requires. Every field being optional is the
+ * point: `estimateStrideLength(frames, config)` behaves exactly as it did before this parameter
+ * existed.
+ */
+export interface StrideLengthOptions {
+  /** The fitted hip-bounce frequency, in Hz — the **STEP** frequency, not the stride frequency.
+   * Supply `SpectralFitSuccess.frequencyHz` from `analyzeHipBounce`/`analyzeBounceSignal`; that is
+   * the same number `cadence.ts` multiplies by 60 to report steps per minute, and its
+   * step-not-stride identity is established there (the hip-mid y-trace bounces once per step, twice
+   * per gait cycle). Step 4a turns it into an expected stride PERIOD of `2 / stepFrequencyHz`.
+   *
+   * Omitted, non-finite or non-positive → the period gate is inert. */
+  stepFrequencyHz?: number
+}
+
 const HIP_NAMES: [KeypointName, KeypointName] = ['left_hip', 'right_hip']
+
+/**
+ * Half-width of step 4a's accept band for a candidate pair's elapsed TIME, as a fraction of the
+ * expected stride period, applied **log-symmetrically**: a pair is kept when
+ * `interval / expectedPeriod` lies in `[1 / (1 + tol), 1 + tol]`. Log-symmetric rather than
+ * additive because the errors it exists to reject are multiplicative — roughly ½× when a spurious
+ * extra strike shortens the interval, roughly 2× when a real strike is missed — and an additive
+ * band would sit at different multiplicative distances from those two.
+ *
+ * ## Derivation (openspec `gate-stride-pairs-on-fitted-period`, design D4)
+ *
+ * A GENUINE same-side pair's measured interval differs from `2 / fit.frequencyHz` for four
+ * independent reasons. Each as a standard deviation, in fractions of the stride period:
+ *
+ * | source | σ | why |
+ * |---|---|---|
+ * | stride-to-stride biological variability | 2.5% | stride-time CV in healthy running is reported in the low single digits (~1–3%, tighter in trained runners); 2.5% is the pessimistic end |
+ * | footstrike-instant quantization | 2.7% | each strike snaps to a sampled frame, so the interval carries σ = Δt/√6 ≈ 0.41·Δt; at this repo's pessimistic live sampling (Δt ≈ 0.08 s) against a 1.2 s stride |
+ * | fit frequency-grid resolution | 0.5% | `spectralFitFrequencyStepHz` 0.02 Hz, uniform within ±½ step → σ = 0.02/√12, worst case at the band's 1.2 Hz floor |
+ * | fit frequency estimation error beyond the grid | 2.0% | measured: Demo 1's fitted 1.52 Hz against a frame-counted 1.546 Hz is 1.7%, rounded up |
+ *
+ * RSS → σ_total = 4.22%, and **3σ = 12.7%**, rounded up to a round 15%. A 3σ envelope (rather than
+ * 2σ) because the two errors cost differently: wrongly rejecting a genuine stride costs one sample
+ * and, at worst, an honest null; wrongly accepting a half-stride puts a 2×-wrong number on screen
+ * at high confidence.
+ *
+ * **Insensitive to the one soft input.** Recomputing across the whole reported CV range gives 3σ =
+ * 10.7% (CV 1.0%) … 13.4% (CV 3.0%) — the entire range rounds to the same 15%.
+ *
+ * **Sanity bounds.** The accept band is `[0.870, 1.150]`. Its edges sit 0.554 nats from BOTH wrong
+ * multiplicities (0.5× and 2×) against a band half-width of 0.140 nats, so the band is ~4× narrower
+ * than its distance to the nearest thing it must exclude — and any tolerance at all must stay under
+ * √2 − 1 = 41.4%, or it would reach them. On the low side, a 5% deviation (larger than any single
+ * term above) is at ratio 0.95, comfortably inside.
+ *
+ * **Not fitted to a clip.** Demo 1's offending pairs sit at 0.790× and 0.426×; rejecting the larger
+ * needs only `tol < 26.5%`, which every value the derivation could have produced (10.7–15%)
+ * satisfies. The outcome on that clip is determined by the physics, not by this number's exact
+ * value. No existing tuned threshold was moved to make this work.
+ */
+export const STRIDE_PERIOD_TOLERANCE = 0.15
+
+/** `2 / stepFrequencyHz` — a stride is exactly two steps — or `null` when no usable reference was
+ * supplied, which makes step 4a inert. */
+function resolveExpectedStridePeriodSeconds(stepFrequencyHz: number | undefined): number | null {
+  if (stepFrequencyHz === undefined) return null
+  if (!Number.isFinite(stepFrequencyHz) || stepFrequencyHz <= 0) return null
+  return 2 / stepFrequencyHz
+}
+
+/** Step 4a's predicate, stated as the band rather than as a `Math.log` so the bounds are readable:
+ * `[expected / (1 + tol), expected * (1 + tol)]` is exactly the log-symmetric band. */
+function isPeriodConsistent(intervalSeconds: number, expectedStridePeriodSeconds: number): boolean {
+  const ratio = intervalSeconds / expectedStridePeriodSeconds
+  return ratio >= 1 / (1 + STRIDE_PERIOD_TOLERANCE) && ratio <= 1 + STRIDE_PERIOD_TOLERANCE
+}
 
 /**
  * Pure extractor — no confidence/caveat policy, that's `verticalRatio.ts`'s job (same division of
@@ -80,6 +166,14 @@ const HIP_NAMES: [KeypointName, KeypointName] = ['left_hip', 'right_hip']
  *    `candidatePairCount = Σ max(0, n_side - 1)` — the count of consecutive-pair opportunities
  *    before any pair is dropped for a resolution failure or non-advancing displacement. Zero →
  *    `'too-few-footstrikes'`.
+ * 4a. **Period gate**, only when `options.stepFrequencyHz` supplies a usable reference. A stride is
+ *    exactly two steps and the fitted hip-bounce frequency IS the step frequency (see
+ *    `StrideLengthOptions.stepFrequencyHz`), so the expected stride period is
+ *    `2 / stepFrequencyHz` — derived, with no fitted or calibrated coefficient in it. A pair whose
+ *    elapsed time falls outside `STRIDE_PERIOD_TOLERANCE`'s log-symmetric band around that period
+ *    is dropped and counted in `periodRejectedPairCount`. Checked BEFORE the hip resolution and
+ *    `d > 0` filters below, so a pair that isn't a stride is accounted for as "not a stride" rather
+ *    than as "couldn't be read" whenever both would have applied.
  * 4. For each side's consecutive footstrike pair `(i, i+1)`: resolve hip-mid x at both strike
  *    frames via `resolveMidpoint`. Either unresolvable → skip (silently — reflected in
  *    `pairCount < candidatePairCount`, not a separate failure reason). Otherwise
@@ -90,10 +184,11 @@ const HIP_NAMES: [KeypointName, KeypointName] = ['left_hip', 'right_hip']
  *    such a pair isn't a real stride, and this filter also guarantees every kept `d` is strictly
  *    positive, so a caller dividing by `strideLengthPx` never risks a zero-or-negative
  *    denominator.
- * 5. Empty kept-pairs list → `'no-usable-pairs'`. Otherwise
- *    `{ ok: true, strideLengthPx: median(d), pairCount: d.length, candidatePairCount, pairs }`,
- *    where each kept pair is returned whole (`StridePair`) rather than as a bare `d` — see that
- *    type's doc for why the frames travel with the number.
+ * 5. Empty kept-pairs list → `'no-period-consistent-pairs'` if step 4a rejected at least one pair,
+ *    otherwise `'no-usable-pairs'` (byte-for-byte the pre-gate behavior). Otherwise
+ *    `{ ok: true, strideLengthPx: median(d), pairCount: d.length, candidatePairCount,
+ *    periodRejectedPairCount, pairs }`, where each kept pair is returned whole (`StridePair`)
+ *    rather than as a bare `d` — see that type's doc for why the frames travel with the number.
  *
  * **No re-pairing across a dropped strike.** If strike `k+1` is dropped at step 4, this does NOT
  * fall back to pairing `k` with `k+2` — that interval spans two real strides, not one, and
@@ -101,7 +196,18 @@ const HIP_NAMES: [KeypointName, KeypointName] = ['left_hip', 'right_hip']
  * a doubled value indistinguishable from a real one. Losing that pair (visible as
  * `pairCount < candidatePairCount`) is honest; inventing a same-shaped-but-wrong value is not.
  *
- * ## Doubling bias — bounded, not eliminated, and reads LOW on a caller's ratio
+ * ## Two multiplicity biases, in OPPOSITE directions
+ *
+ * A pairwise interval can be wrong by a multiple of a stride in either direction, and the two cases
+ * push a caller's ratio opposite ways. Both are listed here because a reader debugging a
+ * `verticalRatio` that looks wrong needs to know which way to suspect:
+ *
+ * | cause | interval spans | `strideLengthPx` | caller's `bounce / stride` |
+ * |---|---|---|---|
+ * | a MISSED strike | ~2 strides | **HIGH** | reads **LOW** |
+ * | a SPURIOUS extra strike | ~½ a stride | **LOW** | reads **HIGH** |
+ *
+ * ### Doubling bias — bounded by the median, reads LOW on a caller's ratio
  *
  * `detectFootstrikes` can miss a real footstrike (e.g. a brief occlusion suppressing one side's
  * ankle-y extremum below the prominence threshold for one cycle). When that happens, the NEXT
@@ -117,7 +223,32 @@ const HIP_NAMES: [KeypointName, KeypointName] = ['left_hip', 'right_hip']
  * reads LOW (a runner would look like they bounce less, per stride, than they actually do).
  * Direction matters for anyone debugging a ratio that looks implausibly good.
  *
- * A second, subtler bias runs the other way: the `d > 0` filter truncates the noise
+ * ### Halving bias — NOT bounded by the median, reads HIGH on a caller's ratio
+ *
+ * The mirror image, and the more dangerous of the two. `detectFootstrikes` keeps per-side ankle-y
+ * MAXIMA, and a trailing leg produces a secondary prominence-confirmed ankle-y maximum while the
+ * OTHER foot is in stance — an instant that is not a ground-contact onset at all (`cadence.ts`'s
+ * module doc names the same mechanism as the reason cadence stopped consuming this extractor's
+ * input). Two such instants, or one real strike plus one spurious one, get labelled the same side
+ * and paired, so the "stride" spans roughly one STEP. `strideLengthPx` then reads LOW, and a
+ * caller's `bounce / strideLengthPx` reads HIGH.
+ *
+ * **The median does not defend against this**, and that is the structural difference from the
+ * doubling case. A missed strike is an occasional outlier that a majority of clean pairs outvotes;
+ * spurious trailing-leg maxima are a systematic property of the signal, so they can affect EVERY
+ * pair at once and leave the median nothing clean to land among. Measured on the Demo 1 side-view
+ * track clip: of three same-side "strikes" at app t = 4.00 / 5.04 / 5.60, frame-by-frame
+ * ground-contact reading of the source shows only the first is a contact onset — the other two are
+ * a toe-off and a late-stance instant belonging to two DIFFERENT (therefore opposite-foot)
+ * contacts. Both surviving pairs (1.04 s and 0.56 s) were wrong against a true ~1.25 s stride, and
+ * `verticalRatio` reported ~6.8% — about 2× high — at High confidence with no caveat.
+ *
+ * Step 4a's period gate is the defense, and it needs a reference the pair set cannot supply itself
+ * (see the mitigation notes below).
+ *
+ * ### A third, unrelated bias
+ *
+ * Subtler and about displacement rather than timing: the `d > 0` filter truncates the noise
  * distribution for pairs whose TRUE displacement is near zero (a hesitant stride, mid-clip
  * deceleration) — keeping only the positive measurements of a near-zero quantity biases the
  * kept values upward. Immaterial on clips where real strides (~1000px) dwarf hip jitter, but
@@ -139,7 +270,14 @@ const HIP_NAMES: [KeypointName, KeypointName] = ['left_hip', 'right_hip']
  *   threshold has no calibrated boundary (this repo's park-clip investigation already flagged
  *   short clips as too noisy for confident per-half-cycle normalization — see this repo's
  *   CLAUDE.md), and misclassifying a genuinely long single stride as doubled would silently halve
- *   a real value.
+ *   a real value. **STILL REJECTED IN THAT FORM — and superseded for the TIMING case by step 4a.**
+ *   The objection above is specifically about a SELF-REFERENTIAL comparison: "2x the median" is a
+ *   statement about a sample whose own median may already be wrong, and on Demo 1 it is
+ *   catastrophically so (every pair is wrong, so no comparison among them can detect anything).
+ *   Step 4a compares each pair against an EXTERNAL, physically-derived reference instead — the
+ *   fitted step period, doubled, with no coefficient to calibrate — which is a different kind of
+ *   check, not a re-litigation of this one. A displacement-space `d`-versus-median rule remains
+ *   uncalibrated and unbuilt.
  *
  * Trigger for revisiting either: if live `pairCount` medians consistently land at or just above
  * the caller's minimum-sample-size gate in practice (rather than comfortably above it), that's
@@ -149,7 +287,10 @@ const HIP_NAMES: [KeypointName, KeypointName] = ['left_hip', 'right_hip']
 export function estimateStrideLength(
   frames: RobustPoseFrame[],
   config: HeuristicsConfig,
+  options: StrideLengthOptions = {},
 ): StrideLengthResult {
+  const expectedStridePeriodSeconds = resolveExpectedStridePeriodSeconds(options.stepFrequencyHz)
+
   const bodyScale = estimateBodyScale(frames)
   if (bodyScale === null) return { ok: false, reason: 'no-body-scale' }
 
@@ -170,9 +311,22 @@ export function estimateStrideLength(
   if (candidatePairCount === 0) return { ok: false, reason: 'too-few-footstrikes' }
 
   const pairs: StridePair[] = []
+  let periodRejectedPairCount = 0
   for (const side of ['left', 'right'] as const) {
     const strikes = bySide[side]
     for (let i = 0; i < strikes.length - 1; i += 1) {
+      // Step 4a, ahead of both displacement checks — see the gate-order note in the module doc.
+      if (
+        expectedStridePeriodSeconds !== null &&
+        !isPeriodConsistent(
+          strikes[i + 1].timestamp - strikes[i].timestamp,
+          expectedStridePeriodSeconds,
+        )
+      ) {
+        periodRejectedPairCount += 1
+        continue
+      }
+
       const frameA = frames[strikes[i].frameIndex]
       const frameB = frames[strikes[i + 1].frameIndex]
       const hipA = resolveMidpoint(frameA, HIP_NAMES[0], HIP_NAMES[1])
@@ -186,13 +340,21 @@ export function estimateStrideLength(
     }
   }
 
-  if (pairs.length === 0) return { ok: false, reason: 'no-usable-pairs' }
+  if (pairs.length === 0) {
+    // `'no-period-consistent-pairs'` only when a pair was actually rejected on timing; otherwise
+    // the reason is exactly what it was before step 4a existed.
+    return {
+      ok: false,
+      reason: periodRejectedPairCount > 0 ? 'no-period-consistent-pairs' : 'no-usable-pairs',
+    }
+  }
 
   return {
     ok: true,
     strideLengthPx: median(pairs.map((pair) => pair.displacementPx)),
     pairCount: pairs.length,
     candidatePairCount,
+    periodRejectedPairCount,
     pairs,
   }
 }
