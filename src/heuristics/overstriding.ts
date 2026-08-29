@@ -9,13 +9,10 @@ import { detectFootstrikes } from './footstrikes'
 import type { FootstrikeCandidate } from './footstrikes'
 import { computeMetricConfidence } from './confidence'
 import {
-  cropDerivable,
   cropKeypoints,
   describeDistribution,
-  isOutlier,
-  pairQuality,
-  scoreExemplarInstant,
   selectExemplars,
+  selectExtremePair,
 } from './exemplars'
 import type { ExemplarDistribution } from './exemplars'
 import { median } from './mathUtils'
@@ -54,42 +51,27 @@ function seedFor(sample: StrikeSample): KeypointName[] {
  * The most- and least-overstriding strike, ghosted into one image — an EXTREME pair, because what
  * this metric's picture is about is the range of foot placements it measured, not their median.
  * Both instants must survive the outlier bound first, so the ghost can never be two tracking
- * glitches; the most extreme SURVIVOR is used, not the raw argmax.
+ * glitches; among the survivors `selectExtremePair` RANKS by the quality each strike would be
+ * emitted with, rather than taking the raw argmax and scoring it afterwards.
  */
 function buildExemplars(
   samples: StrikeSample[],
   distribution: ExemplarDistribution,
 ): MetricExemplar[] {
-  const surviving = samples.filter(
-    (sample) =>
-      cropDerivable(sample.frame, seedFor(sample)) && !isOutlier(sample.ratio, distribution),
+  const pair = selectExtremePair(
+    samples,
+    (sample) => ({
+      frame: sample.frame,
+      seed: seedFor(sample),
+      value: sample.ratio,
+    }),
+    distribution,
   )
-  if (surviving.length === 0) return []
-
-  let most = surviving[0]
-  let least = surviving[0]
-  for (const sample of surviving) {
-    if (sample.ratio > most.ratio) most = sample
-    if (sample.ratio < least.ratio) least = sample
-  }
-  if (most === least) return []
-
-  const instant = (sample: StrikeSample) => ({
-    frame: sample.frame,
-    seed: seedFor(sample),
-    value: sample.ratio,
-  })
-  const mostQuality = scoreExemplarInstant(instant(most), 'extreme', distribution)
-  const leastQuality = scoreExemplarInstant(instant(least), 'extreme', distribution)
-  if (mostQuality === null || leastQuality === null) return []
+  if (pair === null) return []
 
   // Base is the more extreme of the two — a range ghost is about its far end (see trunkLean's
   // identical reasoning).
-  const base =
-    Math.abs(most.ratio - distribution.median) >= Math.abs(least.ratio - distribution.median)
-      ? most
-      : least
-  const ghost = base === most ? least : most
+  const { base, ghost } = pair
 
   return [
     {
@@ -105,7 +87,7 @@ function buildExemplars(
       // layer with no way to tell which ankle the offset was taken from.
       measuredSide: base.side,
       pairedMeasuredSide: ghost.side,
-      quality: pairQuality(mostQuality, leastQuality),
+      quality: pair.quality,
       label: 'Furthest-reaching footstrike, ghosted against the closest-landing one',
       cropKeypoints: cropKeypoints(
         [...seedFor(base), ...seedFor(ghost)],

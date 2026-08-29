@@ -115,17 +115,25 @@ describe('computeTrunkLean', () => {
   })
 })
 
-/** A rigid torso rotated about the hip, so `computeTrunkLean` reads back exactly `deg`. */
-function leanFrame(deg: number, timestamp: number) {
+/**
+ * A rigid torso rotated about the hip, so `computeTrunkLean` reads back exactly `deg`.
+ * `status: 'interpolated'` keeps the same coordinates — and the same measured lean — while making
+ * the frame one the detector never actually saw the torso in.
+ */
+function leanFrame(
+  deg: number,
+  timestamp: number,
+  status: 'detected' | 'interpolated' = 'detected',
+) {
   const rad = (deg * Math.PI) / 180
   const dx = 150 * Math.sin(rad)
   const dy = -150 * Math.cos(rad)
   return buildFrame(
     {
-      left_hip: { x: 197, y: 400 },
-      right_hip: { x: 203, y: 400 },
-      left_shoulder: { x: 197 + dx, y: 400 + dy },
-      right_shoulder: { x: 203 + dx, y: 400 + dy },
+      left_hip: { x: 197, y: 400, status },
+      right_hip: { x: 203, y: 400, status },
+      left_shoulder: { x: 197 + dx, y: 400 + dy, status },
+      right_shoulder: { x: 203 + dx, y: 400 + dy, status },
     },
     timestamp,
   )
@@ -163,6 +171,25 @@ describe('computeTrunkLean exemplars', () => {
     // The 20 deg frame is the raw argmax and is 30 MADs out — a tracking glitch, not a lean.
     expect(evidence.timestamp).not.toBeCloseTo(6 / 30, 10)
     expect(evidence.pairedTimestamp).not.toBeCloseTo(6 / 30, 10)
+  })
+
+  it('falls back to the next-most-forward frame when the most forward one is interpolated', () => {
+    // Median 5, MAD 0.5. 6.4deg is the most forward surviving lean and would win a rank-by-value
+    // selection outright — but all four of its torso seeds are interpolated, so it scores
+    // 0 x 0.933 = 0, and `pairQuality`'s minimum would take the whole exemplar to zero with it.
+    // The measured Demo 1 failure this reproduces: coverage hinging on one frame's tracking.
+    const leans = [4, 4.5, 5, 5, 5.5, 6, 6.4]
+    const frames = leans.map((deg, i) =>
+      leanFrame(deg, i / 30, deg === 6.4 ? 'interpolated' : 'detected'),
+    )
+
+    const result = computeTrunkLean(frames, 'side')
+    const [evidence] = result.exemplars!
+
+    expect(result.exemplars).toHaveLength(1)
+    expect(evidence.timestamp).toBeCloseTo(5 / 30, 10) // the 6 deg frame, detected
+    expect(evidence.pairedTimestamp).toBeCloseTo(0, 10) // the 4 deg frame
+    expect(evidence.quality).toBeCloseTo(1 / 1.5, 6)
   })
 
   it('emits nothing when the lean never varies — there is no range to picture', () => {

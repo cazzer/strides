@@ -7,13 +7,10 @@ import { estimateTravelDirection } from './travelDirection'
 import { resolveMidpoint } from './keypoints'
 import { computeMetricConfidence } from './confidence'
 import {
-  cropDerivable,
   cropKeypoints,
   describeDistribution,
-  isOutlier,
-  pairQuality,
-  scoreExemplarInstant,
   selectExemplars,
+  selectExtremePair,
 } from './exemplars'
 import type { ExemplarDistribution } from './exemplars'
 import { median } from './mathUtils'
@@ -45,55 +42,39 @@ interface LeanSample {
  * The most forward-leaning frame ghosted against the most upright one — an EXTREME pair, since
  * this metric's picture is the range it measured, not its median.
  *
- * The outlier bound does the load-bearing work here: the extremes of a per-frame distribution are,
- * on real footage, the frames most likely to be tracking glitches, so anything beyond it is
- * dropped from consideration entirely and the most extreme SURVIVOR is used instead. A clip whose
- * lean never varies has no range to show and emits nothing rather than ghosting a frame against
- * itself.
+ * `selectExtremePair` does the load-bearing work: the extremes of a per-frame distribution are, on
+ * real footage, the frames most likely to be tracking glitches, so anything beyond the outlier
+ * bound is dropped from consideration entirely, and the surviving candidates are then RANKED by
+ * the quality they would be emitted with rather than by lean angle alone. A clip whose lean never
+ * varies has no range to show and emits nothing rather than ghosting a frame against itself.
  */
 function buildExemplars(
   samples: LeanSample[],
   distribution: ExemplarDistribution,
 ): MetricExemplar[] {
-  const surviving = samples.filter(
-    (sample) =>
-      cropDerivable(sample.frame, EXEMPLAR_SEED_KEYPOINTS) &&
-      !isOutlier(sample.value, distribution),
+  const pair = selectExtremePair(
+    samples,
+    (sample) => ({
+      frame: sample.frame,
+      seed: EXEMPLAR_SEED_KEYPOINTS,
+      value: sample.value,
+    }),
+    distribution,
   )
-  if (surviving.length === 0) return []
-
-  let mostForward = surviving[0]
-  let mostUpright = surviving[0]
-  for (const sample of surviving) {
-    if (sample.value > mostForward.value) mostForward = sample
-    if (sample.value < mostUpright.value) mostUpright = sample
-  }
-  if (mostForward === mostUpright) return []
-
-  const instant = (sample: LeanSample) => ({
-    frame: sample.frame,
-    seed: EXEMPLAR_SEED_KEYPOINTS,
-    value: sample.value,
-  })
-  const forwardQuality = scoreExemplarInstant(instant(mostForward), 'extreme', distribution)
-  const uprightQuality = scoreExemplarInstant(instant(mostUpright), 'extreme', distribution)
-  if (forwardQuality === null || uprightQuality === null) return []
+  if (pair === null) return []
 
   // Base is the more extreme of the two, per the blend plan: a range ghost is *about* its far end,
   // so that is the frame drawn at full opacity. Usually the forward-lean frame, but not always —
   // a clip that spends most of itself leaning forward puts the upright frame further from the
   // median, and it is that frame the picture is really about.
-  const forwardDistance = Math.abs(mostForward.value - distribution.median)
-  const uprightDistance = Math.abs(mostUpright.value - distribution.median)
-  const base = forwardDistance >= uprightDistance ? mostForward : mostUpright
-  const ghost = base === mostForward ? mostUpright : mostForward
+  const { base, ghost } = pair
 
   return [
     {
       kind: 'trunkLeanRange',
       timestamp: base.frame.timestamp,
       pairedTimestamp: ghost.frame.timestamp,
-      quality: pairQuality(forwardQuality, uprightQuality),
+      quality: pair.quality,
       label: 'Most forward trunk lean, ghosted against the most upright frame',
       cropKeypoints: cropKeypoints(EXEMPLAR_SEED_KEYPOINTS, EXEMPLAR_CONTEXT_KEYPOINTS, [
         base.frame,

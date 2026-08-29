@@ -15,6 +15,7 @@ import {
   pairQuality,
   scoreExemplarInstant,
   selectExemplars,
+  selectExtremePair,
   selectOppositeSidePair,
 } from './exemplars'
 import type { MetricExemplar } from './types'
@@ -283,6 +284,133 @@ describe('scoreExemplarInstant', () => {
 describe('pairQuality', () => {
   it('takes the weaker instant — one unreadable half makes one unreadable image', () => {
     expect(pairQuality(0.9, 0.4)).toBe(0.4)
+  })
+})
+
+describe('selectExtremePair', () => {
+  /** Median 5, MAD 0.5, so the outlier bound is 1.5 and the typicality ramp is |v - 5| / 1.5.
+   * 6.4 is the value argmax at 0.933 of the ramp; 6 and 4 sit one MAD out at 2/3. */
+  const VALUES = [4, 4.5, 5, 5, 5.5, 6, 6.4]
+  const DISTRIBUTION = describeDistribution(VALUES)
+
+  interface Candidate {
+    frame: RobustPoseFrame
+    value: number
+  }
+
+  const toInstant = (candidate: Candidate) => ({
+    frame: candidate.frame,
+    seed: [...SEED],
+    value: candidate.value,
+  })
+
+  /** A torso whose `interpolatedNames` resolve with real coordinates but `'interpolated'` status —
+   * the shape that reads as a position the detector never actually saw. */
+  function torsoFrameInterpolating(
+    timestamp: number,
+    interpolatedNames: readonly ('left_shoulder' | 'right_shoulder' | 'left_hip' | 'right_hip')[],
+  ): RobustPoseFrame {
+    const base = {
+      left_shoulder: { x: 197, y: 250 },
+      right_shoulder: { x: 203, y: 250 },
+      left_hip: { x: 197, y: 400 },
+      right_hip: { x: 203, y: 400 },
+    }
+    const overrides = Object.fromEntries(
+      interpolatedNames.map((name) => [name, { ...base[name], status: 'interpolated' as const }]),
+    )
+    return torsoFrame(timestamp, overrides)
+  }
+
+  const WHOLE_TORSO = ['left_shoulder', 'right_shoulder', 'left_hip', 'right_hip'] as const
+
+  /** Every candidate detected, except those named in `interpolated`, whose whole torso is. */
+  function candidates(interpolated: Partial<Record<number, true>> = {}): Candidate[] {
+    return VALUES.map((value, i) => ({
+      frame: interpolated[value]
+        ? torsoFrameInterpolating(i / 30, WHOLE_TORSO)
+        : torsoFrame(i / 30),
+      value,
+    }))
+  }
+
+  it('prefers a well-tracked near-extreme over an interpolated value-extreme', () => {
+    // 6.4 is the most extreme survivor and would win a rank-by-value selection, but its torso is
+    // entirely interpolated, so it scores 0 x 0.933 = 0 and takes the whole pair to zero with it.
+    const pair = selectExtremePair(candidates({ 6.4: true }), toInstant, DISTRIBUTION)
+
+    expect(pair).not.toBeNull()
+    expect(pair!.base.value).toBe(6)
+    expect(pair!.ghost.value).toBe(4)
+    expect(pair!.quality).toBeCloseTo(1 / 1.5, 10)
+  })
+
+  it('selects the value extremes when every candidate is tracked the same way', () => {
+    // The generalisation this change rests on: ranking only diverges from the old rank-by-value
+    // rule where tracking quality actually differs.
+    const pair = selectExtremePair(candidates(), toInstant, DISTRIBUTION)
+
+    expect(pair!.base.value).toBe(6.4)
+    expect(pair!.ghost.value).toBe(4)
+    expect(pair!.quality).toBeCloseTo(1 / 1.5, 10)
+  })
+
+  it('keeps one end either side of the median even when the two best scores share a side', () => {
+    // Both below-median candidates are half-interpolated, so the two highest scores overall
+    // (6.4 at 0.933 and 6 at 0.667) both sit above the median. An unconstrained ranking would
+    // ghost those two together and depict no range at all.
+    const withWeakLowSide = candidates().map((candidate) => {
+      if (candidate.value >= 5) return candidate
+      const frame = torsoFrameInterpolating(candidate.frame.timestamp, ['left_hip', 'right_hip'])
+      return { ...candidate, frame }
+    })
+
+    const pair = selectExtremePair(withWeakLowSide, toInstant, DISTRIBUTION)
+
+    expect(pair!.base.value).toBe(6.4)
+    expect(pair!.ghost.value).toBe(4)
+    expect(pair!.quality).toBeCloseTo(0.5 * (1 / 1.5), 10)
+  })
+
+  it('never selects an instant beyond the outlier bound, however extreme', () => {
+    const withGlitch = [
+      ...candidates(),
+      { frame: torsoFrame(7 / 30), value: 20 },
+    ]
+
+    const pair = selectExtremePair(withGlitch, toInstant, DISTRIBUTION)
+
+    expect(pair!.base.value).not.toBe(20)
+    expect(pair!.ghost.value).not.toBe(20)
+  })
+
+  it('skips a candidate with no derivable crop, and one with no value at all', () => {
+    const unusable = [
+      ...candidates().filter((candidate) => candidate.value !== 6.4),
+      // Extreme, but nothing to crop around.
+      { frame: buildFrame({}, 7 / 30), value: 6.4 },
+    ]
+
+    expect(selectExtremePair(unusable, toInstant, DISTRIBUTION)!.base.value).toBe(6)
+
+    // A context instant carries no value, so it is no end of a range.
+    expect(
+      selectExtremePair(
+        candidates(),
+        (candidate) =>
+          candidate.value === 6.4
+            ? { frame: candidate.frame, seed: [...SEED] }
+            : toInstant(candidate),
+        DISTRIBUTION,
+      )!.base.value,
+    ).toBe(6)
+  })
+
+  it('emits nothing when there is no range to show', () => {
+    const flat = [5, 5, 5, 5, 5].map((value, i) => ({ frame: torsoFrame(i / 30), value }))
+
+    expect(selectExtremePair(flat, toInstant, describeDistribution([5, 5, 5, 5, 5]))).toBeNull()
+    expect(selectExtremePair([], toInstant, DISTRIBUTION)).toBeNull()
   })
 })
 

@@ -191,6 +191,109 @@ export function pairQuality(a: number, b: number): number {
   return Math.min(a, b)
 }
 
+/** The two ends of a range exemplar, already ordered for drawing. */
+export interface ExtremePair<T> {
+  /** The end further from the metric's median — drawn at full opacity, because a range ghost is
+   * *about* its far end. */
+  base: T
+  /** The nearer end, ghosted over the base. */
+  ghost: T
+  /** `pairQuality` of the two ends' own scores. */
+  quality: number
+}
+
+interface RankedEnd<T> {
+  candidate: T
+  value: number
+  quality: number
+  /** Distance from the metric's median, the tie-break — and the base/ghost decision. */
+  deviation: number
+}
+
+function betterEnd<T>(current: RankedEnd<T> | null, next: RankedEnd<T>): RankedEnd<T> {
+  if (current === null) return next
+  if (next.quality > current.quality) return next
+  // Ties are common, not exotic: with no usable distribution every typicality term is the flat 0.5
+  // fallback, so an entire candidate set can score identically. Breaking toward the more extreme
+  // instant is what makes ranking a strict generalisation of picking the value extreme — on a clip
+  // whose candidates are all equally well tracked the two rules select the same pair.
+  if (next.quality === current.quality && next.deviation > current.deviation) return next
+  return current
+}
+
+/**
+ * Picks the two ends of a RANGE exemplar — the pair whose ghost says "this metric measured
+ * anywhere from here to here" — by RANKING every candidate on the quality it would actually be
+ * emitted with, and taking the best-scoring one at each end.
+ *
+ * The order matters and is the whole point. Taking the raw argmax/argmin of the metric's own value
+ * and scoring THAT afterwards makes the score a veto on one pre-chosen frame rather than a ranking
+ * over many: `pairQuality` is a minimum, so a single badly-tracked instant sitting at the value
+ * extreme takes the pair to zero and gates out a metric that had plenty of well-tracked candidates
+ * the selection never looked at. Measured on this repo's own reference clip, `trunkLean`'s
+ * most-forward instant had all four torso seeds interpolated (`detectionFactor` 0) while 18 other
+ * instants cleared the typicality ramp — and the metric emitted nothing.
+ *
+ * **The median split is not an extra rule, it is the range itself.** For an extreme instant
+ * typicality reads |value − median|, blind to direction, so an unconstrained "two best scores"
+ * would happily return two instants from the same end and ghost a frame against its near-twin.
+ * Each end is therefore drawn from its own side of the metric's median. That is also EXACTLY the
+ * best-scoring valid pair rather than a proxy for it: `pairQuality` is a minimum of two
+ * independent scores, so `max over pairs of min(q_high, q_low)` is `min(max q_high, max q_low)` —
+ * the per-side argmax IS the argmax pair, with no search.
+ *
+ * Sides are taken inclusively so an instant sitting exactly ON the median is eligible for either
+ * end rather than silently ineligible for both. With a usable distribution such an instant scores
+ * 0 for this role and never wins anyway; with an unusable one it can, and dropping it would have
+ * narrowed coverage for no statable reason.
+ *
+ * Ranking runs AFTER the hard rejects, never instead of them: `scoreExemplarInstant` returns
+ * `null` for an instant with no derivable crop or one beyond the outlier bound, and those are
+ * skipped as ineligible rather than merely ranked low — so this can never promote a tracking
+ * glitch into the picture.
+ *
+ * Returns `null` when there is no honest range to show: nothing eligible on one side, or both ends
+ * landing on the same instant or the same value (a clip whose measurement never varied has no
+ * range, and ghosting a frame against itself would depict one).
+ */
+export function selectExtremePair<T>(
+  candidates: readonly T[],
+  toInstant: (candidate: T) => ExemplarInstant,
+  distribution: ExemplarDistribution,
+): ExtremePair<T> | null {
+  let high: RankedEnd<T> | null = null
+  let low: RankedEnd<T> | null = null
+
+  for (const candidate of candidates) {
+    const instant = toInstant(candidate)
+    // A context instant carries no value, so it has no side of the median to be an end of.
+    if (instant.value === undefined) continue
+    const quality = scoreExemplarInstant(instant, 'extreme', distribution)
+    if (quality === null) continue
+
+    const end: RankedEnd<T> = {
+      candidate,
+      value: instant.value,
+      quality,
+      deviation: Math.abs(instant.value - distribution.median),
+    }
+    if (instant.value >= distribution.median) high = betterEnd(high, end)
+    if (instant.value <= distribution.median) low = betterEnd(low, end)
+  }
+
+  if (high === null || low === null) return null
+  // `high.value >= median >= low.value`, so equal values means both ends sat exactly on the
+  // median — which also covers the two ends being one and the same candidate.
+  if (high.value === low.value) return null
+
+  const [base, ghost] = high.deviation >= low.deviation ? [high, low] : [low, high]
+  return {
+    base: base.candidate,
+    ghost: ghost.candidate,
+    quality: pairQuality(high.quality, low.quality),
+  }
+}
+
 /**
  * Constructs the opposite-side instant pair the step-width metrics need and do not already have.
  * Those metrics measure each strike independently against the hip midline, and `detectFootstrikes`
