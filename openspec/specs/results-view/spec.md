@@ -988,8 +988,12 @@ gallery figure that no longer exists.
 
 Each thumbnail SHALL carry a text alternative describing what it shows, since the image itself carries
 no text. The text alternative MAY state the one-runner framing the caption omits, because alt text is
-read out of context and reaches a reader who has none of the card around it. Where more than one clip
-is present, the card SHALL indicate which clip its evidence came from.
+read out of context and reaches a reader who has none of the card around it. For a blended image the
+text alternative SHALL additionally say which of the two instants is the emphasised one, because that
+emphasis is carried only by pixels: the photograph is weighted toward its base instant and the base's
+marks are drawn solid against the ghost's faded ones, so a reader who cannot see the image learns from
+neither. Where more than one clip is present, the card SHALL indicate which clip its evidence came
+from.
 
 The rendered image SHALL be the extracted canvas element itself, adopted into the document. The
 system SHALL NOT introduce a data URL, blob, object URL, download affordance, or any other
@@ -1025,7 +1029,8 @@ SHALL NOT weaken any of those.
 - **THEN** its caption conveys the one-runner framing through the metric's own label alone — one
   instant *ghosted against* another — followed by when in the clip the two instants occurred, and
   carries no further sentence spelling out that the image is not two people; its text alternative
-  names the metric and, where the metric is per-side, the side
+  names the metric, where the metric is per-side the side, and which of the two blended instants is
+  shown emphasised rather than faded
 
 #### Scenario: No gallery and no deep link remain
 
