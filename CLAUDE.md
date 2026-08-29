@@ -344,6 +344,11 @@ node scripts/ab-person-selection.mjs \
   7↔10, `kneeFlexion` 116.9↔120.7, `verticalRatio` 0.0524↔0.0682 (30%) and `stepWidth` 1.13↔1.70
   (51%). Treat a wide range column as a possible harness artifact before attributing it to the
   clip. (n=2 runs per regime — a strong signal, not a proven law.)
+  **Extended 2026-08-29 (`strides-b0y`), and the mechanism is now known**: cold vs warm Chromium
+  process, proved by moving which clip runs first. 5 fresh invocations and 3 reused ones across
+  all three clips; the numbers above stand as measured on their commit (`verticalRatio` and
+  `stepWidth` read differently on today's `main`). Full evidence: the rewritten **Determinism
+  caveat** below.
 - **The fresh-process default is close to free**: browser launch+close measures 63-77 ms, and end
   to end 3 trials came out 31.17 s fresh vs 31.06 s reused on Demo 2, and 43.5 s vs 42.2 s on
   Demo 1 — inside the per-trial jitter either way.
@@ -419,14 +424,65 @@ the older, deprecated `@mediapipe/pose` package this repo already stubs out dead
   unverified — no ground truth was established, this is a disagreement, not a verdict.
 - Full GitHub issues: #24 (MoveNet variant), #25 (MediaPipe Tasks Vision), #26 (PoseNet).
 
-**Determinism caveat**: the `tfjs-core` pipeline (MoveNet, BlazePose, PoseNet) is not bit-exact
-run-to-run even with identical input and config — GPU float non-associativity and minor
-frame-timing jitter produce small variance (e.g. 74 vs. 75 detected frames across
-otherwise-identical MoveNet trials, observed this session; much larger variance observed for
-MoveNet Thunder, see above). The MediaPipe Tasks Vision path was, by contrast, bit-identical
-across all 3 trials this session — not yet confirmed whether that holds in general or was
-coincidental to this clip/environment. For a real before/after comparison, run a few trials per
-variant and compare medians/ranges, not single runs.
+**Determinism caveat — mostly a harness artifact, and the mechanism is browser-process warmth**
+(rewritten 2026-08-29, `strides-b0y`; this paragraph previously blamed GPU float non-associativity
+and frame-timing jitter, which is wrong for most of the spread this file records).
+
+**Fresh process per trial is exactly reproducible, on all three clips.** Three independent
+invocations of `scripts/ab-person-selection.mjs` at the default (fresh) regime — 3 + 3 + 5 trials,
+a separate dev server each, real GPU, `ANGLE Metal Renderer: Apple M4 Pro` — agreed on **every
+field except `elapsedMs`**: no spread within an invocation and no difference between invocations,
+on Demo 1, Demo 2 *and* `multiperson`. Two further independent 8-trial `--evidence` invocations on
+Demo 1 + multiperson reproduced that byte for byte, exemplar timestamps, crop sides and
+`cropGrowth` included. That is **27 fresh trials on Demo 1, 11 on Demo 2, 27 on multiperson, over
+5 invocations**; `metrics.kneeFlexion.value` reads `120.690220593611` on every Demo 1 trial of all
+27.
+
+**The spread is a COLD-vs-WARM process split, not scatter.** Under `--reuse-browser` (5 trials),
+Demo 1 spread on ~23 fields — `segmentCount` 3↔4, `rejectedOtherSegment` 7↔10, `kneeFlexion`
+116.924↔120.690, `overstriding` 0.172↔0.297, `stepWidth` −0.396↔−1.280. Per trial rather than as a
+range, there are exactly **two states**: trial 1 is bit-identical to the fresh regime, and trials
+2..N are bit-identical to each other at a different value. The upstream cause is one detection:
+`personSelection.detectedSamplesIn` 66 (cold) vs 65 (warm), which re-partitions the track.
+
+**Clip order proves it is the process, not the clip.** Re-running the same reused matrix with the
+order reversed (`--clips multiperson,demo2,demo1`, 5 trials) moves the split: `multiperson` —
+perfectly flat when it ran last — now splits between trial 1 and trials 2-5 (`detectedFrames`
+103→127, `segmentCount` 3→2, `cadence` 174→`null`), with its trial 1 landing on the fresh regime's
+exact values; and Demo 1 — which spread when it ran first — goes completely flat at the *warm*
+values. Demo 2 never runs first in either order and is flat at its warm value both times. Only the
+clip that gets the cold process shows a range.
+
+**Which regime the other ranges in this file were measured under: the reused one.** Every `[a..b]`
+recorded here before 2026-08-29 — the concealment table, the 4K-area-floor table, the
+tracking-crop and person-of-interest A/Bs, the VO-family cross-trial spreads, `sampling.detected`
+figures like "65-66 in" — predates the fresh-process default and was measured with one Chromium
+process across trials. Read those range columns as an upper bound inflated by a cold/warm mixture
+whose composition depends on trial index and clip order, not as physical spread. **They have not
+been retrofitted**: they were honestly measured under a regime that is now named, and rewriting
+them would destroy the record rather than correct it. The re-run judgement on the A/Bs whose
+conclusions leaned on a range is recorded on bead `strides-b0y`.
+
+The concealment table's "cold-start ramp" ("a first trial reads low and then climbs monotonically
+to a 64 steady state") is this same effect, observed a session before it was explained.
+
+**What fresh-process buys and what it costs.** It buys exact reproducibility, for ~65 ms a trial.
+It costs representativeness: it pins *every* trial to the COLD operating point, and cold is not a
+small perturbation of warm. On multiperson, cold samples 103 detected frames and warm 127 (+23%),
+and `cadence`/`verticalOscillation`/`verticalRatio` resolve cold but are `null` warm. A real
+user's browser is warm. So use fresh-process for anything that must reproduce or be diffed, and do
+not read a fresh-process number as the number a user would see.
+
+**What this does NOT explain.** The observations this paragraph used to carry are preserved, not
+deleted: **74 vs. 75 detected frames across otherwise-identical MoveNet trials** (2026-08-11) and
+MoveNet Thunder's much larger variance were both measured under the reused regime and neither has
+been re-measured. The MediaPipe Tasks Vision path's bit-identical behaviour was measured there too
+and is untouched by this. And "cold vs warm" is the demonstrated *correlate* — the microscopic
+cause of the one flipped detection (JIT tier, WASM/shader cache, per-frame wall-clock budget) was
+not isolated. n = 5 fresh invocations and 3 reused, one machine,
+one session, on one commit — a mechanism demonstrated by a manipulation, not a proven law. For a
+real before/after comparison, still run a few trials per variant; just expect the fresh regime to
+hand you a single number rather than a range.
 
 **Environment gotcha — the cached browser binary can be version-mismatched.** `playwright` is a
 devDependency here (since `06d9f72`), so driver scripts written in this repo resolve the import and
@@ -636,6 +692,19 @@ is worth investigating rather than averaging away. **Park is not deterministic**
 being bit-reproducible elsewhere: its presence-trimmed window lands on 76/83/84 samples across
 trials, and that alone moves the number. One baseline park trial sampled a single frame and
 produced no `scaleCalibration` at all — the known cold-start flake, unrelated to any code change.
+
+⚠️ **"Park is not deterministic" does NOT survive the fresh-process regime** (addendum
+2026-08-29, `strides-b0y` — the 2026-08-12 numbers above are left exactly as measured). Three
+fresh-process trials on today's default MoveNet-primary + grafted-scale-pass path return
+`verticalOscillationCm` **10.486597716761532** cm, `fit.frequencyHz` 3.12, `sinusoidR2`
+0.34968137749045114, **`sampleCount` 98**, `spanSeconds` 1.6182830000000001, `torsoMeters`
+0.464629504405643, `medianPixelsPerMeter` 520.898452525673, `subjectAgreement` 99/99 — every digit
+identical on all three. The presence-trimmed window does not land on 76/83/84 any more; it lands
+on 98, every time. Eleven further fresh trials of the primary line (`--arm 'base={}'`) likewise
+show zero spread on every Demo 2 field. Two things changed between the two measurements and this
+addendum does not separate them: the regime (reused → fresh) and the path (MediaPipe-primary →
+MoveNet-primary with a grafted scale pass). What is certain is that a reader today should not
+expect park to wobble. See the rewritten **Determinism caveat**.
 
 **Why the track number dropped 21%, and why that is not a regression.** The pre-registered
 tolerance for this swap was −7% (from #28's measured sine-underfit bias on the pixel path); the
@@ -935,6 +1004,18 @@ per-metric multiperson column above is the highest-coverage trial (7 images / 5 
 lower trials drop further metrics, and which ones is not pinned per-metric here. `trunkLean`'s
 `all-gated-out` is the one multiperson cell confirmed identical on every trial. Do not treat a 4/3
 reading there as a regression without checking against this range first.
+
+⚠️ **"multiperson is not run-to-run deterministic" does NOT survive the fresh-process regime**
+(addendum 2026-08-29, `strides-b0y` — the 7/5, 4/3, 4/3 observation above is left exactly as
+measured). Two independent 8-trial `--evidence` invocations at the default (fresh) regime, 16
+trials, returned a **bit-identical `[evidence-coverage]` payload every time** on multiperson:
+same per-metric status, same exemplar `timestamp`/`pairedTimestamp`/`quality`/`cropSidePx`/
+`cropGrowth` to full precision. Eleven further fresh trials of the primary line show zero spread
+on every multiperson field. Under `--reuse-browser` the same clip splits into two states the
+moment it runs first in the process (`detectedFrames` 103 cold vs 127 warm) — that split, not the
+clip, is what the 7/5–4/3 range was recording. Caveat: this is today's `main`, several evidence
+changes downstream of the 2026-08-17/18 table, so the *values* are not comparable to the column
+above — only the presence or absence of a range is. See the rewritten **Determinism caveat**.
 
 `excluded` = `metric-excluded`, the tier-3 gate (the metric has no card, so there is nothing to hang
 evidence on) — not the exemplar gate. **Zero `extraction-failed` on any run.** `cadence` deliberately
