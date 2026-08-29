@@ -22,9 +22,15 @@
  *   --clips <a,b,c>       demo1 | demo2 | multiperson (default: all three)
  *   --trials <n>          Trials per (clip, arm). Default 3.
  *   --timeout <ms>        Per-trial wait for "Analysis complete". Default 300000.
- *   --port <n>            Dev-server port. Default is playwright.config.ts's (5173).
- *   --reuse-server        Measure against a dev server this run did not start. Refused by
- *                         default — see startDevServer for why that refusal is not pedantry.
+ *   --port <n>            Dev-server port. Default is playwright.config.ts's, which derives one
+ *                         per checkout so parallel worktrees stop colliding.
+ *   --reuse-server        Attach to a dev server this run did not start. Refused by default —
+ *                         see startDevServer for why that refusal is not pedantry. Reuse is still
+ *                         identity-checked; the flag buys a shortcut, not trust.
+ *   --reuse-browser       Run every trial in ONE Chromium process. Off by default because it
+ *                         changes what gets measured — see the runTrial comment.
+ *   --evidence            Also capture the `[evidence-coverage]` line (exemplar timestamps, crop
+ *                         sides, per-metric status). Costs a wait for the scale-pass re-extraction.
  *   --json <path>         Also write the aggregate + every raw per-trial record here.
  *
  * Example:
@@ -44,6 +50,12 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
+import {
+  assertHardwareRenderer,
+  assertServesThisCheckout,
+  DEV_PORT_ENV_VAR,
+  readRendererInPage,
+} from './lib/harnessProvenance.mjs'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -60,6 +72,19 @@ const CLIPS = {
 }
 
 const DIAGNOSTICS_PREFIX = '[analysis-diagnostics]'
+const SCALE_PASS_PREFIX = '[analysis-diagnostics:scale-pass]'
+const EVIDENCE_PREFIX = '[evidence-coverage]'
+
+/**
+ * How long `--evidence` waits for the `[evidence-coverage]` stream to go quiet before taking the
+ * last line. There can be TWO lines per run: on a MoveNet-primary run the background MediaPipe
+ * scale pass grafts `verticalOscillationCm` in after `phase: 'ready'`, which changes the evidence
+ * input signature and correctly triggers a re-extraction. Taking the first line reports a metric
+ * as `metric-excluded` that the second reports as `planned`, so whether a harness sees one line or
+ * two is a race — settled here by waiting rather than by winning it.
+ */
+const EVIDENCE_SETTLE_MS = 8_000
+const EVIDENCE_MAX_WAIT_MS = 180_000
 
 /**
  * Every key an arm override may set, nested planes included. The app merges an override key-by-key
@@ -97,7 +122,14 @@ const ARM_KEYS = {
  * without that, an arm whose run skipped the selection stage (no `segments[0].*` at all) would
  * shift every later row and make two reports diff on ordering instead of on values.
  */
-const FIELD_GROUPS = ['sampling.', 'personSelection.', 'segments[0].', 'view.', 'metrics.']
+const FIELD_GROUPS = [
+  'sampling.',
+  'personSelection.',
+  'segments[0].',
+  'view.',
+  'metrics.',
+  'evidence.',
+]
 
 function requireValue(flag, value) {
   if (value === undefined) throw new Error(`${flag} needs a value`)
@@ -150,6 +182,8 @@ function parseArgs(argv) {
     timeoutMs: 300_000,
     port: null,
     reuseServer: false,
+    reuseBrowser: false,
+    evidence: false,
     jsonPath: null,
   }
 
@@ -196,6 +230,12 @@ function parseArgs(argv) {
         break
       case '--reuse-server':
         options.reuseServer = true
+        break
+      case '--reuse-browser':
+        options.reuseBrowser = true
+        break
+      case '--evidence':
+        options.evidence = true
         break
       case '--json':
         options.jsonPath = requireValue(flag, value)
@@ -252,6 +292,12 @@ async function serverIsUp(url) {
  * code at all, both arms reduce to old-code-plus-a-flag, and the honest reading of the output is
  * "no effect" — a manufactured false negative for the exact hypothesis under test. Three seconds
  * of startup is not worth that.
+ *
+ * `--reuse-server` no longer means "take my word for it". The caller used to have to confirm the
+ * running server served this checkout by eye; `assertServesThisCheckout` now confirms it by nonce,
+ * so the flag skips a startup rather than a guard. That check then runs on the started-it path
+ * too — it is one localhost fetch, and a guard exercised only by a rarely-passed flag is a guard
+ * nobody notices has stopped working.
  */
 async function startDevServer({ command, url, timeout }, reuse) {
   if (await serverIsUp(url)) {
@@ -259,11 +305,13 @@ async function startDevServer({ command, url, timeout }, reuse) {
       throw new Error(
         `${url} is already being served and this run did not start it. Refusing to measure ` +
           'against a checkout that may not be this one. Stop that server, re-run with --port ' +
-          '<free port>, or pass --reuse-server once you have confirmed it serves THIS checkout.',
+          `<free port> (or ${DEV_PORT_ENV_VAR}=<free port>), or pass --reuse-server to have this ` +
+          'run verify it serves THIS checkout before measuring.',
       )
     }
-    process.stderr.write(`dev server: reusing ${url} (--reuse-server)\n`)
-    return { stop: () => {}, provenance: 'reused, NOT started by this run' }
+    process.stderr.write(`dev server: attaching to ${url} (--reuse-server)\n`)
+    await assertServesThisCheckout(url)
+    return { stop: () => {}, provenance: 'reused, NOT started by this run, identity verified' }
   }
 
   process.stderr.write(`dev server: starting \`${command}\`\n`)
@@ -286,7 +334,14 @@ async function startDevServer({ command, url, timeout }, reuse) {
 
   const deadline = Date.now() + timeout
   while (Date.now() < deadline) {
-    if (await serverIsUp(url)) return { stop, provenance: 'started by this run' }
+    if (await serverIsUp(url)) {
+      await assertServesThisCheckout(url).catch((error) => {
+        // Don't leave a server behind that this run started but will not measure against.
+        stop()
+        throw error
+      })
+      return { stop, provenance: 'started by this run, identity verified' }
+    }
     // `--strictPort` makes vite exit immediately rather than pick another port, so a busy port
     // shows up here as a dead child — report that instead of burning the full timeout.
     if (exit !== null) {
@@ -308,31 +363,38 @@ async function startDevServer({ command, url, timeout }, reuse) {
  * whichever (clip, arm) ran first would otherwise absorb all of it alone and read systematically
  * wide in the range column. Trial-major ordering cannot balance a cost that is only ever paid
  * once. (Model and WebGL warmup is per-context and already symmetric across arms.)
+ *
+ * Runs in its own throwaway browser rather than in the first trial's, because the first trial's
+ * process is not allowed to be special — that privilege is the whole of `strides-9wp`.
  */
-async function warmUpAndReadRenderer(browser, baseURL) {
-  const page = await browser.newPage()
+async function warmUpAndReadRenderer(launchArgs, baseURL) {
+  const browser = await chromium.launch({ args: launchArgs })
   try {
+    const page = await browser.newPage()
     await page.goto(baseURL)
     await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(() => {})
-    return await page.evaluate(() => {
-      const canvas = document.createElement('canvas')
-      const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl')
-      if (!gl) return null
-      const info = gl.getExtension('WEBGL_debug_renderer_info')
-      return info
-        ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL)
-        : gl.getParameter(gl.RENDERER)
-    })
+    return await page.evaluate(readRendererInPage)
   } finally {
-    await page.close()
+    await browser.close()
   }
 }
 
 /**
  * One analysis run: fresh context (so the override is installed before any page script runs),
  * drive the clip, capture the PRIMARY diagnostics line, return the fields we compare on.
+ *
+ * **`browser` is a fresh process per trial unless `--reuse-browser` says otherwise**, and that is
+ * a measurement decision rather than hygiene (`strides-9wp`). Reusing one Chromium across trials
+ * shifts Demo 2's sampling from trial 2 onward: `armSwingSymmetry`'s exemplar moves from
+ * t=0.984317 with a 320 px crop (the `EVIDENCE_CROP_MIN_SIDE_PX` floor, subject 264.7 px) to
+ * t=1.468133 with a 398.7 px crop (subject 449.4 px). Only the fresh-process regime reproduces
+ * the coverage CLAUDE.md records for that clip. The damage is the same shape as measuring against
+ * a foreign server: in the reused regime the subject is WIDER than the crop, so a subject-centring
+ * rule correctly declines to fire, and a driver reusing a browser would have reported "no effect"
+ * for a fix that demonstrably works. The defect reproduces either way; it is the FIX that goes
+ * invisible. A context is not enough — the shift survives `browser.newContext()`.
  */
-async function runTrial(browser, { baseURL, clip, clipName, override, timeoutMs }) {
+async function runTrial(browser, { baseURL, clip, clipName, override, timeoutMs, evidence }) {
   const context = await browser.newContext()
   try {
     await context.addInitScript((value) => {
@@ -350,9 +412,27 @@ async function runTrial(browser, { baseURL, clip, clipName, override, timeoutMs 
     // Keeps a rejection that lands before the await below from surfacing as unhandled.
     diagnosticsPromise.catch(() => {})
 
+    const evidenceLines = []
+    let lastEvidenceAt = 0
+    let scalePassSeen = false
+
     page.on('console', (message) => {
       const text = message.text()
-      // Exclusive: `[analysis-diagnostics:scale-pass]` also starts with the bare prefix.
+      if (text.startsWith(SCALE_PASS_PREFIX)) {
+        scalePassSeen = true
+        return
+      }
+      if (text.startsWith(EVIDENCE_PREFIX)) {
+        try {
+          evidenceLines.push(JSON.parse(text.slice(EVIDENCE_PREFIX.length).trim()))
+          lastEvidenceAt = Date.now()
+        } catch {
+          // A malformed evidence line costs the evidence columns, not the trial.
+        }
+        return
+      }
+      // Exclusive: `[analysis-diagnostics:scale-pass]` also starts with the bare prefix, and is
+      // already returned above.
       if (!text.startsWith(DIAGNOSTICS_PREFIX)) return
       if (text.startsWith('[analysis-diagnostics:')) return
       try {
@@ -401,7 +481,31 @@ async function runTrial(browser, { baseURL, clip, clipName, override, timeoutMs 
       ),
     ])
 
-    return extractFields(diagnostics, elapsedMs)
+    // Wait for the evidence stream to go quiet rather than for a line count: see
+    // EVIDENCE_SETTLE_MS. Quiescence is gated on the scale pass having reported, so a fast machine
+    // cannot settle in the gap before the graft's re-extraction starts.
+    if (evidence) {
+      const deadline = Date.now() + EVIDENCE_MAX_WAIT_MS
+      let settled = false
+      while (!settled && Date.now() < deadline) {
+        settled =
+          evidenceLines.length > 0 && scalePassSeen && Date.now() - lastEvidenceAt > EVIDENCE_SETTLE_MS
+        if (!settled) await new Promise((resolve) => setTimeout(resolve, 250))
+      }
+      // The cap yields whatever arrived rather than failing the trial, so say so — an
+      // un-settled capture may be the pre-graft line, which reports a grafted metric as
+      // `metric-excluded`, and that must not be mistaken for a coverage regression.
+      if (!settled) {
+        process.stderr.write(
+          `\n  WARNING: [evidence-coverage] did not settle in ${EVIDENCE_MAX_WAIT_MS}ms ` +
+            `(${evidenceLines.length} line(s), scale pass ${scalePassSeen ? 'reported' : 'SILENT'}) `,
+        )
+      }
+    }
+
+    // `undefined` means "not asked for"; `null` means "asked for and none arrived" — distinct
+    // states that must not both render as an absent row.
+    return extractFields(diagnostics, elapsedMs, evidence ? (evidenceLines.at(-1) ?? null) : undefined)
   } finally {
     await context.close()
   }
@@ -422,14 +526,27 @@ function scalarize(value) {
  * Recursive so a nested diagnostic (`view.diagnostics`) becomes one comparable row per number
  * instead of one unreadable JSON blob that never medians. Keys sort at every level, so the row
  * order stays a property of the names.
+ *
+ * `arrays` defaults to stringifying, which is what every pre-existing caller got and must keep
+ * getting — descending into an array here would renumber rows in reports this driver has already
+ * produced. `[evidence-coverage]` is array-shaped to its core (clips, exemplars) and opts into
+ * `'index'`, which walks them as `prefix[n].`.
  */
-function flatten(prefix, source, skip = []) {
+function flatten(prefix, source, skip = [], arrays = 'stringify') {
   const flattened = {}
   for (const key of Object.keys(source).sort()) {
     if (skip.includes(key)) continue
     const value = source[key]
-    if (isPlainObject(value)) {
-      Object.assign(flattened, flatten(`${prefix}${key}.`, value))
+    if (Array.isArray(value) && arrays === 'index') {
+      value.forEach((entry, index) => {
+        if (isPlainObject(entry)) {
+          Object.assign(flattened, flatten(`${prefix}${key}[${index}].`, entry, [], arrays))
+        } else {
+          flattened[`${prefix}${key}[${index}]`] = scalarize(entry)
+        }
+      })
+    } else if (isPlainObject(value)) {
+      Object.assign(flattened, flatten(`${prefix}${key}.`, value, [], arrays))
     } else {
       flattened[`${prefix}${key}`] = scalarize(value)
     }
@@ -444,7 +561,7 @@ function flatten(prefix, source, skip = []) {
  * harness built to measure it, and a field silently missing from the table is worse than an
  * unexpected row.
  */
-function extractFields(diagnostics, elapsedMs) {
+function extractFields(diagnostics, elapsedMs, evidenceCoverage) {
   const selection = diagnostics.personSelection ?? {}
   const winner = selection.segments?.[0]
 
@@ -459,6 +576,18 @@ function extractFields(diagnostics, elapsedMs) {
     const metric = diagnostics.metrics[id]
     fields[`metrics.${id}.value`] = scalarize(metric.value)
     fields[`metrics.${id}.confidence`] = scalarize(metric.confidence)
+  }
+
+  // Same "flatten whatever is there" rule as the block above, for the same reason: the fields that
+  // discriminate a fresh-process run from a reused one (exemplar `timestamp`, `cropSidePx`) are
+  // not enumerated here, so a ticket adding one gets it measured without editing this driver.
+  if (evidenceCoverage !== undefined) {
+    Object.assign(
+      fields,
+      evidenceCoverage === null
+        ? { 'evidence.captured': false }
+        : { 'evidence.captured': true, ...flatten('evidence.', evidenceCoverage, [], 'index') },
+    )
   }
 
   fields.elapsedMs = elapsedMs
@@ -531,6 +660,10 @@ function report({ renderer, baseURL, provenance, commit, options, results }) {
     `# baseURL: ${baseURL} (${provenance})`,
     `# commit: ${commit}`,
     `# renderer: ${renderer}`,
+    // Provenance, same as the baseURL and commit lines above it: the browser regime changes what
+    // gets measured on Demo 2 (strides-9wp), so a diff of two reports has to surface it on a line
+    // rather than leave it to be inferred from the numbers.
+    `# browser: ${options.reuseBrowser ? 'ONE process reused across trials (--reuse-browser)' : 'fresh process per trial'}`,
     `# trials: ${options.trials}`,
     ...options.arms.map((arm) => `# arm ${arm.label}: ${JSON.stringify(arm.override)}`),
   ]
@@ -607,18 +740,19 @@ async function main() {
   }
 
   const { stop: stopServer, provenance } = await startDevServer(webServer, options.reuseServer)
-  let browser
+  let sharedBrowser
   try {
-    browser = await chromium.launch({ args: launchArgs })
-
-    const renderer = await warmUpAndReadRenderer(browser, baseURL)
+    const renderer = await warmUpAndReadRenderer(launchArgs, baseURL)
     process.stderr.write(`renderer: ${renderer}\n`)
-    if (renderer === null || /swiftshader|software|llvmpipe/i.test(renderer)) {
-      throw new Error(
-        `refusing to measure on "${renderer}" — that is software rendering, not the GPU. ` +
-          'Every number this driver prints would be unrepresentative (CLAUDE.md, "real GPU").',
-      )
-    }
+    assertHardwareRenderer(renderer)
+
+    // Fresh per trial unless asked otherwise — see runTrial for what reuse costs. The shared
+    // browser is launched here rather than reusing the warmup one so that under --reuse-browser
+    // every trial including the first sees an equally-used process.
+    sharedBrowser = options.reuseBrowser ? await chromium.launch({ args: launchArgs }) : null
+    process.stderr.write(
+      `browser: ${sharedBrowser ? 'ONE process reused across trials' : 'fresh process per trial'}\n`,
+    )
 
     // (clip, arm) -> trial records. Trial-major so no arm collects a disproportionate share of
     // whatever the machine is doing at one moment.
@@ -632,6 +766,7 @@ async function main() {
         for (const arm of options.arms) {
           process.stderr.write(`run: ${clipName} / ${arm.label} / trial ${trial}… `)
           const record = { trial }
+          const browser = sharedBrowser ?? (await chromium.launch({ args: launchArgs }))
           try {
             record.fields = await runTrial(browser, {
               baseURL,
@@ -639,6 +774,7 @@ async function main() {
               clipName,
               override: arm.override,
               timeoutMs: options.timeoutMs,
+              evidence: options.evidence,
             })
             process.stderr.write(
               `detected ${record.fields['sampling.detectedFrames']}/${record.fields['sampling.totalSamples']} in ${record.fields.elapsedMs}ms\n`,
@@ -646,6 +782,8 @@ async function main() {
           } catch (error) {
             record.error = error.message
             process.stderr.write(`FAILED: ${error.message}\n`)
+          } finally {
+            if (!sharedBrowser) await browser.close()
           }
           results.get(`${clipName}|${arm.label}`).push(record)
         }
@@ -666,6 +804,7 @@ async function main() {
           {
             baseURL,
             serverProvenance: provenance,
+            browserProvenance: options.reuseBrowser ? 'one process reused' : 'fresh per trial',
             commit,
             renderer,
             trials: options.trials,
@@ -686,7 +825,7 @@ async function main() {
       process.stderr.write(`wrote ${target}\n`)
     }
   } finally {
-    await browser?.close()
+    await sharedBrowser?.close()
     stopServer()
   }
 }

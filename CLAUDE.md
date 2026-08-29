@@ -67,10 +67,37 @@ via `WEBGL_debug_renderer_info`: `ANGLE Metal Renderer` on Apple Silicon, not
 `SwiftShader Device`) and is dramatically faster and more representative of what a real user's
 browser does.
 
-**Driving the app:**
+**Two guards now refuse instead of measuring the wrong thing — don't work around them.**
+Both were added because their failure mode is a *clean, plausible* number rather than a crash
+(beads `strides-zpb`, `strides-9wp`), and both are on by default because the six agents who each
+hand-rolled a workaround for the first one had no idea they needed to.
+
+1. **The dev-server port is DERIVED from the checkout's absolute path**, not 5173
+   (`scripts/lib/harnessProvenance.mjs`, `resolveDevServerPort` — a sha256 of the repo root into
+   5200-5399, stable per checkout, `STRIDES_DEV_PORT=<n>` to override). Parallel worktrees on this
+   machine routinely left a dev server on 5173, and a foreign server answers *every* arm of an A/B
+   and *every* assertion in a spec — so when the arm under test is a code change behind a flag,
+   the foreign checkout lacks the code entirely, both arms collapse to old-code-plus-a-flag, and
+   the output reads as a clean "no effect". This also produced a false FAIL (`1 failed` on a
+   docs-only commit, 3/3 green on a dedicated port). `reuseExistingServer` is now **off unless
+   `STRIDES_E2E_REUSE_SERVER=1`**, not `!process.env.CI`. Measured cost of never reusing: **under
+   one second** (vite boot to first 200 ≈ 0.7 s; cold dep pre-bundling adds ≈ 0.1 s).
+2. **Server identity is checked by content, and a status code cannot do it.** Vite's SPA fallback
+   answers **HTTP 200 with `index.html` for any unmatched path**, so a foreign vite server returns
+   200 for every probe URL you can invent — which is exactly what Playwright's own
+   `reuseExistingServer` probe looks at, and why no choice of `webServer.url` closes this hole.
+   `assertServesThisCheckout` writes a nonce into `public/`, demands it back through the server,
+   and deletes it. It runs in `e2e/globalSetup.ts` and in `scripts/ab-person-selection.mjs`
+   **unconditionally**, including on the reuse path — `--reuse-server` / `STRIDES_E2E_REUSE_SERVER`
+   now skip a *startup*, not a *guard*. `e2e/globalSetup.ts` also asserts the renderer is not
+   SwiftShader, which the e2e suite previously never checked at all.
+
+**Driving the app** (a hand-rolled driver should use the same derived port rather than 5173, or
+it re-creates the collision the guards exist to stop):
 ```bash
-npm run dev -- --port 5173 --strictPort &
-# poll: curl -sf http://localhost:5173
+node -e "import('./scripts/lib/harnessProvenance.mjs').then(m=>console.log(m.resolveDevServerPort()))"
+npm run dev -- --port <that port> --strictPort &
+# poll: curl -sf http://localhost:<that port>/strides/
 ```
 - `page.getByRole('button', { name: /demo 1/i }).click()` loads a fixed reference clip — the
   side-view track clip, the standard one for before/after comparisons, fetched live from Pexels
@@ -253,7 +280,7 @@ await page.addInitScript((override) => {
 await page.addInitScript((backend) => {
   window.__STRIDES_POSE_BACKEND_OVERRIDE__ = { backend }
 }, 'blazepose')
-await page.goto('http://localhost:5173')
+await page.goto(baseURL) // the DERIVED port, not 5173 — see "Two guards" above
 // ...drive the demo clip, capture [analysis-diagnostics] as above
 ```
 
@@ -287,12 +314,45 @@ node scripts/ab-person-selection.mjs \
   the Upload tab). Default: all three.
 - Reads `playwright.config.ts` for the launch args, baseURL and dev-server command, and **refuses
   to run against a dev server it did not start** — stop it, pass `--port <n>`, or pass
-  `--reuse-server` once you have confirmed the running one serves THIS checkout. Not pedantry:
-  arms differ only by a `window` global, so a foreign checkout answers both arms and yields a
-  plausible delta from code nobody is reviewing — and when the arm is a code change behind a flag,
-  the foreign checkout lacks the code entirely, both arms collapse to old-code-plus-a-flag, and
-  the output reads as a clean "no effect". That is a manufactured false negative for the exact
-  hypothesis under test, and worktrees routinely leave a server on 5173.
+  `--reuse-server`. Not pedantry: arms differ only by a `window` global, so a foreign checkout
+  answers both arms and yields a plausible delta from code nobody is reviewing — and when the arm
+  is a code change behind a flag, the foreign checkout lacks the code entirely, both arms collapse
+  to old-code-plus-a-flag, and the output reads as a clean "no effect". That is a manufactured
+  false negative for the exact hypothesis under test. **`--reuse-server` no longer means "take my
+  word for it"**: the nonce identity check above runs on both paths, so the flag skips the startup
+  and not the guard, and the report header records `identity verified` either way.
+- **Fresh Chromium process per trial, by default** (`strides-9wp`). `--reuse-browser` opts back
+  into one process for the whole matrix and exists only so the difference can be measured. **A
+  fresh `browser.newContext()` is NOT enough** — the driver has always made one per trial, and the
+  shift below happens anyway. Measured this session, Demo 2, 3 trials, real GPU, via `--evidence`:
+
+  | | fresh process per trial | `--reuse-browser` |
+  |---|---|---|
+  | `armSwingSymmetry` exemplar[0] `timestamp` | **0.984317**, no spread | 1.46813 `[0.984317..1.46813]` |
+  | same exemplar's `cropSidePx` | **320** (the `EVIDENCE_CROP_MIN_SIDE_PX` floor), no spread | 398.733 `[320..398.733]` |
+
+  Trial 1 agrees in both regimes; trials 2+ are what move. Only the fresh regime reproduces the
+  coverage this file records for that clip. The damage is the same shape as a foreign dev server:
+  in the reused regime the subject (449.4 px) is WIDER than the crop, so a subject-centring rule
+  correctly declines to fire, and a driver reusing a browser would have reported **"no effect" for
+  a fix that demonstrably works**. The defect reproduces either way; it is the FIX that goes
+  invisible.
+- **Browser reuse is also a large part of what this file calls "GPU non-determinism".** Two
+  independent 3-trial fresh-process runs on Demo 1 (6 trials) agreed on **every field except
+  `elapsedMs`** — zero spread within a run and zero difference between runs. The same clip under
+  `--reuse-browser` spread on ~20 fields, including `segmentCount` 3↔4, `rejectedOtherSegment`
+  7↔10, `kneeFlexion` 116.9↔120.7, `verticalRatio` 0.0524↔0.0682 (30%) and `stepWidth` 1.13↔1.70
+  (51%). Treat a wide range column as a possible harness artifact before attributing it to the
+  clip. (n=2 runs per regime — a strong signal, not a proven law.)
+- **The fresh-process default is close to free**: browser launch+close measures 63-77 ms, and end
+  to end 3 trials came out 31.17 s fresh vs 31.06 s reused on Demo 2, and 43.5 s vs 42.2 s on
+  Demo 1 — inside the per-trial jitter either way.
+- **`--evidence`** additionally captures the `[evidence-coverage]` line as `evidence.*` rows
+  (per-metric status/reason, and each exemplar's `timestamp`/`pairedTimestamp`/`cropSidePx`/
+  `quality`). It waits for the stream to go **quiet** rather than taking the first line, because
+  the scale-pass graft triggers a correct re-extraction and a second line; see "Take the LAST
+  `[evidence-coverage]` line" below. Off by default — the settle wait costs real seconds per
+  trial, and with it off the report is byte-identical to what the driver printed before.
 - Prints the `WEBGL_debug_renderer_info` renderer string once per invocation and **refuses to run**
   on SwiftShader/software rendering rather than quietly producing unrepresentative numbers.
 - Captures `sampling.*`, `view.*`, every metric's `value`/`confidence`, and the whole

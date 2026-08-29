@@ -32,3 +32,8 @@ dist-ssr
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Live-browser harness identity marker (scripts/lib/harnessProvenance.mjs) — written into
+# public/ for the length of one provenance check and deleted again; only ever visible here if a
+# harness run was killed mid-check.
+/public/.strides-harness-identity.json
