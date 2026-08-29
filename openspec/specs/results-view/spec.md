@@ -261,6 +261,18 @@ falls. `LOW_CONFIDENCE_THRESHOLD` feeds ONLY the indicator copy (the Medium/Low 
 it participates in no layout decision. Cards within the grid, and entries within the excluded
 section, each preserve `MetricId` declaration order — never re-sorted by confidence.
 
+Because tier 3 admits a metric on **either** ground, the excluded section SHALL be labeled, and
+SHALL be referred to in the summary line, as metrics that are **not measurable** for this clip
+rather than as metrics that were not measured. A metric excluded on the `viewFit` ground has a
+computed value; calling it "not measured" contradicts the entry printed directly beneath the
+label. The section's own label and the summary line's fragment for it SHALL use the same wording,
+so the two can never drift apart.
+
+A card's confidence indicator SHALL be a statement about confidence and nothing else. It is only
+ever rendered for tier 1 and tier 2, both of which have a non-null `value` by the tier rule, so it
+SHALL NOT carry an availability branch — such a branch is unreachable, and its copy would collide
+with the excluded section's availability wording while meaning something different.
+
 #### Scenario: A high-confidence, view-primary metric renders its value and a high-confidence indicator
 
 - **WHEN** a metric's `confidence` is `>= HIGH_CONFIDENCE_THRESHOLD` (including exactly that
@@ -321,6 +333,14 @@ section, each preserve `MetricId` declaration order — never re-sorted by confi
 - **THEN** the excluded metrics render inside a section with an accessible name (e.g. a heading
   associated via `aria-labelledby`) distinguishing it from the card grid above it
 
+#### Scenario: A metric excluded for its camera angle is not called unmeasured
+
+- **WHEN** a metric carries a non-null `value` and a `viewFit` of `'unsuitable'`, so it is listed
+  in the excluded section with a computed number it is not allowed to show
+- **THEN** the section's label, and the summary line's fragment naming that section, describe its
+  contents as not **measurable** for this clip — never as not measured, which the entry beneath
+  the label contradicts
+
 #### Scenario: No excluded metrics renders no excluded section
 
 - **WHEN** every metric in the result lands in tier 1 or tier 2
@@ -329,11 +349,21 @@ section, each preserve `MetricId` declaration order — never re-sorted by confi
 #### Scenario: A tier-count summary line surfaces caveated and excluded counts at the top of the panel
 
 - **WHEN** at least one metric lands in tier 2 or tier 3
-- **THEN** a single summary line renders above the card grid counting metrics measured, metrics
-  with caveats, and metrics not measured for this clip — so a user who never scrolls the
-  results pane still learns that some metrics carry caveats or were excluded
+- **THEN** a single summary line renders above the card grid, counting metrics measured with the
+  caveated share reported inside that total, and metrics not measurable for this clip — so a user
+  who never scrolls the results pane still learns that some metrics carry caveats or were excluded
 - **WHEN** every metric lands in tier 1
 - **THEN** no summary line renders
+
+#### Scenario: The summary line's counts nest rather than partition
+
+- **WHEN** a run produces metrics in all three tiers at once
+- **THEN** the count of metrics measured is the number of metrics that rendered as a card — tier 1
+  and tier 2 together — and the caveated count is reported as a share **of** that total rather than
+  as a separate quantity beside it, so the sentence never claims fewer metrics were measured than
+  the reader can see values for
+- **AND** the two counts the line reports sum to the whole panel: metrics measured plus metrics not
+  measurable equals every metric the panel considered
 
 #### Scenario: Cards and excluded entries preserve declaration order within their own section
 
@@ -928,10 +958,18 @@ The picture and the number it explains SHALL be visible together.
 
 Placement within the card SHALL be: after the metric's description, **below** it when the card is
 narrow and **beside** it when the card is wide. The narrow/wide decision SHALL be a function of the
-**card's own width**, not the viewport's. The card grid is one, two, or three columns depending on the
-width available to the panel, so a card on a wide screen in a three-column layout is a narrow card; a
-viewport-width rule would place a thumbnail beside a description in a card with no room for it. The
-placement SHALL be correct at every card-grid density the panel produces.
+**card's own width**, not the viewport's; a viewport-width rule would place a thumbnail beside a
+description in a card with no room for it. The placement SHALL be correct at every card width the
+panel produces.
+
+The card grid SHALL be a **single column at every viewport width**. This is a layout decision, not
+an artifact: a full-width card is what leaves the description enough room for its thumbnails to sit
+beside it on a desktop, which is the placement this requirement asks for. At two- or three-column
+density a desktop card is narrow enough that the card-width rule above correctly stacks the
+thumbnail, and "beside the description on a desktop" would stop happening at any viewport. The
+system SHALL NOT carry column-count utilities that do not take effect; keying the split off the
+card's own width rather than the viewport's remains correct regardless, and is what would keep this
+placement rule sound if the density were ever revisited.
 
 Thumbnails SHALL be sized for a card rather than for a gallery figure. Display size SHALL remain a
 presentation decision expressed in the layout: the system SHALL NOT extract a second copy of an image
@@ -970,9 +1008,16 @@ SHALL NOT weaken any of those.
 
 #### Scenario: The card's own width drives the split, not the viewport's
 
-- **WHEN** the card grid is at its three-column density on a wide viewport, so each card is narrow
-- **THEN** each card's thumbnails render below its description, exactly as they would in a
-  single-column layout on a phone
+- **WHEN** the same card is rendered at a viewport narrow enough that the full-width card is itself
+  narrow, and again at a desktop viewport where it is wide
+- **THEN** its thumbnails stack below the description in the first case and sit beside it in the
+  second, decided by the card's measured width rather than by any viewport breakpoint
+
+#### Scenario: The card grid is one column at every width
+
+- **WHEN** the results render at a narrow, a medium, and a wide viewport
+- **THEN** the card grid resolves to a single column at all three, each card spanning the panel's
+  full width, and the panel carries no responsive column-count utility that never takes effect
 
 #### Scenario: A ghosted thumbnail says it is one runner, not two people
 
@@ -1311,4 +1356,47 @@ slot its exemplar already owned and SHALL NOT let one metric render more images 
 - **WHEN** a metric's exemplars each fall back to an alternative pair
 - **THEN** the metric renders no more images than the per-metric budget already allowed, because
   the alternatives belong to the exemplars rather than adding to them
+
+### Requirement: A ghosted evidence photograph is weighted toward its base instant
+
+The system SHALL composite a ghosted pair so that the base instant contributes **strictly more** of
+the resulting image than the ghost does, and SHALL keep the ghost heavy enough to remain identifiable
+as a body at the thumbnail's real display size.
+
+The reason is that the other two layers of the same image already pick a winner and the photograph
+must not contradict them. The annotation layer is asymmetric by requirement — a ghosted pair's marks
+are as solid as a single frame's, while the ghost's are weaker — and the caption names one instant
+*ghosted against* another. A photograph that picks no winner, under an annotation and a caption that
+both do, is a picture contradicting its own labels, and a reader resolves that contradiction from
+whatever cue happens to be strongest in that particular image, which is not reliably the base.
+
+The photographic weight and the annotation mark opacity SHALL be **separate decisions carried by
+separate constants**. The annotation layer SHALL NOT derive its mark opacity from the plan's
+photographic blend value: they answer different questions, and one number serving both means moving
+either one silently moves the other.
+
+The weighting SHALL be chosen by looking at rendered thumbnails **at the size the reader actually
+sees**, across more than one clip, rather than by taste. A ghost's visibility is a function of that
+clip's own subject-against-background contrast — on a static camera the shared background reproduces
+at full contrast whatever the blend, while each body's contrast scales with its own weight — so a
+weighting that reads well on one clip is not evidence about another.
+
+#### Scenario: A ghosted thumbnail's base instant reads as the foreground body
+
+- **WHEN** an exemplar naming two instants renders as a single ghosted thumbnail
+- **THEN** the base instant contributes strictly more of the composited image than the ghost, and at
+  the thumbnail's real display size the base body reads as the foreground body rather than the two
+  reading as equals
+
+#### Scenario: The ghost stays visible as a body
+
+- **WHEN** a ghosted thumbnail is viewed at its real display size
+- **THEN** the ghost instant is still identifiable as a second position of the same body, not a
+  smudge — the delta the image exists to show survives the weighting
+
+#### Scenario: Photographic weight and annotation opacity are independent
+
+- **WHEN** the photographic blend weight of a ghost is changed
+- **THEN** the opacity of the ghost's annotation marks is unchanged, because the two are carried by
+  different constants and the annotation layer never reads the plan's photographic blend value
 
