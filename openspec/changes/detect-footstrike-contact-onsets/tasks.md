@@ -68,6 +68,22 @@
   period-gate test moves to the doubling direction (the halving direction is now structurally
   unreachable), and cadence's cross-check uses the mean because the median is quantization-biased
   at 30fps. No tolerance moved.
+## 5. Round 3 — phase residual diagnosed, and the stop decision
+
+- [x] 5.1 Sweep the fixture's contralateral swing-apex phase and show the emitted lag tracks it 1:1
+  (1/3/5/6/11 frames for apex 0.55/0.60/0.65/0.69/0.75). Demo 1's measured +0.24 s is the 0.69 row.
+- [x] 5.2 Conclude plainly: amplitude is the right selector for WHICH STRIDE and the wrong one for
+  PHASE, because the maximum of the differenced signal marks the contralateral swing apex.
+- [x] 5.3 Enumerate the constant-free alternatives on this signal and record what each actually
+  marks; none is touchdown.
+- [x] 5.4 Show the dispersion is a symptom of the phase residual rather than an independent
+  small-sample trade, from the clip's own reported numbers (~3.7 torso lengths per second).
+- [x] 5.5 Pin the residual executably: `footstrikes.test.ts` asserts the apex sweep and that no
+  single offset could correct it.
+- [x] 5.6 Record the one derivable alternative (hip-bounce inflection), its error budget and its
+  four weaknesses, explicitly NOT built — it is a different detector and needs its own change.
+- [x] 5.7 STOP rather than open a third mechanism round, per the coordinator's exit condition.
+
 - [ ] 3.6 Live verification round 2 on all three clips (owner runs this serially): emitted instants against
   the Demo 1 ground truth, `overstriding`'s per-instance MAD, whether `verticalRatio` returns, and
   `cadence` unchanged at 91.2 spm. Predictions are pre-registered in design.md D9.

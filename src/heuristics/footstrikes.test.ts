@@ -49,6 +49,12 @@ interface GaitShape {
    * `0` models the pessimistic case: a perfectly flat stance plateau, where nothing in the raw
    * ankle-y series distinguishes touchdown from toe-off. */
   toeOffLiftPx: number
+  /** Phase of this foot's own cycle at which its swing reaches maximum height. Defaults to
+   * `APEX`. Expressed relative to the OTHER foot's touchdown — which is half a stride earlier —
+   * this is `apex - 0.5`, and that quantity is what sets the detector's phase error: see the
+   * contralateral-apex test at the end of this file. Real runners vary it; a slow jogger's apex
+   * comes later in the cycle than a sprinter's. */
+  apex?: number
 }
 
 const wrapPhase = (phase: number) => phase - Math.floor(phase)
@@ -88,12 +94,13 @@ function ankleY(phase: number, shape: GaitShape): number {
 
   const relAtToeOff = GROUND_Y - shape.toeOffLiftPx - bodyY(STANCE_END, shape)
   const relAtContact = GROUND_Y - bodyY(0, shape)
+  const apex = shape.apex ?? APEX
   const relAtApex = relAtContact - APEX_LIFT_PX
 
-  if (p <= APEX) {
+  if (p <= apex) {
     const rel =
       relAtApex +
-      (relAtToeOff - relAtApex) * Math.cos((Math.PI / 2) * ((p - STANCE_END) / (APEX - STANCE_END)))
+      (relAtToeOff - relAtApex) * Math.cos((Math.PI / 2) * ((p - STANCE_END) / (apex - STANCE_END)))
     return bodyY(p, shape) + rel
   }
   if (p <= shape.hangEnd) return bodyY(p, shape) + relAtApex
@@ -446,5 +453,68 @@ describe('detectFootstrikes — ground contact vs. airborne ankle-y maxima', () 
       const other = resolvePoint(frame, candidate.side === 'left' ? 'right_ankle' : 'left_ankle')!
       expect(striking.y).toBeGreaterThanOrEqual(other.y)
     }
+  })
+})
+
+describe('detectFootstrikes — the phase residual, pinned as a known limit', () => {
+  /**
+   * What the detector actually reports is the instant of maximum separation between the two
+   * ankles, and that instant is the CONTRALATERAL foot's swing apex — not this foot's touchdown.
+   * The two are different gait events, and the gap between them is a property of the runner's
+   * swing mechanics rather than a constant.
+   *
+   * The contralateral foot touched down half a stride before this one, so its apex falls at
+   * `apex - 0.5` of a stride after this foot's touchdown. Sweeping that and reading the emitted
+   * lag back out shows it tracking one-for-one, which is what makes this a limitation of the
+   * SIGNAL rather than a tuning problem:
+   *
+   * | apex | contralateral apex after touchdown | emitted lag |
+   * |---|---|---|
+   * | 0.55 | 1.5 frames | 1 frame |
+   * | 0.60 | 3.0 | 3 |
+   * | 0.65 | 4.5 | 5 |
+   * | 0.69 | 5.7 | 6 |
+   * | 0.75 | 7.5 | 11 |
+   *
+   * Measured live on Demo 1, the lag is +0.24 s on two of four contacts — 6 frames at 25 fps,
+   * which is the `apex = 0.69` row, a slow jogger's late swing apex. No single offset could
+   * correct all five rows, so no offset is correct at all. See design.md D15.
+   */
+  it('the emitted instant tracks the contralateral swing apex, one for one', () => {
+    const lagsByApex = [0.55, 0.6, 0.65, 0.69, 0.75].map((apex) => {
+      const frames = buildGait({ bounceHalfPx: 12, hangEnd: 0.9, toeOffLiftPx: 22, apex }, 4)
+      const leftFrames = detectedFrames(frames)
+        .filter(([side]) => side === 'left')
+        .map(([, frameIndex]) => frameIndex)
+      // True left touchdowns are every FRAMES_PER_STRIDE frames from 0.
+      return leftFrames.map(
+        (frameIndex) => frameIndex - Math.round(frameIndex / FRAMES_PER_STRIDE) * FRAMES_PER_STRIDE,
+      )
+    })
+
+    // Each apex placement produces ONE lag, repeated on every stride -- the residual is systematic
+    // within a clip, not noise. (The clip's closing frame is a touchdown by construction, so a
+    // zero lag there is the boundary, not a sixth value.)
+    const distinctLags = lagsByApex.map((lags) => [...new Set(lags.filter((lag) => lag !== 0))])
+    for (const lags of distinctLags) expect(lags).toHaveLength(1)
+
+    // And the lag grows monotonically with how late the contralateral apex falls. That is the
+    // whole finding: the detector is reporting the apex, so it inherits the apex's phase.
+    const lag = distinctLags.map(([only]) => only)
+    expect(lag).toEqual([1, 3, 5, 6, 11])
+    for (let i = 1; i < lag.length; i += 1) expect(lag[i]).toBeGreaterThan(lag[i - 1])
+  })
+
+  it('no single offset could correct it, which is why none is applied', () => {
+    // The spread across plausible swing mechanics is 1 to 11 frames -- 0.04s to 0.44s at 25fps,
+    // wider than a whole stance phase. A constant shift fitted to one clip would be wrong on any
+    // runner whose swing apex falls elsewhere, so the detector applies none and the residual is
+    // reported instead.
+    const earliest = buildGait({ bounceHalfPx: 12, hangEnd: 0.9, toeOffLiftPx: 22, apex: 0.55 }, 4)
+    const latest = buildGait({ bounceHalfPx: 12, hangEnd: 0.9, toeOffLiftPx: 22, apex: 0.75 }, 4)
+    const firstLeftLag = (frames: RobustPoseFrame[]) =>
+      detectedFrames(frames).filter(([side]) => side === 'left')[0][1]
+
+    expect(firstLeftLag(latest) - firstLeftLag(earliest)).toBeGreaterThan(FRAMES_PER_STRIDE * 0.3)
   })
 })
