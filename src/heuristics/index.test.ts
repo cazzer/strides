@@ -155,7 +155,12 @@ describe('computeFormHeuristics', () => {
     const frames = generateSyntheticGait(PARAMS)
 
     const result = computeFormHeuristics(frames)
-    const stride = estimateStrideLength(frames, DEFAULT_HEURISTICS_CONFIG)
+    // Called exactly as verticalRatio.ts calls it -- the same fit supplies both this metric's
+    // numerator and its denominator's period gate, so the reference has to cross this boundary too
+    // or the two sides would be estimating stride length from different pair sets.
+    const stride = estimateStrideLength(frames, DEFAULT_HEURISTICS_CONFIG, {
+      stepFrequencyHz: result.verticalOscillation.fit!.frequencyHz,
+    })
 
     expect(result.verticalRatio.value).not.toBeNull()
     expect(result.verticalOscillation.fit).not.toBeNull()

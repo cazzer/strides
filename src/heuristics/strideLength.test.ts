@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { estimateStrideLength } from './strideLength'
+import { estimateStrideLength, STRIDE_PERIOD_TOLERANCE } from './strideLength'
 import { detectFootstrikes } from './footstrikes'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import { median } from './mathUtils'
@@ -196,6 +196,8 @@ describe('estimateStrideLength', () => {
       strideLengthPx: STRIDE_PX_PER_BLOCK,
       pairCount: 6,
       candidatePairCount: 6,
+      // No `stepFrequencyHz` reference is supplied here, so the period gate is inert.
+      periodRejectedPairCount: 0,
       pairs: expectedCleanPairs(clean),
     })
     // The missed footstrike costs one candidate pair (one fewer left-side footstrike total).
@@ -229,6 +231,8 @@ describe('estimateStrideLength', () => {
       strideLengthPx: STRIDE_PX_PER_BLOCK,
       pairCount: 6,
       candidatePairCount: 6,
+      // No `stepFrequencyHz` reference is supplied here, so the period gate is inert.
+      periodRejectedPairCount: 0,
       pairs: expectedCleanPairs(clean),
     })
     expect(mutatedResult.ok).toBe(true)
@@ -284,5 +288,123 @@ describe('estimateStrideLength', () => {
     expect(() => estimateStrideLength([], DEFAULT_HEURISTICS_CONFIG)).not.toThrow()
     const result = estimateStrideLength([], DEFAULT_HEURISTICS_CONFIG)
     expect(result.ok).toBe(false)
+  })
+})
+
+/**
+ * The hand-built trace is what makes these assertions exact: every consecutive same-side pair is
+ * exactly one 10-frame block apart at 30fps, so every candidate pair's interval is exactly
+ * `10/30 = 1/3 s` with no quantization slop at all. Since the expected stride period is
+ * `2 / stepFrequencyHz`, a supplied `stepFrequencyHz` of `f` puts every pair at ratio exactly
+ * `f / 6` — which makes the reference a direct dial on the ratio under test.
+ */
+const MATCHING_STEP_FREQUENCY_HZ = 6 // 2/6 = 1/3 s expected stride period == the real interval
+
+describe('estimateStrideLength — fitted-period gate', () => {
+  const clean = buildHandFrames(normalAnkleTrace(7))
+  const baseline = estimateStrideLength(clean, DEFAULT_HEURISTICS_CONFIG)
+
+  it('keeps every pair whose interval matches the expected stride period', () => {
+    const gated = estimateStrideLength(clean, DEFAULT_HEURISTICS_CONFIG, {
+      stepFrequencyHz: MATCHING_STEP_FREQUENCY_HZ,
+    })
+
+    // Ratio is exactly 1.0 on every pair, so the gate is a no-op: same median, same pairs, and
+    // nothing counted as rejected.
+    expect(gated).toEqual({ ...baseline, periodRejectedPairCount: 0 })
+  })
+
+  it('rejects every pair spanning about half the expected stride period', () => {
+    // Half the step frequency doubles the expected stride period, so the real (unchanged) interval
+    // reads as ~half a stride -- the spurious-extra-strike signature this gate exists for.
+    const gated = estimateStrideLength(clean, DEFAULT_HEURISTICS_CONFIG, {
+      stepFrequencyHz: MATCHING_STEP_FREQUENCY_HZ / 2,
+    })
+
+    expect(gated).toEqual({ ok: false, reason: 'no-period-consistent-pairs' })
+  })
+
+  it('rejects every pair spanning about two strides', () => {
+    // The mirror case: doubling the step frequency halves the expected period, so each real
+    // interval reads as ~two strides -- the missed-footstrike signature.
+    const gated = estimateStrideLength(clean, DEFAULT_HEURISTICS_CONFIG, {
+      stepFrequencyHz: MATCHING_STEP_FREQUENCY_HZ * 2,
+    })
+
+    expect(gated).toEqual({ ok: false, reason: 'no-period-consistent-pairs' })
+  })
+
+  it('rejects only the inconsistent pairs when some are consistent, and still reports a value', () => {
+    // The merged trace's missed footstrike leaves two pairs spanning 15 and 16 frames (ratio 1.5
+    // and 1.6) among three genuine 10-frame ones. Before the gate, the median was what saved this
+    // clip; now the two are rejected outright and counted.
+    const merged = buildHandFrames(mergedAnkleTrace(7, 3))
+
+    const gated = estimateStrideLength(merged, DEFAULT_HEURISTICS_CONFIG, {
+      stepFrequencyHz: MATCHING_STEP_FREQUENCY_HZ,
+    })
+
+    expect(gated.ok).toBe(true)
+    if (!gated.ok) return
+    expect(gated.candidatePairCount).toBe(5)
+    expect(gated.periodRejectedPairCount).toBe(2)
+    expect(gated.pairCount).toBe(3)
+    expect(gated.strideLengthPx).toBe(STRIDE_PX_PER_BLOCK)
+    // The invariant the two counts have to satisfy together.
+    expect(gated.pairCount + gated.periodRejectedPairCount).toBeLessThanOrEqual(
+      gated.candidatePairCount,
+    )
+  })
+
+  it('is log-symmetric: just inside both band edges accepts, just outside either rejects', () => {
+    // ratio == stepFrequencyHz / 6 on this trace, so these frequencies put every pair just inside
+    // and just outside each edge of the band. Deliberately not exactly ON an edge: at the boundary
+    // the outcome is decided by float representation, which is not behaviour worth pinning.
+    const upperEdge = MATCHING_STEP_FREQUENCY_HZ * (1 + STRIDE_PERIOD_TOLERANCE)
+    const lowerEdge = MATCHING_STEP_FREQUENCY_HZ / (1 + STRIDE_PERIOD_TOLERANCE)
+
+    for (const stepFrequencyHz of [upperEdge * 0.999, lowerEdge * 1.001]) {
+      const gated = estimateStrideLength(clean, DEFAULT_HEURISTICS_CONFIG, { stepFrequencyHz })
+      expect(gated.ok).toBe(true)
+      if (!gated.ok) return
+      expect(gated.periodRejectedPairCount).toBe(0)
+    }
+
+    for (const stepFrequencyHz of [upperEdge * 1.001, lowerEdge / 1.001]) {
+      const gated = estimateStrideLength(clean, DEFAULT_HEURISTICS_CONFIG, { stepFrequencyHz })
+      expect(gated).toEqual({ ok: false, reason: 'no-period-consistent-pairs' })
+    }
+  })
+
+  it('is inert without a usable reference, down to every field of the result', () => {
+    // Asserted against a same-frames baseline call rather than hardcoded numbers, so this keeps
+    // holding if the extractor's other behaviour ever changes.
+    const expected = { ...baseline, periodRejectedPairCount: 0 }
+
+    expect(estimateStrideLength(clean, DEFAULT_HEURISTICS_CONFIG, {})).toEqual(expected)
+    expect(
+      estimateStrideLength(clean, DEFAULT_HEURISTICS_CONFIG, { stepFrequencyHz: undefined }),
+    ).toEqual(expected)
+    for (const stepFrequencyHz of [0, -6, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(estimateStrideLength(clean, DEFAULT_HEURISTICS_CONFIG, { stepFrequencyHz })).toEqual(
+        expected,
+      )
+    }
+  })
+
+  it('keeps reporting no-usable-pairs when nothing was rejected on timing', () => {
+    // The new reason is not a rename: a clip that loses every pair for a NON-timing reason must
+    // still say so. Blanking the hip at every strike frame drops all pairs at the resolution step
+    // while leaving body scale, travel direction and the (period-consistent) intervals intact.
+    const strikeFrames = new Set(
+      detectFootstrikes(clean, DEFAULT_HEURISTICS_CONFIG).map((candidate) => candidate.frameIndex),
+    )
+    const blanked = blankHipPoint(clean, strikeFrames)
+
+    const gated = estimateStrideLength(blanked, DEFAULT_HEURISTICS_CONFIG, {
+      stepFrequencyHz: MATCHING_STEP_FREQUENCY_HZ,
+    })
+
+    expect(gated).toEqual({ ok: false, reason: 'no-usable-pairs' })
   })
 })
