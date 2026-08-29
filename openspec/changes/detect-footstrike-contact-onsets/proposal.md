@@ -41,9 +41,18 @@ fix both tickets point at: the detector, not each consumer.
 ## What Changes
 
 - `detectFootstrikes` detects on **each ankle's vertical position relative to the other ankle**
-  (`ankle_S.y − ankle_opposite.y`) instead of on its raw screen y. The whole body's vertical motion
-  and any vertical camera motion are common to both feet and cancel exactly; what remains is the
-  between-legs geometry that alternating gait actually is.
+  (`ankle_S.y − ankle_opposite.y`) instead of on its raw screen y. Vertical camera motion and the
+  airborne-versus-airborne component of the body's own oscillation are common to both feet and
+  cancel; what remains is the between-legs geometry that alternating gait actually is.
+- **Candidates are then selected by amplitude at the clip's own stride rhythm.** Differencing does
+  not remove the body's oscillation during single support — a planted foot carries none of it and a
+  swinging foot carries all of it — and live measurement showed that residual producing about 2.3×
+  as many prominence-confirmed maxima as there are contacts. Prominence cannot separate them (the
+  residual is 3.3× the gate on Demo 1, and a gate large enough would have to exceed the runner's own
+  vertical oscillation, a quantity this app measures). Amplitude can: the contact sits at the full
+  inter-leg separation. So the largest maximum wins within one shortest-plausible-stride window,
+  where that window comes from the clip's fitted step frequency and the period gate's own lower band
+  edge — no new constant, and by construction it can never drop a pair that gate would accept.
 - The maximum of that differenced signal falls on the **ground-contact onset** rather than
   somewhere inside the stance plateau, for a reason with no free parameter in it: approaching
   touchdown this foot is descending fast while the other is at its swing apex, and the instant this
@@ -67,6 +76,10 @@ interval at these instants and will report different values once the instants ar
 
 ## Impact
 
-- Affected specs: `form-heuristics` (one ADDED requirement; nothing modified or removed)
-- Affected code: `src/heuristics/footstrikes.ts`, `src/heuristics/footstrikes.test.ts`,
-  `src/heuristics/strideLength.test.ts` (fixture idiom only — see design D8)
+- Affected specs: `form-heuristics` (two ADDED requirements; nothing modified or removed)
+- Affected code: `src/heuristics/footstrikes.ts`, `src/heuristics/stridePeriod.ts` (new — shared so
+  the tolerance is declared once rather than duplicated across an import cycle),
+  `src/heuristics/strideLength.ts` (imports and re-exports it; no behaviour change), and the tests
+  `footstrikes.test.ts`, `strideLength.test.ts`, `verticalRatio.test.ts`, `cadence.test.ts` — the
+  last three because upstream removal of run-edge artifacts changed what they were measuring, all
+  four documented in design D8 and D13

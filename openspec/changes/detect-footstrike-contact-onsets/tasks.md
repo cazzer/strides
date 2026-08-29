@@ -40,7 +40,35 @@
 - [x] 3.4 Confirm, by measurement rather than inspection, that the new signal is bit-identical to
   the old one on `generateSyntheticGait` and on `buildStrikeFrames` in both its forms.
 - [x] 3.5 `openspec validate detect-footstrike-contact-onsets --strict`.
-- [ ] 3.6 Live verification on all three clips (owner runs this serially): emitted instants against
+
+## 4. Round 2 — after live verification falsified two predictions
+
+- [x] 4.1 Diagnose the 2.3x over-detection: the body's vertical motion survives the difference
+  during single support (planted foot carries none, swinging foot carries all), so a stance can
+  carry two confirmed maxima. Signature checked against Demo 1's own stance durations.
+- [x] 4.2 Establish that the only derivable gate correction (sqrt(2), for the differenced signal's
+  noise) is provably insufficient, and that a sufficient gate would have to exceed the runner's own
+  vertical oscillation. Prominence left untouched.
+- [x] 4.3 Reconcile the overstriding drop with the sign argument: the argument is an ordering claim,
+  never a uniqueness claim, and a falling median with a widening spread is the expected reading of
+  an over-detected mixture.
+- [x] 4.4 Extract `STRIDE_PERIOD_TOLERANCE` and its helpers into `stridePeriod.ts` so
+  `footstrikes.ts` can share the declaration without an import cycle; re-export from
+  `strideLength.ts` so nothing else changes.
+- [x] 4.5 Replace the chronological dedup with amplitude-descending greedy selection, excluding
+  within the longer of `footstrikeMinIntervalSeconds` and the clip's shortest plausible stride.
+- [x] 4.6 Derive the step frequency inside `detectFootstrikes` from the shared hip-bounce fit,
+  gated at `cadenceMinFitR2`; fall back to the configured floor when it fails.
+- [x] 4.7 Add `ARTIFACT_SHAPE` — a bouncier runner with a long mid-swing hang, whose contact series
+  really does carry three confirmed maxima per stride (43.9 / 32.7 / -23.0) — and assert only the
+  contacts are emitted.
+- [x] 4.8 Add a test pinning the no-fittable-rhythm fallback path.
+- [x] 4.9 Update the three downstream tests whose subject changed, recording in each what was
+  measured rather than adjusting a tolerance: verticalRatio's clean-clip caveat is now null, its
+  period-gate test moves to the doubling direction (the halving direction is now structurally
+  unreachable), and cadence's cross-check uses the mean because the median is quantization-biased
+  at 30fps. No tolerance moved.
+- [ ] 3.6 Live verification round 2 on all three clips (owner runs this serially): emitted instants against
   the Demo 1 ground truth, `overstriding`'s per-instance MAD, whether `verticalRatio` returns, and
   `cadence` unchanged at 91.2 spm. Predictions are pre-registered in design.md D9.
 - [ ] 3.7 Re-check `footStrikePattern`'s class label against keyframes rather than assuming it —
