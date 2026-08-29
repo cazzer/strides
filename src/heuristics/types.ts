@@ -505,11 +505,14 @@ export interface HeuristicsConfig {
    * loading-response noise. */
   kneeFlexionMinProminenceDegrees: number // 20
 
-  /** Minimum prominence (as a fraction of torsoLengthPx) for a wrist-relative-to-shoulder-y
-   * extremum to count as a real half-swing rather than tracking jitter. Set to the same 0.03 that
-   * hip bounce used before it moved to a spectral fit: arm swing reads a comparable
-   * roughly-twice-per-stride vertical excursion, so the same jitter floor applies. */
-  armSwingMinProminenceRatio: number // 0.03
+  /** Minimum sinusoid partial R², on the WEAKER of the two arms, for a fitted arm-swing amplitude
+   * pair to be published at all. Same shape and same default as `verticalOscillationMinFitR2` /
+   * `cadenceMinFitR2` — each caller owns its own "is this fit trustworthy" policy — but read
+   * against the weaker side specifically, because a noise-fitted amplitude on one arm becomes a
+   * fabricated asymmetry rather than merely a fuzzy number. It replaced
+   * `armSwingMinProminenceRatio`, whose extrema-prominence estimator was measured latching onto
+   * sub-cycle wiggles (see `armSwingSymmetry.ts`). */
+  armSwingMinFitR2: number // 0.3
 
   /** Half-width, as a fraction of torsoLengthPx, of the "midfoot" band in `footStrikePattern`'s
    * ankle-relative-to-knee classification: at or within this ratio of the knee (either direction)
@@ -665,7 +668,7 @@ export const DEFAULT_HEURISTICS_CONFIG: HeuristicsConfig = {
   footstrikeMinIntervalSeconds: 0.25,
   overstrideFlagRatio: 0.15,
   kneeFlexionMinProminenceDegrees: 20,
-  armSwingMinProminenceRatio: 0.03,
+  armSwingMinFitR2: 0.3,
   footStrikeMidfootBandRatio: 0.05,
   presenceMinConsecutiveFrames: 3,
   interpolationConfidencePenalty: 0.5,

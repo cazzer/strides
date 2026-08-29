@@ -2,10 +2,11 @@ import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { HeuristicsConfig, MetricResult, View } from './types'
-import { estimateBodyScale } from './bodyScale'
 import { resolvePoint } from './keypoints'
-import { findLocalExtrema } from './extrema'
 import { computeMetricConfidence } from './confidence'
+import { fitSpectralSinusoid } from './spectralFit'
+import type { SpectralFitFailureReason, SpectralFitResult } from './spectralFit'
+import { resolvedSpanCenter, selectBounceInstants } from './bounceInstants'
 import {
   cropKeypoints,
   describeDistribution,
@@ -14,14 +15,63 @@ import {
   selectExemplars,
 } from './exemplars'
 import type { MetricExemplar } from './types'
-import { median } from './mathUtils'
+import { clamp01 } from './mathUtils'
 
 /**
- * A judgment-call minimum half-cycle count for a stable median swing-amplitude estimate per side,
- * chosen by analogy to `verticalOscillationMinCycles` — both read a moderately large, roughly
- * twice-per-stride vertical excursion. See design.md for the full reasoning.
+ * Minimum complete ARM-SWING cycles — one per STRIDE, so one cycle spans two footfalls — for the
+ * fitted per-side amplitude to be trusted at full confidence.
+ *
+ * Two is deliberately the same real demand the previous estimator encoded as "at least 4
+ * half-swings": swapping the estimator should not silently also raise the sample bar, so the
+ * number was converted rather than re-chosen. It is NOT comparable to
+ * `verticalOscillationMinCycles`, which counts BOUNCE cycles at one per step — twice this rate for
+ * the same footage.
  */
-const MIN_ARM_SWING_SAMPLE_SIZE = 4
+const MIN_ARM_SWING_CYCLES = 2
+
+/**
+ * Sinusoid partial R² at or above which a side's fit is treated as fully trustworthy — the top of
+ * the ramp `armSwingMinFitR2` starts. Same value and same reasoning as
+ * `verticalOscillation.ts`'s constant of the same name: a module constant rather than config,
+ * because unlike the minimum (a "publish this or not" policy) this is only the shape of the ramp
+ * between the gate and "perfect", and moving it independently of the gate only makes the two
+ * numbers disagree.
+ */
+const FIT_QUALITY_SATURATION_R2 = 0.8
+
+/**
+ * Maximum fractional disagreement between the two sides' fitted frequencies, above which the two
+ * amplitudes are not treated as comparable at all.
+ *
+ * **This is the check that distinguishes a real asymmetry from a measured one**, and it exists
+ * because the R² gate provably does not catch it. Both arms belong to one body and swing on one
+ * rhythm, so two fits landing on materially different frequencies means at least one of them found
+ * something that is not the arm swing — and a ratio between an arm-swing amplitude and some other
+ * oscillation's amplitude is not a symmetry measurement, however confidently each side fitted on
+ * its own. Measured live on `e2e/fixtures/multiperson-track.mp4` (2026-08-29): left 1.48 Hz at
+ * R² 0.676, right **2.80 Hz** at R² 0.324 — the right side had latched onto the step rhythm
+ * (cadence 174 spm = 2.90 Hz) rather than the stride rhythm, cleared the R² gate anyway, and the
+ * reported 0.349 ratio was a comparison between two different oscillations.
+ *
+ * 0.25 is a judgment call sized to be far wider than the disagreement a healthy clip produces and
+ * far narrower than a step-versus-stride confusion, which is a factor of two by construction. The
+ * measured margins either side of it: Demo 2 (both sides on the stride rhythm) 0.027, Demo 1
+ * 0.104, multiperson (one side on the step rhythm) 0.892.
+ */
+const MAX_SIDE_FREQUENCY_DISAGREEMENT = 0.25
+
+/**
+ * Difference in the two sides' fitted `sinusoidR2` above which the clip is caveated for having
+ * measured one arm materially better than the other.
+ *
+ * Confidence already carries this numerically — it ramps on the WEAKER side's fit, below — but a
+ * number alone cannot tell a reader that the asymmetry they are looking at may be a property of
+ * the footage rather than of the runner. On a clip where one arm spends the measured window
+ * further from the camera (Demo 2: left R² 0.778, right R² 0.497), the weaker-looking arm is also
+ * the worse-measured one, and that coincidence is exactly what a symmetry number must not present
+ * as a finding. A judgment call, in the same spirit as `presenceMinConsecutiveFrames`.
+ */
+const SIDE_FIT_QUALITY_DISPARITY_R2 = 0.2
 
 const SHOULDER_NAME: Record<'left' | 'right', KeypointName> = {
   left: 'left_shoulder',
@@ -59,31 +109,12 @@ function nullResult(
   }
 }
 
-/**
- * One findLocalExtrema-confirmed half-swing, kept whole rather than collapsed to its amplitude.
- *
- * It carries the two FRAMES, not a per-extremum interpolated flag: the shared exemplar gate
- * (`exemplars.ts`) scores a `RobustPoseFrame` — `cropDerivable` and `detectionFactor` both read
- * `frame.keypoints` — so a boolean could neither derive a crop nor be scored. Same conclusion #62
- * reached for `IntegrationRun.frames`.
- *
- * **The field names resolve a sign trap.** The series is `wrist.y − shoulder.y` in image-y, which
- * grows DOWNWARD, so the series' MINIMUM is the wrist at its HIGHEST on screen. Naming these by
- * body position rather than by extremum kind means a caption cannot say the exact opposite of the
- * truth while passing every type check — the same hazard `bounceInstants.ts` documents at length.
- */
-interface HalfSwing {
-  /** Peak-to-trough wrist-relative-to-shoulder excursion, px. */
-  amplitudePx: number
-  /** Frame where the wrist sat highest on screen — the series minimum. */
-  wristHighFrame: RobustPoseFrame
-  /** Frame where it sat lowest — the series maximum, half a swing away. */
-  wristLowFrame: RobustPoseFrame
-}
-
 interface SideSwing {
-  /** One entry per findLocalExtrema-confirmed swing, in time order. */
-  halfSwings: HalfSwing[]
+  /** The side's own wrist-relative-to-shoulder-y trace, `null` where it did not resolve, index-
+   * parallel to `frames` — the shape `resolvedSpanCenter` reads. */
+  seriesY: Array<number | null>
+  /** The spectral fit of that trace, over the shared bounce-frequency grid. */
+  fit: SpectralFitResult
   /** Frames where this side's shoulder AND wrist both resolved. */
   resolvedCount: number
   /** Of resolvedCount, how many had either point flagged interpolated. */
@@ -91,102 +122,140 @@ interface SideSwing {
 }
 
 /**
- * Per-side wrist-relative-to-shoulder vertical (image-y) excursion, read as paired extrema via the
- * shared `findLocalExtrema` primitive (the approach `verticalOscillation.ts` used for hip bounce
- * before it moved to a spectral sinusoid fit — see `spectralFit.ts`). Vertical, not
- * horizontal or angular, and wrist rather than elbow, per design.md's reasoning: the sagittal
- * shoulder-flexion rotation that drives arm swing is foreshortened face-on (this metric's primary
- * view), but the coupled elbow-flexion rise/fall of the forearm toward the chest on the forward
- * swing is a real, front-view-visible vertical motion, and the wrist — the most distal available
- * point — inherits the largest version of it.
+ * Per-side wrist-relative-to-shoulder vertical (image-y) excursion, read as a spectral sinusoid
+ * fit via the shared `fitSpectralSinusoid` primitive — the same estimator, over the same frequency
+ * grid, that `verticalOscillation` and `cadence` read their own rhythms with.
+ *
+ * Vertical, not horizontal or angular, and wrist rather than elbow, per design.md's original
+ * reasoning: the sagittal shoulder-flexion rotation that drives arm swing is foreshortened face-on
+ * (this metric's primary view), but the coupled elbow-flexion rise/fall of the forearm toward the
+ * chest on the forward swing is a real, front-view-visible vertical motion, and the wrist — the
+ * most distal available point — inherits the largest version of it. That input signal is unchanged;
+ * only how an amplitude is read off it changed.
+ *
+ * ## Why a fit and not paired extrema
+ *
+ * This function used to hand the same series to `findLocalExtrema` at a
+ * `armSwingMinProminenceRatio × torsoLengthPx` prominence floor and take the median of the
+ * resulting peak-to-trough excursions. Measured on Demo 2 (2026-08-29, real GPU, three
+ * fresh-process trials, bit-identical), that produced roughly **twice as many extrema as the clip
+ * contains half-swings**: 9 confirmed half-swings per side across a 1.62 s window whose fitted
+ * rhythm holds ~2.4 arm-swing cycles, i.e. ~5 real half-swings. Their spacings — left
+ * `[0.200, 0.234, 0.500, 0.184, 0.050, 0.150, 0.100, 0.100, 0.067]` s against a 0.331 s half-cycle
+ * — are the direct evidence: six of nine span under two-thirds of a half-cycle, and the shortest
+ * is three frames. The amplitudes those fragments carry (left 11.5 px to 109.8 px; right 7.9 px to
+ * 159.7 px) are consequently a mixture of real half-swings and tracking wiggle, and their MEDIAN —
+ * the reported per-side amplitude — is a statistic over that mixture rather than over the swing.
+ *
+ * This is the identical failure `verticalOscillation` retired its own extrema-pairing estimator
+ * for, for the identical reasons (see that module's "Method" section), and the fix is the same
+ * primitive: the trend terms absorb whole-body drift instead of charging it to the swing, and the
+ * fitted frequency is a rhythm rather than a count of whichever wiggles cleared a threshold.
+ *
+ * The frequency grid is deliberately the SHARED bounce band, not a halved "stride band", even
+ * though one arm swing spans one stride and therefore sits at half the step rate. Measured both
+ * ways on all three clips: on Demo 2 — the only clip where this metric is primary — the two bands
+ * agree to within one grid step (1.48/1.48 Hz left, 1.52/1.53 Hz right, amplitudes within 0.3%)
+ * while the halved band's `secondPeakRatio` is strictly worse (0.13 -> 0.25 left, 0.31 -> 0.69
+ * right); and on both side-view clips the halved band lands on its own grid FLOOR (0.60 Hz at 1.02
+ * and 1.25 observed cycles) — a grid-edge artifact, not a rhythm. The real limitation this leaves
+ * is recorded on the exported function below.
  */
 function computeSideSwing(
   frames: RobustPoseFrame[],
   side: 'left' | 'right',
-  minProminenceAbs: number,
+  config: HeuristicsConfig,
 ): SideSwing {
   let resolvedCount = 0
   let interpolatedCount = 0
 
-  const series = frames.map((frame) => {
+  const seriesY = frames.map((frame) => {
     const shoulder = resolvePoint(frame, SHOULDER_NAME[side])
     const wrist = resolvePoint(frame, WRIST_NAME[side])
     if (shoulder === null || wrist === null) return null
     resolvedCount += 1
     if (shoulder.interpolated || wrist.interpolated) interpolatedCount += 1
-    return { t: frame.timestamp, v: wrist.y - shoulder.y }
+    return wrist.y - shoulder.y
   })
 
-  const extrema = findLocalExtrema(series, minProminenceAbs)
+  const samples: Array<{ t: number; v: number }> = []
+  seriesY.forEach((v, i) => {
+    if (v !== null) samples.push({ t: frames[i].timestamp, v })
+  })
 
-  // Pair consecutive opposite-kind extrema into half-cycles. The same-kind skip is
-  // load-bearing: two runs separated by an unrecoverable gap could both end/start on the same
-  // kind, and pairing those would fabricate an amplitude that was never observed.
-  const halfSwings: HalfSwing[] = []
-  for (let i = 1; i < extrema.length; i += 1) {
-    const [previous, current] = [extrema[i - 1], extrema[i]]
-    if (current.kind === previous.kind) continue
-    // `Extremum.index` indexes the series passed to `findLocalExtrema`, and that series is
-    // `frames.map(...)` — index-parallel to `frames`, including its `null` entries.
-    const [minimum, maximum] =
-      current.kind === 'min' ? [current, previous] : [previous, current]
-    halfSwings.push({
-      amplitudePx: Math.abs(current.value - previous.value),
-      wristHighFrame: frames[minimum.index],
-      wristLowFrame: frames[maximum.index],
-    })
+  const fit = fitSpectralSinusoid(samples, {
+    minFrequencyHz: config.spectralFitMinFrequencyHz,
+    maxFrequencyHz: config.spectralFitMaxFrequencyHz,
+    frequencyStepHz: config.spectralFitFrequencyStepHz,
+  })
+
+  return { seriesY, fit, resolvedCount, interpolatedCount }
+}
+
+function caveatForFailure(reason: SpectralFitFailureReason, sampleCount: number): string {
+  switch (reason) {
+    case 'too-few-samples':
+      return `Arm position resolved in only ${sampleCount} frame(s) on one side — too few to fit a swing rhythm.`
+    case 'insufficient-cycles':
+      return 'Arm positions were tracked, but the clip is too short to contain a complete arm-swing cycle.'
+    case 'degenerate-signal':
+      return 'Arm positions were tracked, but one arm showed no oscillating vertical motion to measure.'
   }
-
-  return { halfSwings, resolvedCount, interpolatedCount }
 }
 
 /**
- * Up to one ghosted pair per side: the wrist at the top and the bottom of that side's
- * median-amplitude half-swing. Two of them, one per arm, is what makes an ASYMMETRY metric legible
- * as a picture — one arm's swing only means anything next to the other's, so this metric spends
- * its whole two-exemplar budget on the comparison rather than on two views of one arm.
+ * One ghosted pair per side: the wrist at the top and the bottom of ONE fitted half-swing, half a
+ * fitted period apart by construction.
  *
- * **Each side is judged against its OWN distribution.** The metric compares two per-side medians,
- * so ranking a left swing against a pooled left+right spread would score it on the very asymmetry
- * the metric exists to report — a genuinely typical left swing on an asymmetric runner would read
- * as an outlier and gate itself out.
+ * Two of them, one per arm, is what makes an ASYMMETRY metric legible as a picture — one arm's
+ * swing only means anything next to the other's, so this metric spends its whole two-exemplar
+ * budget on the comparison rather than on two views of one arm.
  *
- * **Base is the wrist-high frame**, design D1's instant A for this row. D11's rule — base is the
- * instant closest to (representative) or furthest from (extreme) the metric's own median — cannot
- * decide it here: both instants belong to ONE half-swing and therefore carry the identical value,
- * that swing's amplitude. Same shape of gap #62 recorded for the bounce pair, resolved the same
- * way: fall back to the row's own naming.
+ * **The instants come from the fitted PHASE, never from a scan of the raw trace**, and the pair is
+ * resolved by the same `selectBounceInstants` the vertical-oscillation family uses — see that
+ * module's doc for why (an exemplar scanned off the raw trace depicts drift and jitter the reported
+ * amplitude explicitly excludes, so the picture would contradict the number printed beside it). It
+ * is also the whole point of this change: the previous exemplar was whichever raw extremum pair sat
+ * nearest the median amplitude, which on Demo 2 put a *left* pair 0.5005 s apart — one and a half
+ * half-cycles — under a caption promising one swing.
+ *
+ * **`maximumIs: 'lowest'`** — the fitted series is `wrist.y − shoulder.y` in image-y, which grows
+ * DOWNWARD, so the sinusoid's MAXIMUM is the wrist at its LOWEST on screen. Getting this backwards
+ * produces a caption that says the exact opposite of the truth while passing every type check; the
+ * hazard is documented at length in `bounceInstants.ts` and asserted against fixture geometry in
+ * this module's own tests.
+ *
+ * Scored on DETECTION ALONE, via an empty distribution — same reasoning `buildBounceCycleExemplar`
+ * records: a fitted amplitude has no per-instance values to form a distribution from, and inventing
+ * one (say, the raw excursion at that frame) would reintroduce exactly the jittery quantity the fit
+ * replaced.
  */
-function buildSideExemplar(side: 'left' | 'right', swing: SideSwing): MetricExemplar[] {
-  const distribution = describeDistribution(swing.halfSwings.map((s) => s.amplitudePx))
+function buildSideExemplar(
+  side: 'left' | 'right',
+  swing: SideSwing,
+  frames: RobustPoseFrame[],
+): MetricExemplar[] {
+  if (!swing.fit.ok) return []
+  const spanCenterSeconds = resolvedSpanCenter(frames, swing.seriesY)
+  if (spanCenterSeconds === null) return []
 
-  // The swing whose amplitude sits closest to this side's own median — the amplitude the metric
-  // reports for this side, so this is the swing the number is most directly about. `<` rather than
-  // `<=` keeps the earliest of any tie, which a symmetric fixture produces routinely.
-  let selected: HalfSwing | null = null
-  let bestCost = Infinity
-  for (const halfSwing of swing.halfSwings) {
-    const cost = Math.abs(halfSwing.amplitudePx - distribution.median)
-    if (cost < bestCost) {
-      selected = halfSwing
-      bestCost = cost
-    }
-  }
-  if (selected === null) return []
+  const instants = selectBounceInstants({
+    fit: swing.fit,
+    frames,
+    spanCenterSeconds,
+    maximumIs: 'lowest',
+  })
+  if (instants === null) return []
 
   const seed = [SHOULDER_NAME[side], WRIST_NAME[side]]
-  const instant = (frame: RobustPoseFrame) => ({
-    frame,
-    seed,
-    value: selected.amplitudePx,
-  })
+  const distribution = describeDistribution([])
   const highQuality = scoreExemplarInstant(
-    instant(selected.wristHighFrame),
+    { frame: instants.highest, seed },
     'representative',
     distribution,
   )
   const lowQuality = scoreExemplarInstant(
-    instant(selected.wristLowFrame),
+    { frame: instants.lowest, seed },
     'representative',
     distribution,
   )
@@ -195,28 +264,69 @@ function buildSideExemplar(side: 'left' | 'right', swing: SideSwing): MetricExem
   return [
     {
       kind: 'armSwingCycle',
-      timestamp: selected.wristHighFrame.timestamp,
-      pairedTimestamp: selected.wristLowFrame.timestamp,
+      timestamp: instants.highest.timestamp,
+      pairedTimestamp: instants.lowest.timestamp,
       side,
       quality: pairQuality(highQuality, lowQuality),
       label: `Top and bottom of one ${side}-arm swing, ghosted together`,
       cropKeypoints: cropKeypoints(seed, [ELBOW_NAME[side]], [
-        selected.wristHighFrame,
-        selected.wristLowFrame,
+        instants.highest,
+        instants.lowest,
       ]),
     },
   ]
 }
 
 /**
- * Arm swing symmetry: `min(left, right) / max(left, right)` of each arm's torso-normalized
+ * Arm swing symmetry: `min(left, right) / max(left, right)` of each arm's fitted
  * wrist-relative-to-shoulder swing amplitude — a 0-1 ratio, 1 = perfectly symmetric swing.
+ *
+ * ## Scale-free by construction
+ *
+ * The value is a ratio of two amplitudes measured in the same pixel space on the same body in the
+ * same frames, so the body scale cancels exactly and no torso-length normalization is applied or
+ * needed. This module used to divide each side by `estimateBodyScale`'s clip-median
+ * `torsoLengthPx` before taking a ratio that immediately cancelled it again — a no-op arithmetically,
+ * but NOT a no-op behaviourally, because a clip with no resolvable shoulders/hips returned `null`
+ * on a quantity it could in fact have measured. That dependency went with the prominence threshold
+ * that was its only real consumer, exactly as it did for `verticalOscillationCm`.
+ *
+ * ## Both sides, one rhythm
+ *
+ * Each side is fitted independently and then the two fits are checked against each other before any
+ * ratio is taken — see `MAX_SIDE_FREQUENCY_DISAGREEMENT`. A per-side R² gate cannot do this job on
+ * its own: two fits can each clear it while describing different oscillations, and the ratio between
+ * them is then not a symmetry measurement at all.
+ *
+ * ## Confidence answers "were both arms measured equally well?"
+ *
+ * Every aggregate here is a WEAKEST-SIDE reading — `frameCoverage`, `interpolatedFraction`,
+ * `sampleSize` and `fitQuality` all take the worse of the two arms rather than an average. A
+ * symmetry comparison is only as trustworthy as its less-observed side, and averaging is
+ * specifically wrong for this metric: the case that must not read as confident is one arm measured
+ * materially worse than the other, which is precisely the case an average hides. When the two sides'
+ * fit qualities diverge past `SIDE_FIT_QUALITY_DISPARITY_R2` the result is caveated as well as
+ * discounted, because the reader needs to know the asymmetry may belong to the footage.
+ *
+ * ## View
+ *
  * Front-view-primary, the mirror image of trunk lean/overstriding's side-view-primary gating: a
  * side view occludes or superimposes the far arm (an occlusion/separability problem) rather than
  * making the swing signal itself invisible (side view's problem for trunk lean/overstriding).
  * See design.md for the full reasoning, including why amplitude ratio was chosen over phase
  * alignment. Per "never a silent wrong number", the value is still computed and returned even
  * when the view is unsuitable (`viewFitTable.armSwingSymmetry` caps confidence low instead).
+ *
+ * ## Known limitation
+ *
+ * One arm swing spans one STRIDE, so its frequency is half the step rate — and the shared
+ * `spectralFitMinFrequencyHz` floor of 1.2 Hz was sized for the per-step bounce. A runner below
+ * roughly 144 spm therefore has their true arm-swing frequency outside the searched band entirely.
+ * Widening it was measured and rejected (see `computeSideSwing`): a halved band lands on its own
+ * floor on short clips, which is a worse failure than not finding the rhythm, because it looks like
+ * an answer. What protects the reader in that case is the machinery above rather than the band —
+ * a fit that has found the wrong rhythm scores a low R², and if only one side finds it the
+ * cross-side frequency check rejects the comparison outright.
  */
 export function computeArmSwingSymmetry(
   frames: RobustPoseFrame[],
@@ -224,26 +334,16 @@ export function computeArmSwingSymmetry(
   config: HeuristicsConfig = DEFAULT_HEURISTICS_CONFIG,
 ): MetricResult {
   const viewFitEntry = config.viewFitTable.armSwingSymmetry[view]
-  const bodyScale = estimateBodyScale(frames)
 
-  if (bodyScale === null) {
-    return nullResult(
-      viewFitEntry.fit,
-      'No resolvable body-scale reference (shoulders/hips) in this clip.',
-    )
-  }
+  const left = computeSideSwing(frames, 'left', config)
+  const right = computeSideSwing(frames, 'right', config)
 
-  const { torsoLengthPx } = bodyScale
-  const minProminenceAbs = config.armSwingMinProminenceRatio * torsoLengthPx
-
-  const left = computeSideSwing(frames, 'left', minProminenceAbs)
-  const right = computeSideSwing(frames, 'right', minProminenceAbs)
-
-  // Weakest-side aggregation: a symmetry comparison is only as trustworthy as its less-observed
-  // side, so frameCoverage/sampleSize use min(left, right) rather than an average that could hide
-  // a real weakness on one side.
+  // Weakest-side aggregation throughout — see this function's doc for why an average is
+  // specifically wrong for a symmetry metric.
   const frameCoverage =
-    Math.min(left.resolvedCount, right.resolvedCount) / frames.length
+    frames.length === 0
+      ? 0
+      : Math.min(left.resolvedCount, right.resolvedCount) / frames.length
 
   if (left.resolvedCount === 0 || right.resolvedCount === 0) {
     return nullResult(
@@ -253,58 +353,117 @@ export function computeArmSwingSymmetry(
     )
   }
 
-  if (left.halfSwings.length === 0 || right.halfSwings.length === 0) {
+  // Either side failing to fit is fatal to a COMPARISON, even though the other side may have
+  // fitted perfectly well — there is no honest ratio to take against a side that produced no
+  // amplitude.
+  if (!left.fit.ok) {
     return nullResult(
       viewFitEntry.fit,
-      'Arm positions were tracked, but no complete arm-swing cycle was detected on one or both sides.',
+      caveatForFailure(left.fit.reason, left.fit.sampleCount),
+      frameCoverage,
+    )
+  }
+  if (!right.fit.ok) {
+    return nullResult(
+      viewFitEntry.fit,
+      caveatForFailure(right.fit.reason, right.fit.sampleCount),
       frameCoverage,
     )
   }
 
-  const leftValue = median(left.halfSwings.map((s) => s.amplitudePx)) / torsoLengthPx
-  const rightValue = median(right.halfSwings.map((s) => s.amplitudePx)) / torsoLengthPx
-  const maxValue = Math.max(leftValue, rightValue)
-  // maxValue === 0 shouldn't be reachable here: findLocalExtrema only confirms an extremum once
-  // the series has moved at least minProminenceAbs (> 0) from its predecessor, so any amplitude
-  // that made it into amplitudesPx is strictly positive. Guarded explicitly anyway, per this
-  // pipeline's "never NaN" contract, rather than relying on that invariant silently.
-  const value = maxValue === 0 ? 1 : Math.min(leftValue, rightValue) / maxValue
+  const minFitR2 = config.armSwingMinFitR2
+  const weakestR2 = Math.min(left.fit.sinusoidR2, right.fit.sinusoidR2)
+  if (weakestR2 < minFitR2) {
+    // No-value rather than a low-confidence value, on the same grounds `verticalOscillation` states:
+    // below the gate the fitted amplitude describes noise, and there is no confidence discount
+    // honest enough to make a meaningless number worth showing. Here it is worse than for a single
+    // amplitude — a noise amplitude on one side becomes a fabricated ASYMMETRY, not just a fuzzy
+    // number.
+    return nullResult(
+      viewFitEntry.fit,
+      'Arm positions were tracked, but the swing rhythm on one arm was too irregular to measure.',
+      frameCoverage,
+    )
+  }
 
-  const interpolatedFraction =
-    (left.interpolatedCount + right.interpolatedCount) /
-    (left.resolvedCount + right.resolvedCount)
+  const frequencyDisagreement =
+    Math.abs(left.fit.frequencyHz - right.fit.frequencyHz) /
+    Math.min(left.fit.frequencyHz, right.fit.frequencyHz)
+  if (frequencyDisagreement > MAX_SIDE_FREQUENCY_DISAGREEMENT) {
+    return nullResult(
+      viewFitEntry.fit,
+      'Each arm was tracked, but the two swing rhythms did not match, so their amplitudes are not comparable.',
+      frameCoverage,
+    )
+  }
 
-  const sampleSize = Math.min(
-    left.halfSwings.length,
-    right.halfSwings.length,
+  const leftAmplitudePx = left.fit.peakToPeakAmplitude
+  const rightAmplitudePx = right.fit.peakToPeakAmplitude
+  const maxAmplitudePx = Math.max(leftAmplitudePx, rightAmplitudePx)
+  // Unreachable in practice — `fitSpectralSinusoid` reports `degenerate-signal` rather than a
+  // zero amplitude, and that branch already returned above. Guarded anyway, per this pipeline's
+  // "never NaN" contract, rather than relying on that invariant silently.
+  const value =
+    maxAmplitudePx === 0 ? 1 : Math.min(leftAmplitudePx, rightAmplitudePx) / maxAmplitudePx
+
+  const interpolatedFraction = Math.max(
+    left.interpolatedCount / left.resolvedCount,
+    right.interpolatedCount / right.resolvedCount,
   )
+
+  const observedCycles = Math.min(left.fit.observedCycles, right.fit.observedCycles)
+  const sampleSize = Math.floor(observedCycles)
+
+  // Linear ramp from "just cleared the gate" (0) to "as good as a clean clip gets" (1), on the
+  // WEAKER arm's fit. Denominator is guaranteed positive as long as the saturation point sits above
+  // the gate, which the defaults satisfy by a wide margin (0.30 vs 0.80).
+  const fitQuality =
+    FIT_QUALITY_SATURATION_R2 > minFitR2
+      ? clamp01((weakestR2 - minFitR2) / (FIT_QUALITY_SATURATION_R2 - minFitR2))
+      : 1
 
   const confidence = computeMetricConfidence({
     viewFitMultiplier: viewFitEntry.multiplier,
     frameCoverage,
     interpolatedFraction,
-    sampleSize,
-    minRequiredSampleSize: MIN_ARM_SWING_SAMPLE_SIZE,
+    // Fractional, not the floored `sampleSize`: flooring here would turn a difference smaller than
+    // the fit's own frequency resolution into a confidence cliff.
+    sampleSize: observedCycles,
+    minRequiredSampleSize: MIN_ARM_SWING_CYCLES,
+    fitQuality,
     interpolationConfidencePenalty: config.interpolationConfidencePenalty,
   })
 
+  // Each shortfall that applies is named rather than picking a winner — they are independent, they
+  // each independently cost confidence, and a short clip is also a harder clip to fit.
   const caveats: string[] = []
   if (viewFitEntry.fit === 'unsuitable') {
     caveats.push(
       `Arm swing symmetry needs both arms visible and separable, and is not reliable from a ${view} view.`,
     )
   }
-  if (sampleSize < MIN_ARM_SWING_SAMPLE_SIZE) {
+  if (sampleSize < MIN_ARM_SWING_CYCLES) {
     caveats.push(
-      `Only ${sampleSize} matched swing cycle(s) (recommend at least ${MIN_ARM_SWING_SAMPLE_SIZE}) — confidence reduced accordingly.`,
+      `Only ${sampleSize} complete arm-swing cycle(s) observed (recommend at least ${MIN_ARM_SWING_CYCLES}) — confidence reduced accordingly.`,
+    )
+  }
+  if (
+    Math.abs(left.fit.sinusoidR2 - right.fit.sinusoidR2) > SIDE_FIT_QUALITY_DISPARITY_R2
+  ) {
+    caveats.push(
+      'One arm was tracked noticeably better than the other in this clip, so part of the difference between them may be measurement rather than form.',
+    )
+  } else if (weakestR2 < FIT_QUALITY_SATURATION_R2) {
+    caveats.push(
+      "The arm-swing rhythm in this clip wasn't perfectly steady — confidence reduced accordingly.",
     )
   }
 
   // One candidate per side, gated and ranked together: the budget is per-metric, so gating each
   // arm separately would apply the cap twice and could keep two pictures of one arm.
   const exemplars = selectExemplars([
-    ...buildSideExemplar('left', left),
-    ...buildSideExemplar('right', right),
+    ...buildSideExemplar('left', left, frames),
+    ...buildSideExemplar('right', right, frames),
   ])
 
   return {
