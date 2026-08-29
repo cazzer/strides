@@ -79,13 +79,15 @@ export interface ViewDetectionResult {
   /** 0..1, confidence in the LABEL itself, not in any downstream metric's output.
    *
    * A MARGIN, not a plausibility: how far each signal sits past the threshold its committed view
-   * required, which is a different question from how sure we are of this view versus the other
-   * one. Nothing gates on it — `plausibility` below is what reaches metric confidence — and it is
-   * NOT comparable across labels, because the two directions saturate at anatomically very
-   * different points (see `propagate-view-confidence-to-metric-gating`'s design.md; a front label
-   * cannot reach ~0.5 on real footage while a side label routinely reads 0.75+). Read it as a
-   * diagnostic of signal margin only; `fuseFormHeuristicsResults`'s cross-clip view pick still
-   * compares it and inherits that asymmetry. */
+   * required, expressed as a fraction of the distance from that threshold to what the signal reads
+   * with the camera dead-on for that view. Which makes it COMPARABLE ACROSS LABELS — 1 is a
+   * flawless clip of either kind, 0 is a clip sitting on its own decision boundary — as of
+   * `compare-view-confidence-across-labels`; before that the front label's BSR margin saturated at
+   * twice its threshold, roughly twice the anatomical maximum, and no front clip could exceed
+   * ~0.5 while side clips routinely read 0.75+. Still a different question from how sure we are of
+   * this view VERSUS the other one: nothing gates on it, `plausibility` below is what reaches
+   * metric confidence, and `fuseFormHeuristicsResults`'s cross-clip view pick is the one behaviour
+   * that compares it. */
   confidence: number
   /** Which views the clip's own geometry actually supports, summing to 1 — the quantity every
    * metric's view fit is resolved against. `view` above is its committed-label summary and is
@@ -445,10 +447,28 @@ export interface FormHeuristicsResult {
 export interface HeuristicsConfig {
   /** Bilateral Spread Ratio at/below which a frame votes "side-like" in view detection. */
   sideViewMaxBilateralSpreadRatio: number // 0.30
-  /** Bilateral Spread Ratio at/above which a frame votes "front-like" in view detection. */
-  frontViewMinBilateralSpreadRatio: number // 0.55
+  /** Bilateral Spread Ratio at/above which a frame votes "front-like" in view detection.
+   *
+   * Anatomically bounded above, unlike the other three: BSR's numerator is the pose model's own
+   * shoulder and hip separations (acromion-ish and hip JOINT CENTRES, not external hip breadth),
+   * so a dead-on front view of an adult runner produces roughly 0.47 (narrow build) to 0.67
+   * (broad), centred near 0.56 — see `viewDetection.ts`'s `FRONT_VIEW_...` note and this change's
+   * design.md. A bar at or above that centre means "within ~11 degrees of dead-on" for a typical
+   * build and is UNREACHABLE AT ANY ANGLE for a narrow one, so it sits below the narrow-build
+   * dead-on value by construction. */
+  frontViewMinBilateralSpreadRatio: number // 0.45
+  /** The Bilateral Spread Ratio a dead-on front view of a typical adult runner produces — the
+   * point at which view detection's front BSR margin reads a full 1, rather than a multiple of
+   * the threshold above. Derived, not tuned: (0.37 m biacromial + 0.18 m hip-joint-centre) /
+   * (2 x 0.49 m torso). */
+  frontViewFullBilateralSpreadRatio: number // 0.56
   /** Sagittal Excursion Ratio at/above which a frame votes "side-like". */
   sideViewMinSagittalExcursionRatio: number // 0.8
+  /** The Sagittal Excursion Ratio a dead-on side view of a running stride produces — the point at
+   * which the side SER margin reads a full 1. Derived from an ankle fore-aft range of ~0.8 m over
+   * a ~0.49 m torso; happens to equal twice the threshold, which is why the old implicit `2x`
+   * rule looked serviceable on this one signal. */
+  sideViewFullSagittalExcursionRatio: number // 1.6
   /** Sagittal Excursion Ratio at/below which a frame votes "front-like". */
   frontViewMaxSagittalExcursionRatio: number // 0.4
   /** Below this fraction of frames yielding a usable body-scale sample, view detection refuses
@@ -718,8 +738,10 @@ export const DEFAULT_VIEW_FIT_TABLE: HeuristicsConfig['viewFitTable'] = {
 
 export const DEFAULT_HEURISTICS_CONFIG: HeuristicsConfig = {
   sideViewMaxBilateralSpreadRatio: 0.3,
-  frontViewMinBilateralSpreadRatio: 0.55,
+  frontViewMinBilateralSpreadRatio: 0.45,
+  frontViewFullBilateralSpreadRatio: 0.56,
   sideViewMinSagittalExcursionRatio: 0.8,
+  sideViewFullSagittalExcursionRatio: 1.6,
   frontViewMaxSagittalExcursionRatio: 0.4,
   minViewDetectionFrameCoverage: 0.4,
   spectralFitMinFrequencyHz: 1.2,

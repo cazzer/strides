@@ -33,16 +33,45 @@ function computeSagittalRange(
   return percentile(relX, 0.95) - percentile(relX, 0.05)
 }
 
-/** 1 at the "obviously in-band" extreme (value at/near 0), 0 right at the threshold boundary. */
-function marginTowardZero(value: number, threshold: number): number {
-  if (threshold <= 0) return 0
-  return clamp01((threshold - value) / threshold)
-}
+/**
+ * The Bilateral Spread Ratio a dead-on SIDE view produces: the mediolateral body axis lies along
+ * the optical axis, so the left and right shoulder (and hip) points project onto each other and
+ * the spread collapses to zero. An exact geometric limit rather than an anatomical estimate —
+ * it holds for every body build — which is why it is a module constant and its front-view
+ * counterpart (`frontViewFullBilateralSpreadRatio`) is a config value.
+ */
+const SIDE_VIEW_FULL_BILATERAL_SPREAD_RATIO = 0
 
-/** 0 right at the threshold boundary, approaching 1 as value grows to roughly 2x the threshold. */
-function marginAwayFromZero(value: number, threshold: number): number {
-  if (threshold <= 0) return 0
-  return clamp01((value - threshold) / threshold)
+/**
+ * The Sagittal Excursion Ratio a dead-on FRONT view produces: the anteroposterior body axis lies
+ * along the optical axis, so the leg's whole fore-aft reach is hidden in depth and the ankle's
+ * image-plane range relative to its own hip collapses to zero. The same kind of exact geometric
+ * limit as `SIDE_VIEW_FULL_BILATERAL_SPREAD_RATIO`, for the other signal and the other view.
+ */
+const FRONT_VIEW_FULL_SAGITTAL_EXCURSION_RATIO = 0
+
+/**
+ * How far one signal sits past the threshold its committed view required, as a fraction of the
+ * distance from that threshold to the value the signal takes with the camera in that view's IDEAL
+ * position: 0 right at the decision boundary, 1 once the signal reads what a dead-on view of that
+ * kind produces, clamped either side. Works in both directions — `fullSupport` below `threshold`
+ * (the two collapse-to-zero limits above) or above it — because the sign cancels in the ratio.
+ *
+ * The `fullSupport` endpoint is the whole point of this helper, and the reason it replaced a pair
+ * of one-sided helpers whose saturation was implicitly `0` in one direction and `2 * threshold` in
+ * the other (`strides-2iw`). `2 * threshold` is not a derivation: for the front view's BSR it put
+ * full support at 1.10, roughly twice the ~0.56 a dead-on front view of an adult runner can
+ * physically produce, so the front branch of `confidence` saturated nowhere in the reachable range
+ * and could not be compared with the side branch, which does saturate. Every endpoint here is now
+ * either an exact projection limit or an anatomical measurement.
+ *
+ * A degenerate config whose threshold and full-support value coincide has no margin to report and
+ * yields 0, rather than dividing by zero.
+ */
+function signalMargin(value: number, threshold: number, fullSupport: number): number {
+  const span = fullSupport - threshold
+  if (span === 0) return 0
+  return clamp01((value - threshold) / span)
 }
 
 function computeCommittedConfidence(
@@ -54,12 +83,28 @@ function computeCommittedConfidence(
 ): number {
   const bsrMargin =
     view === 'side'
-      ? marginTowardZero(bilateralSpreadRatio, config.sideViewMaxBilateralSpreadRatio)
-      : marginAwayFromZero(bilateralSpreadRatio, config.frontViewMinBilateralSpreadRatio)
+      ? signalMargin(
+          bilateralSpreadRatio,
+          config.sideViewMaxBilateralSpreadRatio,
+          SIDE_VIEW_FULL_BILATERAL_SPREAD_RATIO,
+        )
+      : signalMargin(
+          bilateralSpreadRatio,
+          config.frontViewMinBilateralSpreadRatio,
+          config.frontViewFullBilateralSpreadRatio,
+        )
   const serMargin =
     view === 'side'
-      ? marginAwayFromZero(sagittalExcursionRatio, config.sideViewMinSagittalExcursionRatio)
-      : marginTowardZero(sagittalExcursionRatio, config.frontViewMaxSagittalExcursionRatio)
+      ? signalMargin(
+          sagittalExcursionRatio,
+          config.sideViewMinSagittalExcursionRatio,
+          config.sideViewFullSagittalExcursionRatio,
+        )
+      : signalMargin(
+          sagittalExcursionRatio,
+          config.frontViewMaxSagittalExcursionRatio,
+          FRONT_VIEW_FULL_SAGITTAL_EXCURSION_RATIO,
+        )
 
   return clamp01(((bsrMargin + serMargin) / 2) * sampleCoverage)
 }
@@ -87,6 +132,13 @@ function computeCommittedConfidence(
  * commits to a label here is one whose plausibility is one-hot on the same label, so the two
  * agree exactly wherever a label exists at all, and the weighting only says something new in the
  * undecided bands where the votes fall silent.
+ *
+ * `confidence` is a MARGIN and is now on the same scale for both labels: every one of the four
+ * per-(view, signal) margins runs from that view's own decision threshold to the value the signal
+ * takes with the camera dead-on for that view, so a perfect clip of either kind reaches 1 and a
+ * clip sitting on its own boundary reads 0 (`signalMargin` above). It was not comparable before
+ * `strides-2iw`: the front view's BSR margin saturated at twice its threshold, a value no human
+ * body can produce, capping a flawless front clip near 0.5 while a side clip routinely read 0.77.
  */
 export function detectView(
   frames: RobustPoseFrame[],
