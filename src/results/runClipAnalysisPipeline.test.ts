@@ -81,6 +81,7 @@ const FAKE_ROBUST_FRAMES: RobustPoseFrame[] = [
 const FAKE_HEURISTICS: FormHeuristicsResult = {
   view: {
     view: 'side',
+    plausibility: { side: 1, front: 0, ambiguous: 0 },
     confidence: 1,
     diagnostics: { bilateralSpreadRatio: null, sagittalExcursionRatio: null, frameCoverage: 1 },
   },

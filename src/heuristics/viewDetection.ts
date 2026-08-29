@@ -5,6 +5,10 @@ import type { HeuristicsConfig, View, ViewDetectionResult } from './types'
 import { estimateBodyScale } from './bodyScale'
 import { resolveBilateralPair, resolvePoint } from './keypoints'
 import { clamp01, mean, median, percentile } from './mathUtils'
+import {
+  AMBIGUOUS_VIEW_PLAUSIBILITY,
+  computeViewPlausibility,
+} from './viewPlausibility'
 
 /**
  * Per-side sagittal excursion range: the p95-p5 spread of that side's ankle position relative to
@@ -75,6 +79,14 @@ function computeCommittedConfidence(
  *
  * Requiring agreement is deliberate: a confident wrong label would corrupt every downstream
  * metric's view-fit gating silently, whereas an honest "ambiguous" just degrades confidence.
+ *
+ * The committed label is a SUMMARY. What gates metrics is `plausibility` — the same two signals
+ * expressed as a weighting over the three views (`viewPlausibility.ts`), which
+ * `computeFormHeuristics` resolves the view-fit table against. That distinction is why this
+ * function's own vote/margin arithmetic below is unchanged by that gating change: a clip that
+ * commits to a label here is one whose plausibility is one-hot on the same label, so the two
+ * agree exactly wherever a label exists at all, and the weighting only says something new in the
+ * undecided bands where the votes fall silent.
  */
 export function detectView(
   frames: RobustPoseFrame[],
@@ -89,6 +101,9 @@ export function detectView(
     return {
       view: 'ambiguous',
       confidence: 0,
+      // Coverage GATES the plausibility rather than weighting it (see `computeViewPlausibility`):
+      // too little body-scale sample to classify from at all, so no view is supported.
+      plausibility: AMBIGUOUS_VIEW_PLAUSIBILITY,
       diagnostics: {
         bilateralSpreadRatio: null,
         sagittalExcursionRatio: null,
@@ -151,6 +166,11 @@ export function detectView(
   return {
     view,
     confidence,
+    plausibility: computeViewPlausibility(
+      bilateralSpreadRatio,
+      sagittalExcursionRatio,
+      config,
+    ),
     diagnostics: {
       bilateralSpreadRatio,
       sagittalExcursionRatio,

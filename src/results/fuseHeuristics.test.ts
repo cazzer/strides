@@ -38,6 +38,7 @@ function makeView(confidence: number): ViewDetectionResult {
   return {
     view: 'side',
     confidence,
+    plausibility: { side: 1, front: 0, ambiguous: 0 },
     diagnostics: { bilateralSpreadRatio: null, sagittalExcursionRatio: null, frameCoverage: 1 },
   }
 }

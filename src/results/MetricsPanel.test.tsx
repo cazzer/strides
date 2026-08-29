@@ -83,6 +83,7 @@ function makeHighConfidenceResult(): FormHeuristicsResult {
   return {
     view: {
       view: 'side',
+      plausibility: { side: 1, front: 0, ambiguous: 0 },
       confidence: 0.95,
       diagnostics: {
         bilateralSpreadRatio: 0.2,
@@ -154,6 +155,7 @@ function makeMixedTierResult(): FormHeuristicsResult {
   return {
     view: {
       view: 'front',
+      plausibility: { side: 0, front: 1, ambiguous: 0 },
       confidence: 0.5,
       diagnostics: {
         bilateralSpreadRatio: 0.6,
