@@ -92,6 +92,7 @@ function plan(
     crop: IDENTITY_CROP,
     travelDirection: 1,
     demotedFromPair: false,
+    cropGrowth: null,
     ...overrides,
   }
 }
