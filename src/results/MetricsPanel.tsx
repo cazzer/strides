@@ -343,7 +343,7 @@ function ExcludedEntry({ metric, hint }: ExcludedEntryProps) {
 }
 
 /**
- * Numeric readouts for all ten form heuristics, partitioned into tiers (#37; exclusion rule
+ * Numeric readouts for all eleven form heuristics, partitioned into tiers (#37; exclusion rule
  * reversed by exclude-only-unmeasurable-metrics) rather than one uniform grid: tier 1
  * ('normal', measured, view-workable, confidence >= 0.7) and tier 2 ('caveated', measured,
  * view-workable, confidence < 0.7 with no lower bound) render as cards in the grid above,

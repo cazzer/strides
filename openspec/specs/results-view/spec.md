@@ -230,7 +230,7 @@ a blank field.
 
 ### Requirement: Metrics panel readouts with measurability and confidence tiers
 
-The system SHALL display, for each of the ten `MetricId`s in `FormHeuristicsResult`, its value in
+The system SHALL display, for each of the eleven `MetricId`s in `FormHeuristicsResult`, its value in
 plain language and a label naming the metric, partitioned into three tiers that determine how —
 and whether — a value renders at all, rather than a single uniform card style for every metric.
 Exclusion is reserved for metrics that are **structurally unmeasurable** — nothing was measured
