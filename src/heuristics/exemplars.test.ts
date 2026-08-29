@@ -5,8 +5,10 @@ import { findNearestFrame } from '../results/skeletonGeometry'
 import { trimToPresenceWindow } from './presenceWindow'
 import { computeTrunkLean } from './trunkLean'
 import {
+  EXEMPLAR_PAIR_ENDS_PER_SIDE,
   MAX_EXEMPLARS_PER_METRIC,
   MIN_EXEMPLAR_QUALITY,
+  attachPairAlternates,
   cropDerivable,
   cropKeypoints,
   describeDistribution,
@@ -15,6 +17,8 @@ import {
   pairQuality,
   scoreExemplarInstant,
   selectExemplars,
+  selectExtremePair,
+  selectExtremePairs,
   selectOppositeSidePair,
 } from './exemplars'
 import type { MetricExemplar } from './types'
@@ -283,6 +287,299 @@ describe('scoreExemplarInstant', () => {
 describe('pairQuality', () => {
   it('takes the weaker instant — one unreadable half makes one unreadable image', () => {
     expect(pairQuality(0.9, 0.4)).toBe(0.4)
+  })
+})
+
+describe('selectExtremePair', () => {
+  /** Median 5, MAD 0.5, so the outlier bound is 1.5 and the typicality ramp is |v - 5| / 1.5.
+   * 6.4 is the value argmax at 0.933 of the ramp; 6 and 4 sit one MAD out at 2/3. */
+  const VALUES = [4, 4.5, 5, 5, 5.5, 6, 6.4]
+  const DISTRIBUTION = describeDistribution(VALUES)
+
+  interface Candidate {
+    frame: RobustPoseFrame
+    value: number
+  }
+
+  const toInstant = (candidate: Candidate) => ({
+    frame: candidate.frame,
+    seed: [...SEED],
+    value: candidate.value,
+  })
+
+  /** A torso whose `interpolatedNames` resolve with real coordinates but `'interpolated'` status —
+   * the shape that reads as a position the detector never actually saw. */
+  function torsoFrameInterpolating(
+    timestamp: number,
+    interpolatedNames: readonly ('left_shoulder' | 'right_shoulder' | 'left_hip' | 'right_hip')[],
+  ): RobustPoseFrame {
+    const base = {
+      left_shoulder: { x: 197, y: 250 },
+      right_shoulder: { x: 203, y: 250 },
+      left_hip: { x: 197, y: 400 },
+      right_hip: { x: 203, y: 400 },
+    }
+    const overrides = Object.fromEntries(
+      interpolatedNames.map((name) => [name, { ...base[name], status: 'interpolated' as const }]),
+    )
+    return torsoFrame(timestamp, overrides)
+  }
+
+  const WHOLE_TORSO = ['left_shoulder', 'right_shoulder', 'left_hip', 'right_hip'] as const
+
+  /** Every candidate detected, except those named in `interpolated`, whose whole torso is. */
+  function candidates(interpolated: Partial<Record<number, true>> = {}): Candidate[] {
+    return VALUES.map((value, i) => ({
+      frame: interpolated[value]
+        ? torsoFrameInterpolating(i / 30, WHOLE_TORSO)
+        : torsoFrame(i / 30),
+      value,
+    }))
+  }
+
+  it('prefers a well-tracked near-extreme over an interpolated value-extreme', () => {
+    // 6.4 is the most extreme survivor and would win a rank-by-value selection, but its torso is
+    // entirely interpolated, so it scores 0 x 0.933 = 0 and takes the whole pair to zero with it.
+    const pair = selectExtremePair(candidates({ 6.4: true }), toInstant, DISTRIBUTION)
+
+    expect(pair).not.toBeNull()
+    expect(pair!.base.value).toBe(6)
+    expect(pair!.ghost.value).toBe(4)
+    expect(pair!.quality).toBeCloseTo(1 / 1.5, 10)
+  })
+
+  it('selects the value extremes when every candidate is tracked the same way', () => {
+    // The generalisation this change rests on: ranking only diverges from the old rank-by-value
+    // rule where tracking quality actually differs.
+    const pair = selectExtremePair(candidates(), toInstant, DISTRIBUTION)
+
+    expect(pair!.base.value).toBe(6.4)
+    expect(pair!.ghost.value).toBe(4)
+    expect(pair!.quality).toBeCloseTo(1 / 1.5, 10)
+  })
+
+  it('keeps one end either side of the median even when the two best scores share a side', () => {
+    // Both below-median candidates are half-interpolated, so the two highest scores overall
+    // (6.4 at 0.933 and 6 at 0.667) both sit above the median. An unconstrained ranking would
+    // ghost those two together and depict no range at all.
+    const withWeakLowSide = candidates().map((candidate) => {
+      if (candidate.value >= 5) return candidate
+      const frame = torsoFrameInterpolating(candidate.frame.timestamp, ['left_hip', 'right_hip'])
+      return { ...candidate, frame }
+    })
+
+    const pair = selectExtremePair(withWeakLowSide, toInstant, DISTRIBUTION)
+
+    expect(pair!.base.value).toBe(6.4)
+    expect(pair!.ghost.value).toBe(4)
+    expect(pair!.quality).toBeCloseTo(0.5 * (1 / 1.5), 10)
+  })
+
+  it('never selects an instant beyond the outlier bound, however extreme', () => {
+    const withGlitch = [
+      ...candidates(),
+      { frame: torsoFrame(7 / 30), value: 20 },
+    ]
+
+    const pair = selectExtremePair(withGlitch, toInstant, DISTRIBUTION)
+
+    expect(pair!.base.value).not.toBe(20)
+    expect(pair!.ghost.value).not.toBe(20)
+  })
+
+  it('skips a candidate with no derivable crop, and one with no value at all', () => {
+    const unusable = [
+      ...candidates().filter((candidate) => candidate.value !== 6.4),
+      // Extreme, but nothing to crop around.
+      { frame: buildFrame({}, 7 / 30), value: 6.4 },
+    ]
+
+    expect(selectExtremePair(unusable, toInstant, DISTRIBUTION)!.base.value).toBe(6)
+
+    // A context instant carries no value, so it is no end of a range.
+    expect(
+      selectExtremePair(
+        candidates(),
+        (candidate) =>
+          candidate.value === 6.4
+            ? { frame: candidate.frame, seed: [...SEED] }
+            : toInstant(candidate),
+        DISTRIBUTION,
+      )!.base.value,
+    ).toBe(6)
+  })
+
+  it('emits nothing when there is no range to show', () => {
+    const flat = [5, 5, 5, 5, 5].map((value, i) => ({ frame: torsoFrame(i / 30), value }))
+
+    expect(selectExtremePair(flat, toInstant, describeDistribution([5, 5, 5, 5, 5]))).toBeNull()
+    expect(selectExtremePair([], toInstant, DISTRIBUTION)).toBeNull()
+  })
+})
+
+describe('selectExtremePairs', () => {
+  /** The same distribution `selectExtremePair` is exercised against above — median 5, MAD 0.5,
+   * outlier bound 1.5 — so the head of this list can be compared against that function directly. */
+  const VALUES = [4, 4.5, 5, 5, 5.5, 6, 6.4]
+  const DISTRIBUTION = describeDistribution(VALUES)
+
+  interface Candidate {
+    frame: RobustPoseFrame
+    value: number
+  }
+
+  const toInstant = (candidate: Candidate) => ({
+    frame: candidate.frame,
+    seed: [...SEED],
+    value: candidate.value,
+  })
+
+  function candidatesOf(values: number[]): Candidate[] {
+    return values.map((value, i) => ({ frame: torsoFrame(i / 30), value }))
+  }
+
+  const CANDIDATES = candidatesOf(VALUES)
+
+  it("puts selectExtremePair's own winner at the head", () => {
+    // The contract that lets `selectExtremePair` be implemented as this function's first element:
+    // if these two could disagree, adding alternatives would silently change which pair every clip
+    // renders. Asserted on identity, not on value, so a coincidentally-equal value cannot pass it.
+    const head = selectExtremePairs(CANDIDATES, toInstant, DISTRIBUTION)[0]
+    const single = selectExtremePair(CANDIDATES, toInstant, DISTRIBUTION)!
+
+    expect(head.base).toBe(single.base)
+    expect(head.ghost).toBe(single.ghost)
+    expect(head.quality).toBe(single.quality)
+  })
+
+  it('ranks by the quality each pair would itself be emitted with', () => {
+    const qualities = selectExtremePairs(CANDIDATES, toInstant, DISTRIBUTION).map(
+      (pair) => pair.quality,
+    )
+
+    expect(qualities.length).toBeGreaterThan(1)
+    expect(qualities).toEqual([...qualities].sort((a, b) => b - a))
+    // Every pair's quality is the MINIMUM of its two ends, so the best possible is the weaker of
+    // the two per-side maxima: 6.4 scores 1.4/1.5 above the median and 4 scores 1/1.5 below.
+    expect(qualities[0]).toBeCloseTo(1 / 1.5, 10)
+  })
+
+  it('spans the median on every pair, and never ghosts one value against itself', () => {
+    for (const { base, ghost } of selectExtremePairs(CANDIDATES, toInstant, DISTRIBUTION)) {
+      expect(Math.max(base.value, ghost.value)).toBeGreaterThanOrEqual(DISTRIBUTION.median)
+      expect(Math.min(base.value, ghost.value)).toBeLessThanOrEqual(DISTRIBUTION.median)
+      // Both ends sitting exactly ON the median is the one way a pair can span it and still depict
+      // no range. Those are skipped rather than emitted as degenerate alternatives — this fixture
+      // has two median-valued candidates, so the combination genuinely arises.
+      expect(base.value).not.toBe(ghost.value)
+    }
+  })
+
+  it('offers distinct alternatives for BOTH ends, not one end against many partners', () => {
+    // The reason the bound is per SIDE. A pair is undrawable because of where its ends sit, so a
+    // list that only ever varies one end can be exhausted by a single unlucky instant.
+    const pairs = selectExtremePairs(CANDIDATES, toInstant, DISTRIBUTION)
+    const [head] = pairs
+
+    expect(pairs.some((p) => p.base === head.base && p.ghost !== head.ghost)).toBe(true)
+    expect(pairs.some((p) => p.ghost === head.ghost && p.base !== head.base)).toBe(true)
+  })
+
+  it('is bounded by the per-side cap rather than by the candidate count', () => {
+    // 40 candidates is ~400 pairs unbounded; this repo's own reference clip reaches ~59 instants.
+    const many = candidatesOf(Array.from({ length: 40 }, (_, i) => 1 + i * 0.25))
+    const manier = candidatesOf(Array.from({ length: 80 }, (_, i) => 1 + i * 0.125))
+
+    const a = selectExtremePairs(many, toInstant, describeDistribution(many.map((c) => c.value)))
+    const b = selectExtremePairs(
+      manier,
+      toInstant,
+      describeDistribution(manier.map((c) => c.value)),
+    )
+
+    expect(a.length).toBeLessThanOrEqual(EXEMPLAR_PAIR_ENDS_PER_SIDE ** 2)
+    expect(b.length).toBeLessThanOrEqual(EXEMPLAR_PAIR_ENDS_PER_SIDE ** 2)
+    expect(b.length).toBe(a.length)
+  })
+
+  it('honours an explicit per-side bound, one pair being exactly selectExtremePair', () => {
+    const one = selectExtremePairs(CANDIDATES, toInstant, DISTRIBUTION, 1)
+    const single = selectExtremePair(CANDIDATES, toInstant, DISTRIBUTION)!
+
+    expect(one).toHaveLength(1)
+    expect(one[0].base).toBe(single.base)
+    expect(selectExtremePairs(CANDIDATES, toInstant, DISTRIBUTION, 2).length).toBeLessThanOrEqual(4)
+  })
+
+  it('is empty exactly where selectExtremePair is null', () => {
+    const flatValues = [5, 5, 5, 5, 5]
+    const flat = candidatesOf(flatValues)
+
+    expect(selectExtremePairs(flat, toInstant, describeDistribution(flatValues))).toEqual([])
+    expect(selectExtremePairs([], toInstant, DISTRIBUTION)).toEqual([])
+  })
+
+  it('still refuses instants beyond the outlier bound, at every rank', () => {
+    const withGlitch = [...CANDIDATES, { frame: torsoFrame(7 / 30), value: 20 }]
+
+    for (const { base, ghost } of selectExtremePairs(withGlitch, toInstant, DISTRIBUTION)) {
+      expect(base.value).not.toBe(20)
+      expect(ghost.value).not.toBe(20)
+    }
+  })
+})
+
+describe('attachPairAlternates', () => {
+  const pairExemplar = (quality: number, timestamp: number): MetricExemplar => ({
+    kind: 'trunkLeanRange',
+    timestamp,
+    pairedTimestamp: timestamp + 0.1,
+    quality,
+    label: 'range',
+    cropKeypoints: [...SEED],
+  })
+
+  it('emits ONE exemplar carrying the rest as alternates', () => {
+    const emitted = attachPairAlternates([
+      pairExemplar(0.9, 1),
+      pairExemplar(0.8, 2),
+      pairExemplar(0.7, 3),
+    ])
+
+    // One exemplar, because the alternatives are other ways to draw the same single image — so
+    // they must not spend against `MAX_EXEMPLARS_PER_METRIC`.
+    expect(emitted).toHaveLength(1)
+    expect(emitted[0].timestamp).toBe(1)
+    expect(emitted[0].alternates!.map((a) => a.timestamp)).toEqual([2, 3])
+  })
+
+  it('gates alternates on the shared minimum quality, like the exemplar they hang off', () => {
+    const emitted = attachPairAlternates([
+      pairExemplar(0.9, 1),
+      pairExemplar(MIN_EXEMPLAR_QUALITY, 2),
+      pairExemplar(MIN_EXEMPLAR_QUALITY - 0.001, 3),
+    ])
+
+    expect(emitted[0].alternates!.map((a) => a.timestamp)).toEqual([2])
+  })
+
+  it('omits the key entirely rather than attaching an empty list', () => {
+    const emitted = attachPairAlternates([pairExemplar(0.9, 1), pairExemplar(0.1, 2)])
+
+    expect(emitted[0].alternates).toBeUndefined()
+    expect('alternates' in emitted[0]).toBe(false)
+  })
+
+  it('never nests: an alternate carries no alternates of its own', () => {
+    const emitted = attachPairAlternates([pairExemplar(0.9, 1), pairExemplar(0.8, 2)])
+
+    for (const alternate of emitted[0].alternates!) {
+      expect(alternate.alternates).toBeUndefined()
+    }
+  })
+
+  it('passes an empty ranking straight through', () => {
+    expect(attachPairAlternates([])).toEqual([])
   })
 })
 

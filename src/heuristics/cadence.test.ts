@@ -5,7 +5,7 @@ import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildFrame } from './__fixtures__/testFrames'
 import { framesFromHipTrace, seededNormals } from './__fixtures__/hipTraceFrames'
 import { detectFootstrikes } from './footstrikes'
-import { median } from './mathUtils'
+import { mean } from './mathUtils'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 
@@ -66,7 +66,19 @@ describe('computeCadence', () => {
 
     const candidates = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)
     const intervals = candidates.slice(1).map((c, i) => c.timestamp - candidates[i].timestamp)
-    const oldPathValue = 60 / median(intervals)
+    // MEAN, not median, and the reason is a property of the fixture rather than of either
+    // estimator. The true step interval here is 0.3529s, which a 30fps grid can only represent as
+    // 10 frames (0.3333s) or 11 (0.3667s); the fixture's 10 intervals split 4/6 between them, so
+    // the mean lands at 0.3533s (0.1% off the truth) while the MEDIAN snaps to whichever bin holds
+    // more mass -- 0.3667s, 3.9% high, which alone reads 163.6 spm against the fit's 170.4. That is
+    // quantization, not disagreement between the two paths.
+    //
+    // This test previously used the median and passed, on a cancellation worth recording: the
+    // detector then also emitted two run-edge artifacts (t=0.0000 and t=3.9667), whose 0.1667s and
+    // 0.2667s intervals dragged the median down to 0.35s -- coincidentally near the truth. Removing
+    // those artifacts upstream is a strict improvement to the candidate set (11 clean alternating
+    // contacts, no edge pivots) that happened to remove the bias masking this one.
+    const oldPathValue = 60 / mean(intervals)
 
     expect(result.value).not.toBeNull()
     expect(Math.abs(result.value! - oldPathValue)).toBeLessThan(3)

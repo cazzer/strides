@@ -23,10 +23,14 @@ import type { RobustPoseFrame } from '../pose/robustness/types'
  * Deliberately 3 (matching `verticalOscillationMinCycles`'s reasoning), not
  * `MIN_CADENCE_STEPS`/`MIN_OVERSTRIDE_SAMPLE_SIZE`'s 4: a MEDIAN becomes a genuine rank statistic
  * — "the middle value", distinct from "the only value" or "an average of two" — starting at
- * `n = 3`. This metric's dominant error mode (`strideLength.ts`'s doubling bias, when a footstrike
- * is missed) is a single outlier-shaped value, not a diffuse noise floor, so a rank-statistic
- * defense (the median simply ignoring an outlier once a majority of clean values surrounds it) is
- * the right shape of protection, and 3 is the smallest sample where that protection exists at all.
+ * `n = 3`. `strideLength.ts`'s doubling bias (when a footstrike is missed) is a single
+ * outlier-shaped value, not a diffuse noise floor, so a rank-statistic defense (the median simply
+ * ignoring an outlier once a majority of clean values surrounds it) is the right shape of
+ * protection, and 3 is the smallest sample where that protection exists at all.
+ *
+ * A median is NOT a defense against that module's halving bias, which is systematic rather than
+ * outlier-shaped and can affect every pair at once — that one is handled upstream, by the period
+ * gate this metric feeds `fit.frequencyHz` into (see the call site below).
  *
  * This is a judgment call pending live evidence, not a derived calibration — see
  * `openspec/changes/add-vertical-ratio-metric/design.md` D3 for the upgrade trigger: if live
@@ -100,6 +104,11 @@ function caveatForStrideLengthFailure(reason: StrideLengthFailureReason): string
       return 'No footstrikes could be detected in this clip.'
     case 'no-usable-pairs':
       return 'Footstrikes were detected, but no consecutive same-side pair advanced in the direction of travel.'
+    case 'no-period-consistent-pairs':
+      // Names the real cause rather than the generic no-pairs text: the pairs read fine, they just
+      // did not last a stride. "Extra footstrike instants" is the mechanism (`strideLength.ts`'s
+      // halving-bias note) stated in words a reader of the card can act on.
+      return 'Footstrikes were detected, but no consecutive same-side pair lasted a full stride at the step rhythm measured in this clip — extra footstrike instants were most likely detected mid-stance, so stride length could not be measured.'
   }
 }
 
@@ -188,6 +197,18 @@ function buildStridePairExemplar(pairs: StridePair[]): MetricExemplar[] {
  * hip-consistent stride length, regardless of what `verticalOscillation` is currently configured
  * to chart.
  *
+ * ## The fit validates the denominator too
+ *
+ * The same `fit` this metric's numerator comes from is passed to `estimateStrideLength` as its
+ * `stepFrequencyHz` reference, so each candidate same-side footstrike pair's elapsed TIME is
+ * checked against the expected stride period (`2 / fit.frequencyHz`, since a stride is two steps)
+ * before its displacement can become the denominator. Without that check the denominator was the
+ * one half of this ratio nothing verified: `detectFootstrikes` labels trailing-leg ankle-y maxima
+ * as same-side strikes, so a "stride" pair can span one STEP and make this metric read ~2× high at
+ * high confidence — measured on the Demo 1 track clip, see `strideLength.ts`'s halving-bias note.
+ * The reference is free (the fit is already computed and already gated by then) and carries no
+ * calibrated coefficient.
+ *
  * ## Gate reuse — no separate `verticalRatioMinFitR2`
  *
  * This metric's numerator is the exact same `fit.peakToPeakAmplitude` `verticalOscillation`
@@ -262,7 +283,12 @@ export function computeVerticalRatio(
     )
   }
 
-  const stride = estimateStrideLength(frames, config)
+  // The denominator is validated against the SAME fit the numerator is measured from. `fit` is
+  // already computed and already past its quality gate by this point, so this costs nothing extra.
+  // `fit.frequencyHz` is the STEP frequency (cadence reports it as `× 60` spm) and a stride is two
+  // steps — `estimateStrideLength` does that doubling itself, so what crosses this boundary is the
+  // step frequency, unmodified. See `StrideLengthOptions.stepFrequencyHz`.
+  const stride = estimateStrideLength(frames, config, { stepFrequencyHz: fit.frequencyHz })
   if (!stride.ok) {
     return nullResult(viewFitEntry.fit, caveatForStrideLengthFailure(stride.reason))
   }
@@ -299,9 +325,18 @@ export function computeVerticalRatio(
       "The bounce rhythm in this clip wasn't perfectly steady — confidence reduced accordingly.",
     )
   }
-  if (stride.pairCount < stride.candidatePairCount) {
+  // Period-rejected pairs are subtracted out rather than folded in: they read perfectly cleanly and
+  // were excluded for a different, nameable reason, which gets its own sentence below.
+  const unreadablePairCount =
+    stride.candidatePairCount - stride.pairCount - stride.periodRejectedPairCount
+  if (unreadablePairCount > 0) {
     caveats.push(
-      `${stride.candidatePairCount - stride.pairCount} stride pair(s) couldn't be read cleanly and didn't count toward the measurement.`,
+      `${unreadablePairCount} stride pair(s) couldn't be read cleanly and didn't count toward the measurement.`,
+    )
+  }
+  if (stride.periodRejectedPairCount > 0) {
+    caveats.push(
+      `${stride.periodRejectedPairCount} detected stride pair(s) didn't last a full stride at this clip's measured step rhythm — likely extra footstrike instants — and were excluded.`,
     )
   }
   if (viewFitEntry.fit === 'unsuitable') {

@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { computeFormHeuristics } from './index'
 import { detectView } from './viewDetection'
 import { estimateStrideLength } from './strideLength'
+import { computeArmSwingSymmetry } from './armSwingSymmetry'
+import { computeTrunkLean } from './trunkLean'
+import { computeVerticalOscillation } from './verticalOscillation'
+import { computeStepWidth } from './stepWidth'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
+import type { RobustPoseFrame } from '../pose/robustness/types'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 
 const PARAMS = {
@@ -155,7 +160,12 @@ describe('computeFormHeuristics', () => {
     const frames = generateSyntheticGait(PARAMS)
 
     const result = computeFormHeuristics(frames)
-    const stride = estimateStrideLength(frames, DEFAULT_HEURISTICS_CONFIG)
+    // Called exactly as verticalRatio.ts calls it -- the same fit supplies both this metric's
+    // numerator and its denominator's period gate, so the reference has to cross this boundary too
+    // or the two sides would be estimating stride length from different pair sets.
+    const stride = estimateStrideLength(frames, DEFAULT_HEURISTICS_CONFIG, {
+      stepFrequencyHz: result.verticalOscillation.fit!.frequencyHz,
+    })
 
     expect(result.verticalRatio.value).not.toBeNull()
     expect(result.verticalOscillation.fit).not.toBeNull()
@@ -276,5 +286,172 @@ describe('computeFormHeuristics', () => {
     expect(result.verticalOscillationCm.caveat).not.toBeNull()
     expect(result.stepWidthCm.caveat).not.toBeNull()
     expect(result.verticalOscillation.series).toEqual([])
+  })
+
+  // ---------------------------------------------------------------------------------------------
+  // View-plausibility gating (propagate-view-confidence-to-metric-gating). TORSO_LENGTH_PX is 150
+  // in the fixture generator, and `withBilateralSpread` sets both the shoulder and hip separation
+  // to the same value, so BSR = spreadPx / 150 exactly. SER stays ~= 2 * strideAmplitudePx / 150,
+  // untouched by the rewrite (see the helper's own note).
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * Re-spreads each frame's shoulder and hip pairs symmetrically about their own midpoints, to
+   * put BSR at a chosen value. Deliberately surgical: the midpoints are unchanged (so torso
+   * length, trunk lean and hip bounce are all untouched), and each ankle moves by the same
+   * constant as its own hip, so every ankle-relative-to-hip RANGE — and therefore SER — is
+   * unchanged too.
+   */
+  const withBilateralSpread = (
+    frames: RobustPoseFrame[],
+    spreadPx: number,
+  ): RobustPoseFrame[] =>
+    frames.map((frame) => {
+      const at = (name: string) => frame.keypoints.find((kp) => kp.name === name)
+      const respread = (leftName: string, rightName: string) => {
+        const left = at(leftName)
+        const right = at(rightName)
+        if (left?.x == null || right?.x == null) return {}
+        const mid = (left.x + right.x) / 2
+        return { [leftName]: mid - spreadPx / 2, [rightName]: mid + spreadPx / 2 }
+      }
+      const xs: Record<string, number> = {
+        ...respread('left_shoulder', 'right_shoulder'),
+        ...respread('left_hip', 'right_hip'),
+      }
+      return {
+        ...frame,
+        keypoints: frame.keypoints.map((kp) =>
+          kp.name in xs ? { ...kp, x: xs[kp.name] } : kp,
+        ),
+      }
+    })
+
+  it('gates a decisively-committed view exactly as it did before plausibility existed', () => {
+    // A clip whose two signals both sit inside one view's regions has a one-hot plausibility, so
+    // resolving the view-fit table against it is the identity and every metric is called with the
+    // caller's own config and the same label as before. Asserted against direct calls rather than
+    // against remembered numbers, so it stays a no-op proof if any metric's own math changes.
+    const frames = generateSyntheticGait(PARAMS)
+
+    const result = computeFormHeuristics(frames)
+
+    expect(result.view.view).toBe('side')
+    expect(result.view.plausibility).toEqual({ side: 1, front: 0, ambiguous: 0 })
+    expect(result.trunkLean).toEqual(
+      computeTrunkLean(frames, 'side', DEFAULT_HEURISTICS_CONFIG),
+    )
+    expect(result.armSwingSymmetry).toEqual(
+      computeArmSwingSymmetry(frames, 'side', DEFAULT_HEURISTICS_CONFIG),
+    )
+    expect(result.verticalOscillation).toEqual(
+      computeVerticalOscillation(frames, 'side', DEFAULT_HEURISTICS_CONFIG),
+    )
+  })
+
+  it('keeps a marginally-committed front view’s front-primary metrics at full front fit', () => {
+    // The front-approach demo clip's shape: BSR barely over the front bar (0.56 vs 0.55), SER far
+    // from side view's (0.26 vs 0.80). `detectView`'s margin-based confidence reads very low
+    // there, but side is ruled out twice over, so nothing about the metrics should move: this is
+    // the case where multiplying confidence by that low number would delete `armSwingSymmetry`
+    // and `stepWidth` on a clip that plainly shows both arms.
+    const frames = withBilateralSpread(
+      generateSyntheticGait({ ...PARAMS, strideAmplitudePx: 20 }),
+      0.56 * 150,
+    )
+
+    const result = computeFormHeuristics(frames)
+
+    expect(result.view.view).toBe('front')
+    expect(result.view.confidence).toBeLessThan(0.2)
+    expect(result.view.plausibility).toEqual({ side: 0, front: 1, ambiguous: 0 })
+    expect(result.armSwingSymmetry.viewFit).toBe('primary')
+    expect(result.stepWidth.viewFit).toBe('primary')
+    expect(result.armSwingSymmetry).toEqual(
+      computeArmSwingSymmetry(frames, 'front', DEFAULT_HEURISTICS_CONFIG),
+    )
+    // The six sagittal metrics stay excluded, exactly as a front label excludes them today.
+    expect(result.verticalRatio.viewFit).toBe('unsuitable')
+    expect(result.trunkLean.viewFit).toBe('unsuitable')
+    expect(result.overstriding.viewFit).toBe('unsuitable')
+    expect(result.kneeFlexion.viewFit).toBe('unsuitable')
+    expect(result.footStrikePattern.viewFit).toBe('unsuitable')
+    // `stepWidthCm` is front-PRIMARY like `stepWidth` — on a real front clip it is excluded for a
+    // different reason entirely (a null value on any backend that measures no real-world scale),
+    // never by view fit.
+    expect(result.stepWidthCm.viewFit).toBe('primary')
+  })
+
+  it('reports, rather than excludes, a front-primary metric when only side is ruled out', () => {
+    // BSR 0.50 — past side view's bar but 0.05 short of front's, so the label stays 'ambiguous' —
+    // with a fully front-like SER. The old gate hard-excluded `armSwingSymmetry` here as
+    // structurally unmeasurable, on the strength of a side view the geometry rules out.
+    const frames = withBilateralSpread(
+      generateSyntheticGait({ ...PARAMS, strideAmplitudePx: 20 }),
+      0.5 * 150,
+    )
+
+    const result = computeFormHeuristics(frames)
+
+    expect(result.view.view).toBe('ambiguous')
+    expect(result.view.plausibility.side).toBe(0)
+    expect(result.view.plausibility.front).toBeCloseTo(0.8, 6)
+    expect(result.view.plausibility.ambiguous).toBeCloseTo(0.2, 6)
+
+    // What the label alone would have produced, for contrast — still the case for any caller that
+    // gates on the label rather than the plausibility.
+    expect(
+      computeArmSwingSymmetry(frames, 'ambiguous', DEFAULT_HEURISTICS_CONFIG).viewFit,
+    ).toBe('unsuitable')
+
+    expect(result.armSwingSymmetry.viewFit).toBe('primary')
+
+    // `stepWidth` is front-primary too, and unlike arm swing it produces a value on this fixture
+    // (whose arms are rigid), so it shows the whole effect: measured, no longer excluded, and
+    // discounted for the residual doubt — strictly between what the ambiguous row and the front
+    // row would each have given it alone.
+    expect(result.stepWidth.viewFit).toBe('primary')
+    expect(result.stepWidth.value).not.toBeNull()
+    const asAmbiguous = computeStepWidth(frames, 'ambiguous', DEFAULT_HEURISTICS_CONFIG)
+    const asFront = computeStepWidth(frames, 'front', DEFAULT_HEURISTICS_CONFIG)
+    expect(asAmbiguous.viewFit).toBe('unsuitable')
+    expect(result.stepWidth.confidence).toBeGreaterThan(asAmbiguous.confidence)
+    expect(result.stepWidth.confidence).toBeLessThan(asFront.confidence)
+
+    // The sagittal metrics are unsuitable from both views still standing, so they stay excluded.
+    expect(result.trunkLean.viewFit).toBe('unsuitable')
+    expect(result.overstriding.viewFit).toBe('unsuitable')
+    expect(result.kneeFlexion.viewFit).toBe('unsuitable')
+    expect(result.footStrikePattern.viewFit).toBe('unsuitable')
+    expect(result.verticalRatio.viewFit).toBe('unsuitable')
+  })
+
+  it('degrades in both directions on a genuinely ambiguous clip', () => {
+    // Both signals dead-centre of their undecided bands: BSR 0.425, SER ~0.6. Half the mass is
+    // honest ambiguity and the rest splits evenly, so neither view's primary metrics are granted
+    // a measurable fit — the same outcome the flat ambiguous row gives today, reached without
+    // pretending the clip is one label.
+    const frames = withBilateralSpread(
+      generateSyntheticGait({ ...PARAMS, strideAmplitudePx: 45 }),
+      0.425 * 150,
+    )
+
+    const result = computeFormHeuristics(frames)
+
+    expect(result.view.view).toBe('ambiguous')
+    expect(result.view.plausibility.ambiguous).toBeCloseTo(0.5, 6)
+    expect(result.view.plausibility.side).toBeCloseTo(0.25, 1)
+    expect(result.view.plausibility.front).toBeCloseTo(0.25, 1)
+
+    // Side-primary and front-primary alike: excluded, neither favoured.
+    expect(result.trunkLean.viewFit).toBe('unsuitable')
+    expect(result.overstriding.viewFit).toBe('unsuitable')
+    expect(result.kneeFlexion.viewFit).toBe('unsuitable')
+    expect(result.footStrikePattern.viewFit).toBe('unsuitable')
+    expect(result.armSwingSymmetry.viewFit).toBe('unsuitable')
+    expect(result.stepWidth.viewFit).toBe('unsuitable')
+    // View-tolerant metrics still report, as they do from any view.
+    expect(result.verticalOscillation.viewFit).toBe('tolerated')
+    expect(result.cadence.viewFit).toBe('tolerated')
   })
 })

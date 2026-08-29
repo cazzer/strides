@@ -29,8 +29,36 @@ import { median } from './mathUtils'
  */
 export const MIN_EXEMPLAR_QUALITY = 0.5
 
-/** At most this many exemplars per metric. A ghosted pair counts as ONE — it produces one image. */
+/** At most this many exemplars per metric. A ghosted pair counts as ONE — it produces one image.
+ *
+ * Unaffected by `MetricExemplar.alternates`: an exemplar's alternates are other ways to draw THAT
+ * exemplar, so they describe the same one image and do not spend against this budget. */
 export const MAX_EXEMPLARS_PER_METRIC = 2
+
+/**
+ * How many ranked ends `selectExtremePairs` keeps on EACH side of the metric's median, and thus how
+ * many pairs a range exemplar can offer: at most this squared.
+ *
+ * **Bounded per SIDE, not per pair, and that is the load-bearing part.** The consumer walking this
+ * list is testing whether a pair can be drawn as one legible image, and a pair fails that because
+ * of WHERE ITS ENDS SIT. A list of the best N pairs ranked purely by quality can be one
+ * positionally-unlucky end paired against N partners — which is exactly the failure this exists for
+ * (this repo's reference side-view clip puts `trunkLean`'s best-scoring end at the frame's right
+ * edge). A per-side bound structurally guarantees this many DISTINCT alternatives for each end, so
+ * neither end alone can exhaust the list.
+ *
+ * A bound is needed at all because `pairQuality` is a minimum, which is what let the winner be
+ * found with no search: `max over pairs of min(q_high, q_low)` is `min(max q_high, max q_low)`, so
+ * the per-side argmax IS the argmax pair. Wanting the next-best DRAWABLE pair breaks that identity —
+ * drawability is not separable across the two sides — so the ordering has to be over pairs, and the
+ * unbounded pair count is quadratic: ~59 eligible instants on that same clip is ~870 pairs.
+ *
+ * Six rather than four because the fallback only has to find ONE admissible partner and two more
+ * ends per side cost two sort entries. Six rather than sixteen because the list rides on
+ * `FormHeuristicsResult`, which lives in React state and is grafted across passes, and 36 small
+ * objects per range metric is already generous for a mechanism whose expected depth is one.
+ */
+export const EXEMPLAR_PAIR_ENDS_PER_SIDE = 6
 
 /**
  * Below this many per-instance values there is no distribution to judge an instant against — a
@@ -191,6 +219,171 @@ export function pairQuality(a: number, b: number): number {
   return Math.min(a, b)
 }
 
+/** The two ends of a range exemplar, already ordered for drawing. */
+export interface ExtremePair<T> {
+  /** The end further from the metric's median — drawn at full opacity, because a range ghost is
+   * *about* its far end. */
+  base: T
+  /** The nearer end, ghosted over the base. */
+  ghost: T
+  /** `pairQuality` of the two ends' own scores. */
+  quality: number
+}
+
+interface RankedEnd<T> {
+  candidate: T
+  value: number
+  quality: number
+  /** Distance from the metric's median, the tie-break — and the base/ghost decision. */
+  deviation: number
+}
+
+/**
+ * Orders ONE side's ends, best first — quality, then distance from the median.
+ *
+ * Ties are common, not exotic: with no usable distribution every typicality term is the flat 0.5
+ * fallback, so an entire candidate set can score identically. Breaking toward the more extreme
+ * instant is what makes ranking a strict generalisation of picking the value extreme — on a clip
+ * whose candidates are all equally well tracked the two rules select the same pair.
+ *
+ * Applied with a STABLE sort, so a candidate tying on both keys keeps its arrival order and the
+ * head of the side is the same end an accumulate-the-best-so-far loop would have kept.
+ */
+function compareEnds<T>(a: RankedEnd<T>, b: RankedEnd<T>): number {
+  if (a.quality !== b.quality) return b.quality - a.quality
+  return b.deviation - a.deviation
+}
+
+/**
+ * Picks the two ends of a RANGE exemplar — the pair whose ghost says "this metric measured
+ * anywhere from here to here" — by RANKING every candidate on the quality it would actually be
+ * emitted with, and taking the best-scoring one at each end.
+ *
+ * The order matters and is the whole point. Taking the raw argmax/argmin of the metric's own value
+ * and scoring THAT afterwards makes the score a veto on one pre-chosen frame rather than a ranking
+ * over many: `pairQuality` is a minimum, so a single badly-tracked instant sitting at the value
+ * extreme takes the pair to zero and gates out a metric that had plenty of well-tracked candidates
+ * the selection never looked at. Measured on this repo's own reference clip, `trunkLean`'s
+ * most-forward instant had all four torso seeds interpolated (`detectionFactor` 0) while 18 other
+ * instants cleared the typicality ramp — and the metric emitted nothing.
+ *
+ * **The median split is not an extra rule, it is the range itself.** For an extreme instant
+ * typicality reads |value − median|, blind to direction, so an unconstrained "two best scores"
+ * would happily return two instants from the same end and ghost a frame against its near-twin.
+ * Each end is therefore drawn from its own side of the metric's median. That is also EXACTLY the
+ * best-scoring valid pair rather than a proxy for it: `pairQuality` is a minimum of two
+ * independent scores, so `max over pairs of min(q_high, q_low)` is `min(max q_high, max q_low)` —
+ * the per-side argmax IS the argmax pair, with no search.
+ *
+ * Sides are taken inclusively so an instant sitting exactly ON the median is eligible for either
+ * end rather than silently ineligible for both. With a usable distribution such an instant scores
+ * 0 for this role and never wins anyway; with an unusable one it can, and dropping it would have
+ * narrowed coverage for no statable reason.
+ *
+ * Ranking runs AFTER the hard rejects, never instead of them: `scoreExemplarInstant` returns
+ * `null` for an instant with no derivable crop or one beyond the outlier bound, and those are
+ * skipped as ineligible rather than merely ranked low — so this can never promote a tracking
+ * glitch into the picture.
+ *
+ * Returns `null` when there is no honest range to show: nothing eligible on one side, or both ends
+ * landing on the same instant or the same value (a clip whose measurement never varied has no
+ * range, and ghosting a frame against itself would depict one).
+ */
+export function selectExtremePair<T>(
+  candidates: readonly T[],
+  toInstant: (candidate: T) => ExemplarInstant,
+  distribution: ExemplarDistribution,
+): ExtremePair<T> | null {
+  return selectExtremePairs(candidates, toInstant, distribution, 1)[0] ?? null
+}
+
+/**
+ * Every pair worth offering, best first — `selectExtremePair`'s winner at the head, then the pairs
+ * it beat.
+ *
+ * **Why a list at all.** Whether a pair can be DRAWN as one legible image is decided against the
+ * subject's pixel geometry and a set of display constants (a padding multiplier, a minimum crop
+ * side, a maximum growth ratio) whose derivations are about a card thumbnail, not about running
+ * form. This module holds none of them and must not: the unit suite runs where `getContext('2d')`
+ * returns `null` by deliberate choice, so that geometry decisions cannot hide inside draw calls.
+ * The layer that does hold them therefore gets a ranked list to walk, and answers drawability
+ * itself. Returning only the winner made one un-drawable pair gate a metric out entirely, with
+ * plenty of drawable pairs never considered — the same "a score vetoes one pre-chosen pick instead
+ * of ranking many" defect the per-instant ranking above exists to fix, one level up.
+ *
+ * **The head is provably `selectExtremePair`'s answer**, which is why that function is implemented
+ * as this one with `endsPerSide` 1 rather than kept alongside it. Each side is ordered by
+ * `compareEnds`, so index 0 of each side is the end an accumulate-the-best loop would have kept;
+ * pairs tying on `pairQuality` break on the SUM OF THE TWO ENDS' OWN PER-SIDE RANKS, and `0 + 0` is
+ * that sum's unique minimum. The tempting alternative — break ties on the widest total deviation —
+ * would silently change which pair every clip renders: a lower-quality end can carry a larger
+ * deviation, so it can tie on the minimum and outrank the winner.
+ *
+ * Ranking is exact within the bound rather than approximate. `EXEMPLAR_PAIR_ENDS_PER_SIDE` keeps
+ * the retained set small enough to enumerate in full, so there is no best-first frontier and hence
+ * no monotonicity obligation on that tie-break.
+ *
+ * Everything the single-pair rule established is preserved per pair: candidates are ranked by
+ * `scoreExemplarInstant`, whose `null` (no derivable crop; beyond the outlier bound) skips a
+ * candidate as INELIGIBLE rather than ranking it low, so no alternative can promote a tracking
+ * glitch; each pair still draws one end from each side of the median, inclusively, so every entry
+ * depicts a range rather than two views of one end; and base/ghost is still the further/nearer end.
+ *
+ * A pair whose two ends share a value is SKIPPED and the next considered, where the single-pair
+ * rule returned `null` outright. Since `high.value >= median >= low.value`, that can only mean both
+ * ends sat exactly ON the median (which also covers their being one and the same candidate), and
+ * such a pair depicts no range. Skipping cannot change the one-pair case: with one end retained per
+ * side there is no next pair, and the result is empty exactly as before.
+ */
+export function selectExtremePairs<T>(
+  candidates: readonly T[],
+  toInstant: (candidate: T) => ExemplarInstant,
+  distribution: ExemplarDistribution,
+  endsPerSide: number = EXEMPLAR_PAIR_ENDS_PER_SIDE,
+): ExtremePair<T>[] {
+  const highs: RankedEnd<T>[] = []
+  const lows: RankedEnd<T>[] = []
+
+  for (const candidate of candidates) {
+    const instant = toInstant(candidate)
+    // A context instant carries no value, so it has no side of the median to be an end of.
+    if (instant.value === undefined) continue
+    const quality = scoreExemplarInstant(instant, 'extreme', distribution)
+    if (quality === null) continue
+
+    const end: RankedEnd<T> = {
+      candidate,
+      value: instant.value,
+      quality,
+      deviation: Math.abs(instant.value - distribution.median),
+    }
+    if (instant.value >= distribution.median) highs.push(end)
+    if (instant.value <= distribution.median) lows.push(end)
+  }
+
+  const rankedHighs = [...highs].sort(compareEnds).slice(0, endsPerSide)
+  const rankedLows = [...lows].sort(compareEnds).slice(0, endsPerSide)
+
+  const ranked: Array<{ pair: ExtremePair<T>; rankSum: number }> = []
+  rankedHighs.forEach((high, highRank) => {
+    rankedLows.forEach((low, lowRank) => {
+      if (high.value === low.value) return
+      const [base, ghost] = high.deviation >= low.deviation ? [high, low] : [low, high]
+      ranked.push({
+        pair: {
+          base: base.candidate,
+          ghost: ghost.candidate,
+          quality: pairQuality(high.quality, low.quality),
+        },
+        rankSum: highRank + lowRank,
+      })
+    })
+  })
+
+  ranked.sort((a, b) => b.pair.quality - a.pair.quality || a.rankSum - b.rankSum)
+  return ranked.map((entry) => entry.pair)
+}
+
 /**
  * Constructs the opposite-side instant pair the step-width metrics need and do not already have.
  * Those metrics measure each strike independently against the hip midline, and `detectFootstrikes`
@@ -253,6 +446,32 @@ export function cropKeypoints(
  * subtlety. The layer that genuinely needs to tell those apart is the plan layer, which has its
  * own discriminated no-evidence result for it.
  */
+/**
+ * The one place a ranked list of pairs is folded into the winner-plus-alternates shape a metric
+ * emits — shared so the two range metrics cannot build it differently.
+ *
+ * `ranked` is `selectExtremePairs`' output already rendered into exemplars, best first. The head
+ * becomes the emitted exemplar and the rest hang off it as `alternates`, so a range metric still
+ * emits exactly ONE `MetricExemplar` and `MAX_EXEMPLARS_PER_METRIC` keeps counting images.
+ *
+ * Alternates are gated on `MIN_EXEMPLAR_QUALITY` HERE, unlike the head, which `selectExemplars`
+ * gates as it always has. Two reasons they cannot simply ride along ungated: `MetricExemplar`'s own
+ * `quality` contract says the number is never below that threshold, and a pair scoring under it is
+ * not evidence merely because a better pair turned out to be undrawable — the fallback exists to
+ * find another pair worth showing, not to lower the bar when it cannot.
+ *
+ * The `alternates` key is OMITTED rather than set to an empty array when nothing survives, matching
+ * how `exemplars` itself is absent rather than empty on `MetricResult`.
+ */
+export function attachPairAlternates(ranked: MetricExemplar[]): MetricExemplar[] {
+  if (ranked.length === 0) return []
+  const [best, ...rest] = ranked
+  const alternates = rest.filter(
+    (alternate) => alternate.quality >= MIN_EXEMPLAR_QUALITY,
+  )
+  return [alternates.length > 0 ? { ...best, alternates } : best]
+}
+
 export function selectExemplars(candidates: MetricExemplar[]): MetricExemplar[] | undefined {
   const kept = candidates
     .filter((candidate) => candidate.quality >= MIN_EXEMPLAR_QUALITY)

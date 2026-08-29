@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import type { KeypointName } from '../pose/types'
+import type { RobustPoseFrame } from '../pose/robustness/types'
 import { computeOverstriding } from './overstriding'
+import { MIN_EXEMPLAR_QUALITY } from './exemplars'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildStrikeFrames } from './__fixtures__/strikeFrames'
 import { buildFrame } from './__fixtures__/testFrames'
@@ -77,6 +80,27 @@ describe('computeOverstriding', () => {
   })
 })
 
+/**
+ * Marks the seed keypoints of strike `index`'s own frame `'interpolated'` — coordinates, and so
+ * the measured ratio at that strike, untouched. `buildStrikeFrames` peaks each strike on the
+ * middle frame of its 10-frame block.
+ */
+function withInterpolatedStrike(frames: RobustPoseFrame[], index: number): RobustPoseFrame[] {
+  const seed: KeypointName[] = ['left_ankle', 'left_hip', 'right_hip']
+  return frames.map((frame, i) =>
+    i === index * 10 + 5
+      ? {
+          ...frame,
+          keypoints: frame.keypoints.map((keypoint) =>
+            seed.includes(keypoint.name) && keypoint.status === 'detected'
+              ? { ...keypoint, status: 'interpolated' as const, score: 0.5 }
+              : keypoint,
+          ),
+        }
+      : frame,
+  )
+}
+
 describe('computeOverstriding exemplars', () => {
   it('ghosts the furthest-reaching strike against the closest-landing one', () => {
     // Offsets / 150px torso -> ratios 0.5, 0.5, 0.4, 0.5, 0.5, 0.6, 0.5. Strikes land on the
@@ -114,6 +138,55 @@ describe('computeOverstriding exemplars', () => {
     const [evidence] = computeOverstriding(frames, 'side').exemplars!
 
     expect(evidence.cropKeypoints).toEqual(['left_ankle', 'left_hip', 'right_hip', 'left_knee'])
+  })
+
+  it('falls back to the next-furthest strike when the furthest one is interpolated', () => {
+    // Ratios 0.4, 0.45, 0.5, 0.5, 0.55, 0.6, 0.64 -> median 0.5, MAD 0.05, outlier bound 0.15.
+    // The 0.64 strike survives the bound and is the value argmax, but its ankle and hips are
+    // interpolated, so it scores 0 and would take the whole pair to zero under rank-by-value.
+    const frames = withInterpolatedStrike(
+      buildStrikeFrames({ ankleOffsetsPx: [60, 67.5, 75, 75, 82.5, 90, 96] }),
+      6,
+    )
+
+    const result = computeOverstriding(frames, 'side')
+    const [evidence] = result.exemplars!
+
+    expect(result.exemplars).toHaveLength(1)
+    expect(evidence.timestamp).toBeCloseTo(55 / 30, 10) // the 0.6 strike, detected
+    expect(evidence.pairedTimestamp).toBeCloseTo(5 / 30, 10) // the 0.4 strike
+    expect(evidence.quality).toBeCloseTo(0.1 / 0.15, 6)
+  })
+
+  it('derives each alternate pair\'s foot identity from that pair, not from the winner', () => {
+    // The alternates exist so the evidence layer can fall back when the winner cannot be drawn —
+    // which means every one of them has to be a complete, independently renderable exemplar. Foot
+    // identity is the field most easily got wrong by copying the winner's: `side` is present only
+    // when a pair's two strikes happen to share a foot, and that is a property of the pair.
+    const frames = buildStrikeFrames({ ankleOffsetsPx: [75, 75, 60, 75, 75, 90, 75] })
+
+    const [evidence] = computeOverstriding(frames, 'side').exemplars!
+
+    // Head unchanged: still the 0.6 strike ghosted against the 0.4 one.
+    expect(evidence.timestamp).toBeCloseTo(55 / 30, 10)
+    expect(evidence.alternates!.length).toBeGreaterThan(0)
+    for (const alternate of evidence.alternates!) {
+      expect(alternate.kind).toBe('overstrideRange')
+      expect(alternate.quality).toBeLessThanOrEqual(evidence.quality)
+      expect(alternate.quality).toBeGreaterThanOrEqual(MIN_EXEMPLAR_QUALITY)
+      expect(alternate.pairedTimestamp).toBeDefined()
+      expect(alternate.measuredSide).toBeDefined()
+      expect(alternate.pairedMeasuredSide).toBeDefined()
+      // `side` is a PAIR-level claim, so it may only be present when the pair's two feet agree.
+      if (alternate.side !== undefined) {
+        expect(alternate.side).toBe(alternate.measuredSide)
+        expect(alternate.measuredSide).toBe(alternate.pairedMeasuredSide)
+      }
+      expect(alternate.alternates).toBeUndefined()
+      // A pair really is a pair: an alternate that ghosted an instant against itself would depict
+      // no range at all.
+      expect(alternate.pairedTimestamp).not.toBe(alternate.timestamp)
+    }
   })
 
   it('emits nothing on a clip whose strikes all land in the same place', () => {

@@ -134,4 +134,49 @@ describe('detectView', () => {
     expect(detectView(wildlyPlacedHead)).toEqual(baseline)
     expect(detectView(unrecoverableHead)).toEqual(baseline)
   })
+
+  it('reports a one-hot plausibility for every clip it commits to a label', () => {
+    // The invariant the gating change rests on: committing needs both signals strictly inside one
+    // view's regions, which is exactly when both of `computeViewPlausibility`'s supports saturate.
+    // So a labelled clip is gated by that same label at full strength, and `resolveViewFitTable`
+    // is a no-op there.
+    const side = detectView(
+      generateSyntheticGait({ ...BASE_PARAMS, strideAmplitudePx: 80, view: 'side' }),
+    )
+    const front = detectView(
+      generateSyntheticGait({ ...BASE_PARAMS, strideAmplitudePx: 80, view: 'front' }),
+    )
+
+    expect(side.plausibility).toEqual({ side: 1, front: 0, ambiguous: 0 })
+    expect(front.plausibility).toEqual({ side: 0, front: 1, ambiguous: 0 })
+  })
+
+  it('reports an all-ambiguous plausibility when the two signals disagree', () => {
+    const frames = generateSyntheticGait({
+      ...BASE_PARAMS,
+      strideAmplitudePx: 20,
+      view: 'side',
+    })
+
+    const result = detectView(frames)
+
+    expect(result.view).toBe('ambiguous')
+    expect(result.plausibility).toEqual({ side: 0, front: 0, ambiguous: 1 })
+  })
+
+  it('reports an all-ambiguous plausibility below the coverage floor and on empty input', () => {
+    // Coverage gates the plausibility rather than weighting it: with too little body scale to
+    // classify from, no view is supported at all.
+    const resolvable = buildFrame({
+      left_shoulder: { x: -5, y: 0 },
+      right_shoulder: { x: 5, y: 0 },
+      left_hip: { x: -5, y: 100 },
+      right_hip: { x: 5, y: 100 },
+    })
+    const unresolvable = buildFrame({})
+    const frames = [resolvable, unresolvable, unresolvable, unresolvable, unresolvable]
+
+    expect(detectView(frames).plausibility).toEqual({ side: 0, front: 0, ambiguous: 1 })
+    expect(detectView([]).plausibility).toEqual({ side: 0, front: 0, ambiguous: 1 })
+  })
 })

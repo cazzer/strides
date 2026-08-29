@@ -10,7 +10,10 @@ import type { BoundingBoxPx } from '../pose/backends/movenetCrop'
 import { computeCropRect } from '../pose/backends/movenetCrop'
 import type { VideoMetadata } from '../video/types'
 import { buildFrame } from '../heuristics/__fixtures__/testFrames'
-import { MIN_EXEMPLAR_QUALITY } from '../heuristics/exemplars'
+import {
+  MAX_EXEMPLARS_PER_METRIC,
+  MIN_EXEMPLAR_QUALITY,
+} from '../heuristics/exemplars'
 import { estimateBodyScale } from '../heuristics/bodyScale'
 import { estimateTravelDirection } from '../heuristics/travelDirection'
 import { trimToPresenceWindow } from '../heuristics/presenceWindow'
@@ -34,6 +37,7 @@ import {
   boundingBoxOfPoints,
   computeEvidenceCropRect,
   evidenceOutputSide,
+  evidenceCropSideDemand,
   evidencePairCropGrowth,
   evidenceSnapToleranceSeconds,
   evidenceTravelDirection,
@@ -42,6 +46,7 @@ import {
   isTooFarApartPair,
   planClipEvidence,
   planExemplarFrames,
+  planExemplarWithFallback,
   planMetricEvidence,
   resolveExemplarFrames,
   resolveInstantKeypoints,
@@ -96,6 +101,25 @@ function hipFrame(
  */
 function separatedPair(ghostY: number): RobustPoseFrame[] {
   return [hipFrame(0, 500, 540), hipFrame(0.1, 700, ghostY)]
+}
+
+/**
+ * A 0.1 s grid whose subject moves 200 px per sample, so a pair's separation — and therefore
+ * whether `isTooFarApartPair` rejects it — is a pure function of how many samples apart its two
+ * instants are chosen. That is what a fallback test needs: one exemplar's worth of instants where
+ * some pairings are drawable and others are not.
+ *
+ * The arithmetic, so a future edit can stay inside it: two default 100 px-wide hip boxes `s` px
+ * apart union to `100 + s`, and against a solo crop pinned at the 320 px floor the growth is
+ * `max((100 + s) × 1.6, 320) / 320`. One sample apart (`s` = 200) reads 1.5 and is drawn; TWO
+ * samples apart (`s` = 400) reads exactly 2.5 and is rejected, `EVIDENCE_MAX_PAIR_CROP_GROWTH`
+ * being inclusive; three apart reads 3.5. The 5 px of vertical drift per sample keeps the boxes
+ * from being byte-identical in shape without materially moving any of those numbers.
+ */
+function crossingFrames(): RobustPoseFrame[] {
+  return [0, 1, 2, 3].map((i) =>
+    hipFrame(Number((i * 0.1).toFixed(2)), 500 + i * 200, 540 + i * 5),
+  )
 }
 
 /**
@@ -192,6 +216,7 @@ function heuristicsResult(
   return {
     view: {
       view: 'side',
+      plausibility: { side: 1, front: 0, ambiguous: 0 },
       confidence: 1,
       diagnostics: {
         bilateralSpreadRatio: 0.1,
@@ -661,7 +686,12 @@ describe('evidencePairCropGrowth / isTooFarApartPair', () => {
   const LOPSIDED = [box(200, 296, 303), box(1034, 225, 553)] as const
 
   it('reproduces the measured growth of all three live pairs', () => {
-    expect(evidencePairCropGrowth(BROKEN[0], BROKEN[1], HD)).toBeCloseTo(3.375, 3)
+    // 5.815, not the 3.375 `strides-ac9.11` recorded: that reading was `1080 / 320` exactly —
+    // union at the frame cap over solo at the floor — and `strides-492` reads the crop each side
+    // DEMANDS instead, which uncaps the numerator. The broken pair moves AWAY from the threshold.
+    expect(evidencePairCropGrowth(BROKEN[0], BROKEN[1], HD)).toBeCloseTo(5.815, 3)
+    // Both legible pairs are byte-unchanged: neither union comes near a 4K clip's 2160 cap, so
+    // there was nothing for the cap to hide, and the calibration bracket's lower side is untouched.
     // 2.0675, which is what the probe's 3-decimal `2.068` was rounded from.
     expect(
       evidencePairCropGrowth(STRIDE_PAIR[0], STRIDE_PAIR[1], UHD),
@@ -695,16 +725,9 @@ describe('evidencePairCropGrowth / isTooFarApartPair', () => {
   })
 
   it('takes the LARGER of the two single crops, so a lopsided pair is judged on its better half', () => {
-    // Against its SMALLER half the legible `kneeFlexion` pair reads ~3.50 — worse than the broken
-    // one's 3.375 — so a `min` reading does not merely blur the boundary, it inverts it.
-    const soloSide = (b: BoundingBoxPx) =>
-      computeCropRect(
-        b,
-        UHD.width,
-        UHD.height,
-        EVIDENCE_CROP_PADDING_MULTIPLIER,
-        EVIDENCE_CROP_MIN_SIDE_PX,
-      ).side
+    // Against its SMALLER half the legible `kneeFlexion` pair reads ~3.50, which is 40% past the
+    // threshold — so a `min` reading would DROP a picture two reviewers called clearly readable,
+    // while the `max` reading keeps it at 1.915.
     const union: BoundingBoxPx = {
       minX: LOPSIDED[0].minX,
       minY: Math.min(LOPSIDED[0].minY, LOPSIDED[1].minY),
@@ -712,10 +735,15 @@ describe('evidencePairCropGrowth / isTooFarApartPair', () => {
       maxY: Math.max(LOPSIDED[0].maxY, LOPSIDED[1].maxY),
     }
     const minReading =
-      soloSide(union) /
-      Math.min(soloSide(LOPSIDED[0]), soloSide(LOPSIDED[1]))
-    expect(minReading).toBeGreaterThan(
-      evidencePairCropGrowth(BROKEN[0], BROKEN[1], HD)!,
+      evidenceCropSideDemand(union) /
+      Math.min(
+        evidenceCropSideDemand(LOPSIDED[0]),
+        evidenceCropSideDemand(LOPSIDED[1]),
+      )
+    expect(minReading).toBeCloseTo(3.495, 3)
+    expect(minReading).toBeGreaterThan(EVIDENCE_MAX_PAIR_CROP_GROWTH)
+    expect(evidencePairCropGrowth(LOPSIDED[0], LOPSIDED[1], UHD)!).toBeLessThan(
+      EVIDENCE_MAX_PAIR_CROP_GROWTH,
     )
     // Order cannot matter: `max` is symmetric, and which instant is base is the metric's choice.
     expect(evidencePairCropGrowth(LOPSIDED[1], LOPSIDED[0], UHD)).toEqual(
@@ -742,16 +770,111 @@ describe('evidencePairCropGrowth / isTooFarApartPair', () => {
     )
   })
 
-  it('cannot fire on a source too small to crop, where the cap binds on both sides', () => {
-    // `computeCropRect` caps every crop at `min(frameWidth, frameHeight)`, so on a small clip the
-    // pair's crop and the single's are the SAME rect and the ratio collapses to 1. A criterion
-    // written on the cap itself — the visible symptom of #71 — would instead delete every ghost on
-    // every webcam clip.
+  it('cannot fire on a small source — the FLOOR bounds it there, not the cap', () => {
+    // `strides-492` took the frame cap out of this measure, so the small-source safety the old
+    // comment credited to the cap has to come from somewhere else. It does, and from the clamp that
+    // genuinely cancels: the union's long side cannot exceed the frame's own larger dimension `D`,
+    // while the denominator sits on the 320 px floor for any subject a small frame can hold — so
+    // growth is bounded by `D × 1.6 / 320`, reaching 2.5 only at `D ≥ 500`. On 320×240 the ceiling
+    // is 1.6, and this guard cannot fire there at any separation, for any subject size.
     const tiny: EvidenceFrameSize = { width: 320, height: 240 }
-    expect(
-      evidencePairCropGrowth(BROKEN[0], BROKEN[1], tiny),
-    ).toBeCloseTo(1, 10)
-    expect(isTooFarApartPair(BROKEN[0], BROKEN[1], tiny)).toBe(false)
+    const inFrame = (left: number, w: number, h: number): BoundingBoxPx => ({
+      minX: left,
+      minY: 20,
+      maxX: left + w,
+      maxY: 20 + h,
+    })
+    const ordinary = [inFrame(20, 40, 120), inFrame(70, 40, 120)] as const
+    expect(evidencePairCropGrowth(ordinary[0], ordinary[1], tiny)).toBeCloseTo(
+      1,
+      10,
+    )
+    expect(isTooFarApartPair(ordinary[0], ordinary[1], tiny)).toBe(false)
+
+    // Opposite edges of the frame: the worst pair a 320 px-wide source can produce.
+    const worst = [inFrame(0, 40, 120), inFrame(280, 40, 120)] as const
+    expect(evidencePairCropGrowth(worst[0], worst[1], tiny)).toBeCloseTo(
+      (tiny.width * EVIDENCE_CROP_PADDING_MULTIPLIER) /
+        EVIDENCE_CROP_MIN_SIDE_PX,
+      10,
+    )
+    expect(isTooFarApartPair(worst[0], worst[1], tiny)).toBe(false)
+
+    // A larger subject only raises the denominator, so the ceiling holds across subject scale.
+    const big = [inFrame(0, 100, 200), inFrame(220, 100, 200)] as const
+    expect(evidencePairCropGrowth(big[0], big[1], tiny)!).toBeLessThan(
+      EVIDENCE_MAX_PAIR_CROP_GROWTH,
+    )
+  })
+
+  it('sees separation on a 4K frame, where the cap used to erase it', () => {
+    // `strides-492`'s measurement, reproduced. A 320×1240 full-body box on 3840×2160 demands a
+    // 1984 px solo crop, so the union hits the 2160 cap almost immediately — under the capped
+    // formula HALF A FRAME apart and OPPOSITE EDGES both read 1.0887, and the worst pair possible
+    // scored 1.09 against a threshold of 2.5. These three must now be distinct and increasing.
+    const body = (left: number) => box(left, 320, 1240)
+    const adjacent = evidencePairCropGrowth(body(0), body(320), UHD)!
+    const halfFrame = evidencePairCropGrowth(body(0), body(1920), UHD)!
+    const oppositeEdges = evidencePairCropGrowth(body(0), body(3520), UHD)!
+
+    expect(adjacent).toBeCloseTo(1, 10)
+    expect(halfFrame).toBeCloseTo(1.8065, 4)
+    expect(oppositeEdges).toBeCloseTo(3.0968, 4)
+    expect(adjacent).toBeLessThan(halfFrame)
+    expect(halfFrame).toBeLessThan(oppositeEdges)
+
+    // The whole point: the worst pair on the clip is now rejected.
+    expect(oppositeEdges).toBeGreaterThan(EVIDENCE_MAX_PAIR_CROP_GROWTH)
+    expect(isTooFarApartPair(body(0), body(3520), UHD)).toBe(true)
+    expect(isTooFarApartPair(body(0), body(320), UHD)).toBe(false)
+
+    // Both saturated readings the ticket measured, so the regression is pinned from the other side
+    // too: under the capped formula these two were the SAME number.
+    const capped = (a: BoundingBoxPx, b: BoundingBoxPx) => {
+      const side = (bx: BoundingBoxPx) =>
+        computeCropRect(
+          bx,
+          UHD.width,
+          UHD.height,
+          EVIDENCE_CROP_PADDING_MULTIPLIER,
+          EVIDENCE_CROP_MIN_SIDE_PX,
+        ).side
+      return (
+        side({
+          minX: Math.min(a.minX, b.minX),
+          minY: Math.min(a.minY, b.minY),
+          maxX: Math.max(a.maxX, b.maxX),
+          maxY: Math.max(a.maxY, b.maxY),
+        }) / Math.max(side(a), side(b))
+      )
+    }
+    expect(capped(body(0), body(1920))).toBeCloseTo(
+      capped(body(0), body(3520)),
+      10,
+    )
+  })
+
+  it('equals `computeCropRect`\'s own side wherever the cap does not bind', () => {
+    // `evidenceCropSideDemand` re-derives two lines of `computeCropRect` rather than calling it, so
+    // the padding and the floor could drift apart from the crop that is actually drawn. They must
+    // agree everywhere the only clause they differ on is inactive.
+    const cases: Array<[BoundingBoxPx, EvidenceFrameSize]> = [
+      [box(300, 400, 400), UHD],
+      [box(300, 34, 79), HD],
+      [box(200, 296, 303), UHD],
+      [STRIDE_PAIR[1], UHD],
+    ]
+    for (const [b, frame] of cases) {
+      const drawn = computeCropRect(
+        b,
+        frame.width,
+        frame.height,
+        EVIDENCE_CROP_PADDING_MULTIPLIER,
+        EVIDENCE_CROP_MIN_SIDE_PX,
+      ).side
+      expect(drawn).toBeLessThan(Math.min(frame.width, frame.height))
+      expect(evidenceCropSideDemand(b)).toBeCloseTo(drawn, 10)
+    }
   })
 
   it('cannot fire on two small boxes the 320 px floor already frames together', () => {
@@ -791,6 +914,9 @@ describe('planExemplarFrames', () => {
       base: { timestamp: 0.5, opacity: EVIDENCE_BASE_OPACITY },
       ghost: null,
       demotedFromPair: false,
+      // No ghost is drawn, so there is no growth — `null`, not the 1 an unghosted image would
+      // trivially score.
+      cropGrowth: null,
     })
   })
 
@@ -828,6 +954,29 @@ describe('planExemplarFrames', () => {
     expect(plan?.crop).toEqual(
       computeEvidenceCropRect(paired, [...HIP_SEED], HD),
     )
+    // The reading `isTooFarApartPair` just cleared, carried on the plan so `[evidence-coverage]`
+    // can report what this image actually cost without a probe patch (`strides-492`).
+    // `separatedPair`'s two 100 px hip pairs sit 200 px apart, so each instant demands the 320 px
+    // floor on its own and the union demands 300 x 1.6 = 480.
+    expect(plan?.cropGrowth).toBeCloseTo(
+      (300 * EVIDENCE_CROP_PADDING_MULTIPLIER) / EVIDENCE_CROP_MIN_SIDE_PX,
+      10,
+    )
+    expect(plan!.cropGrowth!).toBeLessThan(EVIDENCE_MAX_PAIR_CROP_GROWTH)
+  })
+
+  it('reports no growth for a pair that demoted to its base', () => {
+    // Two indistinguishable instants collapse to one drawn frame, and an image with no ghost has
+    // no ghosting cost to report.
+    const plan = planExemplarFrames(
+      'stepWidth',
+      exemplar({ kind: 'stepWidthStrike', timestamp: 0, pairedTimestamp: 0.01 }),
+      [hipFrame(0, 500, 540), hipFrame(0.01, 500, 540)],
+      HD,
+      0.05,
+    )
+    expect(plan?.demotedFromPair).toBe(true)
+    expect(plan?.cropGrowth).toBeNull()
   })
 
   it('resolves annotation inputs for BOTH instants of a pair, at each instant', () => {
@@ -1208,7 +1357,141 @@ describe('planExemplarFrames', () => {
   })
 })
 
+describe('planExemplarWithFallback', () => {
+  const FRAMES = crossingFrames()
+  /** `crossingFrames`' median interval is 0.1 s, so this is what `planMetricEvidence` derives. */
+  const TOLERANCE = 0.05
+
+  function range(
+    timestamp: number,
+    pairedTimestamp: number,
+    quality: number,
+    alternates?: MetricExemplar[],
+  ): MetricExemplar {
+    return exemplar({
+      timestamp,
+      pairedTimestamp,
+      quality,
+      ...(alternates === undefined ? {} : { alternates }),
+    })
+  }
+
+  const planFor = (candidate: MetricExemplar) =>
+    planExemplarWithFallback('trunkLean', candidate, FRAMES, HD, TOLERANCE)
+
+  it('draws the winner and reports no alternative when the winner is drawable', () => {
+    // One sample apart: growth 1.5, comfortably inside the guard. The alternative exists purely so
+    // that "it walked past the winner" would be observable if it happened.
+    const plan = planFor(range(0, 0.1, 0.9, [range(0.1, 0.2, 0.6)]))
+
+    expect(plan!.base.timestamp).toBe(0)
+    expect(plan!.ghost!.timestamp).toBeCloseTo(0.1, 10)
+    expect(plan!.quality).toBe(0.9)
+    expect(plan!.cropGrowth).toBeCloseTo(1.5, 10)
+  })
+
+  it('falls back past every undrawable pair to the best-ranked drawable one', () => {
+    // Winner three samples apart (growth 3.5) and first alternative two apart (exactly 2.5, the
+    // inclusive boundary) — both rejected — so the walk has to reach the third entry.
+    const plan = planFor(
+      range(0, 0.3, 0.9, [range(0, 0.2, 0.7), range(0, 0.1, 0.6)]),
+    )
+
+    expect(plan).not.toBeNull()
+    expect(plan!.base.timestamp).toBe(0)
+    expect(plan!.ghost!.timestamp).toBeCloseTo(0.1, 10)
+  })
+
+  it('reports the pair it drew, never the pair it rejected', () => {
+    // The whole point of the walk being observable: `quality` and `cropGrowth` ride to the
+    // `[evidence-coverage]` line, and a reader told about the winner would be told about an image
+    // that was never rendered.
+    const plan = planFor(range(0, 0.3, 0.9, [range(0, 0.1, 0.6)]))
+
+    expect(plan!.quality).toBe(0.6)
+    expect(plan!.cropGrowth).toBeCloseTo(1.5, 10)
+    expect(plan!.ghost!.timestamp).not.toBeCloseTo(0.3, 10)
+  })
+
+  it('falls back on a failure that is not the far-apart guard', () => {
+    // A ghost outside the snap tolerance collapses the pair, and a range kind is dropped rather
+    // than demoted — undrawable for a completely different reason, and just as recoverable.
+    const plan = planFor(range(0, 9, 0.9, [range(0, 0.1, 0.6)]))
+
+    expect(plan!.ghost!.timestamp).toBeCloseTo(0.1, 10)
+    expect(plan!.demotedFromPair).toBe(false)
+  })
+
+  it('is null when no offered pair can be drawn', () => {
+    // The honest empty result: falling back is not permission to render something that failed a
+    // drop rule.
+    expect(planFor(range(0, 0.3, 0.9, [range(0, 0.2, 0.7)]))).toBeNull()
+    expect(planFor(range(0, 0.3, 0.9))).toBeNull()
+  })
+
+  it('will not fall back onto a pair below the shared minimum quality', () => {
+    const belowGate = range(0, 0.1, MIN_EXEMPLAR_QUALITY - 0.001)
+
+    expect(planFor(range(0, 0.3, 0.9, [belowGate]))).toBeNull()
+  })
+
+  it('leaves a single-instant exemplar alone', () => {
+    // No `pairedTimestamp`, so nothing to fall back from — and `alternates` is absent on every
+    // exemplar this repo emits that is not a range.
+    const plan = planFor(exemplar({ kind: 'footStrike', timestamp: 0.1, quality: 0.9 }))
+
+    expect(plan!.ghost).toBeNull()
+    expect(plan!.base.timestamp).toBeCloseTo(0.1, 10)
+  })
+})
+
 describe('planMetricEvidence', () => {
+  it('spends one slot per exemplar however many alternatives each carries', () => {
+    // Alternatives are other ways to draw ONE image, so they must not reach the budget as if they
+    // were extra exemplars. Every winner here is rejected by the far-apart guard and every
+    // alternative is drawable, so all three exemplars produce an image and the cap is what bites.
+    const frames = crossingFrames()
+    const withAlternates = (quality: number) =>
+      exemplar({
+        timestamp: 0,
+        pairedTimestamp: 0.3,
+        quality,
+        alternates: [
+          exemplar({ timestamp: 0, pairedTimestamp: 0.2, quality: quality - 0.05 }),
+          exemplar({ timestamp: 0, pairedTimestamp: 0.1, quality: quality - 0.1 }),
+        ],
+      })
+
+    const plan = planOf(
+      metricResult('trunkLean', {
+        exemplars: [withAlternates(0.9), withAlternates(0.8), withAlternates(0.7)],
+      }),
+      frames,
+    )
+
+    expect(plan.status).toBe('planned')
+    expect(plan.status === 'planned' && plan.items).toHaveLength(MAX_EXEMPLARS_PER_METRIC)
+  })
+
+  it('reports all-gated-out when no exemplar offers a drawable pair', () => {
+    const plan = planOf(
+      metricResult('trunkLean', {
+        exemplars: [
+          exemplar({
+            timestamp: 0,
+            pairedTimestamp: 0.3,
+            quality: 0.9,
+            alternates: [exemplar({ timestamp: 0, pairedTimestamp: 0.2, quality: 0.7 })],
+          }),
+        ],
+      }),
+      crossingFrames(),
+    )
+
+    expect(reasonOf(plan)).toBe('all-gated-out')
+  })
+
+
   const frames = sampledFrames()
 
   it('plans the surviving exemplars in the order the metric emitted them', () => {
@@ -1456,13 +1739,19 @@ describe('summarizeEvidenceCoverage', () => {
           demotedFromPair: false,
           // Union across the two drawn frames: 700..960 px wide, padded by 1.6.
           cropSidePx: 260 * EVIDENCE_CROP_PADDING_MULTIPLIER,
+          // Each instant's own 100 px-wide hip pair pads to 160 and lands on the 320 px floor, so
+          // ghosting cost this image 416/320.
+          cropGrowth:
+            (260 * EVIDENCE_CROP_PADDING_MULTIPLIER) / EVIDENCE_CROP_MIN_SIDE_PX,
         },
       ],
     })
     // The step-width pair collapsed onto one frame, so it reports as a demoted single.
+    // A demoted pair draws no ghost, so there is no growth to report — `null`, never 1.
     expect(payload.clips[0].metrics.stepWidth?.exemplars[0]).toMatchObject({
       pairedTimestamp: null,
       demotedFromPair: true,
+      cropGrowth: null,
     })
     expect(payload.clips[0].metrics.cadence).toEqual({
       status: 'no-evidence',
