@@ -35,6 +35,32 @@ export type VerticalOscillationSignal = 'hipMid' | 'earMid'
 
 export type ViewFit = 'primary' | 'tolerated' | 'unsuitable'
 
+/** One cell of `HeuristicsConfig.viewFitTable`: how a metric fares from one view, and the
+ * confidence multiplier that goes with it. Named (rather than left inline in the table type)
+ * because `viewPlausibility.ts` builds these values as well as reading them. */
+export interface ViewFitEntry {
+  fit: ViewFit
+  multiplier: number
+}
+
+/**
+ * How plausible each view is given the clip's own geometry — the quantity that actually gates
+ * every metric's view fit (`viewPlausibility.ts`, `computeFormHeuristics`), as distinct from
+ * `ViewDetectionResult.view`'s single committed LABEL and from `ViewDetectionResult.confidence`'s
+ * distance-past-threshold margin.
+ *
+ * The three components sum to 1, `ambiguous` holding whatever mass neither committed view claims.
+ * It is a normalized weighting derived from the same two signals view detection already computes,
+ * NOT a calibrated probability — the same disclaimer `computeMetricConfidence` carries about its
+ * own output. What it is good for is exactly one thing: deciding how much of each row of
+ * `viewFitTable` a metric should be judged by.
+ */
+export interface ViewPlausibility {
+  side: number
+  front: number
+  ambiguous: number
+}
+
 export type MetricId =
   | 'verticalOscillation'
   | 'verticalRatio'
@@ -50,8 +76,21 @@ export type MetricId =
 
 export interface ViewDetectionResult {
   view: View
-  /** 0..1, confidence in the LABEL itself, not in any downstream metric's output. */
+  /** 0..1, confidence in the LABEL itself, not in any downstream metric's output.
+   *
+   * A MARGIN, not a plausibility: how far each signal sits past the threshold its committed view
+   * required, which is a different question from how sure we are of this view versus the other
+   * one. Nothing gates on it — `plausibility` below is what reaches metric confidence — and it is
+   * NOT comparable across labels, because the two directions saturate at anatomically very
+   * different points (see `propagate-view-confidence-to-metric-gating`'s design.md; a front label
+   * cannot reach ~0.5 on real footage while a side label routinely reads 0.75+). Read it as a
+   * diagnostic of signal margin only; `fuseFormHeuristicsResults`'s cross-clip view pick still
+   * compares it and inherits that asymmetry. */
   confidence: number
+  /** Which views the clip's own geometry actually supports, summing to 1 — the quantity every
+   * metric's view fit is resolved against. `view` above is its committed-label summary and is
+   * inert for gating. */
+  plausibility: ViewPlausibility
   diagnostics: {
     bilateralSpreadRatio: number | null
     sagittalExcursionRatio: number | null
@@ -527,10 +566,14 @@ export interface HeuristicsConfig {
   /** A fully-interpolated input is trusted at this fraction relative to a fully-detected one. */
   interpolationConfidencePenalty: number // 0.5 — fully-interpolated input trusted at 50%
 
-  viewFitTable: Record<
-    MetricId,
-    Record<View, { fit: ViewFit; multiplier: number }>
-  >
+  /**
+   * Per-metric, per-view fit and confidence multiplier. Authored per view LABEL, but a clip is
+   * not obliged to be one label: `computeFormHeuristics` resolves this table against the clip's
+   * `ViewPlausibility` before any metric reads it (`viewPlausibility.ts`), so what a metric
+   * actually sees is a blend of these rows. The rows below are therefore the ENDPOINTS of the
+   * gating, not the values every clip gets.
+   */
+  viewFitTable: Record<MetricId, Record<View, ViewFitEntry>>
 }
 
 export const DEFAULT_VIEW_FIT_TABLE: HeuristicsConfig['viewFitTable'] = {

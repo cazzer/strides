@@ -48,6 +48,7 @@ function makeHeuristics(overrides: Partial<FormHeuristicsResult> = {}): FormHeur
   return {
     view: {
       view: 'side',
+      plausibility: { side: 1, front: 0, ambiguous: 0 },
       confidence: 0.9,
       diagnostics: {
         bilateralSpreadRatio: 0.2,

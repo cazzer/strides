@@ -28,6 +28,7 @@ function makeHeuristics(confidence = 1): FormHeuristicsResult {
     view: {
       view: 'side',
       confidence,
+      plausibility: { side: 1, front: 0, ambiguous: 0 },
       diagnostics: { bilateralSpreadRatio: null, sagittalExcursionRatio: null, frameCoverage: 1 },
     },
     verticalOscillation: { ...makeMetric('verticalOscillation', confidence), series: [], fit: null },
