@@ -925,7 +925,7 @@ describe('MetricsPanel — evidence inside the card', () => {
     expect(caption).not.toHaveTextContent(/same runner/i)
     expect(
       within(card).getByRole('img', {
-        name: /Trunk lean: Most forward trunk lean.*Two frames of the same runner blended into one image\./i,
+        name: /Trunk lean: Most forward trunk lean.*Two frames of the same runner blended into one image: the first instant named above is shown solid, the second faded behind it\./i,
       }),
     ).toBeInTheDocument()
   })

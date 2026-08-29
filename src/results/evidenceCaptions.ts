@@ -47,13 +47,22 @@ export function captionFor(plan: EvidenceFramePlan): string {
 }
 
 /** Standalone description for the canvas, which carries no text of its own. Names the metric
- * because alt text is read out of context, unlike the caption sitting under its section heading. */
+ * because alt text is read out of context, unlike the caption sitting under its section heading.
+ *
+ * A blended image is not symmetric and has not been since `weight-evidence-ghost-below-base`: the
+ * photograph is weighted toward its base instant and the base's annotation marks are drawn solid
+ * against the ghost's faded ones. A sighted reader gets "this one is the subject" twice over, from
+ * the weighting and from the marks. Neither reaches a reader who cannot see the image, so the shape
+ * sentence says which of the two the card's measurement is about. Every paired `label` this repo
+ * emits is "X, ghosted against Y" with the base first — see `bounceInstants`, `kneeFlexion`,
+ * `overstriding`, `trunkLean` — so naming the first instant is general, not a per-metric claim. */
 export function altFor(plan: EvidenceFramePlan): string {
   const side = plan.side === undefined ? '' : ` (${plan.side} side)`
   const shape =
     plan.ghost === null
       ? 'A single frame from the clip.'
-      : 'Two frames of the same runner blended into one image.'
+      : 'Two frames of the same runner blended into one image: the first instant named above is ' +
+        'shown solid, the second faded behind it.'
   return `${METRIC_LABELS[plan.metric]}${side}: ${plan.label}. ${shape}`
 }
 
