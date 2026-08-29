@@ -25,31 +25,35 @@ const ONE_FRAME_TRAVEL_TOLERANCE = 100 / 30
 const MIN_STRIDE_PX = EXPECTED_STRIDE_PX - ONE_FRAME_TRAVEL_TOLERANCE
 const MAX_STRIDE_PX = EXPECTED_STRIDE_PX + ONE_FRAME_TRAVEL_TOLERANCE
 
+const BOUNCE_HZ = 2.0
 /**
  * A clip whose ankle rhythm disagrees with its hip-bounce rhythm — the shape of the Demo 1 defect
  * this metric's period gate exists for, built deliberately rather than sampled.
  *
  * The hips bounce cleanly at `BOUNCE_HZ` (a grid frequency, so the fit lands on it exactly and its
- * R² is effectively 1), which makes the expected stride period `2 / BOUNCE_HZ = 1.0 s`. The left
- * ankle meanwhile peaks every 0.5 s — half that — exactly as it does on a real clip where
- * `detectFootstrikes` picks up a trailing-leg maximum between two genuine strikes. The right ankle
- * is flatlined so every candidate pair is a left-side one.
+ * R² is effectively 1), which makes the expected stride period `2 / BOUNCE_HZ = 1.0 s` = 30 frames
+ * at 30fps. `blockFrames` is the ankle-y rhythm's own period in frames, so `15` is a HALF-stride
+ * rhythm and `60` a DOUBLE-stride one — the two multiplicity errors, one either side of the truth.
+ * The right ankle is flatlined, well below the moving left one, which is why every surviving
+ * candidate is a RIGHT-side one: on the relative contact series the flat foot is the one that reads
+ * as being on the ground, and the left side's maxima are all negative and physically rejected.
  *
  * Everything else is deliberately healthy: torso length is a constant 100px, hip-x advances 8px a
  * frame so travel direction resolves, and the ankle bumps clear the prominence floor by 10x.
  */
-const BOUNCE_HZ = 2.0
-function framesWithHalfStrideAnkleRhythm(): RobustPoseFrame[] {
+function framesWithAnkleBlock(blockFrames: number): RobustPoseFrame[] {
   const fps = 30
   const frameCount = 120
-  const ankleBlock = 15 // 0.5s at 30fps -- HALF the 1.0s expected stride period
+  const ankleBlock = blockFrames
+  const rampFrames = ankleBlock / 2
   return Array.from({ length: frameCount }, (_, i) => {
     const t = i / fps
     const hipX = 200 + i * 8
     const hipY = 400 + 20 * Math.sin(2 * Math.PI * BOUNCE_HZ * t)
     // Triangle bump peaking mid-block, so each block contributes exactly one ankle-y maximum.
     const phase = i % ankleBlock
-    const ankleY = 600 + 50 * (phase <= 7 ? phase / 7 : (ankleBlock - phase) / 7)
+    const ankleY =
+      600 + 50 * (phase <= rampFrames ? phase / rampFrames : (ankleBlock - phase) / rampFrames)
     return buildFrame(
       {
         left_shoulder: { x: hipX - 5, y: hipY - 100 },
@@ -79,15 +83,16 @@ describe('computeVerticalRatio', () => {
     expect(result.unit).toBe('percent')
     expect(result.viewFit).toBe('primary')
     expect(result.confidence).toBeGreaterThan(0.9)
-    // The period gate rejects exactly the fixture's two edge artifacts and nothing else, so a value
-    // is still reported at full confidence -- and the exclusion is named rather than silent.
-    // `findLocalExtrema` manufactures an extremum at each run edge, giving this 4s clip a strike at
+    // No caveat at all now, where this used to name two rejected pairs. `findLocalExtrema`
+    // manufactures an extremum at each run edge, and this 4s clip used to carry both -- a strike at
     // t=0.0000 (0.5333s before the first real one) and one at t=3.9667 (0.6s after the last real
-    // one); at 170spm a stride is 0.7059s, so both bound a sub-stride interval and neither is a real
-    // gait cycle. Every one of the other 9 pairs lands within 4.2% of the expected period and
-    // survives -- the gate is not eating genuine strides here.
-    expect(result.caveat).toMatch(/2 detected stride pair\(s\) didn't last a full stride/)
-    expect(result.caveat).not.toMatch(/couldn't be read cleanly/)
+    // one), neither a real gait cycle. `detectFootstrikes` now drops both at source: its same-side
+    // spacing floor is one shortest-plausible stride (0.7059 / 1.15 = 0.6138s here) and each edge
+    // artifact sits 0.5333s / 0.6s from its neighbour, so the lower-amplitude of each pair loses.
+    // The period gate downstream is then left with 9 genuine pairs, all within 4.2% of the expected
+    // period, and nothing to reject. That the two rules agree about exactly which instants were
+    // spurious is the point -- the floor IS the gate's own lower band edge (`stridePeriod.ts`).
+    expect(result.caveat).toBeNull()
   })
 
   it('indeterminate travel direction reports null with the exact caveat prefix', () => {
@@ -137,11 +142,19 @@ describe('computeVerticalRatio', () => {
   })
 
   it('degrades honestly when no stride pair is period-consistent, naming the real cause', () => {
-    const frames = framesWithHalfStrideAnkleRhythm()
+    // A DOUBLE-stride ankle rhythm, not the half-stride one this test used to build. The halving
+    // direction can no longer reach this branch at all: `detectFootstrikes`' same-side spacing
+    // floor is the period gate's own lower band edge, computed from the same fitted step frequency
+    // on the same frames, so a sub-stride same-side pair is now impossible to construct through
+    // that path (`stridePeriod.ts`'s `shortestPlausibleStrideSeconds`). The gate's UPPER edge is
+    // what still bites — a missed footstrike, whose pair spans two strides — and that is what this
+    // fixture now exercises. Measured on it: two same-side pairs at 2.000s and 1.967s against an
+    // expected 1.0s, both rejected.
+    const frames = framesWithAnkleBlock(60)
 
     // The premise: without the gate this clip WOULD have reported a value, off a denominator
-    // spanning half a stride. That is the Demo 1 defect in miniature -- assert the premise so the
-    // test cannot silently degenerate into "some other gate rejected it".
+    // spanning two strides. Assert the premise so the test cannot silently degenerate into "some
+    // other gate rejected it".
     const bounce = analyzeHipBounce(frames, DEFAULT_HEURISTICS_CONFIG)
     expect(bounce.fit.ok).toBe(true)
     if (!bounce.fit.ok) return
@@ -175,7 +188,8 @@ describe('computeVerticalRatio', () => {
       framesFromHipTrace(noise.map((n, i) => ({ t: i / 30, y: 400 + 12 * n }))),
       // Fewer samples than the fit's floor, and a pure ramp at that.
       framesFromHipTrace([400, 401, 402, 403, 404].map((y, i) => ({ t: i / 30, y }))),
-      framesWithHalfStrideAnkleRhythm(),
+      framesWithAnkleBlock(15),
+      framesWithAnkleBlock(60),
       generateSyntheticGait({
         ...BASE_PARAMS,
         verticalBouncePx: 6,

@@ -7,6 +7,11 @@ import { detectFootstrikes } from './footstrikes'
 import type { FootstrikeCandidate } from './footstrikes'
 import { resolveMidpoint } from './keypoints'
 import { median } from './mathUtils'
+import {
+  STRIDE_PERIOD_TOLERANCE,
+  isPeriodConsistent,
+  resolveExpectedStridePeriodSeconds,
+} from './stridePeriod'
 
 export type StrideLengthFailureReason =
   | 'no-body-scale'
@@ -81,60 +86,11 @@ export interface StrideLengthOptions {
 const HIP_NAMES: [KeypointName, KeypointName] = ['left_hip', 'right_hip']
 
 /**
- * Half-width of step 4a's accept band for a candidate pair's elapsed TIME, as a fraction of the
- * expected stride period, applied **log-symmetrically**: a pair is kept when
- * `interval / expectedPeriod` lies in `[1 / (1 + tol), 1 + tol]`. Log-symmetric rather than
- * additive because the errors it exists to reject are multiplicative — roughly ½× when a spurious
- * extra strike shortens the interval, roughly 2× when a real strike is missed — and an additive
- * band would sit at different multiplicative distances from those two.
- *
- * ## Derivation (openspec `gate-stride-pairs-on-fitted-period`, design D4)
- *
- * A GENUINE same-side pair's measured interval differs from `2 / fit.frequencyHz` for four
- * independent reasons. Each as a standard deviation, in fractions of the stride period:
- *
- * | source | σ | why |
- * |---|---|---|
- * | stride-to-stride biological variability | 2.5% | stride-time CV in healthy running is reported in the low single digits (~1–3%, tighter in trained runners); 2.5% is the pessimistic end |
- * | footstrike-instant quantization | 2.7% | each strike snaps to a sampled frame, so the interval carries σ = Δt/√6 ≈ 0.41·Δt; at this repo's pessimistic live sampling (Δt ≈ 0.08 s) against a 1.2 s stride |
- * | fit frequency-grid resolution | 0.5% | `spectralFitFrequencyStepHz` 0.02 Hz, uniform within ±½ step → σ = 0.02/√12, worst case at the band's 1.2 Hz floor |
- * | fit frequency estimation error beyond the grid | 2.0% | measured: Demo 1's fitted 1.52 Hz against a frame-counted 1.546 Hz is 1.7%, rounded up |
- *
- * RSS → σ_total = 4.22%, and **3σ = 12.7%**, rounded up to a round 15%. A 3σ envelope (rather than
- * 2σ) because the two errors cost differently: wrongly rejecting a genuine stride costs one sample
- * and, at worst, an honest null; wrongly accepting a half-stride puts a 2×-wrong number on screen
- * at high confidence.
- *
- * **Insensitive to the one soft input.** Recomputing across the whole reported CV range gives 3σ =
- * 10.7% (CV 1.0%) … 13.4% (CV 3.0%) — the entire range rounds to the same 15%.
- *
- * **Sanity bounds.** The accept band is `[0.870, 1.150]`. Its edges sit 0.554 nats from BOTH wrong
- * multiplicities (0.5× and 2×) against a band half-width of 0.140 nats, so the band is ~4× narrower
- * than its distance to the nearest thing it must exclude — and any tolerance at all must stay under
- * √2 − 1 = 41.4%, or it would reach them. On the low side, a 5% deviation (larger than any single
- * term above) is at ratio 0.95, comfortably inside.
- *
- * **Not fitted to a clip.** Demo 1's offending pairs sit at 0.790× and 0.426×; rejecting the larger
- * needs only `tol < 26.5%`, which every value the derivation could have produced (10.7–15%)
- * satisfies. The outcome on that clip is determined by the physics, not by this number's exact
- * value. No existing tuned threshold was moved to make this work.
+ * Re-exported so this module's public surface is unchanged by the constant's move to
+ * `stridePeriod.ts` — it lives there because `footstrikes.ts` now reads it too, and a constant
+ * declared here and read there would be an import cycle. See that module for the derivation.
  */
-export const STRIDE_PERIOD_TOLERANCE = 0.15
-
-/** `2 / stepFrequencyHz` — a stride is exactly two steps — or `null` when no usable reference was
- * supplied, which makes step 4a inert. */
-function resolveExpectedStridePeriodSeconds(stepFrequencyHz: number | undefined): number | null {
-  if (stepFrequencyHz === undefined) return null
-  if (!Number.isFinite(stepFrequencyHz) || stepFrequencyHz <= 0) return null
-  return 2 / stepFrequencyHz
-}
-
-/** Step 4a's predicate, stated as the band rather than as a `Math.log` so the bounds are readable:
- * `[expected / (1 + tol), expected * (1 + tol)]` is exactly the log-symmetric band. */
-function isPeriodConsistent(intervalSeconds: number, expectedStridePeriodSeconds: number): boolean {
-  const ratio = intervalSeconds / expectedStridePeriodSeconds
-  return ratio >= 1 / (1 + STRIDE_PERIOD_TOLERANCE) && ratio <= 1 + STRIDE_PERIOD_TOLERANCE
-}
+export { STRIDE_PERIOD_TOLERANCE }
 
 /**
  * Pure extractor — no confidence/caveat policy, that's `verticalRatio.ts`'s job (same division of

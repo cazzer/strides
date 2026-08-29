@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { detectFootstrikes } from './footstrikes'
 import { findLocalExtrema } from './extrema'
+import { analyzeHipBounce } from './hipBounce'
 import { resolvePoint } from './keypoints'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { HeuristicsConfig } from './types'
@@ -69,9 +70,12 @@ function bodyY(phase: number, shape: GaitShape): number {
  *   the body's vertical oscillation at FULL strength. The relative offset is chosen to match the
  *   pinned stance values at toe-off and at the next touchdown, which keeps the trace continuous.
  *
- * This asymmetry — the body's bounce present in the swinging foot's screen position and absent
- * from the planted one's — is not a fixture quirk. It is exactly why a single ankle's raw screen
- * y is an unreliable footstrike signal, and exactly what differencing the two ankles removes.
+ * This asymmetry — the body's bounce present in the swinging foot's screen position and absent from
+ * the planted one's — is not a fixture quirk, and it cuts both ways. It is why a single ankle's raw
+ * screen y is an unreliable footstrike signal, AND it is the reason differencing the two ankles
+ * cannot remove the bounce either: subtraction only cancels a term both feet carry, and in running
+ * exactly one of them ever does. `ARTIFACT_SHAPE` below turns that residual up until it produces a
+ * second confirmed maximum inside a single stance.
  */
 function ankleY(phase: number, shape: GaitShape): number {
   const p = wrapPhase(phase)
@@ -151,6 +155,21 @@ function rawAnkleYMaxima(frames: RobustPoseFrame[], side: 'left' | 'right') {
   const series = frames.map((frame) => {
     const ankle = resolvePoint(frame, side === 'left' ? 'left_ankle' : 'right_ankle')
     return ankle === null ? null : { t: frame.timestamp, v: ankle.y }
+  })
+  const minProminenceAbs = DEFAULT_HEURISTICS_CONFIG.footstrikeMinProminenceRatio * TORSO_PX
+  return findLocalExtrema(series, minProminenceAbs).filter((extremum) => extremum.kind === 'max')
+}
+
+/** The prominence-confirmed maxima of one side's CONTACT series — this ankle's y minus the other's,
+ * the signal `detectFootstrikes` actually reads. Used to show what selection had to choose between,
+ * never as the thing under test. */
+function contactSeriesMaxima(frames: RobustPoseFrame[], side: 'left' | 'right') {
+  const own = side === 'left' ? 'left_ankle' : 'right_ankle'
+  const other = side === 'left' ? 'right_ankle' : 'left_ankle'
+  const series = frames.map((frame) => {
+    const a = resolvePoint(frame, own)
+    const b = resolvePoint(frame, other)
+    return a === null || b === null ? null : { t: frame.timestamp, v: a.y - b.y }
   })
   const minProminenceAbs = DEFAULT_HEURISTICS_CONFIG.footstrikeMinProminenceRatio * TORSO_PX
   return findLocalExtrema(series, minProminenceAbs).filter((extremum) => extremum.kind === 'max')
@@ -277,6 +296,10 @@ describe('detectFootstrikes — ground contact vs. airborne ankle-y maxima', () 
    * ankle-y series orders touchdown against toe-off, so its argmax is decided by the scan's tie
    * handling rather than by the gait. */
   const FLAT_STANCE_SHAPE: GaitShape = { bounceHalfPx: 12, hangEnd: APEX, toeOffLiftPx: 0 }
+  /** The pessimistic case for the DIFFERENCED signal: a bouncier runner (36% of torso peak-to-peak)
+   * and a long mid-swing hang, which together leave the contact series genuinely multi-modal
+   * within a single stance. */
+  const ARTIFACT_SHAPE: GaitShape = { bounceHalfPx: 18, hangEnd: 0.9, toeOffLiftPx: 22 }
 
   it('does not emit a trailing leg’s secondary ankle-y maximum as a footstrike', () => {
     const frames = buildGait(TRAILING_LEG_SHAPE)
@@ -357,8 +380,53 @@ describe('detectFootstrikes — ground contact vs. airborne ankle-y maxima', () 
     ])
   })
 
-  it('reports every candidate within two sampled frames of a true touchdown, on all three shapes', () => {
-    for (const shape of [TRAILING_LEG_SHAPE, CLEAN_SHAPE, FLAT_STANCE_SHAPE]) {
+  it('keeps the contact and drops the toe-off hump when the contact series itself is multi-modal', () => {
+    // A bouncier runner (36% of torso peak-to-peak, deliberately beyond the 16-25% this repo has
+    // measured on its own three clips) with a long mid-swing hang. Differencing the two ankles does
+    // NOT remove the body's oscillation here, and cannot: during single support the planted foot
+    // carries none of it and the swinging foot carries all of it, so the contact series inherits it
+    // inverted and at full strength. Prominence is powerless against that — the bounce is several
+    // times the gate — which is exactly why selection is by amplitude instead.
+    const frames = buildGait(ARTIFACT_SHAPE)
+
+    // Three prominence-confirmed maxima per stride on the left, where there is one contact:
+    // the contact at frame 31, an artifact 10 frames later (one stance duration — the toe-off end
+    // of the same stance, where the body has come back up), and a third that is NEGATIVE, meaning
+    // the left foot was above the right and cannot have been the one on the ground.
+    const secondStride = contactSeriesMaxima(frames, 'left').filter(
+      (extremum) => extremum.index >= 30 && extremum.index < 60,
+    )
+    expect(secondStride.map((extremum) => extremum.index)).toEqual([31, 41, 53])
+    expect(secondStride[0].value).toBeGreaterThan(secondStride[1].value)
+    expect(secondStride[2].value).toBeLessThan(0)
+
+    // Only the contacts survive. The artifact loses on amplitude to the contact 0.40 s before it,
+    // which is inside this clip's own shortest plausible stride (2 / 1.66 Hz / 1.15 = 1.05 s).
+    expect(detectedFrames(frames)).toEqual([
+      ['left', 0],
+      ['right', 16],
+      ['left', 31],
+      ['right', 46],
+      ['left', 61],
+      ['right', 76],
+      ['left', 90],
+    ])
+  })
+
+  it('falls back to the configured interval floor when the clip has no fittable step rhythm', () => {
+    const frames = buildGait(CLEAN_SHAPE)
+
+    // CLEAN_SHAPE has no body oscillation at all, so the hip trace is flat and the shared spectral
+    // fit has nothing to lock onto. The rhythm-derived spacing floor is therefore unavailable and
+    // `footstrikeMinIntervalSeconds` is what binds — the behaviour that predates the derived floor.
+    // Asserted so the clean-signal test above is known to run on the FALLBACK path, not silently on
+    // a rhythm that happened to resolve.
+    expect(analyzeHipBounce(frames, DEFAULT_HEURISTICS_CONFIG).fit.ok).toBe(false)
+    expect(detectedFrames(frames)).toHaveLength(TRUE_CONTACT_FRAMES.length)
+  })
+
+  it('reports every candidate within two sampled frames of a true touchdown, on all four shapes', () => {
+    for (const shape of [TRAILING_LEG_SHAPE, CLEAN_SHAPE, FLAT_STANCE_SHAPE, ARTIFACT_SHAPE]) {
       const detected = detectedFrames(buildGait(shape))
       expect(detected).toHaveLength(TRUE_CONTACT_FRAMES.length)
       detected.forEach(([side, frameIndex], i) => {
