@@ -79,7 +79,12 @@ function buildHandFrames(ankleY: number[]): RobustPoseFrame[] {
         left_hip: { x: hipX - 5, y: 100 },
         right_hip: { x: hipX + 5, y: 100 },
         left_ankle: { x: hipX, y },
-        right_ankle: { x: hipX, y: 300 }, // flat -> zero right-side candidates, isolating the left side
+        // The right ankle is left UNRESOLVABLE rather than flatlined, which is what isolates the
+        // left side now that `detectFootstrikes` reads each ankle RELATIVE to the other one: a
+        // flat-but-present right ankle would make the right side's contact series a mirror of the
+        // left's and yield a full set of right-side candidates. With no right ankle at all there
+        // is no contralateral reference, `buildContactSeries` falls back to raw left ankle-y, and
+        // these hand-computed traces mean exactly what they did before.
       },
       i / 30,
     )
@@ -90,7 +95,8 @@ function buildHandFrames(ankleY: number[]): RobustPoseFrame[] {
  * The `StridePair`s a clean `normalAnkleTrace` clip should have produced, derived independently
  * from `detectFootstrikes` rather than read back off the result under test — so the two
  * whole-object assertions below keep doing real work now that `StrideLengthResult` carries its
- * pairs. `buildHandFrames` flatlines the right ankle, so every candidate is a left-side one.
+ * pairs. `buildHandFrames` leaves the right ankle unresolvable, so every candidate is a left-side
+ * one.
  */
 function expectedCleanPairs(frames: RobustPoseFrame[]) {
   const strikes = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG).filter(
