@@ -471,3 +471,132 @@ Stated before live verification, again, and again falsifiable.
 caveat says "extra footstrike instants were most likely detected mid-stance". That describes the
 halving mechanism, which is now the one direction that can no longer reach that branch. The wording
 is user-facing copy on another change's file, so it is reported rather than edited here.
+
+---
+
+## D15. Round 2 measured, and the phase residual is a limit of the signal — stopping here
+
+Round 2 fixed what it was built to fix and left one thing it structurally cannot.
+
+| prediction (D14) | outcome |
+|---|---|
+| 1 — ~4 instants, per-side spacing ≥ 1.14 s | **HELD.** 9 → 4. Same-side 1.16 s (left) and 1.56 s (right). |
+| 5 — `cadence` unmoved | **HELD.** 91.2 spm everywhere. |
+| 3 — `overstriding` median rises | **HELD** on all three clips: demo1 0.129→0.172, multiperson 0.0114→0.0697, demo2 −0.0719→+0.0151 (sign flip). |
+| 3 — its dispersion collapses | **FAILED.** demo1 widened, 49% → 73%. See D15.3. |
+| 2 — instants land within 1–2 frames of touchdown | **FAILED.** Offsets −0.06 / +0.24 / +0.24 / +0.16 s, i.e. 4–6 frames on three of four. |
+
+`verticalRatio` also became deterministic — 0.0353937 [0.0353716..0.0353937] in 3/3 trials, against
+round 1's 2/3-with-a-null — and `verticalOscillation`, `trunkLean` and `kneeFlexion` were
+bit-identical on all three clips.
+
+### D15.1 The lag is the contralateral swing apex, measured 1:1
+
+Newly available ground truth: stance on Demo 1 spans 0.36 s (contact B) and 0.44 s (contact C). A
++0.24 s offset therefore lands **55–67% through stance** — mid-to-late stance, which is the ticket's
+original complaint softened rather than removed.
+
+D6 predicted ~0.05 stride (≈0.066 s) of lag from the contralateral-swing-apex geometry. Measured is
+3.6× that, so the geometry was right and the *number* put into it was wrong. Sweeping the fixture's
+swing-apex phase and reading the emitted lag back out settles it:
+
+| fixture `apex` | contralateral apex after touchdown | emitted lag |
+|---|---|---|
+| 0.55 | 1.5 frames | **1** |
+| 0.60 | 3.0 | **3** |
+| 0.65 | 4.5 | **5** |
+| 0.69 | 5.7 | **6** |
+| 0.75 | 7.5 | **11** |
+
+The lag tracks the apex one for one. Demo 1's measured +0.24 s is 6 frames at 25 fps — the
+`apex = 0.69` row, a slow jogger's late swing apex, against the 0.55 D6 assumed. Nothing else in the
+model contributes: the residual is systematic within a clip (one value, repeated every stride) and
+moves only when the apex moves. Pinned in `footstrikes.test.ts`.
+
+### D15.2 Amplitude is the right selector for WHICH STRIDE and the wrong one for PHASE
+
+Stated plainly, because it is the finding:
+
+`d_S` is maximal when the two ankles are furthest apart vertically. During S's stance S is pinned to
+the ground, so that instant is whenever the OTHER ankle is highest — **the contralateral foot's swing
+apex**. That is a real, well-defined gait event. It is not touchdown, and it is not a fixed distance
+from touchdown: it sits 0.05–0.19 of a stride later depending on how the runner swings.
+
+So amplitude does exactly what D12 claimed for it — it picks the one contact-bearing feature per
+stride out of a multi-modal series, which is why the count went 9 → 4 and the rhythm came right — and
+it cannot do the other job, because the feature it picks is not centred on the event we want.
+
+**No offset can repair this.** The sweep spans 1 to 11 frames (0.04–0.44 s), wider than a whole
+stance phase, so a constant fitted to Demo 1 would be wrong on any runner whose swing apex falls
+elsewhere. That is not a reason to pick a better constant; it is a reason there is no constant.
+
+Every constant-free alternative on this signal was checked and each targets a different wrong event:
+
+| selector on `d` | what it actually marks | verdict |
+|---|---|---|
+| argmax `d` (shipped) | contralateral swing apex | late by 0.05–0.19 stride, runner-dependent |
+| argmax `d'` | fastest inter-leg separation, mid-descent | early by the foot's deceleration time, also runner-dependent |
+| zero crossing of `d` | the two ankles level, i.e. the legs crossing | midstance, further from touchdown than what ships |
+| walk back from the peak within a band | — | needs a band constant; D7 measured 45° of stride phase of movement on a smooth peak |
+| foot speed → 0 (ZUPT) | touchdown, correctly | needs a speed threshold; D7 measured only a ~2.5× plateau either side |
+
+### D15.3 The dispersion is the same residual, not a small-sample trade
+
+The round-2 note offered "fewer instants means each run's small sample swings more" as the likely
+read. That is plausible but it is probably not the dominant term, and the arithmetic says so.
+
+During stance the planted foot is fixed in the image while the hip advances, so `overstriding`'s
+per-instant ratio — `(ankle.x − hipMid.x) / torsoLengthPx` — falls at the runner's own speed measured
+in torso lengths per second. From this clip's own reported numbers: `verticalRatio` 0.0354 with VO at
+0.163 torso implies a stride of 4.6 torso ≈ 2.32 m, over 1.26 s → 1.84 m/s ÷ 0.504 m of torso ≈
+**3.7 torso lengths per second**.
+
+The within-trial phase scatter in round 2 is 0.30 s (−0.06 to +0.24). At 3.7 torso/s that is of order
+a whole torso length of ratio movement — several times the entire reported range [0.172..0.297]. Phase
+scatter alone over-explains the dispersion; sample size need not be invoked. The dispersion should
+therefore collapse if and only if the phase is fixed, which makes it a **symptom of D15.1 rather than
+an independent cost of the smaller set**.
+
+One falsifiable consequence, worth stating because it is uncomfortable: if the instants really are
+0.16–0.24 s into stance and the ratio really moves at ~3.7 torso/s, then a phase-correct
+`overstriding` on Demo 1 should read far above 0.172 — order 0.5–0.9 higher. If a future fix lands
+the phase and the value does *not* move that far, then one of the premises here is wrong (most likely
+that the ankle keypoint is stationary through stance), and that is worth knowing either way.
+
+### D15.4 Where a phase-correct detector would have to come from — not built
+
+The one direction that is derivable rather than fitted is a **different signal**: the fitted
+hip-bounce's own phase, which `spectralFit` already exposes.
+
+During flight the body's vertical acceleration is −g; during stance it is net upward. The sign flips
+exactly at touchdown and at toe-off, so the **inflection points of the vertical trajectory are the
+contact events**, and for the fitted sinusoid those sit a quarter cycle either side of each minimum.
+One touchdown per bounce cycle, which is one per step — the correct rate. Side assignment would still
+come from the ankles (`d > 0` names the lower foot), so this would keep what round 2 got right and
+replace only the timing.
+
+Error budget on Demo 1, from the clip's own measured stance durations: the model puts touchdown
+0.164 s before midstance, where the truth is 0.18 s (contact B) and 0.22 s (contact C) — so it would
+land **0.4 and 1.4 frames late**, against 4–6 frames today. No constant appears anywhere in that.
+
+Its weaknesses are real and would need their own round:
+- It assumes the bounce minimum coincides with midstance; in running the CoM low point is slightly
+  after midstance.
+- A single fitted sinusoid forces stance = flight = half a cycle. On Demo 1 stance is 0.36–0.44 s
+  against a flight of 0.22–0.30 s, and the errors above *are* that discrepancy.
+- It makes footstrike timing a pure function of the hip signal, so a clip whose fit is mediocre gets
+  mediocre timing. The `cadenceMinFitR2` gate would guard it, but the front-approach clip is exactly
+  where that is thinnest.
+- It inverts the architecture: `overstriding` and `footStrikePattern` would read geometry at
+  hip-derived instants.
+
+That is a different detector, not a repair of this one, and it deserves its own proposal, its own
+spec delta and its own live round rather than riding in on this change's momentum.
+
+### D15.5 Decision
+
+**Stopping.** The phase residual cannot be removed on this signal without a fitted constant, and the
+sweep in D15.1 shows no single constant could be correct anyway. Round 2's gains stand on their own —
+9 → 4 instants, correct rhythm, correct side alternation, a deterministic `verticalRatio`, no
+threshold moved and no constant added — and the residual is now pinned executably in the unit suite
+rather than described in prose. The follow-up is D15.4's signal, filed separately.
