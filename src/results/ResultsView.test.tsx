@@ -309,7 +309,7 @@ describe('ResultsView', () => {
       analysis: makeAnalysis({ phase: 'ready', heuristics: makeHeuristics() }),
     })
     expect(
-      screen.queryByText(/not measured for this clip/i),
+      screen.queryByText(/not measurable for this clip/i),
     ).not.toBeInTheDocument()
   })
 
@@ -326,7 +326,7 @@ describe('ResultsView', () => {
     // "lower-confidence results" banner text exists anywhere in ResultsView anymore. (Text
     // queries for the phrase would now be ambiguous: the tier-summary line repeats it, by
     // design — so both assertions scope by the section's accessible role.)
-    expect(screen.getByRole('region', { name: /not measured for this clip/i })).toHaveTextContent(
+    expect(screen.getByRole('region', { name: /not measurable for this clip/i })).toHaveTextContent(
       /trunk lean/i,
     )
     expect(screen.queryByText(/lower-confidence results/i)).not.toBeInTheDocument()

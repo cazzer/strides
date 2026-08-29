@@ -243,7 +243,7 @@ describe('MetricsPanel', () => {
     expect(screen.getByText('8.2 cm')).toBeInTheDocument()
     expect(screen.getAllByText(/high confidence/i).length).toBe(11)
     // No metric is excluded, so the excluded section doesn't render at all.
-    expect(screen.queryByText(/not measured for this clip/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/not measurable for this clip/i)).not.toBeInTheDocument()
     // footStrikePattern is the one deliberate exception: its caveat is always present, even in a
     // clean/high-confidence (tier-1) result, since it's a documented proxy end to end (see
     // footStrikePattern.ts) — so exactly one note renders here, not zero.
@@ -300,13 +300,13 @@ describe('MetricsPanel', () => {
     expect(screen.queryByText('Not measurable')).not.toBeInTheDocument()
     // Scoped to the excluded section specifically: no confidence label of any kind renders there,
     // only the name + reason text already asserted by the next test.
-    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
     expect(within(excludedSection).queryByText(/confidence/i)).not.toBeInTheDocument()
   })
 
   it('lists excluded metrics by name and reason only, in a labeled section', () => {
     render(<MetricsPanel heuristics={makeMixedTierResult()} />)
-    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
     expect(within(excludedSection).getByText('Trunk lean')).toBeInTheDocument()
     expect(within(excludedSection).getByText(/sagittal-plane measurement/i)).toBeInTheDocument()
     expect(within(excludedSection).getByText('Overstriding')).toBeInTheDocument()
@@ -316,10 +316,15 @@ describe('MetricsPanel', () => {
   })
 
   it('renders a tier-count summary line when any metric is caveated or excluded', () => {
-    render(<MetricsPanel heuristics={makeMixedTierResult()} />)
+    const { container } = render(<MetricsPanel heuristics={makeMixedTierResult()} />)
+    // The counts NEST: 8 tier-1 + 1 tier-2 = 9 metrics that got a card and show a number, with
+    // the caveated share parenthesised inside that total rather than subtracted from it. The
+    // assertion below deliberately reads the card count off the same render, because the whole
+    // point of the line is that it must not disagree with what is on screen.
+    expect(container.querySelectorAll('.metrics-panel__card').length).toBe(9)
     expect(
       screen.getByText(
-        '8 metrics measured · 1 with caveat · 2 not measured for this clip (listed below)',
+        '9 metrics measured (1 with caveat) · 2 not measurable for this clip (listed below)',
       ),
     ).toBeInTheDocument()
   })
@@ -366,7 +371,7 @@ describe('MetricsPanel', () => {
 
   it('preserves MetricId declaration order within the excluded section', () => {
     render(<MetricsPanel heuristics={makeMixedTierResult()} />)
-    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
     const names = within(excludedSection)
       .getAllByRole('listitem')
       .map((item) => item.querySelector('p')?.textContent)
@@ -389,7 +394,7 @@ describe('MetricsPanel', () => {
     render(<MetricsPanel heuristics={unavailable} />)
 
     expect(screen.queryByLabelText('Step width (cm)')).not.toBeInTheDocument()
-    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
     expect(within(excludedSection).getByText('Step width (cm)')).toBeInTheDocument()
     expect(
       within(excludedSection).getByText(/no real-world scale could be measured/i),
@@ -407,7 +412,7 @@ describe('MetricsPanel', () => {
 
     render(<MetricsPanel heuristics={heuristics} scalePassStatus="running" />)
 
-    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
     expect(
       within(excludedSection).getByText(
         'Measuring real-world scale with a second look at the clip…',
@@ -440,7 +445,7 @@ describe('MetricsPanel', () => {
     render(<MetricsPanel heuristics={unavailable} />)
 
     expect(screen.queryByLabelText('Vertical oscillation (cm)')).not.toBeInTheDocument()
-    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
     expect(within(excludedSection).getByText('Vertical oscillation (cm)')).toBeInTheDocument()
     expect(
       within(excludedSection).getByText(/no real-world scale could be measured/i),
@@ -468,7 +473,7 @@ describe('MetricsPanel', () => {
     expect(within(card).getByText(/low confidence/i)).toBeInTheDocument()
     expect(within(card).getByRole('note').textContent).toMatch(/scale coverage was low/i)
     // Nothing else is excluded in this fixture, so no excluded section renders at all.
-    expect(screen.queryByText(/not measured for this clip/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/not measurable for this clip/i)).not.toBeInTheDocument()
   })
 
   it('renders every metric of the track-demo bad-fit shape as a card -- low confidence never excludes', () => {
@@ -518,7 +523,7 @@ describe('MetricsPanel', () => {
     expect(screen.getByText('9.0%')).toBeInTheDocument()
     expect(screen.getByText('91 steps/min')).toBeInTheDocument()
 
-    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
     expect(within(excludedSection).getByText('Vertical oscillation (cm)')).toBeInTheDocument()
     expect(within(excludedSection).getByText('Arm swing symmetry')).toBeInTheDocument()
     expect(within(excludedSection).queryByText('Vertical oscillation')).not.toBeInTheDocument()
@@ -541,7 +546,11 @@ describe('MetricsPanel', () => {
 
     expect(screen.queryByLabelText('Arm swing symmetry')).not.toBeInTheDocument()
     expect(screen.queryByText('88.0%')).not.toBeInTheDocument()
-    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
+    // This metric IS the reason the section says "measurable" rather than "measured": its value
+    // was computed (0.88) and then set aside for the camera angle. A heading reading "not
+    // measured" would be false about the entry directly underneath it.
+    expect(screen.queryByText('Not measured for this clip')).not.toBeInTheDocument()
     expect(within(excludedSection).getByText('Arm swing symmetry')).toBeInTheDocument()
     expect(
       within(excludedSection).getByText(/not reliable from a side view/i),
@@ -559,7 +568,7 @@ describe('MetricsPanel', () => {
 
     render(<MetricsPanel heuristics={heuristics} scalePassStatus="running" />)
 
-    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
     expect(
       within(excludedSection).getByText(
         'Measuring real-world scale with a second look at the clip…',
@@ -582,7 +591,7 @@ describe('MetricsPanel', () => {
 
     render(<MetricsPanel heuristics={heuristics} scalePassStatus="failed" />)
 
-    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
     expect(
       within(excludedSection).getByText(
         "A second look at the clip couldn't measure real-world scale.",
@@ -605,7 +614,7 @@ describe('MetricsPanel', () => {
 
     render(<MetricsPanel heuristics={heuristics} />)
 
-    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
     expect(
       within(excludedSection).getByText(/no real-world scale could be measured/i),
     ).toBeInTheDocument()
@@ -664,7 +673,9 @@ describe('MetricsPanel', () => {
 
     render(<MetricsPanel heuristics={heuristics} />)
 
-    expect(screen.getByText('10 metrics measured · 1 with caveat')).toBeInTheDocument()
+    // Nothing is excluded here, so the total is every metric on the panel and the caveated one
+    // is counted inside it, not against it.
+    expect(screen.getByText('11 metrics measured (1 with caveat)')).toBeInTheDocument()
   })
 
   it('falls back to a generic reason for an excluded metric with no caveat text', () => {
@@ -683,7 +694,7 @@ describe('MetricsPanel', () => {
 
     render(<MetricsPanel heuristics={heuristics} />)
 
-    const excludedSection = screen.getByRole('region', { name: /not measured for this clip/i })
+    const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
     expect(within(excludedSection).getByText('Cadence')).toBeInTheDocument()
     expect(
       within(excludedSection).getByText('Not measurable for this clip.'),
