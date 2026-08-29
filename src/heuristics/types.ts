@@ -149,6 +149,31 @@ export interface MetricExemplar {
    * by the metric that measured them, never re-derived downstream from `MetricId`, so knowledge
    * of what a metric measured stays in the module that measures it. */
   cropKeypoints: KeypointName[]
+  /**
+   * Other ways to draw THIS exemplar, ranked below it by the same score that chose it — the pairs
+   * the metric considered and did not pick. Absent where a metric offers none.
+   *
+   * They exist because whether a pair can be drawn as one legible image is not something the
+   * measuring layer can decide: it depends on the subject's pixel geometry and on display constants
+   * (`EVIDENCE_MAX_PAIR_CROP_GROWTH` and friends) that live in the evidence layer and deliberately
+   * do not reach `src/heuristics/`. Without a list, one undrawable winner gated a metric's evidence
+   * out entirely while plenty of drawable pairs went unconsidered. The consumer walks
+   * `[exemplar, ...alternates]` and renders the first entry it can actually draw.
+   *
+   * **One level deep.** An alternate never carries alternates of its own, so a consumer may stop
+   * reading at the entry it selects.
+   *
+   * **Alternatives, not additional images.** These describe the same single image as their parent,
+   * so they do not spend against `MAX_EXEMPLARS_PER_METRIC` and at most one of them is ever
+   * rendered. They are a full `MetricExemplar` rather than some narrower record because nearly
+   * every field genuinely varies per pair — both timestamps, `quality`, `cropKeypoints` (context
+   * points are included only where they resolve in that pair's OWN frames) and, for `overstriding`,
+   * `side`/`measuredSide`/`pairedMeasuredSide`. Only `kind` and `label` are constant across them.
+   *
+   * Each one has already cleared `MIN_EXEMPLAR_QUALITY`, exactly like the exemplar it hangs off: a
+   * pair is not evidence merely because a better one could not be drawn.
+   */
+  alternates?: MetricExemplar[]
 }
 
 export interface MetricResult {

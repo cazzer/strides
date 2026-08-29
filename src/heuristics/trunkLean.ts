@@ -7,10 +7,11 @@ import { estimateTravelDirection } from './travelDirection'
 import { resolveMidpoint } from './keypoints'
 import { computeMetricConfidence } from './confidence'
 import {
+  attachPairAlternates,
   cropKeypoints,
   describeDistribution,
   selectExemplars,
-  selectExtremePair,
+  selectExtremePairs,
 } from './exemplars'
 import type { ExemplarDistribution } from './exemplars'
 import { median } from './mathUtils'
@@ -42,17 +43,24 @@ interface LeanSample {
  * The most forward-leaning frame ghosted against the most upright one — an EXTREME pair, since
  * this metric's picture is the range it measured, not its median.
  *
- * `selectExtremePair` does the load-bearing work: the extremes of a per-frame distribution are, on
+ * `selectExtremePairs` does the load-bearing work: the extremes of a per-frame distribution are, on
  * real footage, the frames most likely to be tracking glitches, so anything beyond the outlier
  * bound is dropped from consideration entirely, and the surviving candidates are then RANKED by
  * the quality they would be emitted with rather than by lean angle alone. A clip whose lean never
  * varies has no range to show and emits nothing rather than ghosting a frame against itself.
+ *
+ * It returns the pairs it BEAT as well as the winner, and they are carried as the emitted
+ * exemplar's `alternates`. This metric cannot tell whether the pair it likes best can be drawn as
+ * one legible image — that is decided from pixel geometry and display constants the evidence layer
+ * owns — and on this repo's own side-view reference clip the best-scoring pair puts the runner at
+ * opposite edges of a 4K frame. Offering the runners-up is what stops that one pair from taking the
+ * whole metric's evidence with it.
  */
 function buildExemplars(
   samples: LeanSample[],
   distribution: ExemplarDistribution,
 ): MetricExemplar[] {
-  const pair = selectExtremePair(
+  const pairs = selectExtremePairs(
     samples,
     (sample) => ({
       frame: sample.frame,
@@ -61,27 +69,24 @@ function buildExemplars(
     }),
     distribution,
   )
-  if (pair === null) return []
 
   // Base is the more extreme of the two, per the blend plan: a range ghost is *about* its far end,
   // so that is the frame drawn at full opacity. Usually the forward-lean frame, but not always —
   // a clip that spends most of itself leaning forward puts the upright frame further from the
   // median, and it is that frame the picture is really about.
-  const { base, ghost } = pair
-
-  return [
-    {
-      kind: 'trunkLeanRange',
+  return attachPairAlternates(
+    pairs.map(({ base, ghost, quality }) => ({
+      kind: 'trunkLeanRange' as const,
       timestamp: base.frame.timestamp,
       pairedTimestamp: ghost.frame.timestamp,
-      quality: pair.quality,
+      quality,
       label: 'Most forward trunk lean, ghosted against the most upright frame',
       cropKeypoints: cropKeypoints(EXEMPLAR_SEED_KEYPOINTS, EXEMPLAR_CONTEXT_KEYPOINTS, [
         base.frame,
         ghost.frame,
       ]),
-    },
-  ]
+    })),
+  )
 }
 
 function nullResult(

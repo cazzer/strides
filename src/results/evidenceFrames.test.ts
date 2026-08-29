@@ -10,7 +10,10 @@ import type { BoundingBoxPx } from '../pose/backends/movenetCrop'
 import { computeCropRect } from '../pose/backends/movenetCrop'
 import type { VideoMetadata } from '../video/types'
 import { buildFrame } from '../heuristics/__fixtures__/testFrames'
-import { MIN_EXEMPLAR_QUALITY } from '../heuristics/exemplars'
+import {
+  MAX_EXEMPLARS_PER_METRIC,
+  MIN_EXEMPLAR_QUALITY,
+} from '../heuristics/exemplars'
 import { estimateBodyScale } from '../heuristics/bodyScale'
 import { estimateTravelDirection } from '../heuristics/travelDirection'
 import { trimToPresenceWindow } from '../heuristics/presenceWindow'
@@ -43,6 +46,7 @@ import {
   isTooFarApartPair,
   planClipEvidence,
   planExemplarFrames,
+  planExemplarWithFallback,
   planMetricEvidence,
   resolveExemplarFrames,
   resolveInstantKeypoints,
@@ -97,6 +101,25 @@ function hipFrame(
  */
 function separatedPair(ghostY: number): RobustPoseFrame[] {
   return [hipFrame(0, 500, 540), hipFrame(0.1, 700, ghostY)]
+}
+
+/**
+ * A 0.1 s grid whose subject moves 200 px per sample, so a pair's separation — and therefore
+ * whether `isTooFarApartPair` rejects it — is a pure function of how many samples apart its two
+ * instants are chosen. That is what a fallback test needs: one exemplar's worth of instants where
+ * some pairings are drawable and others are not.
+ *
+ * The arithmetic, so a future edit can stay inside it: two default 100 px-wide hip boxes `s` px
+ * apart union to `100 + s`, and against a solo crop pinned at the 320 px floor the growth is
+ * `max((100 + s) × 1.6, 320) / 320`. One sample apart (`s` = 200) reads 1.5 and is drawn; TWO
+ * samples apart (`s` = 400) reads exactly 2.5 and is rejected, `EVIDENCE_MAX_PAIR_CROP_GROWTH`
+ * being inclusive; three apart reads 3.5. The 5 px of vertical drift per sample keeps the boxes
+ * from being byte-identical in shape without materially moving any of those numbers.
+ */
+function crossingFrames(): RobustPoseFrame[] {
+  return [0, 1, 2, 3].map((i) =>
+    hipFrame(Number((i * 0.1).toFixed(2)), 500 + i * 200, 540 + i * 5),
+  )
 }
 
 /**
@@ -1333,7 +1356,141 @@ describe('planExemplarFrames', () => {
   })
 })
 
+describe('planExemplarWithFallback', () => {
+  const FRAMES = crossingFrames()
+  /** `crossingFrames`' median interval is 0.1 s, so this is what `planMetricEvidence` derives. */
+  const TOLERANCE = 0.05
+
+  function range(
+    timestamp: number,
+    pairedTimestamp: number,
+    quality: number,
+    alternates?: MetricExemplar[],
+  ): MetricExemplar {
+    return exemplar({
+      timestamp,
+      pairedTimestamp,
+      quality,
+      ...(alternates === undefined ? {} : { alternates }),
+    })
+  }
+
+  const planFor = (candidate: MetricExemplar) =>
+    planExemplarWithFallback('trunkLean', candidate, FRAMES, HD, TOLERANCE)
+
+  it('draws the winner and reports no alternative when the winner is drawable', () => {
+    // One sample apart: growth 1.5, comfortably inside the guard. The alternative exists purely so
+    // that "it walked past the winner" would be observable if it happened.
+    const plan = planFor(range(0, 0.1, 0.9, [range(0.1, 0.2, 0.6)]))
+
+    expect(plan!.base.timestamp).toBe(0)
+    expect(plan!.ghost!.timestamp).toBeCloseTo(0.1, 10)
+    expect(plan!.quality).toBe(0.9)
+    expect(plan!.cropGrowth).toBeCloseTo(1.5, 10)
+  })
+
+  it('falls back past every undrawable pair to the best-ranked drawable one', () => {
+    // Winner three samples apart (growth 3.5) and first alternative two apart (exactly 2.5, the
+    // inclusive boundary) — both rejected — so the walk has to reach the third entry.
+    const plan = planFor(
+      range(0, 0.3, 0.9, [range(0, 0.2, 0.7), range(0, 0.1, 0.6)]),
+    )
+
+    expect(plan).not.toBeNull()
+    expect(plan!.base.timestamp).toBe(0)
+    expect(plan!.ghost!.timestamp).toBeCloseTo(0.1, 10)
+  })
+
+  it('reports the pair it drew, never the pair it rejected', () => {
+    // The whole point of the walk being observable: `quality` and `cropGrowth` ride to the
+    // `[evidence-coverage]` line, and a reader told about the winner would be told about an image
+    // that was never rendered.
+    const plan = planFor(range(0, 0.3, 0.9, [range(0, 0.1, 0.6)]))
+
+    expect(plan!.quality).toBe(0.6)
+    expect(plan!.cropGrowth).toBeCloseTo(1.5, 10)
+    expect(plan!.ghost!.timestamp).not.toBeCloseTo(0.3, 10)
+  })
+
+  it('falls back on a failure that is not the far-apart guard', () => {
+    // A ghost outside the snap tolerance collapses the pair, and a range kind is dropped rather
+    // than demoted — undrawable for a completely different reason, and just as recoverable.
+    const plan = planFor(range(0, 9, 0.9, [range(0, 0.1, 0.6)]))
+
+    expect(plan!.ghost!.timestamp).toBeCloseTo(0.1, 10)
+    expect(plan!.demotedFromPair).toBe(false)
+  })
+
+  it('is null when no offered pair can be drawn', () => {
+    // The honest empty result: falling back is not permission to render something that failed a
+    // drop rule.
+    expect(planFor(range(0, 0.3, 0.9, [range(0, 0.2, 0.7)]))).toBeNull()
+    expect(planFor(range(0, 0.3, 0.9))).toBeNull()
+  })
+
+  it('will not fall back onto a pair below the shared minimum quality', () => {
+    const belowGate = range(0, 0.1, MIN_EXEMPLAR_QUALITY - 0.001)
+
+    expect(planFor(range(0, 0.3, 0.9, [belowGate]))).toBeNull()
+  })
+
+  it('leaves a single-instant exemplar alone', () => {
+    // No `pairedTimestamp`, so nothing to fall back from — and `alternates` is absent on every
+    // exemplar this repo emits that is not a range.
+    const plan = planFor(exemplar({ kind: 'footStrike', timestamp: 0.1, quality: 0.9 }))
+
+    expect(plan!.ghost).toBeNull()
+    expect(plan!.base.timestamp).toBeCloseTo(0.1, 10)
+  })
+})
+
 describe('planMetricEvidence', () => {
+  it('spends one slot per exemplar however many alternatives each carries', () => {
+    // Alternatives are other ways to draw ONE image, so they must not reach the budget as if they
+    // were extra exemplars. Every winner here is rejected by the far-apart guard and every
+    // alternative is drawable, so all three exemplars produce an image and the cap is what bites.
+    const frames = crossingFrames()
+    const withAlternates = (quality: number) =>
+      exemplar({
+        timestamp: 0,
+        pairedTimestamp: 0.3,
+        quality,
+        alternates: [
+          exemplar({ timestamp: 0, pairedTimestamp: 0.2, quality: quality - 0.05 }),
+          exemplar({ timestamp: 0, pairedTimestamp: 0.1, quality: quality - 0.1 }),
+        ],
+      })
+
+    const plan = planOf(
+      metricResult('trunkLean', {
+        exemplars: [withAlternates(0.9), withAlternates(0.8), withAlternates(0.7)],
+      }),
+      frames,
+    )
+
+    expect(plan.status).toBe('planned')
+    expect(plan.status === 'planned' && plan.items).toHaveLength(MAX_EXEMPLARS_PER_METRIC)
+  })
+
+  it('reports all-gated-out when no exemplar offers a drawable pair', () => {
+    const plan = planOf(
+      metricResult('trunkLean', {
+        exemplars: [
+          exemplar({
+            timestamp: 0,
+            pairedTimestamp: 0.3,
+            quality: 0.9,
+            alternates: [exemplar({ timestamp: 0, pairedTimestamp: 0.2, quality: 0.7 })],
+          }),
+        ],
+      }),
+      crossingFrames(),
+    )
+
+    expect(reasonOf(plan)).toBe('all-gated-out')
+  })
+
+
   const frames = sampledFrames()
 
   it('plans the surviving exemplars in the order the metric emitted them', () => {

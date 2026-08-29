@@ -829,6 +829,10 @@ function instantPlan(
  * A pair too far APART is dropped outright instead, never demoted — see `isTooFarApartPair`, which
  * holds both the criterion and the reason the two verdicts differ.
  *
+ * Every `null` here is a verdict about THIS PAIR, never about the metric. `planExemplarWithFallback`
+ * is the caller that acts on that distinction, retrying the exemplar's lower-ranked pairs; call this
+ * one directly only when a single pair really is the whole question.
+ *
  * `travelDirection` is threaded in rather than derived per exemplar because it is a property of
  * the CLIP: `planClipEvidence` computes it once and every item of every metric carries the same
  * value. The default keeps this function independently callable — it is exported and unit-tested
@@ -917,7 +921,63 @@ export function planExemplarFrames(
 }
 
 /**
+ * One exemplar → the plan for the first of its ranked pairs that can actually be DRAWN.
+ *
+ * `planExemplarFrames` answers "can this exact pair be rendered honestly", and its `null` is
+ * final for that pair — but it was being treated as final for the whole metric. The emitting
+ * metric cannot make that call: whether two instants can share one legible crop depends on pixel
+ * geometry and on this module's own display constants, neither of which reaches `src/heuristics/`.
+ * So a range exemplar arrives carrying `alternates`, the pairs it ranked below the winner, and
+ * this walks them. Measured on this repo's side-view reference clip, `trunkLean`'s best-scoring
+ * pair puts the runner at opposite edges of a 4K frame — growth ~6.8 against a 2.5 threshold —
+ * while 18 instants clear the typicality ramp and plenty of drawable pairs sit among them.
+ *
+ * **Retries on EVERY failure, not only on `isTooFarApartPair`.** A ghost that does not snap, two
+ * halves landing on one frame, near-identical boxes, no derivable crop box: each is "this pair
+ * cannot be drawn", and a lower-ranked pair may suffer from none of them. Retrying only on the
+ * far-apart rejection would fix one symptom of a defect that is about the absence of a fallback.
+ *
+ * **Nothing is weakened by retrying.** Every candidate goes through the same `planExemplarFrames`
+ * under the same rules, and `MIN_EXEMPLAR_QUALITY` is re-asserted per candidate exactly as
+ * `planMetricEvidence` re-asserts it for the winner — so an alternate can only render on terms the
+ * winner would also have had to meet. In particular a far-apart pair is still DROPPED rather than
+ * demoted to its base: the fallback replaces a whole pair, it never rescues half of one, so
+ * `isTooFarApartPair`'s reason for refusing demotion is untouched.
+ *
+ * The returned plan is the SELECTED pair's own throughout — its instants, its `quality`, its
+ * `cropGrowth` — so nothing downstream, the `[evidence-coverage]` line included, is ever told
+ * about a pair the image does not show.
+ */
+export function planExemplarWithFallback(
+  metric: MetricId,
+  exemplar: MetricExemplar,
+  frames: RobustPoseFrame[],
+  frameSize: EvidenceFrameSize,
+  toleranceSeconds: number,
+  travelDirection: EvidenceTravelDirection = evidenceTravelDirection(frames),
+): EvidenceFramePlan | null {
+  for (const candidate of [exemplar, ...(exemplar.alternates ?? [])]) {
+    if (candidate.quality < MIN_EXEMPLAR_QUALITY) continue
+    const plan = planExemplarFrames(
+      metric,
+      candidate,
+      frames,
+      frameSize,
+      toleranceSeconds,
+      travelDirection,
+    )
+    if (plan !== null) return plan
+  }
+  return null
+}
+
+/**
  * One metric → its evidence, or a named reason there is none.
+ *
+ * Each exemplar is resolved through `planExemplarWithFallback`, so an exemplar offering ranked
+ * alternative pairs spends its slot on the best one that can actually be drawn rather than losing
+ * the slot to an un-drawable winner. The budget below still counts IMAGES: alternatives belong to
+ * an exemplar and at most one of them is ever rendered.
  *
  * The quality gate and the per-metric budget are re-applied here rather than trusted from
  * upstream. Both are the same constants imported from the same module, so the two layers cannot
@@ -953,7 +1013,7 @@ export function planMetricEvidence(
   )
   const items = candidates
     .map((exemplar) =>
-      planExemplarFrames(
+      planExemplarWithFallback(
         metric.metric,
         exemplar,
         frames,

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { computeOverstriding } from './overstriding'
+import { MIN_EXEMPLAR_QUALITY } from './exemplars'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildStrikeFrames } from './__fixtures__/strikeFrames'
 import { buildFrame } from './__fixtures__/testFrames'
@@ -155,6 +156,37 @@ describe('computeOverstriding exemplars', () => {
     expect(evidence.timestamp).toBeCloseTo(55 / 30, 10) // the 0.6 strike, detected
     expect(evidence.pairedTimestamp).toBeCloseTo(5 / 30, 10) // the 0.4 strike
     expect(evidence.quality).toBeCloseTo(0.1 / 0.15, 6)
+  })
+
+  it('derives each alternate pair\'s foot identity from that pair, not from the winner', () => {
+    // The alternates exist so the evidence layer can fall back when the winner cannot be drawn —
+    // which means every one of them has to be a complete, independently renderable exemplar. Foot
+    // identity is the field most easily got wrong by copying the winner's: `side` is present only
+    // when a pair's two strikes happen to share a foot, and that is a property of the pair.
+    const frames = buildStrikeFrames({ ankleOffsetsPx: [75, 75, 60, 75, 75, 90, 75] })
+
+    const [evidence] = computeOverstriding(frames, 'side').exemplars!
+
+    // Head unchanged: still the 0.6 strike ghosted against the 0.4 one.
+    expect(evidence.timestamp).toBeCloseTo(55 / 30, 10)
+    expect(evidence.alternates!.length).toBeGreaterThan(0)
+    for (const alternate of evidence.alternates!) {
+      expect(alternate.kind).toBe('overstrideRange')
+      expect(alternate.quality).toBeLessThanOrEqual(evidence.quality)
+      expect(alternate.quality).toBeGreaterThanOrEqual(MIN_EXEMPLAR_QUALITY)
+      expect(alternate.pairedTimestamp).toBeDefined()
+      expect(alternate.measuredSide).toBeDefined()
+      expect(alternate.pairedMeasuredSide).toBeDefined()
+      // `side` is a PAIR-level claim, so it may only be present when the pair's two feet agree.
+      if (alternate.side !== undefined) {
+        expect(alternate.side).toBe(alternate.measuredSide)
+        expect(alternate.measuredSide).toBe(alternate.pairedMeasuredSide)
+      }
+      expect(alternate.alternates).toBeUndefined()
+      // A pair really is a pair: an alternate that ghosted an instant against itself would depict
+      // no range at all.
+      expect(alternate.pairedTimestamp).not.toBe(alternate.timestamp)
+    }
   })
 
   it('emits nothing on a clip whose strikes all land in the same place', () => {

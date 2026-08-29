@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { computeTrunkLean } from './trunkLean'
+import { MIN_EXEMPLAR_QUALITY } from './exemplars'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildFrame } from './__fixtures__/testFrames'
 
@@ -190,6 +191,27 @@ describe('computeTrunkLean exemplars', () => {
     expect(evidence.timestamp).toBeCloseTo(5 / 30, 10) // the 6 deg frame, detected
     expect(evidence.pairedTimestamp).toBeCloseTo(0, 10) // the 4 deg frame
     expect(evidence.quality).toBeCloseTo(1 / 1.5, 6)
+  })
+
+  it('carries the pairs it did not pick as ranked alternates', () => {
+    // The evidence layer, not this one, knows whether a pair can be drawn as one legible image, so
+    // the runners-up travel with the winner rather than being discarded here.
+    const frames = [4, 4.5, 5, 5, 5.5, 6, 6.4].map((deg, i) => leanFrame(deg, i / 30))
+
+    const [evidence] = computeTrunkLean(frames, 'side').exemplars!
+
+    // Unchanged head: every frame here is well tracked, so it is still the value extremes — the
+    // 6.4 deg frame against the 4 deg one, exactly what the winner-only selection returned.
+    expect(evidence.timestamp).toBeCloseTo(6 / 30, 10)
+    expect(evidence.pairedTimestamp).toBeCloseTo(0, 10)
+    expect(evidence.alternates!.length).toBeGreaterThan(0)
+    for (const alternate of evidence.alternates!) {
+      expect(alternate.kind).toBe('trunkLeanRange')
+      expect(alternate.quality).toBeLessThanOrEqual(evidence.quality)
+      expect(alternate.quality).toBeGreaterThanOrEqual(MIN_EXEMPLAR_QUALITY)
+      expect(alternate.pairedTimestamp).toBeDefined()
+      expect(alternate.alternates).toBeUndefined()
+    }
   })
 
   it('emits nothing when the lean never varies — there is no range to picture', () => {

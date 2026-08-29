@@ -5,8 +5,10 @@ import { findNearestFrame } from '../results/skeletonGeometry'
 import { trimToPresenceWindow } from './presenceWindow'
 import { computeTrunkLean } from './trunkLean'
 import {
+  EXEMPLAR_PAIR_ENDS_PER_SIDE,
   MAX_EXEMPLARS_PER_METRIC,
   MIN_EXEMPLAR_QUALITY,
+  attachPairAlternates,
   cropDerivable,
   cropKeypoints,
   describeDistribution,
@@ -16,6 +18,7 @@ import {
   scoreExemplarInstant,
   selectExemplars,
   selectExtremePair,
+  selectExtremePairs,
   selectOppositeSidePair,
 } from './exemplars'
 import type { MetricExemplar } from './types'
@@ -411,6 +414,172 @@ describe('selectExtremePair', () => {
 
     expect(selectExtremePair(flat, toInstant, describeDistribution([5, 5, 5, 5, 5]))).toBeNull()
     expect(selectExtremePair([], toInstant, DISTRIBUTION)).toBeNull()
+  })
+})
+
+describe('selectExtremePairs', () => {
+  /** The same distribution `selectExtremePair` is exercised against above — median 5, MAD 0.5,
+   * outlier bound 1.5 — so the head of this list can be compared against that function directly. */
+  const VALUES = [4, 4.5, 5, 5, 5.5, 6, 6.4]
+  const DISTRIBUTION = describeDistribution(VALUES)
+
+  interface Candidate {
+    frame: RobustPoseFrame
+    value: number
+  }
+
+  const toInstant = (candidate: Candidate) => ({
+    frame: candidate.frame,
+    seed: [...SEED],
+    value: candidate.value,
+  })
+
+  function candidatesOf(values: number[]): Candidate[] {
+    return values.map((value, i) => ({ frame: torsoFrame(i / 30), value }))
+  }
+
+  const CANDIDATES = candidatesOf(VALUES)
+
+  it("puts selectExtremePair's own winner at the head", () => {
+    // The contract that lets `selectExtremePair` be implemented as this function's first element:
+    // if these two could disagree, adding alternatives would silently change which pair every clip
+    // renders. Asserted on identity, not on value, so a coincidentally-equal value cannot pass it.
+    const head = selectExtremePairs(CANDIDATES, toInstant, DISTRIBUTION)[0]
+    const single = selectExtremePair(CANDIDATES, toInstant, DISTRIBUTION)!
+
+    expect(head.base).toBe(single.base)
+    expect(head.ghost).toBe(single.ghost)
+    expect(head.quality).toBe(single.quality)
+  })
+
+  it('ranks by the quality each pair would itself be emitted with', () => {
+    const qualities = selectExtremePairs(CANDIDATES, toInstant, DISTRIBUTION).map(
+      (pair) => pair.quality,
+    )
+
+    expect(qualities.length).toBeGreaterThan(1)
+    expect(qualities).toEqual([...qualities].sort((a, b) => b - a))
+    // Every pair's quality is the MINIMUM of its two ends, so the best possible is the weaker of
+    // the two per-side maxima: 6.4 scores 1.4/1.5 above the median and 4 scores 1/1.5 below.
+    expect(qualities[0]).toBeCloseTo(1 / 1.5, 10)
+  })
+
+  it('spans the median on every pair, and never ghosts one value against itself', () => {
+    for (const { base, ghost } of selectExtremePairs(CANDIDATES, toInstant, DISTRIBUTION)) {
+      expect(Math.max(base.value, ghost.value)).toBeGreaterThanOrEqual(DISTRIBUTION.median)
+      expect(Math.min(base.value, ghost.value)).toBeLessThanOrEqual(DISTRIBUTION.median)
+      // Both ends sitting exactly ON the median is the one way a pair can span it and still depict
+      // no range. Those are skipped rather than emitted as degenerate alternatives — this fixture
+      // has two median-valued candidates, so the combination genuinely arises.
+      expect(base.value).not.toBe(ghost.value)
+    }
+  })
+
+  it('offers distinct alternatives for BOTH ends, not one end against many partners', () => {
+    // The reason the bound is per SIDE. A pair is undrawable because of where its ends sit, so a
+    // list that only ever varies one end can be exhausted by a single unlucky instant.
+    const pairs = selectExtremePairs(CANDIDATES, toInstant, DISTRIBUTION)
+    const [head] = pairs
+
+    expect(pairs.some((p) => p.base === head.base && p.ghost !== head.ghost)).toBe(true)
+    expect(pairs.some((p) => p.ghost === head.ghost && p.base !== head.base)).toBe(true)
+  })
+
+  it('is bounded by the per-side cap rather than by the candidate count', () => {
+    // 40 candidates is ~400 pairs unbounded; this repo's own reference clip reaches ~59 instants.
+    const many = candidatesOf(Array.from({ length: 40 }, (_, i) => 1 + i * 0.25))
+    const manier = candidatesOf(Array.from({ length: 80 }, (_, i) => 1 + i * 0.125))
+
+    const a = selectExtremePairs(many, toInstant, describeDistribution(many.map((c) => c.value)))
+    const b = selectExtremePairs(
+      manier,
+      toInstant,
+      describeDistribution(manier.map((c) => c.value)),
+    )
+
+    expect(a.length).toBeLessThanOrEqual(EXEMPLAR_PAIR_ENDS_PER_SIDE ** 2)
+    expect(b.length).toBeLessThanOrEqual(EXEMPLAR_PAIR_ENDS_PER_SIDE ** 2)
+    expect(b.length).toBe(a.length)
+  })
+
+  it('honours an explicit per-side bound, one pair being exactly selectExtremePair', () => {
+    const one = selectExtremePairs(CANDIDATES, toInstant, DISTRIBUTION, 1)
+    const single = selectExtremePair(CANDIDATES, toInstant, DISTRIBUTION)!
+
+    expect(one).toHaveLength(1)
+    expect(one[0].base).toBe(single.base)
+    expect(selectExtremePairs(CANDIDATES, toInstant, DISTRIBUTION, 2).length).toBeLessThanOrEqual(4)
+  })
+
+  it('is empty exactly where selectExtremePair is null', () => {
+    const flatValues = [5, 5, 5, 5, 5]
+    const flat = candidatesOf(flatValues)
+
+    expect(selectExtremePairs(flat, toInstant, describeDistribution(flatValues))).toEqual([])
+    expect(selectExtremePairs([], toInstant, DISTRIBUTION)).toEqual([])
+  })
+
+  it('still refuses instants beyond the outlier bound, at every rank', () => {
+    const withGlitch = [...CANDIDATES, { frame: torsoFrame(7 / 30), value: 20 }]
+
+    for (const { base, ghost } of selectExtremePairs(withGlitch, toInstant, DISTRIBUTION)) {
+      expect(base.value).not.toBe(20)
+      expect(ghost.value).not.toBe(20)
+    }
+  })
+})
+
+describe('attachPairAlternates', () => {
+  const pairExemplar = (quality: number, timestamp: number): MetricExemplar => ({
+    kind: 'trunkLeanRange',
+    timestamp,
+    pairedTimestamp: timestamp + 0.1,
+    quality,
+    label: 'range',
+    cropKeypoints: [...SEED],
+  })
+
+  it('emits ONE exemplar carrying the rest as alternates', () => {
+    const emitted = attachPairAlternates([
+      pairExemplar(0.9, 1),
+      pairExemplar(0.8, 2),
+      pairExemplar(0.7, 3),
+    ])
+
+    // One exemplar, because the alternatives are other ways to draw the same single image — so
+    // they must not spend against `MAX_EXEMPLARS_PER_METRIC`.
+    expect(emitted).toHaveLength(1)
+    expect(emitted[0].timestamp).toBe(1)
+    expect(emitted[0].alternates!.map((a) => a.timestamp)).toEqual([2, 3])
+  })
+
+  it('gates alternates on the shared minimum quality, like the exemplar they hang off', () => {
+    const emitted = attachPairAlternates([
+      pairExemplar(0.9, 1),
+      pairExemplar(MIN_EXEMPLAR_QUALITY, 2),
+      pairExemplar(MIN_EXEMPLAR_QUALITY - 0.001, 3),
+    ])
+
+    expect(emitted[0].alternates!.map((a) => a.timestamp)).toEqual([2])
+  })
+
+  it('omits the key entirely rather than attaching an empty list', () => {
+    const emitted = attachPairAlternates([pairExemplar(0.9, 1), pairExemplar(0.1, 2)])
+
+    expect(emitted[0].alternates).toBeUndefined()
+    expect('alternates' in emitted[0]).toBe(false)
+  })
+
+  it('never nests: an alternate carries no alternates of its own', () => {
+    const emitted = attachPairAlternates([pairExemplar(0.9, 1), pairExemplar(0.8, 2)])
+
+    for (const alternate of emitted[0].alternates!) {
+      expect(alternate.alternates).toBeUndefined()
+    }
+  })
+
+  it('passes an empty ranking straight through', () => {
+    expect(attachPairAlternates([])).toEqual([])
   })
 })
 

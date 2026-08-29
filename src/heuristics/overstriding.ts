@@ -9,10 +9,11 @@ import { detectFootstrikes } from './footstrikes'
 import type { FootstrikeCandidate } from './footstrikes'
 import { computeMetricConfidence } from './confidence'
 import {
+  attachPairAlternates,
   cropKeypoints,
   describeDistribution,
   selectExemplars,
-  selectExtremePair,
+  selectExtremePairs,
 } from './exemplars'
 import type { ExemplarDistribution } from './exemplars'
 import { median } from './mathUtils'
@@ -51,14 +52,19 @@ function seedFor(sample: StrikeSample): KeypointName[] {
  * The most- and least-overstriding strike, ghosted into one image — an EXTREME pair, because what
  * this metric's picture is about is the range of foot placements it measured, not their median.
  * Both instants must survive the outlier bound first, so the ghost can never be two tracking
- * glitches; among the survivors `selectExtremePair` RANKS by the quality each strike would be
+ * glitches; among the survivors `selectExtremePairs` RANKS by the quality each strike would be
  * emitted with, rather than taking the raw argmax and scoring it afterwards.
+ *
+ * It returns the pairs it BEAT as well as the winner, and they ride along as the emitted
+ * exemplar's `alternates`. Whether a pair can be drawn as one legible image depends on pixel
+ * geometry and display constants this layer does not hold, so the runners-up are what stop one
+ * un-drawable pair from taking the whole metric's evidence with it.
  */
 function buildExemplars(
   samples: StrikeSample[],
   distribution: ExemplarDistribution,
 ): MetricExemplar[] {
-  const pair = selectExtremePair(
+  const pairs = selectExtremePairs(
     samples,
     (sample) => ({
       frame: sample.frame,
@@ -67,19 +73,18 @@ function buildExemplars(
     }),
     distribution,
   )
-  if (pair === null) return []
 
   // Base is the more extreme of the two — a range ghost is about its far end (see trunkLean's
   // identical reasoning).
-  const { base, ghost } = pair
-
-  return [
-    {
-      kind: 'overstrideRange',
+  return attachPairAlternates(
+    pairs.map(({ base, ghost, quality }) => ({
+      kind: 'overstrideRange' as const,
       timestamp: base.frame.timestamp,
       pairedTimestamp: ghost.frame.timestamp,
       // Only meaningful when the two strikes happen to be the same foot; the pair is not
-      // constructed to be same-side, so most of the time there is no one side to name.
+      // constructed to be same-side, so most of the time there is no one side to name. Derived
+      // PER PAIR rather than once: two alternatives of the same exemplar can fall differently,
+      // and a `side` copied from the winner would claim a foot the picture does not show.
       ...(base.side === ghost.side && { side: base.side }),
       // Which foot each half of the picture was measured from, emitted unconditionally because
       // this metric always knows it — unlike `side` above, whose presence is a property of how the
@@ -87,15 +92,15 @@ function buildExemplars(
       // layer with no way to tell which ankle the offset was taken from.
       measuredSide: base.side,
       pairedMeasuredSide: ghost.side,
-      quality: pair.quality,
+      quality,
       label: 'Furthest-reaching footstrike, ghosted against the closest-landing one',
       cropKeypoints: cropKeypoints(
         [...seedFor(base), ...seedFor(ghost)],
         [KNEE_NAME[base.side], KNEE_NAME[ghost.side]],
         [base.frame, ghost.frame],
       ),
-    },
-  ]
+    })),
+  )
 }
 
 function nullResult(
