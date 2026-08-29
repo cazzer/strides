@@ -832,6 +832,17 @@ it actually measured out of the clip after analysis and renders them as small **
 thumbnails inside that metric's own card**, ghosting two instants into one image where the metric's
 meaning is a delta. The picture and the number it explains are on screen together.
 
+**The ghost is NOT half the picture — 65/35, and two constants, since 2026-08-19 (`strides-c37`).**
+The photograph was a symmetric `0.5·base + 0.5·ghost` (measured, PSNR peak at exactly 50/50) while
+the caption and the annotation both named the base as the subject, so the picture contradicted its
+own labels and the solid skeleton could read as sitting on the wrong body. `EVIDENCE_GHOST_OPACITY`
+split into **`EVIDENCE_GHOST_BLEND_ALPHA = 0.35`** (photograph, `evidenceFrames.ts` only —
+`source-over` makes that a 65/35 split toward the base) and **`EVIDENCE_GHOST_MARK_OPACITY = 0.5`**
+(annotation marks, `evidenceAnnotations.ts` only, unchanged in value). The archived
+`metric-frame-evidence`/`inline-annotated-evidence` designs still state the symmetric 50/50 intent
+and are stale on this point. Number chosen by a five-arm sweep judged at the real 144 px size on all
+three clips: `openspec/changes/weight-evidence-ghost-below-base/design.md`.
+
 **The standalone gallery is gone.** There is no "What the analysis looked at" section below the
 results, and no deep link from a card to one — `EvidenceGallery.tsx` was deleted (`strides-ac9.3`).
 Ignore any older note below or elsewhere that describes a gallery section, a gallery figure, or a

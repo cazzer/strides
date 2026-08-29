@@ -31,7 +31,8 @@ import {
   EVIDENCE_BASE_OPACITY,
   EVIDENCE_CROP_MIN_SIDE_PX,
   EVIDENCE_CROP_PADDING_MULTIPLIER,
-  EVIDENCE_GHOST_OPACITY,
+  EVIDENCE_GHOST_BLEND_ALPHA,
+  EVIDENCE_GHOST_MARK_OPACITY,
   EVIDENCE_MAX_PAIR_CROP_GROWTH,
   EVIDENCE_NEAR_IDENTICAL_IOU,
   boundingBoxOfPoints,
@@ -258,6 +259,25 @@ function planOf(
 function reasonOf(plan: ReturnType<typeof planMetricEvidence>): string | null {
   return plan.status === 'no-evidence' ? plan.reason : null
 }
+
+describe('EVIDENCE_GHOST_BLEND_ALPHA', () => {
+  // Both bounds the constant's own doc declares, asserted rather than described. The split exists so
+  // the photographic weight and the mark opacity can move independently — which is exactly the
+  // condition under which the relationship between them needs a test and not a comment.
+  it('stays below the ghost mark opacity, so the photograph is fainter than the marks on it', () => {
+    expect(EVIDENCE_GHOST_BLEND_ALPHA).toBeLessThan(EVIDENCE_GHOST_MARK_OPACITY)
+  })
+
+  // The floor, from measurement rather than taste: the sweep rendered 0.25 on all three test clips
+  // and the ghost disappeared into the background on the lowest-contrast one, leaving a faded
+  // skeleton over nothing — the reported bug wearing the other shoe. The true floor is a function of
+  // each clip's subject-against-background contrast and cannot be derived from this number alone, so
+  // this pins the one value observed to fail rather than a computed limit
+  // (`openspec/changes/weight-evidence-ghost-below-base/design.md`).
+  it('stays above the weight at which a measured clip lost its ghost entirely', () => {
+    expect(EVIDENCE_GHOST_BLEND_ALPHA).toBeGreaterThan(0.25)
+  })
+})
 
 describe('evidenceSnapToleranceSeconds', () => {
   it('is half the median sampling interval', () => {
@@ -932,7 +952,7 @@ describe('planExemplarFrames', () => {
     expect('side' in plan!).toBe(false)
   })
 
-  it('plans a pair as base at full opacity and ghost at half', () => {
+  it('plans a pair as base at full opacity and ghost at the blend alpha', () => {
     const paired = separatedPair(540)
     const plan = planExemplarFrames(
       'trunkLean',
@@ -947,7 +967,7 @@ describe('planExemplarFrames', () => {
     })
     expect(plan?.ghost).toMatchObject({
       timestamp: 0.1,
-      opacity: EVIDENCE_GHOST_OPACITY,
+      opacity: EVIDENCE_GHOST_BLEND_ALPHA,
     })
     expect(plan?.demotedFromPair).toBe(false)
     // One rect, unioned across both drawn frames.

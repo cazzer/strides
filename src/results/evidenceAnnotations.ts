@@ -8,7 +8,7 @@ import {
 } from './skeletonGeometry'
 import {
   EVIDENCE_BASE_OPACITY,
-  EVIDENCE_GHOST_OPACITY,
+  EVIDENCE_GHOST_MARK_OPACITY,
   evidenceOutputSide,
   toEvidenceOutputSpace,
 } from './evidenceFrames'
@@ -351,19 +351,23 @@ function opacityForStatus(
 
 /**
  * The frame-level multiplier every mark on that frame is scaled by: `EVIDENCE_BASE_OPACITY` for
- * the base, `EVIDENCE_GHOST_OPACITY` for the ghost, and the base's value for a `'pair'` mark,
+ * the base, `EVIDENCE_GHOST_MARK_OPACITY` for the ghost, and the base's value for a `'pair'` mark,
  * which belongs to neither half.
  *
- * This is the DELIBERATE composition design D5 requires (base skeleton at 1.0, ghost at 0.5,
- * composed with each point's own detected/interpolated opacity) — not the accidental one the spec
- * forbids. Those are different mechanisms: `extractFrames.ts:326` leaves `ctx.globalAlpha` at the
- * ghost's blend value and never resets it, so annotation drawn afterwards inherits 0.5 for the
- * BASE marks too, silently halving the whole layer. `strides-ac9.8` resets `globalAlpha`
- * explicitly and applies the number below; the base's marks then come out as solid as a single
- * frame's, which is what the spec sentence is protecting.
+ * Derived from the instant's ROLE, never from `plan.ghost.opacity`. That field is the ghost's
+ * PHOTOGRAPHIC blend alpha, a separate decision that has already moved once
+ * (`EVIDENCE_GHOST_BLEND_ALPHA`, `strides-c37`) and would drag the marks with it if read here.
+ *
+ * This is the DELIBERATE composition design D5 requires (base skeleton at full opacity, ghost
+ * weaker, composed with each point's own detected/interpolated opacity) — not the accidental one
+ * the spec forbids. Those are different mechanisms: `drawInstant` leaves `ctx.globalAlpha` at the
+ * last instant's blend value and never resets it, so annotation drawn afterwards would inherit the
+ * ghost's alpha for the BASE marks too, silently weakening the whole layer. `strides-ac9.8` resets
+ * `globalAlpha` explicitly and applies the number below; the base's marks then come out as solid as
+ * a single frame's, which is what the spec sentence is protecting.
  */
 function frameOpacityFor(instant: EvidenceAnnotationInstant): number {
-  return instant === 'ghost' ? EVIDENCE_GHOST_OPACITY : EVIDENCE_BASE_OPACITY
+  return instant === 'ghost' ? EVIDENCE_GHOST_MARK_OPACITY : EVIDENCE_BASE_OPACITY
 }
 
 type PositionIndex = ReadonlyMap<KeypointName, EvidenceKeypointPosition>
