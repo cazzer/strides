@@ -161,7 +161,9 @@ view detection and each metric separately in the correct order.
 
 - **WHEN** `computeFormHeuristics` is called on a single frame sequence
 - **THEN** the returned `verticalOscillation.viewFit`, `trunkLean.viewFit`, and
-  `overstriding.viewFit` all reflect the same `view.view` label present in the same result
+  `overstriding.viewFit` all reflect the same resolved view (the one holding the most plausibility
+  mass, which is that result's `view.view` label whenever the clip commits to a label) present in
+  the same result
 
 ### Requirement: Cadence participates in the shared orchestration and output contract
 
@@ -174,8 +176,9 @@ well-typed `RobustPoseFrame[]` input including an empty array.
 #### Scenario: computeFormHeuristics includes cadence gated by the shared detected view
 
 - **WHEN** `computeFormHeuristics` is called on a single frame sequence
-- **THEN** the returned `cadence.viewFit` reflects the same `view.view` label present in the same
-  result as `verticalOscillation`, `trunkLean`, and `overstriding`
+- **THEN** the returned `cadence.viewFit` reflects the same resolved view (the one holding the
+  most plausibility mass, which is that result's `view.view` label whenever the clip commits to a
+  label) present in the same result as `verticalOscillation`, `trunkLean`, and `overstriding`
 
 #### Scenario: Empty frame list produces a well-formed cadence result
 
@@ -233,8 +236,9 @@ The system SHALL include `kneeFlexion: MetricResult` in `FormHeuristicsResult`, 
 #### Scenario: Orchestrated result includes knee flexion
 
 - **WHEN** `computeFormHeuristics` is called on a frame sequence
-- **THEN** the returned result's `kneeFlexion.viewFit` reflects the same `view.view` label present
-  in the same result as the other three metrics
+- **THEN** the returned result's `kneeFlexion.viewFit` reflects the same resolved view (the one
+  holding the most plausibility mass, which is that result's `view.view` label whenever the clip
+  commits to a label) present in the same result as the other three metrics
 
 ### Requirement: Arm swing symmetry compares per-side wrist-relative-to-shoulder swing amplitude
 
@@ -903,8 +907,9 @@ empty array.
 #### Scenario: computeFormHeuristics includes vertical ratio gated by the shared detected view
 
 - **WHEN** `computeFormHeuristics` is called on a single frame sequence
-- **THEN** the returned `verticalRatio.viewFit` reflects the same `view.view` label present in the
-  same result as every other metric
+- **THEN** the returned `verticalRatio.viewFit` reflects the same resolved view (the one holding
+  the most plausibility mass, which is that result's `view.view` label whenever the clip commits
+  to a label) present in the same result as every other metric
 
 #### Scenario: Empty frame list produces a well-formed vertical-ratio result
 
@@ -1030,8 +1035,9 @@ including an empty array.
 #### Scenario: computeFormHeuristics includes vertical oscillation in centimetres gated by the shared detected view
 
 - **WHEN** `computeFormHeuristics` is called on a single frame sequence
-- **THEN** the returned `verticalOscillationCm.viewFit` reflects the same `view.view` label
-  present in the same result as every other metric
+- **THEN** the returned `verticalOscillationCm.viewFit` reflects the same resolved view (the one
+  holding the most plausibility mass, which is that result's `view.view` label whenever the clip
+  commits to a label) present in the same result as every other metric
 
 #### Scenario: Empty frame list produces a well-formed result
 
@@ -1220,8 +1226,9 @@ in `[0, 1]` forced to `0` when `value` is `null`, and no exception for any well-
 #### Scenario: computeFormHeuristics includes step width in centimetres gated by the shared detected view
 
 - **WHEN** `computeFormHeuristics` is called on a single frame sequence
-- **THEN** the returned `stepWidthCm.viewFit` reflects the same `view.view` label present in the
-  same result as every other metric
+- **THEN** the returned `stepWidthCm.viewFit` reflects the same resolved view (the one holding the
+  most plausibility mass, which is that result's `view.view` label whenever the clip commits to a
+  label) present in the same result as every other metric
 
 #### Scenario: Empty frame list produces a well-formed result
 
@@ -1458,4 +1465,448 @@ state for any metric with no qualifying instant.
 - **WHEN** cadence reports a non-null value from a high-quality hip-bounce fit — a fit from which
   bounce instants are perfectly derivable
 - **THEN** the cadence result carries no `exemplars` field
+
+### Requirement: A range exemplar's ends are the best-scoring candidate on each side of the median
+
+For an exemplar that depicts the two ends of a measured range, the system SHALL choose each end by
+**ranking every surviving candidate instant by the quality score that instant would itself receive**
+and taking the best-scoring one. It SHALL NOT choose an end by its raw measured value and score that
+choice afterwards. Scoring a decision already made is not ranking: it can only ever confirm or
+discard one candidate, so a single badly-tracked instant sitting at the value extreme takes the whole
+pair to zero — `pairQuality` is a minimum — and gates out a metric that had many well-tracked
+candidates the ranking never reached.
+
+The pair SHALL still depict a **range**: one end SHALL be drawn from the candidates whose value sits
+at or above the metric's own median and the other from those at or below it. Quality is
+sign-blind — an extreme instant's typicality term reads distance from the median, not direction — so
+an unconstrained ranking could return two instants from the same end of the distribution, and a ghost
+of two near-identical instants depicts no range at all.
+
+Where the candidates are equally well tracked, this SHALL reduce to the most extreme surviving
+instant at each end, because among survivors the typicality term rises strictly with distance from
+the median. Ranking by quality therefore never narrows the depicted range without a tracking reason
+for it, and the existing rule that an outlier is rejected outright in favour of the most extreme
+*surviving* instant continues to hold on such a clip.
+
+A pair whose two ends resolve to the same instant, or to two instants with the same measured value,
+SHALL emit nothing rather than ghost a frame against itself.
+
+Ranking SHALL be applied **after** the hard rejects, not instead of them: an instant with no
+derivable crop, or beyond the robust outlier bound, is ineligible rather than merely low-ranked, so
+ranking can never promote a tracking glitch into the picture.
+
+#### Scenario: A well-tracked near-extreme instant outranks an untracked value-extreme one
+
+- **WHEN** the instant with the most extreme surviving value resolved every one of the metric's input
+  keypoints as `'interpolated'`, while a slightly less extreme instant resolved them as `'detected'`
+- **THEN** the less extreme, well-tracked instant is selected as that end of the range, and the
+  exemplar is emitted rather than gated out by the fully interpolated instant's zero score
+
+#### Scenario: Ranking still spans the median
+
+- **WHEN** the highest-scoring candidates overall both sit on the same side of the metric's median
+- **THEN** the emitted pair still takes one end from each side of the median, so the image depicts a
+  range rather than two views of the same end
+
+#### Scenario: Uniformly tracked candidates select the value extremes
+
+- **WHEN** every surviving candidate resolved its metric's input keypoints identically, so they
+  differ only in how far their values sit from the median
+- **THEN** the selected ends are the most extreme surviving instants — the same pair a
+  rank-by-value rule would have chosen
+
+### Requirement: Stride pairs are validated against the fitted step period before contributing
+
+The system SHALL accept an optional fitted **step frequency** reference when estimating stride
+length, and — when one is supplied — SHALL reject any same-side consecutive-footstrike pair whose
+elapsed time is not consistent with a single stride at that step frequency, before that pair's
+displacement contributes to the reported stride length.
+
+The expected stride period SHALL be `2 / stepFrequencyHz`, derived from the definition of a gait
+cycle (a stride is exactly two steps) and from the fitted hip-bounce frequency already being the
+step frequency — the same identity `cadence` relies on when it reports `frequencyHz × 60` steps per
+minute. No fitted, tuned, or per-clip coefficient SHALL enter that derivation.
+
+A pair SHALL be accepted when the ratio of its elapsed time to the expected stride period lies
+within a log-symmetric tolerance band — that is, within `[1 / (1 + tolerance), 1 + tolerance]` —
+and rejected otherwise. The band SHALL be symmetric in the logarithm rather than additively,
+because the errors it exists to reject are multiplicative (about half a stride when a spurious extra
+strike is detected, about double when a real one is missed). The tolerance SHALL be derived from
+stride-to-stride biological variability, footstrike-instant sampling quantization, and the fitted
+frequency's own resolution and estimation error — never chosen to make any particular clip produce
+any particular value — and SHALL be small enough that neither the half-stride nor the double-stride
+multiplicity falls inside the band.
+
+The system SHALL apply this check before the existing hip-resolution and advancing-displacement
+checks, so that a pair which is not a stride is accounted for as such rather than as a pair that
+could not be read.
+
+The system SHALL report the number of pairs rejected by this check as a distinct field on a
+successful stride-length result, separate from the pre-existing pairing-opportunity and kept-pair
+counts, such that kept pairs plus period-rejected pairs never exceed the pairing-opportunity count.
+
+When no step-frequency reference is supplied, or the supplied value is not a finite positive
+number, the system SHALL skip this check entirely and SHALL produce exactly the result it produced
+before this requirement existed, with a period-rejected count of zero.
+
+#### Scenario: A pair spanning one full stride at the fitted step frequency is kept
+
+- **WHEN** stride length is estimated with a step-frequency reference, and a same-side consecutive
+  footstrike pair's elapsed time is close to `2 / stepFrequencyHz`
+- **THEN** the pair contributes its displacement to the reported stride length, and the
+  period-rejected count does not include it
+
+#### Scenario: A pair spanning about half a stride is rejected
+
+- **WHEN** stride length is estimated with a step-frequency reference, and a same-side consecutive
+  footstrike pair's elapsed time is about half the expected stride period — the signature of a
+  spurious extra strike instant detected mid-stance on the trailing leg
+- **THEN** that pair's displacement does not contribute to the reported stride length, and the
+  period-rejected count includes it
+
+#### Scenario: A pair spanning about two strides is rejected
+
+- **WHEN** a same-side consecutive footstrike pair's elapsed time is about twice the expected stride
+  period — the signature of a missed footstrike
+- **THEN** that pair's displacement does not contribute to the reported stride length, and the
+  period-rejected count includes it, rather than being left to the median to outvote
+
+#### Scenario: No step-frequency reference leaves behaviour unchanged
+
+- **WHEN** stride length is estimated without a step-frequency reference, or with one that is not a
+  finite positive number
+- **THEN** no pair is rejected on timing grounds, the period-rejected count is zero, and the
+  returned stride length, kept-pair count, pairing-opportunity count and failure reason are
+  identical to what the same frames produced before this requirement existed
+
+#### Scenario: Every pair rejected on timing reports its own failure reason
+
+- **WHEN** a step-frequency reference is supplied and every candidate same-side pair is rejected as
+  period-inconsistent, so no pair survives
+- **THEN** the result is not-ok with a reason distinguishing "no pair spanned a plausible stride"
+  from the pre-existing "no pair advanced in the direction of travel", and that pre-existing reason
+  is still what is reported when no pair was rejected on timing
+
+### Requirement: Vertical ratio supplies the period reference and names timing rejections honestly
+
+The system SHALL pass the hip-bounce fit's own frequency to the stride-length estimate as the
+step-frequency reference, so that the metric's denominator is validated against the same fit its
+numerator is measured from. The fit is already computed and quality-gated before stride length is
+estimated, so no additional fit SHALL be performed for this purpose.
+
+When the stride-length estimate fails because no pair was period-consistent, the system SHALL report
+`value: null`, `confidence: 0`, and a caveat naming that specific cause — that no consecutive
+same-side pair lasted a full stride at the rhythm measured in this clip, and that extra detected
+strike instants are the likely reason — rather than a generic no-usable-pairs or unreadable-frames
+message. Reporting no value with that caveat SHALL be preferred over reporting a value derived from
+a denominator known to span less than one stride.
+
+When some pairs were period-rejected but others survived, the system SHALL attach a caveat stating
+how many pairs were excluded for not lasting a full stride, and SHALL NOT count those pairs in the
+existing "couldn't be read cleanly" caveat — those pairs were read cleanly and were excluded for a
+different, nameable reason.
+
+#### Scenario: Period-inconsistent pairs withhold the value with a cause-naming caveat
+
+- **WHEN** vertical ratio is computed against a clip with a fittable hip-bounce rhythm and a known
+  travel direction, but every candidate same-side footstrike pair is period-inconsistent with the
+  fitted step frequency
+- **THEN** `value` is `null`, `confidence` is `0`, and `caveat` names the timing mismatch and the
+  likely extra strike instants, rather than reporting a value from a sub-stride denominator
+
+#### Scenario: Surviving pairs report the exclusions separately from unreadable ones
+
+- **WHEN** vertical ratio is computed against a clip where some candidate pairs are
+  period-inconsistent and at least one is period-consistent and usable
+- **THEN** a value is reported from the surviving pairs only, with a caveat stating how many pairs
+  were excluded for not lasting a full stride, and the "couldn't be read cleanly" caveat counts only
+  the pairs that failed for that other reason
+
+### Requirement: Footstrikes are ground-contact onsets detected between the two ankles
+
+The system SHALL detect footstrike candidates from each ankle's vertical position **relative to the
+opposite ankle**, not from that ankle's raw screen position, and the instants it emits SHALL be
+ground-contact onsets — the moment a foot arrives — rather than the frame within stance at which
+that ankle happened to read lowest.
+
+A single ankle's screen y carries both the leg's own configuration and the whole body's vertical
+motion, which every keypoint shares. Differencing the two ankles removes that second term wherever
+the two feet are in the same state, and in particular removes the airborne-versus-airborne component
+and any common vertical camera motion. It does NOT remove it during single support, where one foot
+is planted and the other is not — that residual is the subject of the next requirement, and the
+system SHALL NOT attempt to suppress it by changing the prominence threshold. The system SHALL NOT
+introduce a new configurable threshold, and SHALL NOT retune `footstrikeMinProminenceRatio` or
+`footstrikeMinIntervalSeconds`: both SHALL be read exactly as they were, against the differenced
+signal.
+
+A candidate on the differenced signal SHALL additionally be rejected when the striking ankle sits
+**above** the opposite ankle at that instant, since a foot cannot be planted while the other foot is
+below it. This check SHALL have no tolerance parameter, and SHALL NOT be applied on the fallback
+series described below, where the value being compared is a screen coordinate whose sign carries no
+such meaning.
+
+A frame in which either ankle is unresolvable SHALL be treated as a gap, on the same terms the
+extremum scan already applies to a gap: runs either side of it are scanned independently and no
+extremum is paired or smoothed across it. When the opposite ankle is resolvable in **no** frame of
+the clip, there is no contralateral reference at all and the system SHALL fall back to that ankle's
+raw vertical position, preserving the behaviour that predates this requirement for a single-leg
+trace.
+
+#### Scenario: A trailing leg's airborne ankle-y maximum is not a footstrike
+
+- **GIVEN** a clip in which one leg's raw ankle-y series carries a prominence-confirmed maximum
+  while that foot is in the air, during the other foot's stance, because the body was descending
+  faster than the swinging foot was rising
+- **WHEN** footstrikes are detected
+- **THEN** that instant is not emitted as a footstrike candidate
+- **AND** every true touchdown in the clip is still emitted, one per foot per stride, alternating
+  feet
+
+#### Scenario: A contact is reported at its onset, not at the end of its stance plateau
+
+- **GIVEN** a clip in which a planted foot's raw ankle-y series is a flat plateau across stance, so
+  that its argmax is decided by the extremum scan's tie handling rather than by the gait
+- **WHEN** footstrikes are detected
+- **THEN** the emitted instant for that contact is within a small, bounded number of sampled frames
+  of the touchdown that begins the plateau, rather than at the plateau's late-stance end
+
+#### Scenario: A clean signal with no secondary maxima is unaffected
+
+- **GIVEN** a clip in which each ankle's raw vertical position already has exactly one
+  prominence-confirmed maximum per stride, at that foot's own touchdown
+- **WHEN** footstrikes are detected
+- **THEN** the same set of contacts is emitted, one per foot per stride, alternating feet, each
+  within a small, bounded number of sampled frames of its touchdown
+
+#### Scenario: A footstrike is never attributed to the higher of the two feet
+
+- **WHEN** footstrikes are detected on a clip where both ankles are resolvable
+- **THEN** at every emitted candidate's frame, the striking side's ankle is at or below the opposite
+  side's ankle
+
+#### Scenario: A clip with only one resolvable ankle falls back to that ankle's own trace
+
+- **GIVEN** a clip in which one side's ankle is unresolvable in every frame
+- **WHEN** footstrikes are detected
+- **THEN** the resolvable side is detected from its own raw vertical position, exactly as it was
+  before this requirement
+- **AND** no candidate is emitted for the unresolvable side
+
+### Requirement: Footstrike candidates are selected by amplitude at the clip's own stride rhythm
+
+Differencing the two ankles does not remove the whole body's vertical motion from the contact
+series, and cannot: during single support the planted foot carries none of that motion and the
+swinging foot carries all of it, so the term survives inverted and at full strength. The system
+SHALL therefore treat prominence as deciding only whether a sample is a turning point, and SHALL
+decide which turning points are ground contacts by a separate rule.
+
+Among a side's admissible maxima the system SHALL accept candidates in **descending order of
+contact-series value**, each accepted candidate excluding every remaining candidate within a
+minimum spacing of it, and SHALL return the survivors in time order. Ties SHALL resolve toward the
+earlier instant. This ordering SHALL be used because a ground contact sits at the full separation
+between the two legs while the surviving body-motion artifacts are the size of the runner's own
+vertical oscillation — a difference in amplitude, not in local prominence.
+
+The minimum spacing SHALL be the longer of the configured minimum footstrike interval and the
+shortest interval that could still be a single stride at the clip's own fitted step frequency,
+namely `(2 / stepFrequencyHz) / (1 + tolerance)` using the same tolerance and the same
+`2 / stepFrequencyHz` derivation the stride-pair period gate applies. Deriving it as that gate's
+lower band edge SHALL be preserved rather than restated as an independent number, so that this
+selection can never remove a same-side pair the period gate would have accepted.
+
+The fitted step frequency SHALL be used only when it clears the same fit-quality bar cadence itself
+requires before reporting a value; below that bar the system SHALL fall back to the configured
+minimum footstrike interval alone, which is the behaviour that predates this requirement.
+
+The system SHALL NOT rescale the prominence threshold to compensate for the differenced signal.
+
+#### Scenario: A body-motion artifact inside a stance is not emitted
+
+- **GIVEN** a clip whose contact series carries more than one prominence-confirmed maximum within a
+  single stance, the extra one arising from the body's vertical motion rather than from a foot
+  arriving
+- **WHEN** footstrikes are detected
+- **THEN** only the largest maximum in that stride window is emitted for that side
+- **AND** the emitted instant is the ground contact rather than the artifact
+
+#### Scenario: Two same-side candidates closer than one plausible stride cannot both be emitted
+
+- **WHEN** footstrikes are detected on a clip whose step rhythm could be fitted
+- **THEN** no two candidates on the same side are closer together than the shortest interval that
+  could be a single stride at that rhythm
+
+#### Scenario: A clip with no fittable step rhythm keeps the configured interval floor
+
+- **GIVEN** a clip whose hip-bounce fit fails or falls below cadence's own fit-quality bar
+- **WHEN** footstrikes are detected
+- **THEN** the minimum spacing between candidates is the configured minimum footstrike interval,
+  exactly as it was before a rhythm-derived floor existed
+
+### Requirement: A range exemplar offers ranked alternative pairs, not only its winner
+
+A metric that emits a range exemplar SHALL emit, with it, the **lower-ranked pairs it did not
+choose**, ordered by the same score that chose the winner. Whether a pair can actually be drawn as
+one legible image depends on the subject's pixel geometry and on display constants that the
+measurement layer does not hold and SHALL NOT acquire; the layer that does hold them therefore
+receives a ranked list to walk rather than a single take-it-or-leave-it choice.
+
+The first entry of that list SHALL be exactly the pair the metric would have emitted on its own, so
+that adding alternatives cannot change which pair a clip renders when the winner is drawable.
+
+Every alternative SHALL be a complete, independently renderable exemplar of the same kind, carrying
+its own two instants, its own quality and its own crop keypoints — all of which genuinely differ per
+pair. An alternative SHALL NOT itself carry alternatives: the list is one level deep, and a
+consumer SHALL be able to stop reading after the entry it selects.
+
+Alternatives SHALL be subject to the same emission gate as the winner. A pair scoring below the
+minimum exemplar quality is not evidence merely because a better pair could not be drawn, and SHALL
+NOT be offered as a fallback.
+
+Offering alternatives SHALL NOT change how many images a metric may produce. The alternatives belong
+to one exemplar and describe one image; the per-metric exemplar budget continues to count images.
+
+#### Scenario: The winner is unchanged by the presence of alternatives
+
+- **WHEN** a metric selects its range pair over a candidate set that yields several eligible pairs
+- **THEN** the first pair offered is the same one the single-best selection returns for that same
+  candidate set, with the same two instants, the same base/ghost order and the same quality
+
+#### Scenario: Alternatives are ranked by the same score as the winner
+
+- **WHEN** a metric offers alternative pairs
+- **THEN** they are ordered by the quality each pair would itself be emitted with — the weaker of
+  its two ends — highest first, and each still spans the metric's median with one end on each side
+
+#### Scenario: An alternative below the emission gate is not offered
+
+- **WHEN** the candidate set yields pairs whose quality falls below the minimum exemplar quality
+- **THEN** those pairs are absent from the offered list, so a consumer walking it can never reach a
+  pair that would have been gated out had it been chosen first
+
+#### Scenario: A metric with no eligible pair offers nothing
+
+- **WHEN** no pair spans the metric's median with two eligible ends, or every eligible pair depicts
+  no range because its two ends share one measured value
+- **THEN** the metric emits no range exemplar and no alternatives, exactly as before
+
+### Requirement: The ranked pair search is bounded independently of the candidate count
+
+The search that produces the ranked pair list SHALL be bounded by a fixed cap on how many ranked
+ends it considers **on each side** of the median, and SHALL NOT evaluate the full cross product of
+eligible instants. On this repository's own reference footage a single metric reaches roughly sixty
+eligible instants, which is on the order of nine hundred pairs; the emitted list, and the number of
+drawability tests a consumer can be made to run, SHALL NOT scale with that.
+
+The bound SHALL be expressed per side rather than as a count of pairs. A pair is undrawable because
+of where its ends sit, and a list of the best N *pairs* can be dominated by one unlucky end repeated
+against many partners, whereas a per-side bound guarantees that many distinct alternatives exist for
+each end.
+
+Within the bound the ranking SHALL be exact: every pair formed from the retained ends is scored and
+ordered, with no approximation of the ordering.
+
+#### Scenario: A large candidate set yields a bounded list
+
+- **WHEN** a metric's eligible instants number in the dozens, so the unbounded pair count is in the
+  hundreds
+- **THEN** the number of pairs offered is capped by the per-side bound and does not grow with the
+  candidate count
+
+#### Scenario: Both ends have distinct alternatives
+
+- **WHEN** the winning pair is offered along with its alternatives
+- **THEN** the list contains pairs that replace the first end while holding the second, and pairs
+  that replace the second while holding the first, so neither end alone can exhaust the list
+
+### Requirement: View detection reports how plausible each view is
+
+The system SHALL return, alongside the committed view label and its confidence, a
+`plausibility` distribution over `'side'`, `'front'` and `'ambiguous'` whose components are
+non-negative and sum to 1, derived from the same two signals (BSR and SER) the label is derived
+from and from the same configurable thresholds, with no additional tunable of its own.
+
+Each signal SHALL contribute a support in `[0, 1]` for each committed view, equal to 1 once the
+signal has cleared that view's own threshold, 0 once it has cleared the other view's threshold,
+and interpolated across the band between them. A committed view's plausibility SHALL be the
+product of the two signals' support for it, so that one signal alone can never carry a view, and
+`'ambiguous'` SHALL take the remaining mass.
+
+The distribution SHALL be one-hot on `'ambiguous'` whenever either signal is unavailable or
+body-scale coverage is below `minViewDetectionFrameCoverage`.
+
+#### Scenario: A clip that commits to a label is one-hot on that same label
+
+- **WHEN** both signals sit inside one view's regions, so the clip is classified `'side'` or
+  `'front'`
+- **THEN** that view's plausibility is 1 and the other two are 0
+
+#### Scenario: A signal in the undecided band splits mass with ambiguous
+
+- **WHEN** one signal has cleared one view's threshold but the other signal sits between the two
+  thresholds for its own measure
+- **THEN** that view's plausibility is between 0 and 1, the opposite view's is 0, and `'ambiguous'`
+  holds the remainder
+
+#### Scenario: Disagreeing signals leave all the mass on ambiguous
+
+- **WHEN** one signal fully supports `'side'` and the other fully supports `'front'`
+- **THEN** both committed views have plausibility 0 and `'ambiguous'` has 1
+
+#### Scenario: A missing signal or insufficient coverage supports no view
+
+- **WHEN** no frames yield a usable BSR or SER sample, or body-scale coverage is below
+  `minViewDetectionFrameCoverage`, or the frame list is empty
+- **THEN** `plausibility` is `{ side: 0, front: 0, ambiguous: 1 }`
+
+### Requirement: Metric view fit is resolved from view plausibility, not from the committed label
+
+The system SHALL resolve each metric's view fit against the clip's `plausibility` before any
+metric reads it: the applied confidence multiplier SHALL be the plausibility-weighted mean of that
+metric's three `viewFitTable` rows, and the reported `viewFit` SHALL be the row of the view holding
+the most plausibility mass, with `'ambiguous'` taking ties. Both SHALL be derived from the same
+distribution, so that a metric can never be reported as structurally unmeasurable and another
+metric granted full confidence on the strength of the same uncertain view classification.
+
+`computeFormHeuristics` SHALL perform this resolution exactly once per clip and share it across
+every metric. Where another requirement in this capability names a metric's per-view row values
+(for example `side: 1.0`, `front: 0.85`, `ambiguous: 0.6`), those values are the endpoints of this
+resolution: they are the multiplier applied whenever the clip commits to a view, and the values
+blended otherwise.
+
+Resolution SHALL NOT depend on body-scale sample coverage beyond the existing
+`minViewDetectionFrameCoverage` gate, since every metric already factors its own frame coverage
+into its confidence over the same frames.
+
+#### Scenario: A committed view is gated exactly as its own row prescribes
+
+- **WHEN** `computeFormHeuristics` runs on a clip classified `'side'` or `'front'`
+- **THEN** every metric's `viewFit` and confidence multiplier are exactly that view's row from
+  `viewFitTable`, identical to computing the metric directly against that view label
+
+#### Scenario: A marginally-committed view is not degraded for being marginal
+
+- **WHEN** a clip commits to a view because both signals cleared that view's thresholds, but one of
+  them cleared its threshold only narrowly
+- **THEN** that view's metrics are gated by its own row at full strength, because the opposite
+  view's conditions are unmet and the narrowness of one margin is not evidence for the opposite
+  view
+
+#### Scenario: A metric measurable from the most plausible view is reported, not excluded
+
+- **WHEN** one committed view has plausibility 0 and the other holds most of the remaining mass,
+  so the label is `'ambiguous'`
+- **THEN** a metric whose row for the plausible view is not `'unsuitable'` reports that fit rather
+  than being excluded, with a multiplier between what the plausible view's row and the
+  `'ambiguous'` row would each have given it alone
+
+#### Scenario: A metric unsuitable from every plausible view stays excluded
+
+- **WHEN** a metric's rows are `'unsuitable'` for every view carrying plausibility mass
+- **THEN** its resolved `viewFit` is `'unsuitable'` and it remains excluded
+
+#### Scenario: A genuinely ambiguous clip degrades in both directions
+
+- **WHEN** both signals sit in their undecided bands, so `'ambiguous'` holds the most mass
+- **THEN** side-primary and front-primary metrics alike resolve to their `'ambiguous'` rows' fit,
+  neither direction favoured, while view-tolerant metrics continue to report
 
