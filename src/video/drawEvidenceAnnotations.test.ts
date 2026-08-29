@@ -12,7 +12,8 @@ import {
 } from '../results/skeletonGeometry'
 import {
   EVIDENCE_BASE_OPACITY,
-  EVIDENCE_GHOST_OPACITY,
+  EVIDENCE_GHOST_BLEND_ALPHA,
+  EVIDENCE_GHOST_MARK_OPACITY,
 } from '../results/evidenceFrames'
 import type {
   EvidenceFramePlan,
@@ -148,7 +149,8 @@ function instant(
 /**
  * A ghosted `trunkLeanRange` pair. The base carries one INTERPOLATED shoulder so all three of the
  * composed opacities the pure layer can produce are present in one fixture: base-detected (1.0),
- * base-interpolated (0.35) and ghost-detected (0.5).
+ * base-interpolated (0.35) and ghost-detected (0.5). That 0.35 is `INTERPOLATED_OPACITY` and shares
+ * a value with `EVIDENCE_GHOST_BLEND_ALPHA` by coincidence — the two are unrelated quantities.
  */
 function ghostedPairAnnotation(): EvidenceAnnotation {
   const base = instant(
@@ -167,7 +169,7 @@ function ghostedPairAnnotation(): EvidenceAnnotation {
       pos('left_shoulder', 330, 252),
       pos('right_shoulder', 370, 252),
     ],
-    EVIDENCE_GHOST_OPACITY,
+    EVIDENCE_GHOST_BLEND_ALPHA,
   )
   const plan: EvidenceFramePlan = {
     metric: 'trunkLean',
@@ -241,11 +243,12 @@ describe('drawEvidenceAnnotation', () => {
 
   describe('the globalAlpha trap', () => {
     // `extractFrame` never resets `ctx.globalAlpha`, so on a ghosted pair this module is handed a
-    // context sitting at the ghost's blend value. Inheriting it would halve the BASE marks too.
+    // context sitting at the ghost's PHOTOGRAPHIC blend alpha — a different number from the ghost's
+    // mark opacity. Inheriting it would weaken the BASE marks too.
     it('is unaffected by the alpha the context arrives carrying', () => {
       const annotation = ghostedPairAnnotation()
       const clean = recordingContext(1)
-      const afterGhost = recordingContext(EVIDENCE_GHOST_OPACITY)
+      const afterGhost = recordingContext(EVIDENCE_GHOST_BLEND_ALPHA)
       const arbitrary = recordingContext(0.17)
 
       drawEvidenceAnnotation(clean.ctx, annotation)
@@ -258,7 +261,7 @@ describe('drawEvidenceAnnotation', () => {
 
     it("draws the base instant's detected marks at full opacity after a ghost", () => {
       const annotation = ghostedPairAnnotation()
-      const { ctx, paints } = recordingContext(EVIDENCE_GHOST_OPACITY)
+      const { ctx, paints } = recordingContext(EVIDENCE_GHOST_BLEND_ALPHA)
       drawEvidenceAnnotation(ctx, annotation)
 
       const baseDetectedOps = annotation.ops.filter(
@@ -269,8 +272,8 @@ describe('drawEvidenceAnnotation', () => {
         (paint) => paint.alpha === DETECTED_OPACITY,
       )
       expect(atFullOpacity).toHaveLength(baseDetectedOps.length)
-      // The halved reading this test exists to reject: had the leaked 0.5 applied, every one of
-      // those marks would have painted at 0.5 and none at 1.
+      // The weakened reading this test exists to reject: had the leaked blend alpha applied, every
+      // one of those marks would have painted at it and none at 1.
       expect(Math.max(...paints.map((paint) => paint.alpha))).toBe(
         DETECTED_OPACITY,
       )
@@ -278,14 +281,14 @@ describe('drawEvidenceAnnotation', () => {
 
     it('carries the three composed opacities through unchanged', () => {
       const annotation = ghostedPairAnnotation()
-      const { ctx, paints } = recordingContext(EVIDENCE_GHOST_OPACITY)
+      const { ctx, paints } = recordingContext(EVIDENCE_GHOST_BLEND_ALPHA)
       drawEvidenceAnnotation(ctx, annotation)
 
       const painted = new Set(coloredPaints(paints).map((paint) => paint.alpha))
       // base detected, ghost detected (also base interpolated × nothing), base interpolated.
       expect(painted).toContain(DETECTED_OPACITY)
       expect(painted).toContain(
-        DETECTED_OPACITY * EVIDENCE_GHOST_OPACITY,
+        DETECTED_OPACITY * EVIDENCE_GHOST_MARK_OPACITY,
       )
       expect(painted).toContain(INTERPOLATED_OPACITY * EVIDENCE_BASE_OPACITY)
       expect([...painted].sort()).toEqual(
@@ -295,13 +298,13 @@ describe('drawEvidenceAnnotation', () => {
 
     it("leaves the context reset rather than at the last mark's opacity", () => {
       const annotation = ghostedPairAnnotation()
-      const { ctx } = recordingContext(EVIDENCE_GHOST_OPACITY)
+      const { ctx } = recordingContext(EVIDENCE_GHOST_BLEND_ALPHA)
       drawEvidenceAnnotation(ctx, annotation)
       expect(ctx.globalAlpha).toBe(1)
     })
 
     it('resets nothing and paints nothing when there is nothing to draw', () => {
-      const { ctx, paints } = recordingContext(EVIDENCE_GHOST_OPACITY)
+      const { ctx, paints } = recordingContext(EVIDENCE_GHOST_BLEND_ALPHA)
       drawEvidenceAnnotation(ctx, {
         metric: 'cadence',
         kind: 'bounceCycle',

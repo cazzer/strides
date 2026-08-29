@@ -21,6 +21,8 @@ export interface FakeCanvasRenderingContext2D {
   /** Used by the evidence annotation layer, which dashes its construction lines. */
   setLineDash: ReturnType<typeof vi.fn>
   globalAlpha: number
+  /** Recorded so a test can prove the photographic layers composite, rather than replace. */
+  globalCompositeOperation: string
   strokeStyle: string
   fillStyle: string
   lineWidth: number
@@ -44,6 +46,7 @@ export function stubCanvas2DContext(): FakeCanvasRenderingContext2D {
     drawImage: vi.fn(),
     setLineDash: vi.fn(),
     globalAlpha: 1,
+    globalCompositeOperation: 'source-over',
     strokeStyle: '',
     fillStyle: '',
     lineWidth: 1,

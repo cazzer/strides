@@ -7,7 +7,7 @@ import type {
 } from '../results/evidenceFrames'
 import {
   EVIDENCE_BASE_OPACITY,
-  EVIDENCE_GHOST_OPACITY,
+  EVIDENCE_GHOST_BLEND_ALPHA,
 } from '../results/evidenceFrames'
 import { stubCanvas2DContext } from '../test/canvasTestUtils'
 import type { FakeCanvasRenderingContext2D } from '../test/canvasTestUtils'
@@ -25,6 +25,7 @@ vi.mock('./evidenceSeekOffset', () => ({
 }))
 
 import {
+  DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS,
   EVIDENCE_OUTPUT_MAX_SIDE_PX,
   extractClipEvidence,
   extractPlannedFrames,
@@ -89,7 +90,7 @@ const PAIR: EvidenceFramePlan = {
   },
   ghost: {
     timestamp: 2.25,
-    opacity: EVIDENCE_GHOST_OPACITY,
+    opacity: EVIDENCE_GHOST_BLEND_ALPHA,
     keypoints: HIP_KEYPOINTS,
     outwardSign: HIP_SIGNS,
     side: null,
@@ -164,21 +165,86 @@ function seekableVideo({ presentFrames = true } = {}): {
   return { video, registrationCount: controller.registrationCount }
 }
 
-/** Records `globalAlpha` as it stood at each `drawImage`, which is the only way to observe it —
- * the fake context is a plain object and the property is overwritten before the next call. */
-function recordAlphas(ctx: FakeCanvasRenderingContext2D): number[] {
-  const alphas: number[] = []
-  ctx.drawImage.mockImplementation(() => {
-    alphas.push(ctx.globalAlpha)
-  })
-  return alphas
+interface RecordedDraw {
+  call: 'drawImage' | 'clearRect' | 'fill'
+  alpha: number
+  /** Which instant this call drew, read off the element at draw time. */
+  sourceTime: number
+  composite: string
+}
+
+/**
+ * An ordered log of the calls that put pixels on the canvas, each stamped with the context state in
+ * force at the time — the only way to observe that state, since the fake context is a plain object
+ * whose properties are overwritten before the next call.
+ *
+ * The log, rather than a list of alphas: alphas alone say nothing about ORDER, and reversing the two
+ * photographic draws does not change them while changing the image completely — a base drawn last
+ * at full opacity ERASES the ghost rather than reweighting it. `clearRect`/`fill` are logged so an
+ * erase inserted between the two draws breaks the photographic prefix instead of hiding behind it.
+ */
+function recordDraws(
+  ctx: FakeCanvasRenderingContext2D,
+  video: HTMLVideoElement,
+): RecordedDraw[] {
+  const draws: RecordedDraw[] = []
+  const record = (call: RecordedDraw['call']) => () => {
+    draws.push({
+      call,
+      alpha: ctx.globalAlpha,
+      sourceTime: video.currentTime,
+      composite: ctx.globalCompositeOperation,
+    })
+  }
+  ctx.drawImage.mockImplementation(record('drawImage'))
+  ctx.clearRect.mockImplementation(record('clearRect'))
+  ctx.fill.mockImplementation(record('fill'))
+  return draws
+}
+
+/**
+ * The weight each drawn instant ends up carrying in the finished image, by replaying the log through
+ * `source-over` onto a transparent canvas: `out = α·src + (1 − α)·dst`.
+ *
+ * Test-local on purpose. The draw path does not use a reducer — it issues canvas calls — so a shared
+ * helper would be a second model of the same thing, free to drift from the one that ships. What this
+ * models is verified against the real compositor by live PSNR, not here
+ * (`openspec/changes/weight-evidence-ghost-below-base/design.md` D4).
+ */
+function compositeWeights(draws: RecordedDraw[]): Map<number, number> {
+  const weights = new Map<number, number>()
+  for (const draw of draws.filter((d) => d.call === 'drawImage')) {
+    // The reducer models one compositing mode. Under `'copy'` the same log really yields 100% of
+    // the last draw, so replaying it as source-over would report a split that never happened.
+    if (draw.composite !== 'source-over') {
+      throw new Error(`compositeWeights models source-over, got ${draw.composite}`)
+    }
+    for (const [time, weight] of weights) {
+      weights.set(time, weight * (1 - draw.alpha))
+    }
+    weights.set(
+      draw.sourceTime,
+      (weights.get(draw.sourceTime) ?? 0) + draw.alpha,
+    )
+  }
+  return weights
+}
+
+/**
+ * The `currentTime` an instant is drawn at, derived the way `drawInstant` derives its seek target
+ * rather than assumed equal to the timestamp. The two coincide only while the default offset is
+ * zero; hard-coding the bare timestamp would break these assertions the day it isn't, for a reason
+ * that has nothing to do with what they test.
+ */
+function drawnTimeOf(instant: EvidenceInstantPlan): number {
+  return Math.max(0, instant.timestamp + DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS)
 }
 
 describe('extractPlannedFrames', () => {
   it('blends a pair into one canvas at the plan opacities, through the plan crop rect', async () => {
     const ctx = stubCanvas2DContext()
-    const alphas = recordAlphas(ctx)
     const { video, registrationCount } = seekableVideo()
+    const draws = recordDraws(ctx, video)
 
     const evidence = await extractPlannedFrames(
       video,
@@ -189,9 +255,24 @@ describe('extractPlannedFrames', () => {
       status: 'extracted',
       items: [{ plan: PAIR, canvas: expect.any(HTMLCanvasElement) }],
     })
-    // Two frames composited into the ONE canvas the single returned item carries.
+    // Two frames composited into the ONE canvas the single returned item carries — the base first
+    // and opaque, the ghost over it, both compositing rather than replacing. Everything after this
+    // prefix belongs to the annotation layer.
     expect(ctx.drawImage).toHaveBeenCalledTimes(2)
-    expect(alphas).toEqual([EVIDENCE_BASE_OPACITY, EVIDENCE_GHOST_OPACITY])
+    expect(draws.slice(0, 2)).toEqual([
+      {
+        call: 'drawImage',
+        alpha: EVIDENCE_BASE_OPACITY,
+        sourceTime: drawnTimeOf(PAIR.base),
+        composite: 'source-over',
+      },
+      {
+        call: 'drawImage',
+        alpha: EVIDENCE_GHOST_BLEND_ALPHA,
+        sourceTime: drawnTimeOf(PAIR.ghost!),
+        composite: 'source-over',
+      },
+    ])
 
     // Nine-argument form: only the crop rect is read, and the destination is the display crop —
     // never a full-frame canvas (design R3).
@@ -213,6 +294,39 @@ describe('extractPlannedFrames', () => {
     expect(registrationCount()).toBe(2)
   })
 
+  it('composites a ghosted pair to a 65/35 split of the two instants', async () => {
+    const ctx = stubCanvas2DContext()
+    const { video } = seekableVideo()
+    const draws = recordDraws(ctx, video)
+
+    await extractPlannedFrames(video, planWith({ trunkLean: [PAIR] }))
+
+    const weights = compositeWeights(draws)
+    expect(Object.fromEntries(weights)).toEqual({
+      [drawnTimeOf(PAIR.base)]: 1 - EVIDENCE_GHOST_BLEND_ALPHA,
+      [drawnTimeOf(PAIR.ghost!)]: EVIDENCE_GHOST_BLEND_ALPHA,
+    })
+    // Sums to one: nothing of the canvas is left unpainted, and neither draw was dropped.
+    expect([...weights.values()].reduce((sum, weight) => sum + weight, 0)).toBe(1)
+  })
+
+  it('composites the base instant at strictly more weight than the ghost', async () => {
+    const ctx = stubCanvas2DContext()
+    const { video } = seekableVideo()
+    const draws = recordDraws(ctx, video)
+
+    await extractPlannedFrames(video, planWith({ trunkLean: [PAIR] }))
+
+    // The invariant this weighting exists for, asserted independently of the number that satisfies
+    // it: the caption names one instant as the subject and the annotation draws that instant's
+    // marks solid, so the photograph underneath must not pick the other one — or nobody
+    // (`strides-c37`). Flattening the emphasis means deleting a test that says why not to.
+    const weights = compositeWeights(draws)
+    expect(weights.get(drawnTimeOf(PAIR.base))!).toBeGreaterThan(
+      weights.get(drawnTimeOf(PAIR.ghost!))!,
+    )
+  })
+
   it('seeks each planned instant, offset by the calibration hook and nothing else', async () => {
     stubCanvas2DContext()
     const { video } = seekableVideo()
@@ -231,8 +345,8 @@ describe('extractPlannedFrames', () => {
 
   it('draws a single-instant exemplar once, and sizes the canvas to the crop when it is smaller than the cap', async () => {
     const ctx = stubCanvas2DContext()
-    const alphas = recordAlphas(ctx)
     const { video } = seekableVideo()
+    const draws = recordDraws(ctx, video)
 
     const evidence = await extractPlannedFrames(
       video,
@@ -240,7 +354,15 @@ describe('extractPlannedFrames', () => {
     )
 
     expect(evidence.footStrikePattern.status).toBe('extracted')
-    expect(alphas).toEqual([EVIDENCE_BASE_OPACITY])
+    // An unghosted exemplar is untouched by the ghost's blend weight: one opaque draw.
+    expect(draws.slice(0, 1)).toEqual([
+      {
+        call: 'drawImage',
+        alpha: EVIDENCE_BASE_OPACITY,
+        sourceTime: SINGLE.base.timestamp,
+        composite: 'source-over',
+      },
+    ])
     // 320 < 640: the crop is never upscaled to reach the cap.
     expect(ctx.drawImage).toHaveBeenCalledWith(
       video,
@@ -720,16 +842,18 @@ describe('abandoning an in-flight clip', () => {
   it('changes nothing when no signal is supplied', async () => {
     const ctx = stubCanvas2DContext()
     const { video } = seekableVideo()
-    const alphas = recordAlphas(ctx)
+    const draws = recordDraws(ctx, video)
 
     const evidence = await extractPlannedFrames(
       video,
       planWith({ trunkLean: [PAIR], footStrikePattern: [SINGLE] }),
     )
 
-    expect(alphas).toEqual([
+    expect(
+      draws.filter((draw) => draw.call === 'drawImage').map((draw) => draw.alpha),
+    ).toEqual([
       EVIDENCE_BASE_OPACITY,
-      EVIDENCE_GHOST_OPACITY,
+      EVIDENCE_GHOST_BLEND_ALPHA,
       EVIDENCE_BASE_OPACITY,
     ])
     expect(evidence.trunkLean.status).toBe('extracted')
