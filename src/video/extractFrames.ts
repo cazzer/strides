@@ -10,6 +10,15 @@ import { evidenceOutputSide } from '../results/evidenceFrames'
 import { planEvidenceAnnotations } from '../results/evidenceAnnotations'
 import { drawEvidenceAnnotation } from './drawEvidenceAnnotations'
 import { resolveEvidenceSeekOffsetSeconds } from './evidenceSeekOffset'
+import {
+  FRAME_PRESENTATION_TIMEOUT_MS,
+  LOAD_TIMEOUT_MS,
+  SEEK_TIMEOUT_MS,
+  queueDetachedDecode,
+  seekTo,
+  waitForPresentedFrame,
+  withDecodedVideo,
+} from './videoElement'
 
 /**
  * The IMPURE half of evidence-frame extraction: take the plan `evidenceFrames.ts` produced and
@@ -22,13 +31,17 @@ import { resolveEvidenceSeekOffsetSeconds } from './evidenceSeekOffset'
  * starts picking a timestamp or a rectangle, it belongs in `evidenceFrames.ts` instead.
  *
  * **One detached decoder at a time, process-wide, and abandonable.** The ordering lives inside
- * `extractClipEvidence` — the function that opens the decoder — on a module-level queue, exactly
- * as `posterFrame.ts` puts it inside `deriveClipPoster`. A `for await` loop can only order the
- * clips of ONE call, and the overlap that mattered was between SEPARATE calls: the gallery starts
- * a fresh pass whenever its input signature changes, which it legitimately does mid-session when
- * the background scale pass grafts `verticalOscillationCm` in. Three 4K decoders were measured
- * open at once. Alongside it, `EvidenceExtractionOptions.signal` lets a caller abandon a pass
- * whose result nobody will read, so a superseded pass drops its decoder instead of grinding on.
+ * `extractClipEvidence` — the function that opens the decoder — on `videoElement.ts`'s shared
+ * `queueDetachedDecode`, which `posterFrame.ts` puts inside `deriveClipPoster` for the same reason.
+ * A `for await` loop can only order the clips of ONE call, and the overlap that mattered was
+ * between SEPARATE calls: extraction starts a fresh pass whenever its input signature changes,
+ * which it legitimately does mid-session when the background scale pass grafts
+ * `verticalOscillationCm` in. Three 4K decoders were measured open at once. That queue is now ONE
+ * queue for the whole app rather than one per feature — it used to be a tail private to this
+ * module, which bounded evidence at one decoder and said nothing about the poster path's, leaving a
+ * global peak of two structurally possible. Alongside it, `EvidenceExtractionOptions.signal` lets a
+ * caller abandon a pass whose result nobody will read, so a superseded pass drops its decoder
+ * instead of grinding on.
  *
  * **Never the visible element.** `useVideoAnalysis` re-arms the canonical `<video>` with
  * `muted`/`loop`/`currentTime = 0`/`play()` the moment a run reaches `phase: 'ready'`, so the clip
@@ -38,33 +51,14 @@ import { resolveEvidenceSeekOffsetSeconds } from './evidenceSeekOffset'
  * entry point below therefore either takes a `<video>` the caller owns or mints its own detached
  * one from `sourceBlob`.
  *
- * Runs strictly after `phase: 'ready'`, never inside the sampling loop.
+ * **THIS module runs strictly after `phase: 'ready'`, never inside the sampling loop.** That is a
+ * fact about when evidence extraction is CALLED, not a property of the `<video>` primitives it is
+ * built from, and it deliberately stayed behind when those moved to `videoElement.ts`:
+ * `useClipPoster` runs the same primitives DURING sampling, on purpose, and used to inherit this
+ * sentence as a false claim about itself by importing half of them from here. The shared module
+ * states no schedule; each consumer states its own, and the shared decoder queue is what makes two
+ * different schedules safe to hold at once.
  */
-
-/**
- * Bounded wait for a single seek. Resurrected verbatim from the retired
- * `src/quality/assessVideoQuality.ts` (`git show ee7a56e^`): `seeked` is not guaranteed to fire
- * reliably in every browser/state, so the wait degrades rather than hanging the caller forever.
- */
-export const SEEK_TIMEOUT_MS = 2000
-
-/**
- * Bounded wait for the detached element to have decoded data. Generous, because the alternative
- * to waiting is extracting from a black frame: the blob is local and has already been decoded once
- * by the analysis pass, so a clip that has not produced `loadeddata` inside this window is broken
- * rather than slow.
- */
-export const LOAD_TIMEOUT_MS = 10000
-
-/**
- * Backstop on the post-seek presentation grace period (see `waitForPresentedFrame`). Deliberately
- * two orders of magnitude below `SEEK_TIMEOUT_MS`: this is a courtesy pause, not a gate, and the
- * one situation that reaches it is a document that never paints (a backgrounded tab throttles
- * `requestAnimationFrame` to nothing). A whole clip's plan is on the order of forty instants, so a
- * seek-sized backstop here would cost a minute of wall clock to buy nothing `seeked` had not
- * already guaranteed.
- */
-export const FRAME_PRESENTATION_TIMEOUT_MS = 100
 
 /**
  * Cap on the side of the canvas a crop is drawn into, in device pixels. The crop rect itself is in
@@ -95,9 +89,6 @@ export const EVIDENCE_OUTPUT_MAX_SIDE_PX = 640
  * not shift the two clocks — which is why it stays the default an explicit caller inherits.
  */
 export const DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS = 0
-
-/** `HTMLMediaElement.HAVE_CURRENT_DATA` — data for the current playback position is available. */
-const HAVE_CURRENT_DATA = 2
 
 export interface EvidenceExtractionOptions {
   /**
@@ -157,160 +148,6 @@ export type ClipEvidence = Record<MetricId, MetricEvidence>
 export interface ClipEvidenceInput {
   sourceBlob: Blob | null
   plan: ClipEvidencePlan
-}
-
-/**
- * `'already-there'` distinguishes the `<0.001s` short-circuit from a real seek, which matters
- * downstream: no seek means no new frame will be presented, so waiting for one would only ever
- * time out.
- */
-export type SeekOutcome = 'seeked' | 'already-there' | 'timed-out'
-
-/**
- * Seeks `video` to `time` and waits for `seeked`, with a timeout fallback — resurrected from the
- * retired `assessVideoQuality.ts` rather than rewritten. It never rejects and never hangs.
- *
- * The one change from the original is the resolved value: that caller degraded gracefully on a
- * timeout and had no use for the distinction, whereas this one must mark the metric
- * `'extraction-failed'` rather than draw whatever frame happened to be showing.
- */
-export function seekTo(
-  video: HTMLVideoElement,
-  time: number,
-  timeoutMs: number = SEEK_TIMEOUT_MS,
-): Promise<SeekOutcome> {
-  return new Promise((resolve) => {
-    if (Math.abs(video.currentTime - time) < 0.001) {
-      resolve('already-there')
-      return
-    }
-    const cleanup = () => {
-      clearTimeout(timer)
-      video.removeEventListener('seeked', onSeeked)
-    }
-    const onSeeked = () => {
-      cleanup()
-      resolve('seeked')
-    }
-    const timer = setTimeout(() => {
-      cleanup()
-      resolve('timed-out')
-    }, timeoutMs)
-    video.addEventListener('seeked', onSeeked)
-    video.currentTime = time
-  })
-}
-
-/** Which arm of `waitForPresentedFrame` resolved it. Reported for observability — no arm is a
- * failure, so the caller draws regardless of which one won. */
-export type FramePresentationSignal =
-  | 'video-frame-callback'
-  | 'animation-frame'
-  | 'timed-out'
-
-/**
- * Bounded, best-effort pause between a completed seek and the draw. **Every arm resolves and none
- * of them fails the exemplar** — a presentation signal is a courtesy here, never the only path to
- * a drawn frame.
- *
- * ### Why this is not the `requestVideoFrameCallback` gate it replaced
- *
- * #66 awaited exactly one `requestVideoFrameCallback` after `seeked` and dropped the exemplar when
- * it did not arrive, reasoning that `seeked` reports seek completion but not that the new frame is
- * on screen (design D11 — an inference, never measured). Measured live for #59 (headless Chromium,
- * real GPU): **`requestVideoFrameCallback` does not fire after a PAUSED seek** in this Chromium —
- * detached or attached to the document, headless or headed. It fires normally during playback; the
- * paused-seek case specifically never presents. So the gate never opened, and every metric on every
- * clip degraded to `'extraction-failed'`.
- *
- * The premise was wrong as well as the remedy. `drawImage(video, …)` samples the DECODED frame at
- * the current playback position, not the composited output `requestVideoFrameCallback` reports on,
- * and `seeked` already implies `readyState >= HAVE_CURRENT_DATA` for the new position — the frame
- * is decoded and drawable at that point. The #59 probe confirms it end to end: pixels drawn
- * immediately after `seeked` alone are correct and DISTINCT per timestamp.
- *
- * ### The three arms
- *
- * - `requestVideoFrameCallback`, when the browser has it. First choice, and the reason the wait
- *   still exists: a browser that DOES present after a paused seek gets the real signal.
- * - Two `requestAnimationFrame` ticks. The everyday fallback, ~32 ms. Two rather than one because a
- *   single tick can land ahead of the frame callback in a browser where that callback works, which
- *   would make the real signal unreachable in practice.
- * - `timeoutMs`. The backstop for a document that never paints at all, where
- *   `requestAnimationFrame` is throttled to nothing and would hang this forever.
- *
- * A browser with no `requestVideoFrameCallback` simply loses the first arm and resolves through the
- * other two, which is the same "extract anyway" posture the old code took by resolving immediately.
- */
-export function waitForPresentedFrame(
-  video: HTMLVideoElement,
-  timeoutMs: number = FRAME_PRESENTATION_TIMEOUT_MS,
-): Promise<FramePresentationSignal> {
-  return new Promise((resolve) => {
-    let settled = false
-    let frameHandle: number | undefined
-    let rafHandle: number | undefined
-
-    // Armed before either fast arm is registered, and read only through the hoisted `settle`
-    // below, so no arm — not even one a stub fires synchronously — can reach it unassigned.
-    const timer = setTimeout(() => settle('timed-out'), timeoutMs)
-
-    function settle(signal: FramePresentationSignal) {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (frameHandle !== undefined) video.cancelVideoFrameCallback?.(frameHandle)
-      if (rafHandle !== undefined && typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(rafHandle)
-      }
-      resolve(signal)
-    }
-
-    if (typeof video.requestVideoFrameCallback === 'function') {
-      frameHandle = video.requestVideoFrameCallback(() => {
-        frameHandle = undefined
-        settle('video-frame-callback')
-      })
-    }
-
-    if (typeof requestAnimationFrame === 'function') {
-      rafHandle = requestAnimationFrame(() => {
-        rafHandle = requestAnimationFrame(() => {
-          rafHandle = undefined
-          settle('animation-frame')
-        })
-      })
-    }
-  })
-}
-
-/** Bounded wait for the element to hold decoded pixels. Resolves `false` on error or timeout. */
-function waitForDecodedData(
-  video: HTMLVideoElement,
-  timeoutMs: number,
-): Promise<boolean> {
-  if (video.readyState >= HAVE_CURRENT_DATA) return Promise.resolve(true)
-  return new Promise((resolve) => {
-    const cleanup = () => {
-      clearTimeout(timer)
-      video.removeEventListener('loadeddata', onLoaded)
-      video.removeEventListener('error', onError)
-    }
-    const onLoaded = () => {
-      cleanup()
-      resolve(true)
-    }
-    const onError = () => {
-      cleanup()
-      resolve(false)
-    }
-    const timer = setTimeout(() => {
-      cleanup()
-      resolve(false)
-    }, timeoutMs)
-    video.addEventListener('loadeddata', onLoaded)
-    video.addEventListener('error', onError)
-  })
 }
 
 interface ResolvedOptions {
@@ -498,20 +335,10 @@ export async function extractPlannedFrames(
 }
 
 /**
- * Tail of the process-wide evidence queue (see `extractClipEvidence`). Always settled or pending —
- * never rejected, so one failed clip cannot wedge the queue for every clip behind it.
- */
-let evidenceQueue: Promise<unknown> = Promise.resolve()
-
-/**
- * One clip, one detached decoder, torn down before returning.
- *
- * The object URL is minted from `sourceBlob` and revoked here. `useVideoSource` keeps its own
- * `objectUrlRef` private and revokes it on reset/unmount — that one is never reused and never
- * revoked from here; `sourceBlob` is the intended seam and needs no `VideoSource` API change.
- * Blob URLs inherit the document's origin, so the canvas is never tainted (all four input modes
- * converge on `useVideoSource.load(blob)`; the remote demo URL is fetched to a blob and never
- * assigned to a `src`).
+ * One clip, one detached decoder, torn down before returning. The element, its object URL and the
+ * teardown are `withDecodedVideo`'s (`videoElement.ts`) — identical plumbing to the poster path's,
+ * because it is literally the same code rather than a second copy of it. A clip whose element never
+ * decodes degrades every planned metric to `'extraction-failed'`.
  */
 async function decodeClipEvidence(
   sourceBlob: Blob,
@@ -533,39 +360,28 @@ async function decodeClipEvidence(
   const withOffset: EvidenceExtractionOptions = { ...options, seekOffsetSeconds }
   const resolved = resolveOptions(withOffset)
 
-  const url = URL.createObjectURL(sourceBlob)
-  const video = document.createElement('video')
-  video.muted = true
-  video.playsInline = true
-  video.preload = 'auto'
-  video.src = url
-  video.load()
-
-  try {
-    const ready = await waitForDecodedData(video, resolved.loadTimeoutMs)
-    if (!ready) return extractionFailed(plan)
-    return await extractPlannedFrames(video, plan, withOffset)
-  } finally {
-    // Drop the decoder before the URL: revoking first leaves the element holding a reference to a
-    // now-unresolvable blob.
-    video.removeAttribute('src')
-    video.load()
-    URL.revokeObjectURL(url)
-  }
+  return withDecodedVideo(
+    sourceBlob,
+    resolved.loadTimeoutMs,
+    (video) => extractPlannedFrames(video, plan, withOffset),
+    () => extractionFailed(plan),
+  )
 }
 
 /**
  * One clip's evidence, **strictly after every extraction already asked for**.
  *
- * The wait is imposed here rather than asked of callers, and here specifically because this is the
- * function that opens the decoder. `extractSessionEvidence`'s `for await` loop orders the clips of
- * ONE call and can do no more — the gallery starts a whole new pass whenever its input signature
- * changes, which it legitimately does mid-session when the background scale pass grafts
- * `verticalOscillationCm` into the fused heuristics, and nothing ordered those passes against each
- * other. Measured: three 4K decoders open at once on a four-clip session. Chaining onto a
- * module-level tail makes "one detached decoder exists at a time" a property of this function
- * instead of a convention every call site has to know about — the same posture, and the same 4K
- * memory reason, as `deriveClipPoster`'s `posterQueue`.
+ * "Already asked for" spans poster derivation too, not just other extractions: the wait is
+ * `videoElement.ts`'s single `queueDetachedDecode`, shared with `deriveClipPoster`. It is imposed
+ * here rather than asked of callers, and here specifically because this is the function that opens
+ * the decoder. `extractSessionEvidence`'s `for await` loop orders the clips of ONE call and can do
+ * no more — extraction starts a whole new pass whenever its input signature changes, which it
+ * legitimately does mid-session when the background scale pass grafts `verticalOscillationCm` into
+ * the fused heuristics, and nothing ordered those passes against each other. Measured: three 4K
+ * decoders open at once on a four-clip session. Chaining onto one module-level tail makes "one
+ * detached decoder exists at a time" a property of the shared module instead of a convention every
+ * call site has to know about — the same posture, and the same 4K memory reason, as
+ * `deriveClipPoster`.
  *
  * Nothing-to-do calls take no place in the queue: a clip with no bytes, and a pass already
  * abandoned, both open no decoder, so making them wait behind one would be pure latency.
@@ -578,19 +394,9 @@ export function extractClipEvidence(
   if (sourceBlob === null || options.signal?.aborted) {
     return Promise.resolve(extractionFailed(plan))
   }
-
-  const extraction = evidenceQueue.then(() =>
+  return queueDetachedDecode(() =>
     decodeClipEvidence(sourceBlob, plan, options),
   )
-  // The tail swallows outcomes on purpose. `decodeClipEvidence` names a verdict rather than
-  // throwing on every failure it knows about, but an unforeseen throw must still not leave
-  // `evidenceQueue` rejected — every later clip chains off it, and they would all reject without
-  // ever decoding.
-  evidenceQueue = extraction.then(
-    () => undefined,
-    () => undefined,
-  )
-  return extraction
 }
 
 /**

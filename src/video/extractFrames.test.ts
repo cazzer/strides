@@ -30,7 +30,6 @@ import {
   extractClipEvidence,
   extractPlannedFrames,
   extractSessionEvidence,
-  waitForPresentedFrame,
 } from './extractFrames'
 
 beforeEach(() => {
@@ -468,43 +467,9 @@ describe('extractPlannedFrames', () => {
   })
 })
 
-describe('waitForPresentedFrame', () => {
-  it('resolves on the presentation callback when the browser actually fires one', async () => {
-    const { video } = seekableVideo()
-    // The stub answers on the next microtask — ahead of any animation frame, so the real signal
-    // wins the race wherever it works, which is the whole reason the arm is still here.
-    await expect(waitForPresentedFrame(video, 30_000)).resolves.toBe(
-      'video-frame-callback',
-    )
-  })
-
-  it('falls through to an animation frame when the callback never fires', async () => {
-    const { video } = seekableVideo({ presentFrames: false })
-    // 30s backstop: only the animation-frame arm can resolve this inside the test timeout.
-    await expect(waitForPresentedFrame(video, 30_000)).resolves.toBe(
-      'animation-frame',
-    )
-  })
-
-  it('cancels the pending frame callback once another arm has won', async () => {
-    const { video } = seekableVideo({ presentFrames: false })
-    const cancel = vi.spyOn(video, 'cancelVideoFrameCallback')
-    await waitForPresentedFrame(video, 30_000)
-    expect(cancel).toHaveBeenCalledTimes(1)
-  })
-
-  it('resolves on its own backstop when nothing paints', async () => {
-    const { video } = seekableVideo({ presentFrames: false })
-    // A document that never paints — a backgrounded tab throttles rAF to nothing, and without the
-    // backstop this wait would simply never settle.
-    vi.stubGlobal('requestAnimationFrame', undefined)
-    try {
-      await expect(waitForPresentedFrame(video, 5)).resolves.toBe('timed-out')
-    } finally {
-      vi.unstubAllGlobals()
-    }
-  })
-})
+// `waitForPresentedFrame`'s own four tests moved to `videoElement.test.ts` with the function, and
+// are unchanged there. What stays here is how THIS module uses it: that a real seek waits for a
+// presentation signal and an `'already-there'` short-circuit does not (above).
 
 describe('extractClipEvidence', () => {
   it('degrades every planned metric when the clip has no source bytes', async () => {
