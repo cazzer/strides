@@ -97,6 +97,7 @@ const PAIR: EvidenceFramePlan = {
   crop: { x: 412, y: 130, side: 900 },
   travelDirection: 1,
   demotedFromPair: false,
+  cropGrowth: 1.4,
 }
 
 const SINGLE: EvidenceFramePlan = {
@@ -118,6 +119,7 @@ const SINGLE: EvidenceFramePlan = {
   ghost: null,
   crop: { x: 0, y: 0, side: 320 },
   travelDirection: -1,
+  cropGrowth: null,
   demotedFromPair: true,
 }
 

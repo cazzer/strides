@@ -103,9 +103,28 @@ export const EVIDENCE_NEAR_IDENTICAL_IOU = 0.98
  * background. What makes that unreadable is not how far the two boxes are apart, it is how far
  * apart they are RELATIVE TO THE SUBJECT — so the measure is the crop the pair needs divided by
  * the crop one instant needs, which is exactly the factor by which ghosting shrinks the subject on
- * screen. Dimensionless, so it needs no per-clip unit; and self-cancelling under both of
- * `computeCropRect`'s clamps, since a floor or a cap that binds on the pair's crop binds on the
- * single's too.
+ * screen. Dimensionless, so it needs no per-clip unit.
+ *
+ * **Read off the crop each side DEMANDS, before the frame cap** — `evidenceCropSideDemand`, and
+ * `strides-492`. `computeCropRect`'s two clamps do not behave alike here, and the claim this
+ * comment used to make — that the measure is "self-cancelling under both of `computeCropRect`'s
+ * clamps, since a floor or a cap that binds on the pair's crop binds on the single's too" — held
+ * for only one of them. The FLOOR does cancel, and in the right direction: it binds from BELOW, so
+ * a pair whose union the 320 px floor already frames really is no smaller on screen than its
+ * single would have been, and 1 is the honest reading. The CAP does not cancel, it ANNIHILATES: it
+ * binds from ABOVE, so once the union exceeds `min(frameWidth, frameHeight)` the numerator stops
+ * growing while the separation does not, and every pair past that point reads the same number.
+ * Measured on 3840×2160 with a 320×1240 full-body box, the post-cap reading is 1.089 for a pair
+ * half a frame apart and 1.089 again for one at OPPOSITE EDGES — the worst pair there is, scoring
+ * 1.089 against this 2.5. The demand reading separates them: 1.806 and 3.097.
+ *
+ * That is NOT the "did the crop hit the cap" test rejected below, and the difference is not
+ * cosmetic. This never asks whether a clamp bound; it is a continuous ratio of two demands, and it
+ * KEEPS the floor — which is exactly what makes a small source safe. On a frame whose larger
+ * dimension is `D`, the union's long side cannot exceed `D`, so the numerator cannot exceed
+ * `D × 1.6` while the denominator sits on the 320 px floor: the ratio is bounded by `D × 1.6 / 320`
+ * and reaches 2.5 only at `D ≥ 500`. On a 320×240 webcam clip this guard therefore cannot fire at
+ * ANY separation (its ceiling there is 1.6), where a cap test would have deleted every ghost.
  *
  * **2.5, from the framing contract and bracketed by measurement.** A single frames its subject to
  * span `1 / EVIDENCE_CROP_PADDING_MULTIPLIER` = 62.5% of the image's side; growth `R` shrinks that
@@ -120,6 +139,17 @@ export const EVIDENCE_NEAR_IDENTICAL_IOU = 0.98
  * and must not reach 3.375, the same clip's `trunkLean`, which is #71's whole-frame crop. The
  * eleven other pairs measured across the three test clips sit at 1.000–2.068, so nothing measured
  * lands between those two: moving this number is a decision to reclassify one of those images.
+ *
+ * Those thirteen readings were taken under the capped formula. Switching to the demand reading can
+ * only RAISE a reading and never lower it — the denominator is untouched and the numerator loses a
+ * ceiling — and it moves a pair at all only if that pair's own union crop was capped. Of the three
+ * whose box geometry is on record here, both legible ones are byte-unchanged (`STRIDE_PAIR`
+ * 2.0675, `LOPSIDED` 1.915: neither union reaches the 2160 cap on a 4K clip) and only the broken
+ * one moves, 3.375 → 5.815, further from this threshold rather than nearer it. `3.375` was itself
+ * `1080 / 320` exactly — union at the cap over solo at the floor — i.e. a saturated reading whose
+ * true value was always larger. The 2.190 pair's boxes were not recorded, so its demand reading is
+ * re-measured live rather than asserted; `cropGrowth` on the `[evidence-coverage]` line is the
+ * instrument for that.
  *
  * **What it is NOT.** Not elapsed time between the instants: on that same data the good
  * `stridePair` on Demo 1 unions to 1164 px and the broken `trunkLean` to 1144 px, so absolute
@@ -274,6 +304,19 @@ export interface EvidenceFramePlan {
   /** The exemplar arrived as a pair and is planned as a single: its two instants were
    * indistinguishable, or the ghost could not be resolved to a sampled frame. */
   demotedFromPair: boolean
+  /**
+   * `evidencePairCropGrowth` for the two instants this plan actually DRAWS — the factor by which
+   * ghosting shrank the subject in this image. `null` whenever no ghost is drawn (a single-instant
+   * exemplar, or a pair demoted to its base), where the quantity does not exist rather than being
+   * 1.
+   *
+   * A diagnostic, not a render input: nothing in the drawing layer reads it. It is here so the
+   * DEV-only `[evidence-coverage]` line can report the reading that `EVIDENCE_MAX_PAIR_CROP_GROWTH`
+   * is calibrated against, per clip and per exemplar, without a probe patch (`strides-492`). Every
+   * value that reaches that line is by construction BELOW the threshold — a pair at or above it was
+   * dropped and has no plan to carry a field.
+   */
+  cropGrowth: number | null
 }
 
 /**
@@ -601,6 +644,28 @@ export function computeEvidenceCropRect(
 }
 
 /**
+ * The crop side a box DEMANDS: `computeCropRect`'s padding and its degenerate-box floor, without
+ * its `min(frameWidth, frameHeight)` cap. Native video pixels, and never a rect — nothing is drawn
+ * through this, so it deliberately has no position and no frame to be positioned in.
+ *
+ * The only consumer is `evidencePairCropGrowth`, and the cap's absence is the whole point of
+ * `strides-492`: the cap is what the frame can SUPPLY, and a ratio of two supplies stops carrying
+ * separation the moment both sides saturate. `EVIDENCE_MAX_PAIR_CROP_GROWTH` holds the argument in
+ * full, including why the floor stays and why this is not a "did the crop hit the cap" test.
+ *
+ * It re-derives two lines of `computeCropRect` rather than calling it, which is a real drift risk
+ * and is pinned by a test: wherever the cap does not bind, this equals `computeCropRect`'s own
+ * `side` exactly. Do not "simplify" this by passing an infinite frame size — `computeCropRect`
+ * would then return a rect whose position is arithmetic on infinities, and a caller could read it.
+ */
+export function evidenceCropSideDemand(box: BoundingBoxPx): number {
+  const padded =
+    Math.max(box.maxX - box.minX, box.maxY - box.minY) *
+    EVIDENCE_CROP_PADDING_MULTIPLIER
+  return Math.max(padded, EVIDENCE_CROP_MIN_SIDE_PX)
+}
+
+/**
  * How much bigger the crop a pair needs is than the crop the BETTER-FRAMED of its two instants
  * needs alone — the factor by which ghosting shrinks the subject in the finished image. `1` when
  * ghosting costs nothing; see `EVIDENCE_MAX_PAIR_CROP_GROWTH` for why this is the quantity.
@@ -610,9 +675,11 @@ export function computeEvidenceCropRect(
  * are legitimately different sizes (a leg near the camera at one instant and far at the other)
  * would read as catastrophically degraded against its smaller half while the larger half carries
  * the picture perfectly well. Measured, not asserted — on Demo 1's `kneeFlexion`, whose two boxes
- * are 303 px and 553 px tall, the `min` reading is 3.498 and the `max` reading 1.915, and the
- * image is legible; the `min` reading would rank it as WORSE than #71's broken `trunkLean` at
- * 3.375, which it plainly is not.
+ * are 303 px and 553 px tall, the `min` reading is 3.495 and the `max` reading 1.915, and the
+ * image is legible; a `min` reading would put a picture two reviewers called clearly readable a
+ * full 40% past `EVIDENCE_MAX_PAIR_CROP_GROWTH` and drop it. Neither reading moves between the
+ * capped and the demand formulas on that pair — its union is nowhere near a 4K clip's cap — so the
+ * argument for `max` is independent of `strides-492`.
  *
  * `null` where there is nothing to compare — an unusable frame size, or a degenerate single crop.
  * A ratio that cannot be formed must never be read as a small one.
@@ -625,19 +692,12 @@ export function evidencePairCropGrowth(
   if (!isUsableFrameSize(frameSize)) return null
   const union = unionBoxes([baseBox, ghostBox])
   if (union === null) return null
-  // The same call `computeEvidenceCropRect` makes, so the numerator is the crop this pair will
-  // actually be drawn through rather than a re-derivation of it that could drift.
-  const cropSide = (box: BoundingBoxPx) =>
-    computeCropRect(
-      box,
-      frameSize.width,
-      frameSize.height,
-      EVIDENCE_CROP_PADDING_MULTIPLIER,
-      EVIDENCE_CROP_MIN_SIDE_PX,
-    ).side
-  const soloSide = Math.max(cropSide(baseBox), cropSide(ghostBox))
+  const soloSide = Math.max(
+    evidenceCropSideDemand(baseBox),
+    evidenceCropSideDemand(ghostBox),
+  )
   if (!Number.isFinite(soloSide) || soloSide <= 0) return null
-  return cropSide(union) / soloSide
+  return evidenceCropSideDemand(union) / soloSide
 }
 
 /**
@@ -846,6 +906,13 @@ export function planExemplarFrames(
     crop,
     travelDirection,
     demotedFromPair: isPair && ghost === null,
+    // Recomputed from the boxes rather than carried down from the drop check above, which does not
+    // run for a demoted pair. `ghostBox` is non-null whenever `ghost` is: `ghost` is null exactly
+    // when `pairCollapsed`, and a null `ghostBox` is one of the conditions that sets it.
+    cropGrowth:
+      ghost === null || ghostBox === null
+        ? null
+        : evidencePairCropGrowth(baseBox, ghostBox, frameSize),
   }
 }
 
@@ -949,6 +1016,16 @@ export interface EvidenceCoverageExemplar {
   pairedTimestamp: number | null
   demotedFromPair: boolean
   cropSidePx: number
+  /**
+   * `EvidenceFramePlan.cropGrowth` — how much this image's ghost enlarged its crop over what the
+   * better-framed of its two instants needed alone, read BEFORE `computeCropRect`'s frame cap.
+   * `null` on a single and on a demoted pair, where nothing was ghosted.
+   *
+   * A number, like `cropSidePx` beside it, and for the same reason: it is what
+   * `EVIDENCE_MAX_PAIR_CROP_GROWTH`'s calibration bracket is stated in, so re-checking that bracket
+   * on real footage should not need a probe patch and a private console prefix.
+   */
+  cropGrowth: number | null
 }
 
 export interface EvidenceCoverageMetric {
@@ -1006,6 +1083,7 @@ export function summarizeEvidenceCoverage(
                   pairedTimestamp: item.ghost?.timestamp ?? null,
                   demotedFromPair: item.demotedFromPair,
                   cropSidePx: item.crop.side,
+                  cropGrowth: item.cropGrowth,
                 })),
               }
             : { status: 'no-evidence', reason: entry.reason, exemplars: [] }
