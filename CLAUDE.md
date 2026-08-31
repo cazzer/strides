@@ -1035,16 +1035,21 @@ inspected images.
 the amber measurement layer are cleanly distinguishable at the 112 px inline size, and the joints
 land on the right body throughout. Honest limit: the VO/VO_cm bounce delta (two guides 15-20 px
 apart on a 640 px canvas, so ~3 px displayed) and the arc/caliper end-ticks **do not resolve** at
-112 px — the gestalt reads, the fine marks do not. Best image on any clip is `verticalRatio`'s
-`stridePair`.
+112 px — the gestalt reads, the fine marks do not. Best image on any clip was judged to be
+`verticalRatio`'s `stridePair` — **that nomination is RETIRED**; see correction (2) immediately
+below, and the `verticalRatio` bullet under "Coverage re-measured 2026-08-31" for why that image
+was never as good as it looked.
 
 ⚠️ **Two corrections to the paragraph above, neither of which un-measures it** (2026-08-31). (1)
 **The inline size is no longer 112 px**: `0325943` widened the thumbnail to `w-36` — 144 CSS px
 nominal, **142 measured** (`strides-c37` recorded the 1.4% gap and deliberately left the design's
 144 alone). Every "at 112 px" reading here is therefore a floor; the ~3 px bounce-guide separation
 scales to roughly 4 px, still marginal rather than resolved. (2) **`verticalRatio`'s `stridePair`
-is not produced any more** on any clip — see "Coverage re-measured 2026-08-31" below — so the
-"best image" nomination names an image a reader can no longer find.
+is not produced any more** on any clip, and that is CORRECT rather than a regression
+(`strides-mjw`) — the pair demanded a crop wider than the frame, and pre-`4fac355` the guard was
+comparing two clamped numbers, so the nominated image was drawn through a crop that could not
+contain both instants it was captioned for. Full measurement in the `verticalRatio` bullet under
+"Coverage re-measured 2026-08-31" below.
 
 **A third dev-only console line, `[evidence-coverage]`.** Same contract as the two
 `[analysis-diagnostics]` lines — `import.meta.env.DEV`-gated, `JSON.parse`able, matched exclusively
@@ -1155,15 +1160,36 @@ do not read a per-metric difference as a regression without checking it against 
   cell is superseded: `EVIDENCE_MAX_PAIR_CROP_GROWTH` is untouched at 2.5, but the pair it now
   chooses demands 2.289 rather than the 3.375 the old pair demanded. The guard did not weaken; a
   better pair became reachable.
-- **`verticalRatio` drops from ✅ 2 to ✅ 1 on Demo 1 and on multiperson.** Its one surviving
-  exemplar is the `bounceCycle`; the `stridePair` that used to accompany it does not reach the
-  line on any clip, on any trial. `MAX_EXEMPLARS_PER_METRIC` is still 2, so this is not the budget,
-  and the metric itself still resolves on both clips — **the stage that drops it was NOT isolated
-  in this docs pass**, and the two plausible suspects are `ceee2dc`'s fitted-step-period gate
-  (`strides-dy8`, which changes which pairs exist) and `strides-cjl`'s footstrike re-timing (which
-  moves every instant a stride pair is built from). Worth a bead if the image is wanted back.
-  Either way it retires the "best image on any clip is `verticalRatio`'s `stridePair`" claim
-  recorded under Legibility above: that image is not produced any more.
+- **`verticalRatio` drops from ✅ 2 to ✅ 1 on Demo 1 and on multiperson — CAUSE ISOLATED, and the
+  drop is CORRECT** (`strides-mjw`, 2026-08-31). Its one surviving exemplar is the `bounceCycle`.
+  **Neither of the two suspects this bullet used to name is responsible** — not `ceee2dc`'s
+  fitted-step-period gate, not `strides-cjl`'s footstrike re-timing. `verticalRatio` still EMITS
+  the stride pair, at **quality 1.0**, the ceiling; `MAX_EXEMPLARS_PER_METRIC` and
+  `MIN_EXEMPLAR_QUALITY` are both uninvolved. It is dropped inside planning by
+  `isTooFarApartPair`, and the constant did not move — the MEASUREMENT did.
+  **`4fac355`** ("Measure a ghosted pair's crop growth before the frame cap clamps it") swapped
+  `evidencePairCropGrowth`'s numerator from `computeCropRect(...).side`, capped at
+  `min(frameWidth, frameHeight)` = 2160 on Demo 1's 3840×2160, to the uncapped
+  `evidenceCropSideDemand`. Both readings, measured on the identical pair (t = 4.84 ↔ 6.16) in one
+  run: **clamped 2.3679** (passed, pre-`4fac355`) vs **unclamped 4.5306** (fails, today), against
+  `EVIDENCE_MAX_PAIR_CROP_GROWTH` = 2.5 throughout.
+  The pair demands a union crop side of **4132.8 px on a 3840 px-wide frame** — wider than the
+  video. The old image was therefore drawn through a crop that could not contain both instants it
+  was captioned for, the same failure the `trunkLean`-on-multiperson bullet records. There is no
+  fallback: the probe reports `alternates: 0`, since `buildStridePairExemplar` emits exactly one
+  pair (the median-displacement one, which *is* `strideLengthPx`).
+  **The kind is structurally unreachable for this metric, not unlucky on one clip.** A stride pair
+  spans a full stride of subject translation by definition, and `verticalRatio` is side-view-gated
+  — the one camera angle where that translation is fully in-plane and therefore maximal. Every
+  stride pair on this clip has the same shape. Recovering the image needs a different construction
+  (a wide letterboxed crop, or a composed side-by-side rather than a ghost), which is a product
+  decision, not a threshold — filed as `strides-nrg`. **Do not raise
+  `EVIDENCE_MAX_PAIR_CROP_GROWTH`** (4.53 is not marginal, and admitting it re-admits
+  `trunkLean`'s 6.1–6.8 pairs on the same clip), and **do not demote the pair to its base**
+  (`isTooFarApartPair` refuses demotion on purpose, and a label reading "One stride: consecutive
+  left-foot strikes, ghosted together" is exactly a claim one frame cannot make).
+  This retires the "best image on any clip is `verticalRatio`'s `stridePair`" claim recorded under
+  Legibility above.
 - **Demo 2 is unchanged at 5 / 4**, cell for cell, and its `armSwingSymmetry` pair still sits on
   the `EVIDENCE_CROP_MIN_SIDE_PX` floor at `cropSidePx` 320 — now centred on the subject, see the
   bystander bullet below.

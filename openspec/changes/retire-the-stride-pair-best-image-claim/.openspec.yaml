@@ -1,0 +1,9 @@
+schema: spec-driven
+created: 2026-08-31
+# No spec delta, and deliberately so. The investigation's finding is that the CURRENT behaviour is
+# correct: `verticalRatio`'s `stridePair` is dropped by `isTooFarApartPair`, a guard
+# `openspec/specs/results-view/spec.md` already requires, and it is dropped because the pair
+# genuinely demands a crop wider than the frame. Nothing in the behaviour contract changes; what
+# changes is a stale claim in CLAUDE.md about an image the app no longer produces, plus a
+# follow-up bead for the product question the measurement exposed.
+skip_specs: true
