@@ -1,0 +1,6 @@
+schema: spec-driven
+created: 2026-08-31
+# No spec delta. This change is the DIAGNOSIS for strides-boc: a verified root cause plus a
+# remediation sketch. The remediation choice is explicitly the user's and is not taken here, so
+# no behaviour contract changes yet. The change that fixes it will carry the delta.
+skip_specs: true

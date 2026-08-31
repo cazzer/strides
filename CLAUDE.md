@@ -939,14 +939,24 @@ MediaPipe's view opinion. Measured in one default MoveNet-primary run, both cons
 | **BSR** | 0.5510 | **0.5229** | ≥ 0.45 → both vote FRONT |
 | **SER** | 0.3284 | **1.5911** | ≤ 0.40 front; **≥ 0.80 side** → MediaPipe votes SIDE |
 
-1–1, so `ambiguous`. **BSR agrees to within 5%; SER differs 4.8×**, and BSR and SER **share a
-denominator** (`torsoLengthPx`), so the entire 4.8× is in SER's numerator — MediaPipe's ankles range
-~4.8× further from their own hips, horizontally, on a clip where the runner comes straight at the
-camera. The Demo 1 control settles it: on a side view the two agree on **both** signals within 10%
+1–1, so `ambiguous`. **BSR agrees to within 5%; SER differs 4.8×.**
+
+⚠️ **RETRACTION (`strides-boc`, 2026-08-31).** This paragraph used to argue: "BSR and SER share a
+denominator (`torsoLengthPx`), so the entire 4.8× is in SER's numerator." **The premise is true and
+the conclusion does not follow.** BSR agreeing pins the *ratio* `N_bsr / T`, not `T` — algebraically
+`(N_ser,mp / N_ser,mn) = 4.61 × (N_bsr,mp / N_bsr,mn)`, so the ankle-range ratio is 4.8× only if the
+two backends' shoulder/hip spreads also agree, which nobody had measured. The conclusion SURVIVES
+measurement (`torsoLengthPx` ratio mp/mn = **1.058–1.075×**, measured `strides-boc`), so the numbers
+here stand — but the reasoning was luck, and the same argument would have concealed a hip-side or
+torso-side error. Two over-claims went with it: the `stepWidth` figure below is **not** independent
+corroboration (it is the same quantity `ankle.x − hipMid.x` with a different denominator), and
+`COMMON_KEYPOINT_NAMES` is **19** and includes heel/foot_index since `72b0564` (#44), not the 15
+recorded elsewhere in this file. The Demo 1 control settles it: on a side view the two agree on **both** signals within 10%
 (BSR 0.1335 vs 0.1207, SER 1.5744 vs 1.4147) — and MediaPipe's FRONT-view SER (1.5911) is **higher
-than its own SIDE-view SER** (1.4147), which is anatomically impossible. Corroborated from another
-direction in the same run: the two passes' own `stepWidth` reads **0.2253** (MoveNet, conf 1.0) vs
-**0.4042** (MediaPipe, conf 0.2) — **1.79× apart**. Filed as `strides-boc`.
+than its own SIDE-view SER** (1.4147), which is anatomically impossible. Alongside it in the same run — the same
+quantity seen through a different reduction, NOT independent corroboration: the two passes' own
+`stepWidth` reads **0.2253** (MoveNet, conf 1.0) vs **0.4042** (MediaPipe, conf 0.2), **1.79×
+apart**. `strides-boc` diagnosed the SER gap and **did not explain that 1.79×** — see below.
 
 **`strides-2iw` is not implicated** — it changed how a margin maps to a *confidence*, not how a
 *vote* is cast, and this fails on a vote. (Its threshold move does change the route: MediaPipe's
@@ -977,6 +987,85 @@ person** each pass selected, and is structurally blind to the two passes disagre
 clip's camera geometry or about a metric's value — both entirely compatible with watching the same
 runner throughout, which is what happens here. Do not read a 1.0 as "the two passes agree". Filed as
 `strides-lbg`.
+
+## MediaPipe's front-view ankle error — ROOT CAUSE, two stacked defects (2026-08-31, `strides-boc`)
+
+Diagnosis of the SER gap above. Four parallel investigators plus one confirming experiment; fresh
+Chromium per trial, real GPU, cold page load, identity-verified server.
+
+**The cause is TWO separable defects that MULTIPLY**, not one:
+
+| defect | factor | where |
+|---|---|---|
+| **raw detection failure at clip-open** | ~1.97× | MediaPipe's own detections |
+| **interpolation amplification** | ~2.45× | `interpolate.ts` + `viewDetection.ts` |
+| combined | **~4.8×** | the observed gap |
+
+Verified end-to-end, MediaPipe forced primary on Demo 2, both arms detecting 87/99 so they differ
+only in what happens to the 12 they miss:
+
+| arm | SER |
+|---|---|
+| default (`maxGapSeconds: 0.5`) | **1.59113** |
+| `{"robustness":{"maxGapSeconds":0.05}}` | **0.650297** |
+
+**Defect 1 — the model guesses and reports confidence.** At clip-open the subject is most distant:
+hand-measured torso **150 px** at t=0, growing **4×** across the clip, so after the landmarker's
+square resize the torso is **~7–8 px** and the shoe **~2 px**. MediaPipe misses 10 of 12 consecutive
+frames (t = 0.033–0.267 s) where MoveNet misses none and reads normally throughout. The detections it
+does return collapse **both ankles onto nearly one point**, ~307–327 px from the hip against a
+150–195 px torso — precisely the "'best guess' and default pose … predicting average point location"
+degradation MediaPipe's own model card describes. Also in frame there: heavy foot motion blur, white
+shoes on light-grey gravel, and **a second person's shoes at the runner's hip height**.
+Nothing catches it — those frames carry `visibility` **0.41–0.87**, clear of the 0.3 gate. That is
+not bad luck: `visibility` is a Google-acknowledged, still-open bug
+(`google-ai-edge/mediapipe#5197`, maintainer: *"this is a bug in our pose detection model"*), high
+even for out-of-frame joints (0.92 measured at `y = 1.009`). **The repo's only validity gate is a
+signal its vendor has labelled defective.**
+
+**Defect 2 — interpolation turns 4 bad frames into 14, and the load-bearing bug is in SHARED code.**
+The 10-frame gap is 0.33 s, inside `maxGapSeconds: 0.5`, and **both flanking anchors are bad**, so
+every filled frame lands in the extreme zone. **13 of 87 frames (14.9%), all t < 0.45 s, carry more
+than 100% of the raw inflation** — dropping them takes the range 163.0 px → **70.8 px, below
+MoveNet's own 77.1 px**. `computeSagittalRange`'s p95−p5 trims only ~4 values at n=87; its docstring
+claims robustness to "a single wildly-off ankle sample", true for one and false for fourteen.
+⚠️ **`viewDetection.ts` is the ONLY consumer in the repo that receives `resolvePoint`'s
+`.interpolated` flag and discards it** — `stepWidth.ts:99` honours the identical flag. That is
+backend-agnostic shared code, and view detection gates every other metric. It does not bite MoveNet
+on these clips only because MoveNet has no gaps to fill. Filed as `strides-kxn` — and note it must be
+A/B'd on all three clips before shipping, because its blast radius reaches MoveNet's view path.
+
+**Ground truth, measured by hand from keyframes** (grid overlay, ~13 frames): per-ankle excursion
+**0.16–0.20 torso**, every offset medial; **0.20–0.35** all-in. **MoveNet's 0.3284 is in band;
+MediaPipe's 1.5911 is physically impossible** — it demands ~477 px of ankle-to-hip travel against a
+~290 px shoulder span. Camera confirmed square within ~4–5°, handheld but nearly static.
+
+**Four hypotheses REFUTED — do not re-derive:**
+- **Out-of-frame extrapolation.** Zero normalized coords outside [0,1] across all 87 detected frames.
+  The feet never leave frame either — **630 px of clear ground** below the shoe at the largest frame.
+  The mechanism is real upstream (MediaPipe emits unbounded normalized coords, never clamps) but is
+  **not active here**, so an adapter bounds check is a **no-op on this clip**.
+- **Left/right swap.** The two backends genuinely disagree on which leg is screen-left (84/87 vs
+  0/96), but SER is per-label against *that label's own hip*, so a consistent relabel cancels exactly.
+- **Swing-leg occlusion.** The swing foot IS hidden on ~8 of 11 stride frames — but those frames
+  (t ≈ 1.00–1.67 s) read normally (−22 to −126 px). The outliers are at t < 0.45 s. Right mechanism,
+  wrong part of the clip.
+- **Denominator difference.** `torsoLengthPx` ratio mp/mn = 1.058–1.075× on both clips.
+
+**Demo 1 is genuinely clean, not masked** — 619.1 px vs 627.5 px, 1.3% apart.
+
+⚠️ **Fixing the interpolation alone is NECESSARY BUT NOT SUFFICIENT.** At SER 0.650 MediaPipe casts
+**no SER vote at all** (front needs ≤ 0.4, side ≥ 0.8), so the label stays `ambiguous` — by
+abstention instead of by conflict — and `stepWidthCm` stays tier-3 excluded. Any remedy meant to make
+that metric render must address the raw detection error too.
+
+⚠️ **The 1.79× `stepWidth` gap is still NOT explained.** SER is an outlier-amplifying p95−p5 range;
+`stepWidth` is an outlier-suppressing median at footstrikes, and cross-backend **median** ankle
+distance is only **~20 px** — so the clip-opening outliers should not move a median. `strides-wac`
+must not ship until that is understood. Filed as `strides-87x`, which now also blocks `strides-wac`.
+
+Full tables, per-hypothesis verdicts and the retraction:
+`openspec/changes/archive/2026-08-31-diagnose-mediapipe-front-view-ankles/design.md`.
 
 **2. `armSwingSymmetry` is fitted, not scanned** (`strides-gzl`, `2ed7f0b`, archived
 `2026-08-29-fit-arm-swing-amplitude`). The prominence-threshold extremum scan was latching onto

@@ -1,0 +1,67 @@
+# scripts/ab-person-selection.mjs
+# baseURL: http://localhost:5341/strides/ (started by this run, identity verified)
+# commit: 0965ed1
+# renderer: ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)
+# browser: fresh process per trial
+# trials: 2
+# arm base: {}
+# arm nogap: {"robustness":{"maxGapSeconds":0.05}}
+# backend-arm base: {"backend":"mediapipePoseLandmarker"}
+# backend-arm nogap: {"backend":"mediapipePoseLandmarker"}
+
+## demo2
+field                                     base               nogap
+----------------------------------------  -----------------  -------------------
+trials                                    2/2 ok             2/2 ok
+sampling.detectedFrames                   87                 87
+sampling.missingFrames                    12                 12
+sampling.path                             sequential         sequential
+sampling.totalSamples                     99                 99
+personSelection.bridgedCuts               0                  0
+personSelection.detectedSamplesIn         87                 87
+personSelection.detectedSamplesOut        87                 87
+personSelection.minBoundingBoxAreaPx      1658.88            1658.88
+personSelection.rejectedBelowFloor        0                  0
+personSelection.rejectedOtherSegment      0                  0
+personSelection.rejectedOutsideEvidence   0                  0
+personSelection.segmentCount              1                  1
+personSelection.separationRatio           null               null
+personSelection.skipReason                null               null
+personSelection.status                    selected           selected
+personSelection.totalSamples              99                 99
+segments[0].endTimestamp                  1.66833            1.66833
+segments[0].frameCount                    87                 87
+segments[0].integratedAreaPx              18415000           18415000
+segments[0].medianAreaPx                  165487             165487
+segments[0].startTimestamp                0.033367           0.033367
+view.confidence                           0.3                0.3
+view.diagnostics.bilateralSpreadRatio     0.522923           0.532548
+view.diagnostics.frameCoverage            1                  1
+view.diagnostics.sagittalExcursionRatio   1.59113            0.650297
+view.plausibility.ambiguous               1                  0.625741
+view.plausibility.front                   0                  0.374259
+view.plausibility.side                    0                  0
+view.view                                 ambiguous          ambiguous
+metrics.armSwingSymmetry.value            0.874466           null
+metrics.armSwingSymmetry.confidence       0.0636853          0
+metrics.cadence.value                     null               178.8
+metrics.cadence.confidence                0                  0.31688
+metrics.footStrikePattern.value           0.103343           -0.0801475
+metrics.footStrikePattern.confidence      0.2                0.0812871
+metrics.kneeFlexion.value                 174.013            173.491
+metrics.kneeFlexion.confidence            0.172109           0.160684
+metrics.overstriding.value                0.0595993          -0.0556017
+metrics.overstriding.confidence           0.2                0.0812871
+metrics.stepWidth.value                   0.404238           0.364554
+metrics.stepWidth.confidence              0.2                0.499407
+metrics.stepWidthCm.value                 4.53087            4.9403
+metrics.stepWidthCm.confidence            0.2                0.499407
+metrics.trunkLean.value                   -1.90069           2.18338
+metrics.trunkLean.confidence              0.188776           0.0808145
+metrics.verticalOscillation.value         null               0.242607
+metrics.verticalOscillation.confidence    0                  0.31688
+metrics.verticalOscillationCm.value       10.4866            12.3125
+metrics.verticalOscillationCm.confidence  0.0499555          0.305724
+metrics.verticalRatio.value               null               null
+metrics.verticalRatio.confidence          0                  0
+elapsedMs                                 1907 [1885..1929]  1887.5 [1882..1893]
