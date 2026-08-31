@@ -5,6 +5,7 @@ import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildStrikeFrames } from './__fixtures__/strikeFrames'
 import { buildFrame } from './__fixtures__/testFrames'
+import { median } from './mathUtils'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { KeypointName } from '../pose/types'
 
@@ -122,7 +123,10 @@ describe('computeStepWidth', () => {
     expect(result.value as number).toBeGreaterThan(0)
     expect(result.unit).toBe('percent')
     expect(result.viewFit).toBe('primary')
-    expect(result.sampleSize).toBeGreaterThanOrEqual(4)
+    // At or above the metric's own minimum, which is what lets the confidence assertion below
+    // read as "nothing is discounting this" rather than as a number with a sample-size haircut in
+    // it. (It said 4 while the minimum was 4; both moved to 7 together.)
+    expect(result.sampleSize).toBeGreaterThanOrEqual(7)
     expect(result.frameCoverage).toBe(1)
     expect(result.confidence).toBeGreaterThan(0.9)
     expect(result.caveat).toBeNull()
@@ -266,7 +270,13 @@ describe('computeStepWidth exemplars', () => {
     // No single side: the two instants are deliberately opposite feet, so naming one would be
     // wrong about the other.
     expect(evidence).not.toHaveProperty('side')
-    expect(evidence.cropKeypoints).toEqual(['right_ankle', 'left_hip', 'right_hip', 'left_ankle'])
+    // The base is the LEFT plant at frame 5 and the ghost the right plant at frame 10. The right
+    // foot's first plant sits on frame 0, which `detectFootstrikes` no longer emits (a candidate
+    // with no frame before it has no reversal to confirm it), so the earliest opposite-foot pair
+    // this clip offers now begins with the left foot. Which foot leads is incidental to the
+    // property under test — that a pair is CONSTRUCTED from a list that does not hand one over —
+    // and both instants' own feet are still asserted below.
+    expect(evidence.cropKeypoints).toEqual(['left_ankle', 'left_hip', 'right_hip', 'right_ankle'])
 
     const sides = [evidence.timestamp, evidence.pairedTimestamp!].map(
       (t) => detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG).find((s) => s.timestamp === t)!.side,
@@ -304,5 +314,112 @@ describe('computeStepWidth exemplars', () => {
 
     expect(result.value).not.toBeNull() // the metric itself is unchanged
     expect(result.exemplars).toBeUndefined()
+  })
+})
+
+/**
+ * The arithmetic `MIN_STEP_WIDTH_SAMPLE_SIZE` is derived from, pinned against the numbers that
+ * produced it. The constant is module-private, so these read it through the only two things it
+ * changes that anyone can observe: the confidence factor and the caveat, both asserted in the
+ * metric-level test below. This block is the derivation itself.
+ *
+ * The ratios are the real ones — Demo 2's background scale pass, five strikes, measured by
+ * `strides-87x` and recorded on `strides-h6r`. Two of the five sit on contaminated frames (one on
+ * the clip's final sampled frame, one at the edge of the contaminated clip-opening window
+ * `strides-boc` measured), and both are HIGH, which is the shape contamination takes here: a
+ * degenerate or unconfirmable strike inflates the offset, it does not scatter it. Contaminants
+ * biased one way occupy the top ranks, so the median is untouched by them exactly when the middle
+ * of the sorted array still lies strictly inside the clean subsample:
+ *
+ *   odd  n:  (n + 1) / 2  <  n − k   ->  n >= 2k + 2
+ *   even n:  n / 2 + 1    <  n − k   ->  n >= 2k + 3     <- binds
+ */
+describe('the sample-size minimum: n >= 2k + 3', () => {
+  /** Demo 2's scale pass, three uncontaminated strikes, ascending. */
+  const CLEAN_3 = [-0.00793, 0.16306, 0.40424]
+  /** ...and two more, to reach a clean subsample of five. */
+  const CLEAN_5 = [-0.00793, 0.1, 0.16306, 0.3, 0.40424]
+  /** The two contaminated strikes, both high. `1.38051` is the one on the clip's final frame. */
+  const HIGH = [0.84934, 1.38051]
+
+  it('n = 4, k = 1: half the reported number IS the clean sample maximum — why 4 was wrong', () => {
+    // The previous constant claimed to be the point where a SINGLE noisy detection stops
+    // dominating. At n = 4 the median averages ranks 2 and 3, which are the clean median and the
+    // clean MAX: the contaminant is pushed off the top and takes the clean median's partner with
+    // it. Four is dominated by one bad strike, which is a correctness defect on its own terms.
+    const median4 = median([...CLEAN_3, HIGH[1]])
+
+    expect(median4).toBeCloseTo((CLEAN_3[1] + CLEAN_3[2]) / 2, 12)
+    expect(median4).toBeCloseTo(0.28365, 5)
+    expect(median4).toBeGreaterThan(median(CLEAN_3))
+  })
+
+  it('n = 5, k = 2: the median IS the clean maximum — the measured failure this change is for', () => {
+    // At n = 5 the median is simply the third-largest value, so two high contaminants promote the
+    // third-smallest into the middle slot. This is the 2.48x that made Demo 2's scale pass read
+    // 0.40424 where the clean strikes say 0.16306.
+    const median5 = median([...CLEAN_3, ...HIGH])
+
+    expect(median5).toBe(CLEAN_3[2])
+    expect(median5).toBeCloseTo(0.40424, 12)
+    expect(median5 / median(CLEAN_3)).toBeCloseTo(2.479, 3)
+  })
+
+  it('n = 7, k = 2: the median lands strictly inside the clean sample', () => {
+    // `2 * 2 + 3 = 7`, and this is what clearing the bound buys: not a better estimate of the clean
+    // median, but a reported number that is a clean sample rather than a clean extreme.
+    const median7 = median([...CLEAN_5, ...HIGH])
+
+    expect(CLEAN_5).toContain(median7)
+    expect(median7).toBeGreaterThan(Math.min(...CLEAN_5))
+    expect(median7).toBeLessThan(Math.max(...CLEAN_5))
+
+    // The bound does NOT promise the clean median — `2k + 3` is exactly the point at which the
+    // contaminants stop reaching the middle slot, not the point at which they stop shifting it.
+    // Claiming otherwise would be claiming a robustness the arithmetic does not deliver.
+    expect(median7).not.toBe(median(CLEAN_5))
+  })
+
+  it('n = 6, k = 2 is NOT enough — the even case is what binds', () => {
+    // `2k + 2 = 6` satisfies the odd inequality and fails the even one, which is why the bound is
+    // stated as `2k + 3` rather than as the tighter-looking `2k + 2`.
+    const median6 = median([...CLEAN_5.slice(0, 4), ...HIGH])
+
+    expect(median6).toBeGreaterThan(median(CLEAN_5.slice(0, 4)))
+  })
+})
+
+describe('computeStepWidth — how few strikes are priced', () => {
+  it('five strikes report at 5/7 of what the other factors allow, and say so', () => {
+    // Five same-offset plants of one foot, none of them on a boundary frame: a front view, full
+    // frame coverage, nothing interpolated, so every confidence factor except the sample-size one
+    // is provably 1.0 and the reported number is that factor alone.
+    const frames = buildStrikeFrames({ ankleOffsetsPx: [-75, -75, -75, -75, -75] })
+
+    const result = computeStepWidth(frames, 'front')
+
+    expect(result.sampleSize).toBe(5)
+    expect(result.viewFit).toBe('primary')
+    expect(result.frameCoverage).toBe(1)
+    expect(result.interpolatedFraction).toBe(0)
+    expect(result.confidence).toBeCloseTo(5 / 7, 12)
+    expect(result.caveat).toContain('Only 5 footstrike(s) detected (recommend at least 7)')
+
+    // Discounted, never withheld — the shared contract. A thin sample is reported with its price
+    // attached rather than replaced by a null the reader cannot interrogate.
+    expect(result.value).not.toBeNull()
+    expect(result.value as number).toBeGreaterThan(0)
+  })
+
+  it('a clip with enough strikes carries neither the discount nor the caveat', () => {
+    const frames = buildStrikeFrames({
+      ankleOffsetsPx: [-75, -75, -75, -75, -75, -75, -75],
+    })
+
+    const result = computeStepWidth(frames, 'front')
+
+    expect(result.sampleSize).toBe(7)
+    expect(result.confidence).toBeCloseTo(1, 12)
+    expect(result.caveat).toBeNull()
   })
 })

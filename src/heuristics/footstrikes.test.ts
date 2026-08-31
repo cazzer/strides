@@ -250,13 +250,21 @@ function leftLags(detected: Array<[string, number]>) {
 
 describe('detectFootstrikes', () => {
   it('keeps only maxima (footstrikes), not minima, on the single-leg fallback series', () => {
-    // Reuses extrema.ts's own hand-traced "monotonic rise" case (see extrema.test.ts): raw
-    // [0,1,2,3,4,5] at threshold 2 confirms min@index0 then max@index5 -- only the max is a
-    // footstrike candidate. The right ankle is left UNRESOLVABLE, which is what isolates the left
-    // side now that each ankle is read relative to the other: with no opposite ankle anywhere in
-    // the clip there is no contralateral reference, so `buildContactSeries` falls back to raw left
-    // ankle-y and this trace means exactly what it says.
-    const leftY = [0, 1, 2, 3, 4, 5]
+    // extrema.ts's own hand-traced "monotonic rise" case (see extrema.test.ts) with a DESCENT
+    // added: raw [0,1,2,3,4,5,4,0,0] at threshold 2 confirms min@index0, then max@index5 once the
+    // series has fallen back past it -- only the max is a footstrike candidate.
+    //
+    // The descent is not decoration. The bare rise [0,1,2,3,4,5] put its maximum on the clip's
+    // LAST frame, where `detectFootstrikes` now declines to emit at all: an instant with no frame
+    // after it has no reversal to confirm it (`hasFramesEitherSide`). Padding makes the extremum a
+    // genuinely CONFIRMED one, which is strictly better evidence for the property this test is
+    // about -- that only maxima survive -- than the trailing pivot it used to assert on.
+    //
+    // The right ankle is left UNRESOLVABLE, which is what isolates the left side now that each
+    // ankle is read relative to the other: with no opposite ankle anywhere in the clip there is no
+    // contralateral reference, so `buildContactSeries` falls back to raw left ankle-y and this
+    // trace means exactly what it says.
+    const leftY = [0, 1, 2, 3, 4, 5, 4, 0, 0]
     const frames = leftY.map((y, i) => buildFrame({ ...TORSO_POINTS, left_ankle: { x: 0, y } }, i))
 
     const result = detectFootstrikes(frames, configWithRatio(0.02)) // 0.02 * 100 = 2
@@ -265,33 +273,46 @@ describe('detectFootstrikes', () => {
   })
 
   it('drops a same-side candidate closer than footstrikeMinIntervalSeconds to the last kept one', () => {
-    // Reuses extrema.test.ts's "hand-traced down-up-down" case: raw [10,8,6,4,6,8,10,8,6] at
-    // threshold 3 confirms max@index0, min@index3, max@index6 -- two maxima, i.e. two footstrike
-    // candidates before dedup. Timestamps are assigned independently of index/value (smoothing
-    // and extrema selection only look at value order, never at timestamp), so the gap between the
-    // two maxima's timestamps can be controlled precisely: index0 -> t=0, index6 -> t=0.1, well
-    // under the default 0.25s minimum interval, so the second is dropped as a re-detection of the
-    // first rather than a distinct footstrike. Right ankle unresolvable, as above.
-    const leftY = [10, 8, 6, 4, 6, 8, 10, 8, 6]
-    const timestamps = [0, 0.02, 0.04, 0.06, 0.08, 0.09, 0.1, 0.12, 0.14]
+    // extrema.test.ts's "hand-traced down-up-down" case with a LEADING RISE added:
+    // [6,8,10,8,6,4,6,8,10,8,6] at threshold 3 confirms max@index2, min@index5, max@index8 -- two
+    // maxima, i.e. two footstrike candidates before dedup, and both now sit in the series'
+    // interior. The bare [10,8,6,4,6,8,10,8,6] put its first maximum on frame 0, where
+    // `detectFootstrikes` no longer emits (`hasFramesEitherSide`), which would have left this test
+    // asserting that dedup dropped a candidate no longer eligible to be kept in the first place.
+    //
+    // Timestamps are assigned independently of index/value (smoothing and extrema selection only
+    // look at value order, never at timestamp), so the gap between the two maxima's timestamps can
+    // be controlled precisely: index2 -> t=0.02, index8 -> t=0.12, a 0.1s gap well under the
+    // default 0.25s minimum interval, so the second is dropped as a re-detection of the first
+    // rather than a distinct footstrike. Right ankle unresolvable, as above.
+    const leftY = [6, 8, 10, 8, 6, 4, 6, 8, 10, 8, 6]
+    const timestamps = [0, 0.01, 0.02, 0.04, 0.06, 0.07, 0.08, 0.1, 0.12, 0.13, 0.14]
     const frames = leftY.map((y, i) =>
       buildFrame({ ...TORSO_POINTS, left_ankle: { x: 0, y } }, timestamps[i]),
     )
 
     const result = detectFootstrikes(frames, configWithRatio(0.03)) // 0.03 * 100 = 3
 
-    expect(result).toEqual([{ frameIndex: 0, timestamp: 0, side: 'left' }])
+    expect(result).toEqual([{ frameIndex: 2, timestamp: 0.02, side: 'left' }])
   })
 
   it('combines both legs into a single timestamp-ordered list, not grouped/appended by side', () => {
-    // Left ankle-y rises monotonically (max at the end, index 5); right ankle-y falls
-    // monotonically (max at the start, index 0) -- mirror-image traces of the same "monotonic
-    // rise" extrema.ts case, and a genuine antiphase pair, so each side's relative series peaks
-    // exactly where that side's own ankle is lowest. Detection appends left's candidates before
-    // right's internally, so the assertion on order below only holds if detectFootstrikes actually
-    // re-sorts by timestamp afterward.
-    const leftY = [0, 1, 2, 3, 4, 5]
-    const rightY = [5, 4, 3, 2, 1, 0]
+    // Two antiphase triangle waves of period 6, so each side's relative series peaks exactly where
+    // that side's own ankle is lowest. Left peaks at indices 3 and 9, right at index 6.
+    //
+    // The single monotone rise/fall pair this test used to carry (left [0..5], right [5..0]) put
+    // BOTH of its maxima on a boundary frame -- index 5 for the left and index 0 for the right --
+    // and `detectFootstrikes` no longer emits an instant with no frame on one side of it
+    // (`hasFramesEitherSide`), so it detected nothing at all. That is unavoidable for a single
+    // half-cycle: whichever side's series starts by falling has the extremum scan's phase-1
+    // maximum at index 0 by construction. A cycle and a half gives each side one CONFIRMED
+    // interior maximum, which is what this test wanted to sort in the first place.
+    //
+    // Detection appends BOTH of left's candidates before right's single one internally, so the
+    // interleaved order asserted below (left, right, left) is reachable only if detectFootstrikes
+    // actually re-sorts by timestamp afterward -- a stronger form of the same check.
+    const leftY = [0, 2, 4, 6, 4, 2, 0, 2, 4, 6, 4, 2]
+    const rightY = [6, 4, 2, 0, 2, 4, 6, 4, 2, 0, 2, 4]
     const frames = leftY.map((y, i) =>
       buildFrame(
         { ...TORSO_POINTS, left_ankle: { x: 0, y }, right_ankle: { x: 0, y: rightY[i] } },
@@ -302,13 +323,16 @@ describe('detectFootstrikes', () => {
     const result = detectFootstrikes(frames, configWithRatio(0.02)) // 0.02 * 100 = 2
 
     expect(result).toEqual([
-      { frameIndex: 0, timestamp: 0, side: 'right' },
-      { frameIndex: 5, timestamp: 5, side: 'left' },
+      { frameIndex: 3, timestamp: 3, side: 'left' },
+      { frameIndex: 6, timestamp: 6, side: 'right' },
+      { frameIndex: 9, timestamp: 9, side: 'left' },
     ])
   })
 
   it('scales the prominence threshold with footstrikeMinProminenceRatio * torsoLengthPx', () => {
-    const leftY = [0, 1, 2, 3, 4, 5]
+    // The first test's padded trace, unchanged: its maximum has to be reachable at all before this
+    // test can show a threshold suppressing it.
+    const leftY = [0, 1, 2, 3, 4, 5, 4, 0, 0]
     const frames = leftY.map((y, i) => buildFrame({ ...TORSO_POINTS, left_ankle: { x: 0, y } }, i))
 
     // Same clip, same bump -- only the config's ratio changes. torsoLengthPx is fixed at 100, so
@@ -438,6 +462,15 @@ describe('detectFootstrikes — ground contact vs. airborne ankle-y maxima', () 
     // touches down, so the differenced signal peaks slightly after touchdown too. It is bounded by
     // that phase offset and does not grow — bounded lateness is what distinguishes it from the
     // nine-frame plateau error above.
+    //
+    // Six of the fixture's seven contacts, not all seven. The missing one is the closing left
+    // touchdown, which `buildGait` deliberately places on the clip's LAST sampled frame — and
+    // `detectFootstrikes` no longer emits an instant with no frame after it (`hasFramesEitherSide`).
+    // That is the rule doing exactly what it is for rather than a detection failure: the fixture
+    // knows by construction that the contact is real, and the CLIP contains no evidence of it, which
+    // is the only thing the detector can read. The shapes with a fittable bounce lose the same
+    // contact for a different reason (their fitted cycle predicts it just past the sampled span),
+    // so every shape in this file now reports six.
     expect(detectedFrames(frames)).toEqual([
       ['left', 2],
       ['right', 17],
@@ -445,7 +478,6 @@ describe('detectFootstrikes — ground contact vs. airborne ankle-y maxima', () 
       ['right', 47],
       ['left', 62],
       ['right', 77],
-      ['left', 90],
     ])
   })
 
@@ -503,8 +535,13 @@ describe('detectFootstrikes — ground contact vs. airborne ankle-y maxima', () 
     // `footstrikeMinIntervalSeconds` is what binds — the behaviour that predates the derived floor.
     // Asserted so the clean-signal test above is known to run on the FALLBACK path, not silently on
     // a rhythm that happened to resolve.
+    //
+    // One short of the fixture's contact count, for the boundary reason the clean-signal test above
+    // spells out: the closing touchdown sits on the last sampled frame and is not eligible. The
+    // count is what matters here — that every OTHER contact survived a floor which could in
+    // principle have deduplicated them away.
     expect(analyzeHipBounce(frames, DEFAULT_HEURISTICS_CONFIG).fit.ok).toBe(false)
-    expect(detectedFrames(frames)).toHaveLength(TRUE_CONTACT_FRAMES.length)
+    expect(detectedFrames(frames)).toHaveLength(TRUE_CONTACT_FRAMES.length - 1)
   })
 
   it('reports every candidate within two sampled frames of a true touchdown, on all four shapes', () => {
@@ -628,6 +665,12 @@ describe('detectFootstrikes — timing derived from the fitted bounce phase', ()
     const { fit } = analyzeHipBounce(frames, DEFAULT_HEURISTICS_CONFIG)
     expect(fit.ok && fit.sinusoidR2 >= DEFAULT_HEURISTICS_CONFIG.cadenceMinFitR2).toBe(true)
 
+    // The reference is the ankle detector's own output with the SAME boundary-eligibility rule
+    // applied to it, not its raw output. Eligibility is applied once, in `detectFootstrikes`, to
+    // whichever path won — so comparing against the raw list would be asserting that the fallback
+    // is exempt from a rule the spec states for both paths. What this test is about, and still
+    // tests, is the fallback CONDITION: an attributable-instant failure hands the clip to the ankle
+    // detector rather than to an empty list.
     const bodyScale = estimateBodyScale(frames)!
     expect(detectedFrames(frames)).toEqual(
       detectFootstrikesBetweenAnkles(
@@ -635,8 +678,14 @@ describe('detectFootstrikes — timing derived from the fitted bounce phase', ()
         DEFAULT_HEURISTICS_CONFIG,
         bodyScale.torsoLengthPx,
         fit,
-      ).map((candidate) => [candidate.side, candidate.frameIndex]),
+      )
+        .filter(
+          (candidate) =>
+            candidate.frameIndex > 0 && candidate.frameIndex < frames.length - 1,
+        )
+        .map((candidate) => [candidate.side, candidate.frameIndex]),
     )
+    expect(detectedFrames(frames).length).toBeGreaterThan(0)
     expect(detectedFrames(frames).every(([side]) => side === 'left')).toBe(true)
   })
 
@@ -781,3 +830,129 @@ describe('detectFootstrikes — what each path’s phase residual is a function 
   })
 })
 
+
+describe('detectFootstrikes — a candidate needs a sampled frame on both sides of it', () => {
+  /**
+   * The single-leg fallback series (right ankle unresolvable everywhere, so `buildContactSeries`
+   * reads raw left ankle-y), with a confirmed maximum at index 5 and a TRAILING pivot on the final
+   * frame at index 10 — the higher of the two, so amplitude-ranked selection reaches it first.
+   * That is the exact shape measured on Demo 2's background scale pass, which emitted the clip's
+   * last frame at ratio +1.38051 against a primary-pass maximum of +0.37568.
+   */
+  const TRAILING_BOUNDARY_Y = [0, 10, 20, 30, 40, 50, 40, 0, 0, 30, 60]
+  /** The mirror image: the extremum scan's phase 1 emits a maximum at index 0 for any series that
+   * begins by falling, so a clip that opens mid-descent hands one out for free. Confirmed interior
+   * maximum at index 8. */
+  const LEADING_BOUNDARY_Y = [60, 30, 0, 0, 10, 20, 30, 40, 50, 40, 0, 0]
+  /** Amplitudes are in tens because these run at the DEFAULT prominence ratio (0.05 of a 100px
+   * torso = 5px), not the eased ratio the traces at the top of this file use — the fallback path
+   * has to be reachable through `detectFootstrikes` and through `ankleOnlyFrames` under one config
+   * for the two to be comparable at all. */
+
+  const singleLegFrames = (values: number[]) =>
+    values.map((y, i) => buildFrame({ ...TORSO_POINTS, left_ankle: { x: 0, y } }, i))
+
+  it('does not emit a candidate on the last sampled frame, and leaves the interior untouched', () => {
+    const frames = singleLegFrames(TRAILING_BOUNDARY_Y)
+
+    // The fixture really does contain the defect: read straight off the ankle detector, with no
+    // eligibility applied, the final frame IS emitted — and it outranks the real contact.
+    expect(ankleOnlyFrames(frames)).toEqual([
+      ['left', 5],
+      ['left', 10],
+    ])
+
+    expect(detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)).toEqual([
+      { frameIndex: 5, timestamp: 5, side: 'left' },
+    ])
+  })
+
+  it('does not emit a candidate on the first sampled frame either', () => {
+    const frames = singleLegFrames(LEADING_BOUNDARY_Y)
+
+    expect(ankleOnlyFrames(frames)).toEqual([
+      ['left', 0],
+      ['left', 8],
+    ])
+
+    expect(detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)).toEqual([
+      { frameIndex: 8, timestamp: 8, side: 'left' },
+    ])
+  })
+
+  it('emits nothing at all when every candidate is a boundary candidate', () => {
+    // The bare monotonic rise this file's first test used to run on: its only prominence-confirmed
+    // maximum is the trailing pivot on the final frame. Nothing here is a contact this clip can
+    // evidence, and the honest answer is an empty list rather than the one instant the series
+    // happened to end on.
+    const frames = singleLegFrames([0, 10, 20, 30, 40, 50])
+
+    expect(ankleOnlyFrames(frames)).toEqual([['left', 5]])
+    expect(detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)).toEqual([])
+  })
+
+  it('applies the identical rule to the phase path, which reaches a boundary for its own reason', () => {
+    // The fallback lands on a boundary BY CONSTRUCTION — `findLocalExtrema` emits an unconfirmed
+    // trailing pivot at the end of every run. The phase path lands there only by coincidence, when
+    // the fitted phase happens to put a predicted touchdown within half a frame of an end. Both are
+    // excluded, because the rule is applied once to whichever path won rather than inside either.
+    //
+    // A 30fps synthetic clip sliced to 70 frames is such a coincidence: its own fit predicts a
+    // touchdown on frame 69, the last one.
+    const full = generateSyntheticGait({
+      durationSec: 4,
+      fps: 30,
+      cadenceStepsPerMin: 170,
+      strideAmplitudePx: 80,
+      verticalBouncePx: 20,
+      trunkLeanDeg: 5,
+      view: 'side',
+    })
+    const frames = full.slice(0, 70)
+    const lastIndex = frames.length - 1
+
+    // The phase path is what runs here, and it really does predict an instant on the final frame —
+    // recomputed from the fit rather than assumed, so this cannot degrade into "some other stage
+    // dropped it".
+    const { fit } = analyzeHipBounce(frames, DEFAULT_HEURISTICS_CONFIG)
+    expect(fit.ok && fit.sinusoidR2 >= DEFAULT_HEURISTICS_CONFIG.cadenceMinFitR2).toBe(true)
+    if (!fit.ok) return
+    const period = 1 / fit.frequencyHz
+    const omega = 2 * Math.PI * fit.frequencyHz
+    const firstTouchdown =
+      fit.tMeanSeconds + (Math.PI / 2 - fit.phaseRadians) / omega - period / 4
+    const lastTimestamp = frames[lastIndex].timestamp
+    const k = Math.round((lastTimestamp - firstTouchdown) / period)
+    expect(Math.abs(firstTouchdown + k * period - lastTimestamp)).toBeLessThanOrEqual(1 / 30 / 2)
+
+    // Six instants, none of them the seventh the fit predicted on the boundary.
+    const emitted = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)
+    expect(emitted.map((candidate) => candidate.frameIndex)).toEqual([5, 16, 26, 37, 48, 58])
+    expect(emitted.some((candidate) => candidate.frameIndex === lastIndex)).toBe(false)
+  })
+
+  it('never emits either boundary, whichever path runs and however the clip is cut', () => {
+    // The invariant, swept rather than argued: every prefix of a real gait clip long enough to
+    // detect anything, across slice lengths that move the fitted phase through several cycles.
+    const full = generateSyntheticGait({
+      durationSec: 4,
+      fps: 30,
+      cadenceStepsPerMin: 170,
+      strideAmplitudePx: 80,
+      verticalBouncePx: 20,
+      trunkLeanDeg: 5,
+      view: 'side',
+    })
+    let sawCandidates = false
+    for (let end = 45; end <= full.length; end += 1) {
+      const frames = full.slice(0, end)
+      const emitted = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)
+      if (emitted.length > 0) sawCandidates = true
+      for (const candidate of emitted) {
+        expect(candidate.frameIndex).toBeGreaterThan(0)
+        expect(candidate.frameIndex).toBeLessThan(frames.length - 1)
+      }
+    }
+    expect(sawCandidates).toBe(true)
+  })
+})

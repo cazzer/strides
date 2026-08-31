@@ -299,6 +299,15 @@ function resolveStepFrequencyHz(
  * `torsoLengthPx` sizes the prominence threshold; `fit` is the caller's already-computed hip-bounce
  * fit, passed in rather than re-derived so that the two paths cannot end up reading two different
  * fits of the same clip.
+ *
+ * **This path is where the boundary defect lives, by construction rather than by chance**: it
+ * consumes `findLocalExtrema`, which emits an unconfirmed trailing pivot at the end of every run BY
+ * DESIGN, and `selectFootstrikes` then ranks by descending amplitude — so a boundary pivot on a
+ * contaminated frame competes on the strength of its contamination. `detectFootstrikes` excludes
+ * those instants after path selection; see `hasFramesEitherSide`. This path is also the one that
+ * actually runs more often than the module's shape suggests: Demo 2's background scale pass was
+ * measured reaching it, not the phase path, because its hip fit fell below `cadenceMinFitR2` — its
+ * emitted frames 25/45/67/86/100 have deltas 20/22/19/14, which no single fixed period can produce.
  */
 export function detectFootstrikesBetweenAnkles(
   frames: RobustPoseFrame[],
@@ -347,6 +356,54 @@ function nearestFrameIndex(frames: RobustPoseFrame[], t: number): number {
   }
   if (lo === 0) return 0
   return Math.abs(frames[lo].timestamp - t) < Math.abs(frames[lo - 1].timestamp - t) ? lo : lo - 1
+}
+
+/**
+ * Whether this candidate has a sampled frame on BOTH sides of it — i.e. it sits neither on the
+ * first nor on the last frame of the analysed series.
+ *
+ * ## The evidence for a ground contact is two-sided
+ *
+ * Every reading of "a foot landed here" this module has ever used is a REVERSAL: the striking
+ * ankle stops descending, or the two ankles stop separating, or the fitted body trajectory changes
+ * the sign of its curvature. A reversal is a statement about what happened before an instant AND
+ * about what happened after it. At the first or last sampled frame only one of those exists, so
+ * what gets emitted there is not a confirmed contact — it is whatever the series was doing when the
+ * data ran out. The instant may well BE a real touchdown; the point is that this clip contains no
+ * evidence either way, and the downstream consumers treat every emitted instant as equally
+ * evidenced.
+ *
+ * **There is no threshold in this.** It is not "near the edge", not a tolerance in seconds, not a
+ * discount: an instant either has a neighbour on each side or it does not.
+ *
+ * ## The boundary is the PRESENCE-TRIMMED window's edge, not the clip's
+ *
+ * `runClipAnalysisPipeline.ts` calls `trimToPresenceWindow` before `computeFormHeuristics`, so the
+ * `frames` every heuristic sees already begin at the first frame the subject was present in and end
+ * at the last. That is worth stating because it is surprising in the reader's favour: the frames
+ * excluded here are the edges of the SUBJECT's own window, which is exactly where a partially
+ * entered or partially exited body produces its least trustworthy geometry, rather than the edges
+ * of a recording that may have had the runner nowhere near it.
+ *
+ * ## Both paths can land here, for entirely different reasons
+ *
+ * - `detectFromBouncePhase` admits the sampled span **inclusively** (`firstK` rounds up from
+ *   `spanStart`, `lastK` rounds down from `spanEnd`), so a predicted touchdown lands on a boundary
+ *   frame whenever it happens to fall within half a frame of one end — a coincidence of where the
+ *   fitted phase sits, not a mechanism.
+ * - `findLocalExtrema` emits an unconfirmed trailing pivot at the end of **every** run, BY DESIGN —
+ *   see the closing paragraph of `findExtremaInRun`'s doc in `extrema.ts`. That defence is made on
+ *   PROMINENCE grounds, which is a claim about the pivot's amplitude and not about the pivot being
+ *   a ground contact; it is correct as far as it goes and is not what this predicate disputes.
+ *   `selectFootstrikes` then ranks candidates by DESCENDING value, so a boundary pivot sitting on a
+ *   contaminated frame competes on the strength of its own contamination — measured on Demo 2's
+ *   scale pass, which emitted the clip's final frame at ratio +1.38051 against a primary-pass
+ *   maximum of +0.37568.
+ *
+ * So the rule is applied once, to whichever path won, rather than inside either of them.
+ */
+function hasFramesEitherSide(candidate: FootstrikeCandidate, frameCount: number): boolean {
+  return candidate.frameIndex > 0 && candidate.frameIndex < frameCount - 1
 }
 
 /**
@@ -506,6 +563,11 @@ function attributeSides(
  * short to have a snap tolerance, when no predicted instant snaps to a frame, or when nothing in
  * the clip names the feet. `detectFootstrikes` reads an empty result as "fall back", so the failure
  * mode of this path is that the clip keeps the behaviour it had before this path existed.
+ *
+ * `firstK`/`lastK` admit the sampled span INCLUSIVELY, so this path can also place an instant on the
+ * first or last frame — but only when the fitted phase happens to put a prediction within half a
+ * frame of an end, roughly 2.5% of the time per end, rather than by any mechanism. Those instants
+ * are excluded downstream on the same terms as the fallback's; see `hasFramesEitherSide`.
  */
 function detectFromBouncePhase(
   frames: RobustPoseFrame[],
@@ -587,8 +649,20 @@ export function detectFootstrikes(
 
   const { fit } = analyzeHipBounce(frames, config)
 
+  // Path selection FIRST, eligibility second, and the order is load-bearing. Filtering before the
+  // `length > 0` test would silently redefine the fallback condition documented above from "path 1
+  // produced no instant at all" to "path 1 produced nothing away from the boundary" — a different
+  // rule, and one nothing in the spec states.
   const fromPhase = detectFromBouncePhase(frames, fit, config)
-  if (fromPhase.length > 0) return fromPhase
+  const candidates =
+    fromPhase.length > 0
+      ? fromPhase
+      : detectFootstrikesBetweenAnkles(frames, config, bodyScale.torsoLengthPx, fit)
 
-  return detectFootstrikesBetweenAnkles(frames, config, bodyScale.torsoLengthPx, fit)
+  // And AFTER `attributeSides`, which is equally deliberate. That vote is ONE magnitude-weighted
+  // decision over every instant, and a boundary instant's ankle separation is real evidence about
+  // which foot is which even though its TIMING is unconfirmable — the two are separate claims about
+  // the same frame. Excluding it from the vote would throw away a genuine, often large, ankle
+  // separation to protect against a defect that is not in the ankles.
+  return candidates.filter((candidate) => hasFramesEitherSide(candidate, frames.length))
 }

@@ -40,6 +40,31 @@ spm (3.02 Hz) against the scale pass's fitted 3.12 Hz. Over the clip's 1.67 s th
 cycle of accumulated phase — easily enough to shift every instant and to drop one strike off the
 front and add one off the back.
 
+> ⚠️ **CORRECTION (2026-08-31, `exclude-boundary-footstrikes`, beads `strides-aah`/`strides-h6r`).
+> The paragraph immediately above is WRONG about the scale pass's mechanism, and the measurements
+> either side of it are untouched.** The scale pass did not use the phase detector at all — it used
+> the **ankle-difference fallback**, so the two passes' instants differ because they came from two
+> different DETECTORS, not from two fits of the same one.
+>
+> Both passes sample at 1/59.94 s. The primary's strike frames are 6, 26, 46, 66, 85 — deltas 20,
+> 20, 20, 19, consistent with a single period (`59.94 / 3.02 = 19.85`). The scale pass's are 25, 45,
+> 67, 86, 100 — deltas 20, 22, 19, **14**. `detectFromBouncePhase` emits at a fixed period and never
+> skips a `k`, so its consecutive deltas are confined to `{floor(p), ceil(p)}`; 20/22/19/14 cannot
+> come from any single `p`. Corroborated independently: the scale pass's same-side right gap (frames
+> 67 → 100 = 0.5506 s) is BELOW `shortestPlausibleStrideSeconds(2 / 3.12) = 0.5574 s`, which
+> `selectFootstrikes` would have rejected had it been working from a trustworthy rhythm. So the
+> scale pass's hip fit fell below `cadenceMinFitR2`, `isRhythmTrustworthy` returned false,
+> `detectFromBouncePhase` returned `[]`, and the fallback ran with `minIntervalSeconds` collapsed to
+> the 0.25 s config floor.
+>
+> This matters beyond bookkeeping: D2b's frame-100 outlier is then not a coincidence of the fitted
+> phase but a structural product of the fallback, whose extremum scan emits an unconfirmed trailing
+> pivot at the end of every run and then ranks candidates by amplitude — so the boundary instant
+> competes on the strength of its own contamination. That is why the fix landed as a
+> path-independent eligibility rule in `detectFootstrikes` rather than as a change to either
+> detector. The 3.02 vs 3.12 Hz figures quoted above are real; they simply are not what produced the
+> differing instant sets.
+
 ### D2b. Both of the scale pass's outliers sit on contaminated frames
 
 - **t = 0.41708, ratio +0.84934** — immediately at the edge of the clip-opening window

@@ -16,11 +16,54 @@ import type { StepWidthStrikeSample } from './stepWidthExemplars'
 import { median } from './mathUtils'
 
 /**
- * Roughly one full gait cycle's worth of footstrikes (two per leg) — a judgment-call minimum for
- * a stable median step-width ratio, chosen for the same reason as overstriding's identical
- * minimum: fewer strikes than this is too easily dominated by a single noisy detection.
+ * How many footstrikes a median over per-strike ratios needs before one contaminated strike stops
+ * deciding it. **Half derived, half judgment, and the two halves are kept apart on purpose.**
+ *
+ * ## The derived half: `n >= 2k + 3`
+ *
+ * Take `n` samples of which `k` are contaminants, all biased the same way — which is the shape
+ * contamination actually takes here, since both known mechanisms (a boundary strike, a
+ * tracker-dropout window) inflate the offset rather than scattering it. Those `k` then occupy the
+ * top `k` ranks, so the median is untouched by them exactly when the middle of the sorted array
+ * still lies strictly inside the clean subsample's interior:
+ *
+ * ```
+ * odd  n:  (n + 1) / 2  <  n − k    ->   n >= 2k + 2
+ * even n:  n / 2 + 1    <  n − k    ->   n >= 2k + 3
+ * ```
+ *
+ * The even case binds, so the requirement is `n >= 2k + 3`: `k = 1` needs 5, `k = 2` needs 7.
+ *
+ * **The previous value of 4 fails its own docstring.** It claimed to be the point where a *single*
+ * noisy detection stops dominating, and at `n = 4, k = 1` the median is
+ * `mean(rank2, rank3) = mean(clean median, clean MAX)` — half of the reported number IS the worst
+ * clean sample, with the contaminant merely pushed off the top. Four is dominated by one bad
+ * strike. That was a correctness defect on its own terms, independent of any clip.
+ *
+ * ## The judgment half: `k = 2`
+ *
+ * Nothing derives `k`. It is chosen at 2 on two grounds, both from this repo's own corpus:
+ * TWO independent contamination mechanisms are documented on it — footstrikes at the analysed
+ * series' boundaries (`strides-aah`, now excluded in `detectFootstrikes`) and detector-dropout
+ * windows where surviving detections collapse both ankles onto one point (`strides-boc`, NOT fixed
+ * and not fixable at this layer) — and the one clip whose per-strike ratios have actually been
+ * measured carried exactly `k = 2` of `n = 5`.
+ *
+ * ## What this does and does not buy, measured
+ *
+ * Demo 2's scale pass reads `n = 4` AFTER the boundary exclusion, so it is a live instance of
+ * precisely the `n = 4, k = 1` failure above: `median = mean(0.16306, 0.40424) = 0.28365`, with the
+ * clean maximum contributing half. This minimum does not repair that median — nothing at this layer
+ * can — it prices it, at `4/7` of whatever the other confidence factors allow, and says so in the
+ * caveat.
+ *
+ * Below the minimum the metric is DISCOUNTED, never withheld: `min(1, n / 7)` in
+ * `computeMetricConfidence` plus the caveat below, never a `null`. The four sibling
+ * `MIN_*_SAMPLE_SIZE` constants (`stepWidthCm`, `footStrikePattern`, `kneeFlexion`, `overstriding`)
+ * are deliberately NOT moved with this one — the same arithmetic applies to each, but each has its
+ * own estimator and its own blast radius, and sweeping them is a separate decision.
  */
-const MIN_STEP_WIDTH_SAMPLE_SIZE = 4
+const MIN_STEP_WIDTH_SAMPLE_SIZE = 7
 
 function nullResult(
   viewFit: MetricResult['viewFit'],

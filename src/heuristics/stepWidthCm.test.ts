@@ -255,7 +255,10 @@ describe('computeStepWidthCm exemplars', () => {
     expect(evidence.kind).toBe('stepWidthStrike')
     expect(evidence.pairedTimestamp).not.toBeUndefined()
     expect(evidence).not.toHaveProperty('side')
-    expect(evidence.cropKeypoints).toEqual(['right_ankle', 'left_hip', 'right_hip', 'left_ankle'])
+    // Left base, right ghost — the same pair `stepWidth.test.ts` asserts, and for the same reason:
+    // this fixture's first right plant sits on frame 0, which `detectFootstrikes` no longer emits.
+    // "The same pair its ratio sibling constructs" is the property; which foot leads is not.
+    expect(evidence.cropKeypoints).toEqual(['left_ankle', 'left_hip', 'right_hip', 'right_ankle'])
   })
 
   it('demotes to a single representative strike when every plant is the same foot', () => {

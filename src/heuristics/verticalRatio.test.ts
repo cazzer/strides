@@ -41,6 +41,17 @@ const BOUNCE_HZ = 2.0
  * Everything else is deliberately healthy: torso length is a constant 100px, hip-x advances 8px a
  * frame so travel direction resolves, and the ankle bumps clear the prominence floor by 10x.
  */
+/**
+ * Shifts the ankle rhythm's phase so that no block boundary — where the ankle-y trough sits, and
+ * therefore where the RIGHT side's relative contact series peaks and every surviving candidate
+ * lands — coincides with the clip's first or last sampled frame. `detectFootstrikes` declines to
+ * emit an instant with no frame on one side of it, so the unshifted block (troughs at frames 0 and
+ * 60, plus the extremum scan's trailing pivot at frame 119) would have put every one of this
+ * fixture's candidates on a boundary and left the clip with a single strike and no same-side pair
+ * to gate.
+ */
+const ANKLE_BLOCK_PHASE_OFFSET_FRAMES = 10
+
 function framesWithAnkleBlock(blockFrames: number): RobustPoseFrame[] {
   const fps = 30
   const frameCount = 120
@@ -51,7 +62,7 @@ function framesWithAnkleBlock(blockFrames: number): RobustPoseFrame[] {
     const hipX = 200 + i * 8
     const hipY = 400 + 20 * Math.sin(2 * Math.PI * BOUNCE_HZ * t)
     // Triangle bump peaking mid-block, so each block contributes exactly one ankle-y maximum.
-    const phase = i % ankleBlock
+    const phase = (i + ANKLE_BLOCK_PHASE_OFFSET_FRAMES) % ankleBlock
     const ankleY =
       600 + 50 * (phase <= rampFrames ? phase / rampFrames : (ankleBlock - phase) / rampFrames)
     return buildFrame(
@@ -148,8 +159,11 @@ describe('computeVerticalRatio', () => {
     // on the same frames, so a sub-stride same-side pair is now impossible to construct through
     // that path (`stridePeriod.ts`'s `shortestPlausibleStrideSeconds`). The gate's UPPER edge is
     // what still bites — a missed footstrike, whose pair spans two strides — and that is what this
-    // fixture now exercises. Measured on it: two same-side pairs at 2.000s and 1.967s against an
-    // expected 1.0s, both rejected.
+    // fixture now exercises. Measured on it: one same-side pair, frames 50 and 110, spanning 2.000s
+    // against an expected 1.0s, rejected. (It was two pairs before `detectFootstrikes` began
+    // requiring a sampled frame on both sides of a candidate — the third strike was the extremum
+    // scan's trailing pivot on the clip's final frame, which is not evidence of a contact. One pair
+    // is all this test needs: it asserts the gate rejects what it is handed, not how much.)
     const frames = framesWithAnkleBlock(60)
 
     // The premise: without the gate this clip WOULD have reported a value, off a denominator
