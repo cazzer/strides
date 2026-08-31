@@ -121,8 +121,76 @@ export const EVIDENCE_GHOST_MARK_OPACITY = 0.5
  * Intersection-over-union above which a pair's two per-frame boxes are treated as the same
  * instant. A ghost of two indistinguishable frames is a blurry mess rather than a delta, and a
  * blurry double exposure is worse than one clean still.
+ *
+ * **This number was measured and deliberately NOT moved (`strides-r41`).** It is one of two
+ * near-identical tests, and it is the one that catches a pair whose boxes coincide; it does not
+ * and cannot catch a pair that is merely too CLOSE IN TIME — see
+ * `EVIDENCE_MIN_PAIR_SEPARATION_INTERVALS`, which does. The temptation is to lower this until the
+ * close-in-time case falls out of it, and the live data says that is unreachable: on
+ * `e2e/fixtures/multiperson-track.mp4` the two-sampled-frame `kneeFlexion` pair reads IoU
+ * **0.2476**, while Demo 2's perfectly legible `verticalOscillation` bounce reads **0.8330** and
+ * its `armSwingSymmetry` and `stepWidth` pairs read 0.3656 and 0.2984. IoU orders these BACKWARDS
+ * — any threshold low enough to reject the broken pair rejects three good ones first — because a
+ * bounding box is blind to motion INSIDE itself: a knee swinging through a box changes the pose
+ * completely while barely moving the hull, and a small far-away limb box changes shape a lot
+ * between two adjacent frames while depicting one pose.
  */
 export const EVIDENCE_NEAR_IDENTICAL_IOU = 0.98
+
+/**
+ * The fewest SAMPLED FRAME INTERVALS a pair's two instants may be apart and still be drawn as two.
+ * The companion to `EVIDENCE_NEAR_IDENTICAL_IOU` above: that one asks whether the two boxes
+ * coincide, this one asks whether the two moments do.
+ *
+ * **Why time, here, when time is the wrong measure at the far end.** `EVIDENCE_MAX_PAIR_CROP_GROWTH`
+ * rejects elapsed time explicitly, and that rejection stands — at the FAR end the question is
+ * whether two bodies can share one legible crop, which is spatial, and a stationary subject 1.667 s
+ * apart ghosts perfectly while a sprinter 0.3 s apart does not. At the NEAR end the question is a
+ * different one: not "can a reader see two bodies" but "are these two instants the two distinct
+ * phases the label names". Every paired label this repo emits is a claim about gait phase — peak
+ * flexion against extension, top of the bounce against the bottom, opposite-foot plants — and a
+ * pair sampled two frames apart cannot be any of them at any human cadence. That is a claim about
+ * the SIGNAL, whose natural unit is time, not about the picture.
+ *
+ * **The display measures were tried first and all three fail.** Measured live on all three test
+ * clips, real GPU, against the one known-broken pair (`kneeFlexion` on
+ * `e2e/fixtures/multiperson-track.mp4`, two sampled frames apart, an image showing one bent leg
+ * plus a smeared foot where the caption promises a second pose):
+ *
+ * | measure | broken pair | tightest GOOD pair | separates? |
+ * |---|---|---|---|
+ * | box IoU | 0.2476 | 0.8330 (demo2 bounce) | no — backwards |
+ * | median joint travel, output px | 7.10 | 5.19 (demo2 bounce) | no — backwards |
+ * | joint travel ÷ box diagonal | 0.128 | 0.054 (demo2 bounce) | no — backwards |
+ * | **elapsed, in sampled intervals** | **2** | **8** (demo1 `verticalOscillationCm`) | **yes, 4×** |
+ *
+ * The broken pair MOVES MORE than a good one on every display measure, because what moved is one
+ * jittered ankle rather than a body. Only elapsed time orders them correctly, and in sampled
+ * intervals the gap is empty on both sides: nothing measured sits at 3, 4, 5, 6 or 7.
+ *
+ * **Why intervals and not seconds.** A sampled interval is this module's own time resolution, and
+ * `snapToSampledFrame` already declares that anything within half of one is the same frame. It also
+ * scales the right way: a clip sampled sparsely genuinely cannot resolve phase as finely as a dense
+ * one, so the floor should grow with the interval, which a fixed number of seconds would not.
+ * `toleranceSeconds` is half the median interval, so twice it is the interval itself and no new
+ * plumbing is needed.
+ *
+ * **3, and why it cannot reject a legitimate pair.** The tightest pair any metric here can honestly
+ * emit is half a bounce cycle at `spectralFitMaxFrequencyHz` (4.0 Hz) — 0.125 s. Every other paired
+ * kind is wider: a knee peak-to-extension and an arm-swing half cycle are half a STRIDE, twice that
+ * again. At a sampled rate `r`, 0.125 s is `0.125 × r` intervals, which is at least 3 whenever
+ * `r ≥ 24`. Sampling defaults to every decoded frame (`targetSamplesPerSecond: null`) and no
+ * consumer capture rate is below 24 fps, so on any clip this pipeline can meaningfully fit, half a
+ * bounce is three intervals or more. Measured margins: the floor lands at 0.12 s on Demo 1 (25 fps)
+ * and 0.05 s on both 60 fps clips, against tightest real pairs of 0.32 s, 0.167 s and 0.167 s —
+ * 2.7×, 3.3× and 3.3× clear, with the broken pair 1.5× below it.
+ *
+ * Honest limit: at exactly 24-25 fps the floor (0.120-0.125 s) meets that 0.125 s bound with almost
+ * no margin, so a 240 spm cadence filmed at 25 fps is the one case where this could reject a real
+ * bounce pair. That clip is already unfittable for an unrelated reason — 6.25 samples per cycle is
+ * barely above Nyquist — so the pair would not survive its own metric's quality gate either.
+ */
+export const EVIDENCE_MIN_PAIR_SEPARATION_INTERVALS = 3
 
 /**
  * The most a pair may enlarge its own crop, relative to the crop the better-framed of its two
@@ -209,11 +277,25 @@ const METRICS_WITHOUT_EVIDENCE: ReadonlySet<MetricId> = new Set(['cadence'])
 
 /**
  * Exemplar kinds that still say something true from ONE frame, and may therefore be demoted to a
- * single rather than dropped when their pair collapses. A footstrike measured against the hip
- * midline is one whole measurement; a RANGE (`trunkLeanRange`, `overstrideRange`), a CYCLE
- * (`bounceCycle`, `armSwingCycle`, `stridePair`) or a peak that needs its adjacent trough to be
- * legible (`kneeFlexionPeak`) has nothing to say from one instant, so a collapsed pair of those
- * is dropped instead.
+ * single rather than dropped when their pair collapses. A RANGE (`trunkLeanRange`,
+ * `overstrideRange`) or a CYCLE (`bounceCycle`, `armSwingCycle`, `stridePair`) has nothing to say
+ * from one instant, so a collapsed pair of those is dropped instead.
+ *
+ * **The discriminator is where the REPORTED NUMBER lives, not whether the exemplar arrived as a
+ * pair.** A footstrike angle measured against the hip midline, a step width, and a peak knee
+ * flexion angle are each read off a single frame; the paired instant is context that helps a
+ * reader see the extreme, and losing it costs the picture its comparison but not its subject. A
+ * bounce amplitude, an arm-swing amplitude, a stride length and a lean or overstride RANGE are all
+ * quantities OF THE DIFFERENCE between two instants — one frame of those depicts no part of the
+ * number on the card.
+ *
+ * `kneeFlexionPeak` moved into this set with `strides-r41`, and on that principle rather than for
+ * coverage: `kneeFlexion.value` is a peak angle at one instant, and the annotation draws that
+ * angle's arc at that instant, so a demoted single still shows exactly what the card reports. It
+ * was previously grouped with the cycles on the grounds that the peak "needs its adjacent trough to
+ * be legible", which conflates a helpful comparison with a necessary one — and had the concrete
+ * effect that the near-identical rules, which exist to REPLACE a bad ghost with an honest still,
+ * silently deleted this metric's evidence instead.
  *
  * Keyed on the exemplar's own `kind` rather than on `MetricId` deliberately: the kind is what the
  * exemplar says about itself and travels with it, so this module never has to hold an opinion
@@ -222,6 +304,7 @@ const METRICS_WITHOUT_EVIDENCE: ReadonlySet<MetricId> = new Set(['cadence'])
 const SINGLE_INSTANT_KINDS: ReadonlySet<MetricExemplarKind> = new Set([
   'footStrike',
   'stepWidthStrike',
+  'kneeFlexionPeak',
 ])
 
 /**
@@ -969,6 +1052,29 @@ export function isNearIdenticalPair(
 }
 
 /**
+ * Whether a pair's two instants are too close in TIME to depict the two phases its label names —
+ * the second of the two near-identical tests, and the one `isNearIdenticalPair` structurally
+ * cannot perform. `EVIDENCE_MIN_PAIR_SEPARATION_INTERVALS` carries the criterion, the measurement
+ * that chose it over three display-space alternatives, and why it does not contradict
+ * `EVIDENCE_MAX_PAIR_CROP_GROWTH`'s rejection of elapsed time at the far end.
+ *
+ * `toleranceSeconds` is half the median sampled interval (`evidenceSnapToleranceSeconds`), so
+ * `2 × toleranceSeconds` is that interval exactly. A non-finite or non-positive tolerance answers
+ * `false` rather than rejecting everything: with no measurable interval there is no scale to judge
+ * a separation against, and a guard that cannot form its own criterion must not fire.
+ */
+export function isTooCloseInTimePair(
+  baseTimestamp: number,
+  ghostTimestamp: number,
+  toleranceSeconds: number,
+): boolean {
+  const intervalSeconds = 2 * toleranceSeconds
+  if (!Number.isFinite(intervalSeconds) || intervalSeconds <= 0) return false
+  const separation = Math.abs(ghostTimestamp - baseTimestamp)
+  return separation < EVIDENCE_MIN_PAIR_SEPARATION_INTERVALS * intervalSeconds
+}
+
+/**
  * One resolved frame → the instant the extractor seeks to and the annotation layer draws over.
  * Everything positional is captured HERE, while the `RobustPoseFrame` is still in hand — the plan
  * is the last place that holds it, and re-resolving downstream would either need the frames
@@ -1041,7 +1147,12 @@ export function planExemplarFrames(
     (resolved.ghost === null ||
       ghostBox === null ||
       resolved.ghost === resolved.base ||
-      isNearIdenticalPair(baseBox, ghostBox))
+      isNearIdenticalPair(baseBox, ghostBox) ||
+      isTooCloseInTimePair(
+        resolved.base.timestamp,
+        resolved.ghost.timestamp,
+        toleranceSeconds,
+      ))
 
   if (pairCollapsed && !SINGLE_INSTANT_KINDS.has(exemplar.kind)) return null
 

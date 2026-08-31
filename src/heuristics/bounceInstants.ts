@@ -52,12 +52,35 @@ export type BounceMaximumPosition = 'highest' | 'lowest'
  * midpoint is a zero-area rect; a torso band keeps the body recognisable while leaving the
  * vertical delta a visible fraction of the crop. Optional by contract — `cropKeypoints` drops any
  * of these that resolves nowhere in the pair's own frames.
+ *
+ * **The head is in the set because of WHICH instant loses it (`strides-ql0`).** A shoulders-and-
+ * knees band tops out at the shoulders, and `computeEvidenceCropRect` pads from the union of both
+ * instants' boxes — so the crown of the head sits above the padded top edge, and the instant it is
+ * cut from is not arbitrary. The base of a bounce pair is the HIGHEST point by construction
+ * (`buildBounceCycleExemplar`), so it is the base whose head leaves the frame first, while the
+ * lower ghost keeps its whole head. Measured on Demo 2 before this changed: the base's nose/ear
+ * line cleared the crop's top edge by 35.5 px against the ghost's 87.5 px, on a 720 px crop, and
+ * the visible scalp above that line was clipped on the base alone. The composite then held exactly
+ * one complete, legible face and it belonged to the GHOST — so a reader anchored on the ghost's
+ * face as "the runner" and read the correctly-drawn solid skeleton, sitting above it on the base's
+ * body, as mis-registered.
+ *
+ * Adding them ENLARGES both per-instant boxes and their union, which is why it is not free and was
+ * measured rather than assumed. It moves `evidencePairCropGrowth` toward 1 rather than away from
+ * it: the growth ratio is `demand(union) / max(demand(base), demand(ghost))`, and a head raises
+ * the union's long side and each solo box's long side by very nearly the same number of pixels, so
+ * the ratio of two quantities greater than 1 falls when both gain the same addend. Every
+ * bounce-family pair on all three test clips moved DOWN, the largest reading going 1.197 → 1.132
+ * against a 2.5 threshold. See `EVIDENCE_MAX_PAIR_CROP_GROWTH`.
  */
 export const BOUNCE_CONTEXT_KEYPOINTS: KeypointName[] = [
   'left_shoulder',
   'right_shoulder',
   'left_knee',
   'right_knee',
+  'nose',
+  'left_ear',
+  'right_ear',
 ]
 
 /**

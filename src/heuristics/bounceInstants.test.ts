@@ -3,7 +3,11 @@ import type { RobustPoseFrame } from '../pose/robustness/types'
 import { buildFrame } from './__fixtures__/testFrames'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { resolveMidpoint } from './keypoints'
-import { resolvedSpanCenter, selectBounceInstants } from './bounceInstants'
+import {
+  BOUNCE_CONTEXT_KEYPOINTS,
+  resolvedSpanCenter,
+  selectBounceInstants,
+} from './bounceInstants'
 import type { SpectralFitSuccess } from './spectralFit'
 import { computeVerticalOscillation } from './verticalOscillation'
 import { computeVerticalOscillationCmMetric } from './verticalOscillationCm'
@@ -217,4 +221,40 @@ describe('bounce exemplar direction, against a fixture with known geometry', () 
     expect(cadence.value).not.toBeNull()
     expect(cadence.exemplars).toBeUndefined()
   })
+
+  it('reaches every member of the family, above the seed each of them names', () => {
+    // The context set is applied by `cropKeypoints`, which keeps a context point only where it
+    // resolves in one of the pair's own frames — so this asserts the wiring end to end rather
+    // than the constant a second time.
+    for (const exemplars of [
+      computeVerticalOscillation(CLIP, 'side').exemplars!,
+      computeVerticalOscillationCmMetric(CLIP, 'side').exemplars!,
+      computeVerticalRatio(CLIP, 'side').exemplars!,
+    ]) {
+      const [exemplar] = exemplars
+      expect(exemplar.cropKeypoints).toContain('nose')
+      expect(exemplar.cropKeypoints).toContain('left_ear')
+      expect(exemplar.cropKeypoints).toContain('right_ear')
+      // Seed first, context after — several callers rely on `slice(0, 2)` being the seed.
+      expect(exemplar.cropKeypoints.slice(0, 2)).toEqual(['left_hip', 'right_hip'])
+    }
+  })
+})
+
+describe('BOUNCE_CONTEXT_KEYPOINTS', () => {
+  it('carries the head, so the crop cannot cut the base instant out of frame', () => {
+    // `strides-ql0`. Without these, the band tops out at the shoulders and the padded crop clips
+    // the crown — and it clips it on the BASE, which `buildBounceCycleExemplar` pins to the
+    // highest point of the bounce. The composite then holds one complete face and it belongs to
+    // the ghost, so the solid skeleton reads as sitting on the wrong body.
+    expect(BOUNCE_CONTEXT_KEYPOINTS).toContain('nose')
+    expect(BOUNCE_CONTEXT_KEYPOINTS).toContain('left_ear')
+    expect(BOUNCE_CONTEXT_KEYPOINTS).toContain('right_ear')
+    // The torso band it was, still is — the head is an addition, not a replacement.
+    expect(BOUNCE_CONTEXT_KEYPOINTS).toContain('left_shoulder')
+    expect(BOUNCE_CONTEXT_KEYPOINTS).toContain('right_shoulder')
+    expect(BOUNCE_CONTEXT_KEYPOINTS).toContain('left_knee')
+    expect(BOUNCE_CONTEXT_KEYPOINTS).toContain('right_knee')
+  })
+
 })
