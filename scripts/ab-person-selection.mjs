@@ -705,10 +705,17 @@ function extractFields(diagnostics, elapsedMs, evidenceCoverage) {
     ...flatten('view.', diagnostics.view ?? {}),
   }
 
+  // The same "flatten whatever is there" rule as the block above, and it was stated there while
+  // this loop did the opposite: a hardcoded pair of keys meant `viewFit`, `sampleSize`,
+  // `frameCoverage` and `interpolatedFraction` — the fields that say WHY a value or a confidence
+  // moved — never reached the table, so a ticket adding one had to edit this driver first.
+  //
+  // `caveat` is the single skip, expressed through `flatten`'s existing skip-list idiom (the
+  // `personSelection` block above skips `segments` the same way). It is derived prose restating
+  // `sampleSize` and `viewFit`, it is unconditionally non-null for `footStrikePattern`, and it
+  // would put a ~200-character cell per metric per clip into a terminal table.
   for (const id of Object.keys(diagnostics.metrics ?? {}).sort()) {
-    const metric = diagnostics.metrics[id]
-    fields[`metrics.${id}.value`] = scalarize(metric.value)
-    fields[`metrics.${id}.confidence`] = scalarize(metric.confidence)
+    Object.assign(fields, flatten(`metrics.${id}.`, diagnostics.metrics[id], ['caveat']))
   }
 
   // Same "flatten whatever is there" rule as the block above, for the same reason: the fields that
