@@ -234,6 +234,8 @@ function heuristicsResult(
       diagnostics: {
         bilateralSpreadRatio: 0.1,
         sagittalExcursionRatio: 1,
+        sagittalExcursionSampleCount: { left: 30, right: 30 },
+        sagittalExcursionInterpolatedFraction: { left: 0, right: 0 },
         frameCoverage: 1,
       },
     },

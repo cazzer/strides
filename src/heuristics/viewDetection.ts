@@ -11,26 +11,91 @@ import {
 } from './viewPlausibility'
 
 /**
+ * The smallest sample count at which the p95-p5 range below actually trims anything at either
+ * end. A DERIVATION, not a tunable — the same kind of exact statement as
+ * `SIDE_VIEW_FULL_BILATERAL_SPREAD_RATIO` below, which is a module constant for the same reason
+ * its front-view counterpart is a config value.
+ *
+ * `percentile` interpolates at index `p·(n−1)`. The largest sample, at index `n−1`, therefore
+ * influences the p95 exactly when `0.95(n−1) > n−2`, i.e. when `n < 21`; the smallest influences
+ * the p5 under the symmetric condition, which is the same one. So below 21 samples this estimator
+ * is partly a min-max and a single wildly-off ankle sample walks straight into the result. At
+ * n = 21 it is exactly second-largest minus second-smallest, and the robustness claim in
+ * `computeSagittalRange`'s docstring is literally true for the first time.
+ */
+const MIN_SAGITTAL_RANGE_SAMPLES = 21
+
+interface SagittalRange {
+  /** The p95-p5 spread in pixels, or `null` iff `detectedSamples < MIN_SAGITTAL_RANGE_SAMPLES`. */
+  range: number | null
+  /** Directly-detected ankle+hip samples — the population the range was computed from, reported
+   * even when the floor rejected it, so a near-miss reads as a count rather than a bare null. */
+  detectedSamples: number
+  /** Resolvable ankle+hip samples DISCARDED because either point was temporally interpolated. */
+  interpolatedSamples: number
+}
+
+/**
  * Per-side sagittal excursion range: the p95-p5 spread of that side's ankle position relative to
- * its own hip (which cancels whole-body camera pan, leaving only the leg's own reach). Percentile
- * range rather than plain min/max specifically to stay robust to one bad detection blowing the
- * range out — a single wildly-off ankle sample shouldn't be able to masquerade as "large sagittal
- * reach".
+ * its own hip (which cancels whole-body camera pan, leaving only the leg's own reach).
+ *
+ * The population is DIRECTLY-DETECTED samples only. A frame where the robustness layer had to
+ * interpolate either point is discarded outright rather than discounted, and the asymmetry with
+ * the rest of the pipeline is the point: a lerped sample lies strictly between its own flanking
+ * detections, so it can never carry a real extreme — all it can add is probability mass NEAR one,
+ * which is exactly what walks an extreme quantile into an outlier cluster. Excluding therefore
+ * cannot discard a real extreme that the anchors do not already carry. A signal reduced by a
+ * median or a mean has the opposite trade and keeps interpolated samples (`stepWidth`, the
+ * bilateral-spread ratio below). Measured on a front-view clip where the detector missed ten
+ * consecutive frames between two bad anchors: interpolation grew the outlier population from ~4
+ * samples to ~14 and inflated this clip's SER 2.45x (`strides-kxn`).
+ *
+ * A percentile range rather than a plain min/max so that one stray detection cannot masquerade as
+ * "large sagittal reach" — but that robustness is n-dependent rather than unconditional. The trim
+ * discards roughly `ceil(0.05(n−1))` samples at each end, so it is worth one bad sample at n = 21,
+ * two at n = 41, and NOTHING below `MIN_SAGITTAL_RANGE_SAMPLES`. Hence the floor: rather than
+ * silently degrade into a min-max on a thin sample, this reports no range at all and lets the
+ * caller treat the side as unavailable.
  */
 function computeSagittalRange(
   frames: RobustPoseFrame[],
   ankleName: KeypointName,
   hipName: KeypointName,
-): number | null {
+): SagittalRange {
   const relX: number[] = []
+  let interpolatedSamples = 0
   for (const frame of frames) {
     const ankle = resolvePoint(frame, ankleName)
     const hip = resolvePoint(frame, hipName)
     if (ankle === null || hip === null) continue
+    if (ankle.interpolated || hip.interpolated) {
+      interpolatedSamples += 1
+      continue
+    }
     relX.push(ankle.x - hip.x)
   }
-  if (relX.length === 0) return null
-  return percentile(relX, 0.95) - percentile(relX, 0.05)
+  const detectedSamples = relX.length
+  if (detectedSamples < MIN_SAGITTAL_RANGE_SAMPLES) {
+    return { range: null, detectedSamples, interpolatedSamples }
+  }
+  return {
+    range: percentile(relX, 0.95) - percentile(relX, 0.05),
+    detectedSamples,
+    interpolatedSamples,
+  }
+}
+
+/**
+ * The share of one side's resolvable ankle+hip samples that `computeSagittalRange` EXCLUDED as
+ * interpolated; 0 when nothing was resolvable at all.
+ *
+ * Note this is the inverse of `MetricResult.interpolatedFraction`'s meaning: that one reports
+ * interpolated samples a metric USED and then discounted its confidence for, whereas this reports
+ * samples the range refused to look at.
+ */
+function discardedFraction({ detectedSamples, interpolatedSamples }: SagittalRange): number {
+  const resolvable = detectedSamples + interpolatedSamples
+  return resolvable === 0 ? 0 : interpolatedSamples / resolvable
 }
 
 /**
@@ -118,9 +183,10 @@ function computeCommittedConfidence(
  *   mediolateral axis, so left/right nearly coincide); front view keeps it large (full shoulder
  *   /hip width is visible).
  * - Sagittal Excursion Ratio (SER): how far each ankle ranges relative to its own hip over the
- *   clip, relative to torso length. Side view shows the leg's full fore-aft reach in the image
- *   plane (large range); front view hides that reach in depth, leaving only minor mediolateral
- *   sway (small range).
+ *   clip, relative to torso length, measured over that side's DIRECTLY-DETECTED samples only and
+ *   reported for a side at all only once there are enough of them (`computeSagittalRange`). Side
+ *   view shows the leg's full fore-aft reach in the image plane (large range); front view hides
+ *   that reach in depth, leaving only minor mediolateral sway (small range).
  *
  * Requiring agreement is deliberate: a confident wrong label would corrupt every downstream
  * metric's view-fit gating silently, whereas an honest "ambiguous" just degrades confidence.
@@ -176,6 +242,10 @@ export function detectView(
       diagnostics: {
         bilateralSpreadRatio: null,
         sagittalExcursionRatio: null,
+        // Nothing was measured on this path at all, so the sagittal population is empty on both
+        // sides rather than merely below the floor.
+        sagittalExcursionSampleCount: { left: 0, right: 0 },
+        sagittalExcursionInterpolatedFraction: { left: 0, right: 0 },
         frameCoverage: bodyScale?.sampleCoverage ?? 0,
       },
     }
@@ -194,9 +264,11 @@ export function detectView(
   }
   const bilateralSpreadRatio = bsrSamples.length > 0 ? median(bsrSamples) : null
 
-  const rangeLeft = computeSagittalRange(frames, 'left_ankle', 'left_hip')
-  const rangeRight = computeSagittalRange(frames, 'right_ankle', 'right_hip')
-  const ranges = [rangeLeft, rangeRight].filter((r): r is number => r !== null)
+  const sagittalLeft = computeSagittalRange(frames, 'left_ankle', 'left_hip')
+  const sagittalRight = computeSagittalRange(frames, 'right_ankle', 'right_hip')
+  const ranges = [sagittalLeft.range, sagittalRight.range].filter(
+    (r): r is number => r !== null,
+  )
   const sagittalExcursionRatio =
     ranges.length > 0 ? mean(ranges) / torsoLengthPx : null
 
@@ -243,6 +315,14 @@ export function detectView(
     diagnostics: {
       bilateralSpreadRatio,
       sagittalExcursionRatio,
+      sagittalExcursionSampleCount: {
+        left: sagittalLeft.detectedSamples,
+        right: sagittalRight.detectedSamples,
+      },
+      sagittalExcursionInterpolatedFraction: {
+        left: discardedFraction(sagittalLeft),
+        right: discardedFraction(sagittalRight),
+      },
       frameCoverage: sampleCoverage,
     },
   }

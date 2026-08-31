@@ -53,6 +53,8 @@ function makeHeuristics(overrides: Partial<FormHeuristicsResult> = {}): FormHeur
       diagnostics: {
         bilateralSpreadRatio: 0.2,
         sagittalExcursionRatio: 0.9,
+        sagittalExcursionSampleCount: { left: 30, right: 30 },
+        sagittalExcursionInterpolatedFraction: { left: 0, right: 0 },
         frameCoverage: 1,
       },
     },

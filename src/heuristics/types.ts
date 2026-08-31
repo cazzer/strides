@@ -96,6 +96,17 @@ export interface ViewDetectionResult {
   diagnostics: {
     bilateralSpreadRatio: number | null
     sagittalExcursionRatio: number | null
+    /** Per side, how many DIRECTLY-DETECTED ankle+hip samples the sagittal range was computed
+     * from — or would have been, on a side whose count fell below the minimum and which therefore
+     * contributed no range. Reported either way, so a near miss reads as "18, just short" rather
+     * than as an unexplained null ratio. */
+    sagittalExcursionSampleCount: { left: number; right: number }
+    /** Per side, the share of resolvable ankle+hip samples DISCARDED as interpolated; 0 when
+     * nothing was resolvable. The INVERSE of `MetricResult.interpolatedFraction`'s meaning: that
+     * one counts interpolated samples a metric USED and discounted itself for, this one counts
+     * samples the sagittal range refused to look at, because an extreme-quantile range excludes
+     * them rather than discounting them. */
+    sagittalExcursionInterpolatedFraction: { left: number; right: number }
     frameCoverage: number
   }
 }

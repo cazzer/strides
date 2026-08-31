@@ -58,8 +58,15 @@ const TORSO_PX = 100
  * ankle alternates between two positions `ser * TORSO_PX` apart relative to its OWN hip, and over
  * an even, evenly-split sample the p95-p5 range of a two-valued series is exactly that gap — so
  * each side's sagittal range, and therefore SER, is exactly `ser`.
+ *
+ * The default count is 22, and both of its properties are load-bearing — it is not an arbitrary
+ * round number to be tidied back to 20. It has to clear `computeSagittalRange`'s 21-sample floor,
+ * under which that function reports no range at all and every clip built here would read
+ * `'ambiguous'`; and it has to stay EVEN, so the two-valued series splits exactly in half and the
+ * exactness argument above (p95 and p5 landing strictly inside the high and the low block) still
+ * holds.
  */
-function framesWithSignals(bsr: number, ser: number, count = 20): RobustPoseFrame[] {
+function framesWithSignals(bsr: number, ser: number, count = 22): RobustPoseFrame[] {
   const spread = bsr * TORSO_PX
   const reach = (ser * TORSO_PX) / 2
   return Array.from({ length: count }, (_, i) => {
@@ -72,6 +79,69 @@ function framesWithSignals(bsr: number, ser: number, count = 20): RobustPoseFram
         right_hip: { x: spread / 2, y: TORSO_PX },
         left_ankle: { x: -spread / 2 + offset, y: 2 * TORSO_PX },
         right_ankle: { x: spread / 2 + offset, y: 2 * TORSO_PX },
+      },
+      i / 30,
+    )
+  })
+}
+
+/**
+ * A bilateral spread that clears `frontViewMinBilateralSpreadRatio` (0.45) and whose half is an
+ * exact binary fraction, so `ankle.x - hip.x` recovers each offset to the last bit and the
+ * fixtures below can be asserted with `toBe`/`toEqual` rather than a tolerance.
+ */
+const FRONT_BSR = 0.5
+
+/**
+ * `framesWithSignals` with a third population: a block of frames parked at ONE extreme offset,
+ * interpolated by default. That is the shape of the defect the detected-only sagittal population
+ * exists for (`strides-kxn`) — the robustness layer lerped ten consecutive missed frames across a
+ * gap whose two flanking anchors were both bad detections, so every filled frame landed in the
+ * same extreme zone and the p95 walked into it.
+ *
+ * `detectedCount` frames alternate at `±ser * TORSO_PX / 2` exactly as in `framesWithSignals`
+ * (keep it EVEN so the split is exact); `blockCount` further frames sit at
+ * `+blockSer * TORSO_PX / 2`. `blockInterpolated: false` makes the block an honest detected
+ * population instead, which is the same clip as a backend that never interpolates would produce.
+ * `rightAnkleInterpolated` knocks out the right side's whole population without touching the left.
+ */
+function framesWithBlock({
+  bsr = FRONT_BSR,
+  ser,
+  detectedCount,
+  blockCount = 0,
+  blockSer = 0,
+  blockInterpolated = true,
+  rightAnkleInterpolated = false,
+}: {
+  bsr?: number
+  ser: number
+  detectedCount: number
+  blockCount?: number
+  blockSer?: number
+  blockInterpolated?: boolean
+  rightAnkleInterpolated?: boolean
+}): RobustPoseFrame[] {
+  const spread = bsr * TORSO_PX
+  const reach = (ser * TORSO_PX) / 2
+  const blockReach = (blockSer * TORSO_PX) / 2
+
+  return Array.from({ length: detectedCount + blockCount }, (_, i) => {
+    const inBlock = i >= detectedCount
+    const offset = inBlock ? blockReach : i % 2 === 0 ? -reach : reach
+    const status = inBlock && blockInterpolated ? 'interpolated' : 'detected'
+    return buildFrame(
+      {
+        left_shoulder: { x: -spread / 2, y: 0 },
+        right_shoulder: { x: spread / 2, y: 0 },
+        left_hip: { x: -spread / 2, y: TORSO_PX, status },
+        right_hip: { x: spread / 2, y: TORSO_PX, status },
+        left_ankle: { x: -spread / 2 + offset, y: 2 * TORSO_PX, status },
+        right_ankle: {
+          x: spread / 2 + offset,
+          y: 2 * TORSO_PX,
+          status: rightAnkleInterpolated ? 'interpolated' : status,
+        },
       },
       i / 30,
     )
@@ -346,6 +416,131 @@ describe('detectView', () => {
     // The comparability claim as a ratio rather than a pair of remembered numbers: the front clip
     // is no longer an order of magnitude adrift of the side ones.
     expect(demo2.confidence / demo1.confidence).toBeGreaterThan(0.5)
+  })
+
+  // -------------------------------------------------------------------------------------------
+  // The sagittal range's population is DIRECTLY-DETECTED samples only (`strides-kxn`). A lerped
+  // sample lies strictly between its own flanking detections, so it can never carry a real
+  // extreme — all it can do is pile probability mass near one, which is exactly what walks the
+  // p95 into an outlier cluster. Measured live on a front-view clip where the detector missed ten
+  // consecutive frames between two bad anchors: SER read 1.591 with interpolation and 0.650
+  // without, a 2.45x inflation of the signal that gates every metric's view fit.
+  // -------------------------------------------------------------------------------------------
+
+  it('excludes interpolated samples from the sagittal range instead of letting them set it', () => {
+    // 34 honest detections at SER 0.33 (±16.5 px against TORSO_PX 100), plus a 6-frame block —
+    // 15% of the clip — lerped out to +82.5 px, five times the honest excursion. Including that
+    // block walks the p95 from +16.5 all the way to +82.5 and reports SER 0.99, triple the truth
+    // and past the front bar, which is the unit-scale miniature of the 1.591-vs-0.650 measurement.
+    const mixed = framesWithBlock({ ser: 0.33, detectedCount: 34, blockCount: 6, blockSer: 1.65 })
+    const detectedOnly = framesWithBlock({ ser: 0.33, detectedCount: 34, blockCount: 0 })
+
+    const result = detectView(mixed)
+
+    expect(result.diagnostics.sagittalExcursionRatio).toBe(0.33)
+    expect(result.diagnostics.sagittalExcursionRatio).toBe(
+      detectView(detectedOnly).diagnostics.sagittalExcursionRatio,
+    )
+    // And the consequence that makes it worth excluding: at BSR 0.5 the clip is a front view, but
+    // an SER of 0.99 clears neither threshold, so SER abstains and the label collapses to
+    // ambiguous — a corrupted signal silently degrading the view that gates every metric.
+    expect(result.view).toBe('front')
+  })
+
+  it('is a no-op on a clip the robustness layer never had to interpolate', () => {
+    // The same three populations with the block DETECTED rather than lerped: nothing is excluded,
+    // the outliers legitimately set the p95, and the result is identical to a plain two-valued
+    // clip carrying that same 0.99 range. This is the MoveNet path, which fills no gaps at all on
+    // this repo's clips — its numbers are exactly what they were before the exclusion existed.
+    const allDetected = framesWithBlock({
+      ser: 0.33,
+      detectedCount: 34,
+      blockCount: 6,
+      blockSer: 1.65,
+      blockInterpolated: false,
+    })
+
+    expect(detectView(allDetected)).toEqual(detectView(framesWithSignals(FRONT_BSR, 0.99, 40)))
+    expect(detectView(allDetected).diagnostics.sagittalExcursionRatio).toBe(0.99)
+    expect(detectView(allDetected).diagnostics.sagittalExcursionInterpolatedFraction).toEqual({
+      left: 0,
+      right: 0,
+    })
+  })
+
+  it('reports no sagittal range below the sample count the percentile trim needs', () => {
+    // `percentile` interpolates at index `p*(n-1)`, so the largest sample influences the p95
+    // exactly while `0.95(n-1) > n-2`, i.e. while `n < 21` — below 21 the "range" is partly a
+    // min-max and one stray detection sets it outright. At n = 21 it is exactly second-largest
+    // minus second-smallest and the robustness claim is true for the first time. Anyone tempted to
+    // lower the floor has to argue with that arithmetic first.
+    const below = detectView(framesWithSignals(0.05, 1.2, 20))
+
+    expect(below.diagnostics.sagittalExcursionSampleCount).toEqual({ left: 20, right: 20 })
+    expect(below.diagnostics.sagittalExcursionRatio).toBeNull()
+    expect(below.view).toBe('ambiguous')
+    expect(below.plausibility).toEqual({ side: 0, front: 0, ambiguous: 1 })
+    // 0.3 * coverage, NOT 0 — this is the ordinary undecided path, not the insufficient-coverage
+    // early return, which forces confidence to exactly 0. Every frame here resolves.
+    expect(below.diagnostics.frameCoverage).toBe(1)
+    expect(below.confidence).toBeCloseTo(0.3, 10)
+
+    // One more sample, and the estimator has something to trim.
+    const at = detectView(framesWithSignals(0.05, 1.2, 21))
+
+    expect(at.diagnostics.sagittalExcursionSampleCount).toEqual({ left: 21, right: 21 })
+    expect(at.diagnostics.sagittalExcursionRatio).toBeCloseTo(1.2, 10)
+    expect(at.view).toBe('side')
+  })
+
+  it('reports the sagittal population and the discarded share per side, floor or no floor', () => {
+    const mixed = detectView(
+      framesWithBlock({ ser: 0.33, detectedCount: 34, blockCount: 6, blockSer: 1.65 }),
+    )
+
+    expect(mixed.diagnostics.sagittalExcursionSampleCount).toEqual({ left: 34, right: 34 })
+    // The fraction is DISCARDED over resolvable — the inverse of `MetricResult`'s
+    // `interpolatedFraction`, which counts interpolated samples a metric used.
+    expect(mixed.diagnostics.sagittalExcursionInterpolatedFraction).toEqual({
+      left: 6 / 40,
+      right: 6 / 40,
+    })
+
+    // Below the floor the counts are still the real ones, so "18, just short of 21" is legible
+    // rather than reaching the reader as a bare null ratio with nothing to explain it.
+    const short = detectView(
+      framesWithBlock({ ser: 0.33, detectedCount: 18, blockCount: 6, blockSer: 1.65 }),
+    )
+
+    expect(short.diagnostics.sagittalExcursionRatio).toBeNull()
+    expect(short.diagnostics.sagittalExcursionSampleCount).toEqual({ left: 18, right: 18 })
+    expect(short.diagnostics.sagittalExcursionInterpolatedFraction).toEqual({
+      left: 6 / 24,
+      right: 6 / 24,
+    })
+  })
+
+  it('still averages a one-legged SER when only one side has a usable population', () => {
+    // Unchanged behaviour, restated against the new failure mode: `detectView` means over whatever
+    // sides produced a range, so one side losing its whole population to interpolation leaves the
+    // other side's range standing as the SER rather than nulling the signal.
+    const oneLegged = detectView(
+      framesWithBlock({
+        bsr: 0.05,
+        ser: 1.2,
+        detectedCount: 40,
+        blockCount: 0,
+        rightAnkleInterpolated: true,
+      }),
+    )
+
+    expect(oneLegged.diagnostics.sagittalExcursionSampleCount).toEqual({ left: 40, right: 0 })
+    expect(oneLegged.diagnostics.sagittalExcursionInterpolatedFraction).toEqual({
+      left: 0,
+      right: 1,
+    })
+    expect(oneLegged.diagnostics.sagittalExcursionRatio).toBeCloseTo(1.2, 10)
+    expect(oneLegged.view).toBe('side')
   })
 })
 

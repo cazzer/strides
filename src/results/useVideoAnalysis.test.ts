@@ -128,6 +128,8 @@ const FAKE_HEURISTICS: FormHeuristicsResult = {
     diagnostics: {
       bilateralSpreadRatio: null,
       sagittalExcursionRatio: null,
+      sagittalExcursionSampleCount: { left: 0, right: 0 },
+      sagittalExcursionInterpolatedFraction: { left: 0, right: 0 },
       frameCoverage: 1,
     },
   },

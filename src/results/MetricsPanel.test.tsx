@@ -88,6 +88,8 @@ function makeHighConfidenceResult(): FormHeuristicsResult {
       diagnostics: {
         bilateralSpreadRatio: 0.2,
         sagittalExcursionRatio: 0.9,
+        sagittalExcursionSampleCount: { left: 30, right: 30 },
+        sagittalExcursionInterpolatedFraction: { left: 0, right: 0 },
         frameCoverage: 1,
       },
     },
@@ -160,6 +162,8 @@ function makeMixedTierResult(): FormHeuristicsResult {
       diagnostics: {
         bilateralSpreadRatio: 0.6,
         sagittalExcursionRatio: 0.2,
+        sagittalExcursionSampleCount: { left: 30, right: 30 },
+        sagittalExcursionInterpolatedFraction: { left: 0, right: 0 },
         frameCoverage: 0.5,
       },
     },
