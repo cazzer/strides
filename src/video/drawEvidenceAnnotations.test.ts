@@ -24,11 +24,23 @@ import { planEvidenceAnnotations } from '../results/evidenceAnnotations'
 import type { EvidenceAnnotation } from '../results/evidenceAnnotations'
 import {
   EVIDENCE_ANNOTATION_HALO_COLOR,
+  EVIDENCE_INLINE_DISPLAY_SIDE_PX,
   EVIDENCE_JOINT_COLOR,
   EVIDENCE_MEASUREMENT_COLOR,
+  MIN_DASH_GAP_DISPLAY_PX,
+  MIN_HALO_DISPLAY_PX,
   drawEvidenceAnnotation,
   evidenceAnnotationMetrics,
+  haloOpacityFor,
 } from './drawEvidenceAnnotations'
+
+/**
+ * Canvas sides the crop planner actually produced across the three test clips, measured live rather
+ * than invented: the `EVIDENCE_CROP_MIN_SIDE_PX` floor at 320, the `EVIDENCE_OUTPUT_MAX_SIDE_PX` cap
+ * at 640, and three intermediate crops in between. A floor stated in display pixels has to hold at
+ * every one of them, not only at the cap.
+ */
+const OBSERVED_OUTPUT_SIDES = [320, 364, 377, 463, 640] as const
 
 const MAX_OUTPUT_SIDE = 640
 const IDENTITY_CROP: CropRectPx = { x: 0, y: 0, side: MAX_OUTPUT_SIDE }
@@ -444,6 +456,134 @@ describe('drawEvidenceAnnotation', () => {
       expect(Math.max(...narrow.paints.map((paint) => paint.lineWidth))).toBeLessThan(
         Math.max(...wide.paints.map((paint) => paint.lineWidth)),
       )
+    })
+  })
+
+  /**
+   * The defect these cover is invisible to every assertion above, because every assertion above is
+   * in CANVAS pixels and the failure is a canvas-correct weight that the compositor averages out of
+   * the delivered image. At the shipped fractions the halo resolved to 0.72 display px and a
+   * construction line's visible dash gap to 0.65 — both under one pixel of what the reader is
+   * served (`strides-dt1`, `strides-60w`).
+   */
+  describe('legibility floors are stated in display pixels', () => {
+    const displayPxOn = (outputSide: number): number =>
+      outputSide / EVIDENCE_INLINE_DISPLAY_SIDE_PX
+    /** The floors are reached by dividing back out exactly what was multiplied in, so a canvas side
+     * that is not a clean multiple of the display side lands a few ulps under. The tolerance is for
+     * that and nothing else — it is far below one part in a million of a display pixel. */
+    const EPS = 1e-9
+
+    it('keeps the halo at least the display-pixel floor on every canvas the planner produces', () => {
+      for (const side of OBSERVED_OUTPUT_SIDES) {
+        const metrics = evidenceAnnotationMetrics(side)
+        expect(metrics.haloWidth / displayPxOn(side)).toBeGreaterThanOrEqual(
+          MIN_HALO_DISPLAY_PX - EPS,
+        )
+      }
+    })
+
+    it('leaves a visible dash gap after the halo has extended every dash', () => {
+      // A dashed construction is one path stroked twice, so the halo pass draws the same dashes at
+      // `constructionWidth + 2·haloWidth` with round caps — which grow each dash by half that width
+      // at BOTH ends. The gap the reader sees is what is left over, and it is that quantity, not
+      // the dash pattern handed to the canvas, that has to clear the floor.
+      for (const side of OBSERVED_OUTPUT_SIDES) {
+        const metrics = evidenceAnnotationMetrics(side)
+        const haloStroke = metrics.constructionWidth + metrics.haloWidth * 2
+        const visibleGap = metrics.constructionDash[1] - haloStroke
+        expect(visibleGap / displayPxOn(side)).toBeGreaterThanOrEqual(
+          MIN_DASH_GAP_DISPLAY_PX - EPS,
+        )
+      }
+    })
+
+    it('still halves the halo and the dash pattern when the canvas halves', () => {
+      // The display floors are themselves proportional to the canvas side, so adding them must not
+      // cost the proportional sizing the fractions exist to provide.
+      const large = evidenceAnnotationMetrics(640)
+      const small = evidenceAnnotationMetrics(320)
+      expect(small.haloWidth).toBeCloseTo(large.haloWidth / 2, 6)
+      expect(small.constructionDash[0]).toBeCloseTo(
+        large.constructionDash[0] / 2,
+        6,
+      )
+      expect(small.constructionDash[1]).toBeCloseTo(
+        large.constructionDash[1] / 2,
+        6,
+      )
+    })
+
+    it('relaxes the floors for a surface larger than the card thumbnail', () => {
+      // The floors answer one surface's smallness. A bigger surface must fall back to the canvas
+      // fractions rather than inherit a width only a 144 px box ever needed.
+      const inline = evidenceAnnotationMetrics(640)
+      const large = evidenceAnnotationMetrics(640, 640)
+      expect(large.haloWidth).toBeLessThan(inline.haloWidth)
+      expect(large.constructionDash[1]).toBeLessThan(inline.constructionDash[1])
+    })
+
+    it('floors the halo in canvas pixels too, so a degenerate canvas still gets one', () => {
+      // `displaySide` larger than the canvas makes the display floor vanish; the canvas floor is
+      // what is left, and it must still be positive.
+      const metrics = evidenceAnnotationMetrics(1, 10_000)
+      expect(metrics.haloWidth).toBeGreaterThan(0)
+      expect(metrics.constructionDash[1]).toBeGreaterThan(0)
+    })
+  })
+
+  /**
+   * The halo answers "can this mark be told apart from an unknown photograph", which is a different
+   * question from "how far should this mark be trusted". Only the second is the mark's opacity.
+   */
+  describe('the halo carries separability, not emphasis', () => {
+    it('draws every halo before any mark colour', () => {
+      // Interleaved, op N+1's halo lands on top of op N's colour — survivable at a hairline, not at
+      // a width the reader can see, where neighbouring marks bury each other.
+      const { ctx, paints } = recordingContext(EVIDENCE_GHOST_BLEND_ALPHA)
+      drawEvidenceAnnotation(ctx, ghostedPairAnnotation())
+
+      const haloIndices = indicesWhere(
+        paints,
+        (paint) => paint.color === EVIDENCE_ANNOTATION_HALO_COLOR,
+      )
+      const colorIndices = indicesWhere(
+        paints,
+        (paint) => paint.color !== EVIDENCE_ANNOTATION_HALO_COLOR,
+      )
+      expect(haloIndices.length).toBeGreaterThan(0)
+      expect(colorIndices.length).toBeGreaterThan(0)
+      expect(Math.max(...haloIndices)).toBeLessThan(Math.min(...colorIndices))
+    })
+
+    it('gives a ghost mark the same halo strength as a base mark', () => {
+      const annotation = ghostedPairAnnotation()
+      const { ctx, paints } = recordingContext(EVIDENCE_GHOST_BLEND_ALPHA)
+      drawEvidenceAnnotation(ctx, annotation)
+
+      const haloAlphas = new Set(
+        paints
+          .filter((paint) => paint.color === EVIDENCE_ANNOTATION_HALO_COLOR)
+          .map((paint) => paint.alpha),
+      )
+      // The marks themselves still differ — that is the emphasis the ghost split exists to create.
+      const markAlphas = new Set(coloredPaints(paints).map((paint) => paint.alpha))
+      expect(markAlphas.size).toBeGreaterThan(1)
+      expect([...haloAlphas]).toEqual([haloOpacityFor(DETECTED_OPACITY)])
+    })
+
+    it('never draws a halo stronger than a full-opacity mark gets', () => {
+      for (const opacity of [
+        INTERPOLATED_OPACITY * EVIDENCE_GHOST_MARK_OPACITY,
+        EVIDENCE_GHOST_MARK_OPACITY,
+        INTERPOLATED_OPACITY,
+        DETECTED_OPACITY,
+      ]) {
+        expect(haloOpacityFor(opacity)).toBeGreaterThanOrEqual(opacity)
+        expect(haloOpacityFor(opacity)).toBeLessThanOrEqual(
+          haloOpacityFor(DETECTED_OPACITY),
+        )
+      }
     })
   })
 
