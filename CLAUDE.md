@@ -927,6 +927,57 @@ every digit, and **no metric changed value, confidence, `viewFit` or tier on any
   `fuseHeuristics.ts`'s cross-clip view pick and the dev diagnostics line. Everything user-facing
   gates on `view.plausibility` instead, since `strides-ich`.
 
+⚠️ **The two backends disagree about Demo 2's view, and it is MediaPipe's ANKLES, not the scoring**
+(`strides-fn4`, 2026-08-31). This matters on the DEFAULT path, not only under an override: the
+background scale pass **is** MediaPipe, so every grafted centimetre metric arrives carrying
+MediaPipe's view opinion. Measured in one default MoveNet-primary run, both console lines:
+
+| Demo 2 | primary (MoveNet) | scale pass (MediaPipe) | bars |
+|---|---|---|---|
+| `view` | **front** | **ambiguous** | needs a 2–0 vote |
+| `confidence` | 0.5486 | 0.3 (the flat `0.3 × coverage`) | |
+| **BSR** | 0.5510 | **0.5229** | ≥ 0.45 → both vote FRONT |
+| **SER** | 0.3284 | **1.5911** | ≤ 0.40 front; **≥ 0.80 side** → MediaPipe votes SIDE |
+
+1–1, so `ambiguous`. **BSR agrees to within 5%; SER differs 4.8×**, and BSR and SER **share a
+denominator** (`torsoLengthPx`), so the entire 4.8× is in SER's numerator — MediaPipe's ankles range
+~4.8× further from their own hips, horizontally, on a clip where the runner comes straight at the
+camera. The Demo 1 control settles it: on a side view the two agree on **both** signals within 10%
+(BSR 0.1335 vs 0.1207, SER 1.5744 vs 1.4147) — and MediaPipe's FRONT-view SER (1.5911) is **higher
+than its own SIDE-view SER** (1.4147), which is anatomically impossible. Corroborated from another
+direction in the same run: the two passes' own `stepWidth` reads **0.2253** (MoveNet, conf 1.0) vs
+**0.4042** (MediaPipe, conf 0.2) — **1.79× apart**. Filed as `strides-boc`.
+
+**`strides-2iw` is not implicated** — it changed how a margin maps to a *confidence*, not how a
+*vote* is cast, and this fails on a vote. (Its threshold move does change the route: MediaPipe's
+0.5229 sits below the old 0.55, so before `strides-2iw` it would have landed on `ambiguous` at 0–1
+rather than 1–1. Same label. Separately worth knowing: **MoveNet's front label here cleared the old
+0.55 bar by 0.001** — `strides-2iw` did not create it, but it did move it off a knife edge.)
+
+**Consequence — `stepWidthCm` is structurally unable to render on the one clip it is designed for.**
+`graftScalePassResult` copies the scale pass's `MetricResult` wholesale, `viewFit` included, while
+explicitly discarding the scale pass's `view`. On Demo 2 the panel therefore shows **front** while
+withholding a card whose caveat names a view the panel never displays:
+
+| | value | confidence | viewFit | tier |
+|---|---|---|---|---|
+| grafted `stepWidthCm` | **4.5309 cm** | 0.2 | **`unsuitable`** (`ambiguous` → 0.2) | **excluded** |
+| grafted `verticalOscillationCm` | 10.4866 cm | 0.0500 | `tolerated` (`ambiguous` → 0.6) | caveated |
+
+**Recorded decision: the scale pass's view opinion should NOT gate grafted metrics — AND the gate
+must not be removed as an isolated change.** View is a property of the CLIP, and the panel already
+commits to the primary's answer for everything else the reader sees. But `stepWidthCm` is computed
+from ankle positions at footstrike, which is exactly what MediaPipe gets wrong here, so the gate is
+reaching a defensible OUTCOME for a FALSE REASON. Removing the false reason alone would put 4.53 cm
+on screen sourced from keypoints measuring the underlying quantity 1.79× away from the primary's own
+answer. `strides-wac` carries the fix, **blocked on `strides-boc`**.
+
+⚠️ **`subjectAgreement` reads a flawless 99/99 through all of this.** #56's check compares **which
+person** each pass selected, and is structurally blind to the two passes disagreeing about the
+clip's camera geometry or about a metric's value — both entirely compatible with watching the same
+runner throughout, which is what happens here. Do not read a 1.0 as "the two passes agree". Filed as
+`strides-lbg`.
+
 **2. `armSwingSymmetry` is fitted, not scanned** (`strides-gzl`, `2ed7f0b`, archived
 `2026-08-29-fit-arm-swing-amplitude`). The prominence-threshold extremum scan was latching onto
 sub-cycle wiggles — 9 half-swings per side on Demo 2 across a window holding ~4.8, with spacings

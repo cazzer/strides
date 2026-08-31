@@ -1,0 +1,9 @@
+schema: spec-driven
+created: 2026-08-31
+# No spec delta, and that is the finding rather than an omission. The cause of the disagreement is
+# a detector defect (MediaPipe's ankle placement on a front-approach clip), not a rule that is
+# stated wrongly, and the recorded decision is that the scale pass's view opinion should NOT gate
+# grafted metrics but that removing the gate is UNSAFE until the detector defect is characterised.
+# Changing the requirement now would ship a centimetre number this investigation has just shown to
+# be derived from unreliable keypoints. Three follow-up beads carry the work.
+skip_specs: true
