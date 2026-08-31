@@ -155,7 +155,9 @@ describe('computeStepWidth', () => {
     expect(result.value).not.toBeNull()
     expect(result.viewFit).toBe('unsuitable')
     expect(result.confidence).toBeLessThan(0.25)
-    expect(result.caveat).toContain('ambiguous view')
+    // `toContain('ambiguous view')` passed for two years while the copy read "a ambiguous";
+    // assert the article, which is the part that was wrong (`strides-7wq`).
+    expect(result.caveat).toContain('an ambiguous view')
   })
 
   it('a crossover-gait clip: negative value, crossover caveat fires', () => {

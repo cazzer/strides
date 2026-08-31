@@ -140,6 +140,23 @@ function computeCommittedConfidence(
  * `strides-2iw`: the front view's BSR margin saturated at twice its threshold, a value no human
  * body can produce, capping a flawless front clip near 0.5 while a side clip routinely read 0.77.
  */
+/**
+ * The view, as an article-qualified noun phrase for user-facing copy: `'a side view'`,
+ * `'a front view'`, `'an ambiguous view'`.
+ *
+ * Exists because eight metrics independently interpolated the view into a caveat as
+ * `` `from a ${view} view` ``, which reads "from a ambiguous view" on the one label that takes
+ * `an`. That branch is reachable in shipped output rather than theoretical: the background
+ * MediaPipe scale pass can classify a clip `ambiguous` where the primary pass does not, and the
+ * caveat then rides onto a grafted metric's card (`strides-fn4`).
+ *
+ * A helper rather than eight inline ternaries, and it lives here because this module owns what a
+ * `View` means. Each metric keeps its own sentence — only the shared phrase moves.
+ */
+export function viewPhrase(view: View): string {
+  return `${view === 'ambiguous' ? 'an' : 'a'} ${view} view`
+}
+
 export function detectView(
   frames: RobustPoseFrame[],
   config: HeuristicsConfig = DEFAULT_HEURISTICS_CONFIG,

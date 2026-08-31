@@ -1,4 +1,5 @@
 import type { KeypointName } from '../pose/types'
+import { viewPhrase } from './viewDetection'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { HeuristicsConfig, MetricResult, View } from './types'
@@ -439,7 +440,7 @@ export function computeArmSwingSymmetry(
   const caveats: string[] = []
   if (viewFitEntry.fit === 'unsuitable') {
     caveats.push(
-      `Arm swing symmetry needs both arms visible and separable, and is not reliable from a ${view} view.`,
+      `Arm swing symmetry needs both arms visible and separable, and is not reliable from ${viewPhrase(view)}.`,
     )
   }
   if (sampleSize < MIN_ARM_SWING_CYCLES) {

@@ -1,4 +1,5 @@
 import type { KeypointName } from '../pose/types'
+import { viewPhrase } from './viewDetection'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { HeuristicsConfig, MetricExemplar, MetricResult, View } from './types'
@@ -269,7 +270,7 @@ export function computeKneeFlexion(
   const caveats: string[] = []
   if (viewFitEntry.fit === 'unsuitable') {
     caveats.push(
-      `Knee flexion is a sagittal-plane measurement and is not reliable from a ${view} view.`,
+      `Knee flexion is a sagittal-plane measurement and is not reliable from ${viewPhrase(view)}.`,
     )
   }
   if (sampleSize < MIN_KNEE_FLEXION_SAMPLE_SIZE) {

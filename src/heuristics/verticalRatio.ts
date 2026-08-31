@@ -1,4 +1,5 @@
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
+import { viewPhrase } from './viewDetection'
 import type { HeuristicsConfig, MetricResult, View } from './types'
 import { analyzeHipBounce } from './hipBounce'
 import type { SpectralFitFailureReason } from './spectralFit'
@@ -348,7 +349,7 @@ export function computeVerticalRatio(
   }
   if (viewFitEntry.fit === 'unsuitable') {
     caveats.push(
-      `Vertical ratio depends on stride length, a fore-aft measurement, and is not reliable from a ${view} view.`,
+      `Vertical ratio depends on stride length, a fore-aft measurement, and is not reliable from ${viewPhrase(view)}.`,
     )
   }
 

@@ -1,4 +1,5 @@
 import type { KeypointName } from '../pose/types'
+import { viewPhrase } from './viewDetection'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { HeuristicsConfig, MetricResult, View } from './types'
@@ -196,7 +197,7 @@ export function computeStepWidthCm(
   const caveats: string[] = []
   if (viewFitEntry.fit === 'unsuitable') {
     caveats.push(
-      `Step width is a side-to-side measurement and is not reliable from a ${view} view.`,
+      `Step width is a side-to-side measurement and is not reliable from ${viewPhrase(view)}.`,
     )
   }
   if (usableStrikeCount < MIN_STEP_WIDTH_CM_SAMPLE_SIZE) {

@@ -1,4 +1,5 @@
 import type { KeypointName } from '../pose/types'
+import { viewPhrase } from './viewDetection'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { HeuristicsConfig, MetricExemplar, MetricResult, View } from './types'
@@ -234,7 +235,7 @@ export function computeFootStrikePattern(
   }
   if (viewFitEntry.fit === 'unsuitable') {
     caveats.push(
-      `Foot strike pattern is a fore-aft measurement and is not reliable from a ${view} view.`,
+      `Foot strike pattern is a fore-aft measurement and is not reliable from ${viewPhrase(view)}.`,
     )
   }
   if (usableStrikeCount < MIN_FOOT_STRIKE_SAMPLE_SIZE) {

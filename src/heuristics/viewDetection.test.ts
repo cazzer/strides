@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { RobustPoseFrame } from '../pose/robustness/types'
-import { detectView } from './viewDetection'
+import { detectView, viewPhrase } from './viewDetection'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildFrame } from './__fixtures__/testFrames'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
@@ -346,5 +346,24 @@ describe('detectView', () => {
     // The comparability claim as a ratio rather than a pair of remembered numbers: the front clip
     // is no longer an order of magnitude adrift of the side ones.
     expect(demo2.confidence / demo1.confidence).toBeGreaterThan(0.5)
+  })
+})
+
+describe('viewPhrase', () => {
+  // The whole point of the helper: 'ambiguous' is the one label taking "an", and it is reachable
+  // in shipped output because the background MediaPipe scale pass can classify a clip ambiguous
+  // where the primary pass does not, sending the caveat onto a grafted metric's card.
+  it.each([
+    ['side', 'a side view'],
+    ['front', 'a front view'],
+    ['ambiguous', 'an ambiguous view'],
+  ] as const)('renders %s as "%s"', (view, expected) => {
+    expect(viewPhrase(view)).toBe(expected)
+  })
+
+  it('never emits the wrong article for any View the type admits', () => {
+    for (const view of ['side', 'front', 'ambiguous'] as const) {
+      expect(viewPhrase(view)).not.toMatch(/\ba [aeiou]/i)
+    }
   })
 })

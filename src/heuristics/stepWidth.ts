@@ -1,4 +1,5 @@
 import type { RobustPoseFrame } from '../pose/robustness/types'
+import { viewPhrase } from './viewDetection'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { HeuristicsConfig, MetricResult, View } from './types'
 import { estimateHipWidth } from './bodyScale'
@@ -155,7 +156,7 @@ export function computeStepWidth(
   const caveats: string[] = []
   if (viewFitEntry.fit === 'unsuitable') {
     caveats.push(
-      `Step width is a mediolateral measurement and is not reliable from a ${view} view.`,
+      `Step width is a mediolateral measurement and is not reliable from ${viewPhrase(view)}.`,
     )
   }
   if (usableStrikeCount < MIN_STEP_WIDTH_SAMPLE_SIZE) {
