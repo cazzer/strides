@@ -332,7 +332,11 @@ node scripts/ab-person-selection.mjs \
   | same exemplar's `cropSidePx` | **320** (the `EVIDENCE_CROP_MIN_SIDE_PX` floor), no spread | 398.733 `[320..398.733]` |
 
   Trial 1 agrees in both regimes; trials 2+ are what move. Only the fresh regime reproduces the
-  coverage this file records for that clip. The damage is the same shape as a foreign dev server:
+  coverage this file records for that clip. ⚠️ **The exemplar TIMESTAMPS in that table are stale as
+  a present-day reading** — `2ed7f0b` re-derived `armSwingSymmetry`'s instants from a spectral fit,
+  and on `c79d307` the fresh-process value is `0.934267` (still at `cropSidePx` 320, still with no
+  spread). The regime contrast the table demonstrates is unaffected. The damage is the same shape as
+  a foreign dev server:
   in the reused regime the subject (449.4 px) is WIDER than the crop, so a subject-centring rule
   correctly declines to fire, and a driver reusing a browser would have reported **"no effect" for
   a fix that demonstrably works**. The defect reproduces either way; it is the FIX that goes
@@ -613,7 +617,10 @@ control only, never a target.
 
 **Update (#36, same day): no longer diagnostics-only.** `verticalOscillationCm` is now the
 vertical-oscillation family's third real `MetricId` (`FormHeuristicsResult.verticalOscillationCm`,
-after `verticalOscillation`/`verticalRatio` — the panel now shows **nine** metrics, not seven/eight)
+after `verticalOscillation`/`verticalRatio` — this took the panel from eight metrics to **nine**;
+⚠️ the `MetricId` union has since grown to **eleven**, which is the count to check against today —
+`src/heuristics/types.ts`, and `strides-x8w` swept three stale "ten" counts out of `src/` and the
+results-view spec on 2026-08-29)
 — `computeVerticalOscillationCmMetric` (`verticalOscillationCm.ts`) wraps the calculation described
 below with a `value`/`confidence`/`viewFit`/`caveat`, view-tolerant on the identical terms
 `verticalOscillation` uses (side 1.0 / front 0.85 / ambiguous 0.6 — it has no denominator to be
@@ -894,6 +901,80 @@ a product decision inside it — today's full-width cards are why inline evidenc
 description on a desktop, which is the behaviour the evidence epic was asked for. **Left open
 deliberately; do not "fix" it as a typo.**
 
+## Three metric-layer changes that moved numbers this file quotes (2026-08-29/31)
+
+Every "expected value" recorded elsewhere in this file predates at least one of these. Check a
+surprising reading against them before filing it as a regression.
+
+**1. `view.confidence` is now comparable between a side label and a front label** (`strides-2iw`,
+`a468fdb`, archived `2026-08-29-compare-view-confidence-across-labels`). It was not: the old
+`marginAwayFromZero(value, threshold)` saturated at 2× the threshold, and for the bilateral-spread
+ratio that point (1.10) sits at roughly twice the signal's ANATOMICAL maximum — so a perfect front
+view structurally topped out around 0.51–0.61 while a side view could reach 1. Every per-(view,
+signal) margin now ramps from its threshold to what that signal reads with the camera dead-on for
+that view. **`frontViewMinBilateralSpreadRatio` moved 0.55 → 0.45**, forced rather than preferred:
+0.55 sat BETWEEN a narrow build's dead-on value (0.4712) and the central one (0.5612), so it was
+unreachable at any camera angle for a narrow-built runner. A threshold sweep is **flat across
+0.35–0.50** — a plateau, the opposite of the 4K-area-floor's factor-of-two cliff, and the reason
+this one was shippable. Measured effect: Demo 2 **0.0771 → 0.5343**, side controls untouched to
+every digit, and **no metric changed value, confidence, `viewFit` or tier on any clip**.
+- **Consequence for this file:** every `view confidence` figure recorded above this section — the
+  pipeline-comparison table's `~0.76-0.79`, the tracking-crop A/B's park `0.073–0.136` — is on the
+  OLD scale. Side-label numbers survive the rescale essentially unchanged; **front-label numbers do
+  not** and must not be compared against a reading taken today. Current fresh-process values on
+  `c79d307`: Demo 1 **0.7615**, Demo 2 **0.5486**, multiperson **0.7132**.
+- Established in passing and worth knowing: `view.confidence` has exactly TWO readers —
+  `fuseHeuristics.ts`'s cross-clip view pick and the dev diagnostics line. Everything user-facing
+  gates on `view.plausibility` instead, since `strides-ich`.
+
+**2. `armSwingSymmetry` is fitted, not scanned** (`strides-gzl`, `2ed7f0b`, archived
+`2026-08-29-fit-arm-swing-amplitude`). The prominence-threshold extremum scan was latching onto
+sub-cycle wiggles — 9 half-swings per side on Demo 2 across a window holding ~4.8, with spacings
+down to 0.050 s against a 0.331 s half-cycle. Replaced by the shared spectral sinusoid fit +
+`selectBounceInstants`, so an exemplar pair spans a half-cycle **by construction**, plus a
+cross-side frequency-agreement check and a caveat naming a fit disparity. The 54.9% asymmetry was
+REAL but overstated: both arms fit the stride rhythm within one grid step, but the weaker-looking
+right arm fits at R² 0.497 against the left's 0.778. **Demo 2 moved 0.5464 → 0.6066 and its
+confidence 0.980 → 0.385 — normal tier to caveated.** Re-measured on `c79d307`: value
+`0.606563233508127`, confidence `0.38457189580244544`, exemplar pairs spanning 0.35035 s (left) and
+0.33367 s (right). Anywhere this file shows `armSwingSymmetry` at high confidence on Demo 2, that
+number is pre-`2ed7f0b`.
+
+**3. Footstrikes are timed from the fitted hip-bounce phase** (`strides-cjl`, `478d271`/`7564e9d`/
+`1b6720c`, archived `2026-08-31-derive-footstrike-timing-from-bounce-phase`). Touchdown = the
+fitted hip-bounce low point minus `T/4`; the ankle-difference detector is retained VERBATIM as the
+fallback when the hip fit is poor. This moves every consumer of `detectFootstrikes` —
+`overstriding`, `footStrikePattern`, `stepWidth`, `stepWidthCm` and transitively `verticalRatio` —
+on every clip. Demo 1, before → after: `overstriding` 0.29735 @ 1.000 → **0.325743 @ 0.875**,
+`footStrikePattern` −0.0251745 @ 1.000 → **+0.00108462 @ 0.875** (midfoot both ways),
+`verticalRatio` 0.0353716 @ 0.2397 → **0.0310419 @ 0.4795**. All three reproduce exactly on
+`c79d307`. `cadence` does not consume this detector and did not move. A **+0.11 s systematic**
+residual remains, shipped uncorrected on principle — fitting an offset is the thing this change
+exists to stop — and is filed as `strides-24s`.
+
+⚠️ **Demo 1's footstrike ground truth was itself wrong, and the corrected set is the one to use**
+(addendum 2026-08-31, `strides-dly`). `strides-da8` recorded the contact onsets as ffmpeg
+`3.90 / 4.60 / 5.16 / 5.84` (app `3.98 / 4.68 / 5.24 / 5.92`) and both its own design and
+`strides-cjl`'s acceptance criterion were stated against them. Keyframes pulled from the source at
+0.04 s intervals with a grid overlay, judged on shoe-versus-shadow, put them **1.5 to 4 frames
+later**:
+
+| contact | `strides-da8` (ffmpeg) | keyframe-confirmed (ffmpeg) | error |
+|---|---|---|---|
+| 1 (left) | 3.90 | **4.00** | 2.5 frames early |
+| 2 (left) | 4.60 | **4.66** | 1.5 frames early |
+| 3 (right) | 5.16 | **5.32** | 4 frames early |
+| 4 (right) | 5.84 | **5.98** | 3.5 frames early |
+
+**Corrected app-domain onsets: `4.08 / 4.74 / 5.40 / 6.06`** (ffmpeg + this clip's own 0.08 s
+edit-list shift, unchanged). The original set is spaced 0.70 / 0.56 / 0.68 s; the corrected set is a
+uniform **0.66 s**, agreeing with the clip's own fitted step period of 0.658 s to 0.3% — that
+regularity is itself the evidence. Independently corroborated by the app's own `ankle.x` going
+stationary (325 px/s against the hip's 1617 px/s) from app ≈ 4.84. The old numbers are NOT rewritten
+where they were honestly recorded; `2026-08-29-detect-footstrike-contact-onsets/design.md` carries a
+correction note beside them, and the full derivation is that change's own
+`design.md` **D11.1**.
+
 ## Metric frame evidence — inline, annotated, measured live (2026-08-17/18, epic #59 and `strides-ac9`)
 
 **Each metric card carries its own evidence, inline.** For every metric the app re-pulls the frames
@@ -915,7 +996,10 @@ three clips: `openspec/changes/weight-evidence-ghost-below-base/design.md`.
 **The standalone gallery is gone.** There is no "What the analysis looked at" section below the
 results, and no deep link from a card to one — `EvidenceGallery.tsx` was deleted (`strides-ac9.3`).
 Ignore any older note below or elsewhere that describes a gallery section, a gallery figure, or a
-"See evidence" link; several `src/` doc comments still say "gallery" and are stale in the same way.
+"See evidence" link. The `src/` doc comments that still said "gallery" were swept on 2026-08-31
+(`strides-hcm`); the word now survives in `src/` only where a comment names `EvidenceGallery.tsx`
+as a deleted component it inherited code or discipline from — plus one test title in
+`evidenceSeekOffset.test.ts`, left alone because renaming it is a code change, not a comment fix.
 
 Current modules: `evidenceFrames.ts` plans purely, `evidenceAnnotations.ts` derives every annotation
 mark's geometry purely, `extractFrames.ts` produces pixels, `drawEvidenceAnnotations.ts` paints the
@@ -954,12 +1038,21 @@ apart on a 640 px canvas, so ~3 px displayed) and the arc/caliper end-ticks **do
 112 px — the gestalt reads, the fine marks do not. Best image on any clip is `verticalRatio`'s
 `stridePair`.
 
+⚠️ **Two corrections to the paragraph above, neither of which un-measures it** (2026-08-31). (1)
+**The inline size is no longer 112 px**: `0325943` widened the thumbnail to `w-36` — 144 CSS px
+nominal, **142 measured** (`strides-c37` recorded the 1.4% gap and deliberately left the design's
+144 alone). Every "at 112 px" reading here is therefore a floor; the ~3 px bounce-guide separation
+scales to roughly 4 px, still marginal rather than resolved. (2) **`verticalRatio`'s `stridePair`
+is not produced any more** on any clip — see "Coverage re-measured 2026-08-31" below — so the
+"best image" nomination names an image a reader can no longer find.
+
 **A third dev-only console line, `[evidence-coverage]`.** Same contract as the two
 `[analysis-diagnostics]` lines — `import.meta.env.DEV`-gated, `JSON.parse`able, matched exclusively
 on `startsWith('[evidence-coverage]')`, and it carries **nothing image-shaped** (no canvas, `Blob`,
 object URL or data URI — verified by scanning 38 captured lines). It reports, per clip:
 `frameCount`, and per metric either `{status:'planned', exemplars:[{kind, side?, quality, timestamp,
-pairedTimestamp, demotedFromPair, cropSidePx}]}` or `{status:'no-evidence', reason}` where reason is
+pairedTimestamp, demotedFromPair, cropSidePx, cropGrowth}]}` or `{status:'no-evidence', reason}`
+where reason is
 `not-emitted | all-gated-out | metric-excluded | frames-unavailable | extraction-failed`. Plus
 `sourceIndices`, the per-metric winning clip index. `[analysis-diagnostics]` is untouched — same six
 top-level keys, ~5.5-5.6 kB, no exemplar data — and `vite build` output contains **zero** occurrences
@@ -975,9 +1068,13 @@ evidence input signature, correctly triggers a re-extraction, and emits a second
 Demo 1: line 1 has `verticalOscillationCm: metric-excluded`, line 2 has it `planned`. Whether a
 harness sees one line or two is a race against the scale pass.
 
-**Coverage** (✅ = images produced; count is images, a ghosted pair being 1). Demo 1 and Demo 2 are
-**exact and reproduce on every trial**, re-confirmed independently by both epics' live verification.
-**multiperson is NOT** — see the caveat under the table:
+**Coverage** (✅ = images produced; count is images, a ghosted pair being 1). ⚠️ **The table
+immediately below is the 2026-08-17/18 reading and is NO LONGER the number to check a regression
+against** — jump to "Coverage re-measured 2026-08-31" a few paragraphs down for the current one.
+It is kept because the per-metric reasons it records are still the explanation for how the current
+figures were reached. As measured then, Demo 1 and Demo 2 were **exact and reproduced on every
+trial**, re-confirmed independently by both epics' live verification, and **multiperson was NOT** —
+see the caveat under the table:
 
 | metric | Demo 1 | Demo 2 | multiperson |
 |---|---|---|---|
@@ -1017,6 +1114,60 @@ clip, is what the 7/5–4/3 range was recording. Caveat: this is today's `main`,
 changes downstream of the 2026-08-17/18 table, so the *values* are not comparable to the column
 above — only the presence or absence of a range is. See the rewritten **Determinism caveat**.
 
+**Coverage re-measured 2026-08-31 on `c79d307` — this is the current reference** (`strides-h4u`).
+`scripts/ab-person-selection.mjs --arm 'base={}' --clips demo1,demo2,multiperson --trials 3
+--evidence`, fresh Chromium process per trial, dev server started and identity-verified by the run,
+real GPU (`ANGLE Metal Renderer: Apple M4 Pro`), reading the LAST `[evidence-coverage]` line.
+**Bit-identical across all three trials on all three clips** — per-metric status, exemplar
+`timestamp`/`pairedTimestamp`/`quality`/`cropSidePx`/`cropGrowth` to full precision.
+
+| metric | Demo 1 | Demo 2 | multiperson |
+|---|---|---|---|
+| `verticalOscillation` | ✅ 1 | ✅ 1 | ✅ 1 |
+| `verticalRatio` | ✅ 1 | excluded | ✅ 1 |
+| `verticalOscillationCm` | ✅ 1 (post-graft) | ✅ 1 | ✅ 1 |
+| `trunkLean` | ✅ 1 | excluded | ✅ 1 |
+| `overstriding` | ✅ 1 | excluded | ✅ 1 |
+| `cadence` | `not-emitted` by design | `not-emitted` | `not-emitted` |
+| `kneeFlexion` | ✅ 1 | excluded | ✅ 1 |
+| `armSwingSymmetry` | excluded | ✅ 2 | excluded |
+| `footStrikePattern` | ✅ 2 | excluded | ✅ 2 |
+| `stepWidth` | excluded | ✅ 1 | excluded |
+| `stepWidthCm` | excluded | excluded | excluded |
+| **totals** | **8 images / 7 sections** | **5 / 4** | **8 images / 7 sections** |
+
+**multiperson is a single number again, and the "record it as a RANGE" instruction above is
+retired.** Read that paragraph as a record of what the reused-browser regime produced, not as
+advice: under the fresh-process default this clip reads 8/7 on every trial. What is *not*
+comparable across the two tables is the **values** — several evidence changes land in between — so
+do not read a per-metric difference as a regression without checking it against this table first.
+
+**Four cells moved, and every one of them is expected drift from named changes:**
+- **`trunkLean` and `overstriding` now emit on Demo 1 and on multiperson**, where the old table
+  records `all-gated-out` on both clips. `edb3f07` (fall back to the next-best croppable exemplar
+  pair), `9fa169c` (rank exemplar candidates by quality rather than scoring only the argmax) and
+  `4fac355` (judge a pair on the crop it demands, before the frame cap clamps it) are exactly the
+  fixes the old table's own follow-up **#70** predicted would move these cells. Measured qualities:
+  Demo 1 `trunkLean` 0.567 (crop 1687.4 px, growth 1.866), Demo 1 `overstriding` 0.500 (crop 2160 px
+  — the frame cap — growth 2.428), multiperson `trunkLean` 0.692 (crop 732.6 px, growth 2.289),
+  multiperson `overstriding` 0.500 (crop 696.1 px, growth 2.175).
+- **So `trunkLean` on multiperson is no longer `all-gated-out`**, and the note above explaining that
+  cell is superseded: `EVIDENCE_MAX_PAIR_CROP_GROWTH` is untouched at 2.5, but the pair it now
+  chooses demands 2.289 rather than the 3.375 the old pair demanded. The guard did not weaken; a
+  better pair became reachable.
+- **`verticalRatio` drops from ✅ 2 to ✅ 1 on Demo 1 and on multiperson.** Its one surviving
+  exemplar is the `bounceCycle`; the `stridePair` that used to accompany it does not reach the
+  line on any clip, on any trial. `MAX_EXEMPLARS_PER_METRIC` is still 2, so this is not the budget,
+  and the metric itself still resolves on both clips — **the stage that drops it was NOT isolated
+  in this docs pass**, and the two plausible suspects are `ceee2dc`'s fitted-step-period gate
+  (`strides-dy8`, which changes which pairs exist) and `strides-cjl`'s footstrike re-timing (which
+  moves every instant a stride pair is built from). Worth a bead if the image is wanted back.
+  Either way it retires the "best image on any clip is `verticalRatio`'s `stridePair`" claim
+  recorded under Legibility above: that image is not produced any more.
+- **Demo 2 is unchanged at 5 / 4**, cell for cell, and its `armSwingSymmetry` pair still sits on
+  the `EVIDENCE_CROP_MIN_SIDE_PX` floor at `cropSidePx` 320 — now centred on the subject, see the
+  bystander bullet below.
+
 `excluded` = `metric-excluded`, the tier-3 gate (the metric has no card, so there is nothing to hang
 evidence on) — not the exemplar gate. **Zero `extraction-failed` on any run.** `cadence` deliberately
 never emits (design D7). `stepWidthCm` produced nothing anywhere, for a reason outside this feature:
@@ -1030,7 +1181,10 @@ MP4s sample through WebCodecs, where `robustFrames[].timestamp` is raw `sample.c
 adjusted. Ground-truthed by rebuilding each exemplar's exact crop from the source with
 `ffmpeg -vf "select='eq(n\,IDX)',crop=…,scale=…"` at a range of candidate frame indices (blended
 50/50 for a ghosted pair) and PSNR-comparing against the app's own canvas — the argmax names the
-frame actually drawn:
+frame actually drawn. ⚠️ **If you re-run this recipe, the blend is no longer 50/50** — since
+`strides-c37` the photograph is `0.35·ghost + 0.65·base`, so a reconstruction blended 50/50 will
+mis-rank candidates. The measurements in the table below were taken when 50/50 was correct and are
+left as measured:
 
 | clip | `elst media_time` ÷ media timescale | measured | best PSNR vs runner-up |
 |---|---|---|---|
@@ -1110,8 +1264,23 @@ fallback never fired, so it explains nothing here.
   `{ sequentialSampling: { enabled: false } }` samples a different set, the argmax lands on a
   well-tracked frame, and `trunkLean` **emits at quality 0.664**. Both in follow-up **#70**.
 
-**Image-quality findings — two of the three original defects are now closed** (every image was pulled
-out of the DOM and looked at, both epics, full-res and at the real 112 px inline size):
+⚠️ **The three bullets above describe a state that has been FIXED — `overstriding` and `trunkLean`
+both emit on Demo 1 and on multiperson today** (addendum 2026-08-31, `strides-h4u`; the
+distribution table and the bullets are left exactly as measured, because the mechanism they
+describe is still how the gate works and still what a future regression would look like). #70's
+"second defect" — one argmax, scored after the fact, no fallback — is what `9fa169c` (rank
+candidates by quality) and `edb3f07` (fall back to the next-best croppable pair) closed, with
+`4fac355` measuring a pair's crop growth before the frame cap clamps it. Measured on `c79d307`:
+Demo 1 `overstriding` 0.500 and `trunkLean` 0.567, multiperson `overstriding` 0.500 and `trunkLean`
+0.692 — all four at or above `MIN_EXEMPLAR_QUALITY`, which was still not touched. Note two of them
+land at exactly 0.500: these metrics clear the gate, they do not clear it comfortably, so a change
+that shaves the ramp will silently take `overstriding`'s coverage back out on both clips.
+
+**Image-quality findings — all three original defects are now closed** (every image was pulled
+out of the DOM and looked at, both epics, full-res and at the real inline size — **112 px when
+these three were judged; the cards were widened to `w-36` afterwards and the inline size is now
+144 px nominal, 142 measured**, so every "at 112 px" reading below is a floor rather than the
+present-day rendering):
 - **`trunkLean` on multiperson was a whole-frame crop — FIXED.** Its two extremes are 1.25 s apart,
   the runner crosses the frame between them, `computeEvidenceCropRect` unioned both torso boxes,
   squared, and hit the `min(frameWidth, frameHeight)` cap → side 1080 on a 1920×1080 clip, showing
@@ -1121,11 +1290,19 @@ out of the DOM and looked at, both epics, full-res and at the real 112 px inline
   (`EVIDENCE_MAX_PAIR_CROP_GROWTH = 2.5`, `isTooFarApartPair`) — the pair is now gated out instead
   of ghosted, and the **largest crop on that clip is 509 px**. Note the guard is the complement of
   D12, which demotes a pair that is too *similar*.
-- **`armSwingSymmetry` on Demo 2 includes a bystander, every trial — still open.**
-  `EVIDENCE_CROP_MIN_SIDE_PX = 320` (still 320, `evidenceFrames.ts`) inflates the small limb box
-  until it swallows a man in a yellow shirt standing to the right, who reads as a second body in an
-  image whose caption insists "not two people". Systematic in cause, clip-specific in particulars.
-  **Do not just move the 320** — it came from display reasoning, not from this clip.
+- **`armSwingSymmetry` on Demo 2 included a bystander, every trial — FIXED** (`strides-e9b`,
+  archived change `openspec/changes/archive/2026-08-30-place-floored-evidence-crop-on-subject/`).
+  `EVIDENCE_CROP_MIN_SIDE_PX = 320` inflated the small limb box until it swallowed a man in a
+  yellow shirt standing to the right, who read as a second body. **The 320 did not move, and the
+  advice not to move it stands** — it came from display reasoning, not from this clip. What changed
+  is where a floor-inflated crop is PLACED: `frameSubjectExtentBox` + `subjectCentredCropRect`
+  (`evidenceFrames.ts`) re-centre a crop on the subject's own keypoint extent on any axis where the
+  FLOOR, not the padding, is what made it wider than the body. Verified by looking: the bystander
+  is gone, and every other image on all three clips was byte-identical to baseline. Demo 2's
+  `armSwingSymmetry` exemplars still sit at `cropSidePx` 320 on `c79d307`, so the floor is still
+  binding — the crop is just aimed correctly now. (The caption this bullet used to quote — the
+  "not two people" disclaimer — is also gone, dropped by `aed9a84` as restating what a *ghosted
+  against* label already says.)
 - **A bounce ghost read as horizontal translation on a side view — materially improved.**
   `verticalOscillation` on Demo 1 is two clearly-separated horizontal positions with the vertical
   delta the smaller displacement; the same exemplar on the front-approach Demo 2 always read well.
@@ -1142,7 +1319,10 @@ multiperson added through the header add-a-clip action): **10 images / 7 section
 rendered *"From clip N of 2."* caption matched `sourceIndices` one-for-one.
 `verticalOscillationCm` had a planned exemplar on both clips and correctly took the fusion winner's,
 not "any clip that has it." (The pre-annotation measurement of the same check was 11 images /
-8 sections, against the then-current coverage.)
+8 sections, against the then-current coverage.) **Both totals move with per-clip coverage and neither
+is a target** — see "Coverage re-measured 2026-08-31" below; what this check actually asserts is
+that every rendered *"From clip N of 2."* caption matches `sourceIndices`, which is independent of
+how many images there are.
 
 **No analysis wall-clock regression, and evidence's own cost lands after `ready`.** Re-measured
 against pre-epic baseline `2a3f009`, 6 trials/arm: **+1.4% on both demo clips** — noise, no
@@ -1166,6 +1346,16 @@ cross-check the anchor really tests still holds exactly: `fit.frequencyHz × 60`
 **Re-confirmed 2026-08-18, after both the navbar shell and the inline-annotation epics**: the anchor
 still reads `4.421467928439415` cm with `fit 1.52 × 60 = 91.2 == cadence 91.2`, and
 `subjectAgreement` 52/53. Neither epic moved a number.
+
+**Re-confirmed again 2026-08-31 on `c79d307`**, after the ghost-weight split, the arm-swing fit, the
+view-confidence rescale, the subject-centred crop and the footstrike re-timing — two fresh-process
+trials, every digit identical to both readings above: `verticalOscillationCm`
+**`4.421467928439415`**, `fit.frequencyHz` **1.52** so `× 60 = 91.2 == cadence.value 91.2`,
+`sinusoidR2` `0.42451916621964814`, `sampleCount` 57, `spanSeconds` 2.24, `torsoMeters`
+`0.504143645953322`, `medianPixelsPerMeter` `868.0221516689736`, `subjectAgreement` 52/53. Note the
+anchor lives on the `[analysis-diagnostics:scale-pass]` line, which
+`scripts/ab-person-selection.mjs` does not capture — checking it needs a driver that waits for that
+line separately, after "Analysis complete".
 
 **Probe recipes used, if this needs re-measuring.** Both were added, measured and reverted per the
 add-measure-revert cycle. (1) `[evidence-seek]`: one dev-only `console.log` in

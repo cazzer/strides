@@ -663,7 +663,7 @@ describe('extractSessionEvidence', () => {
     stubCanvas2DContext()
     const decoders = bracketDecoders()
 
-    // The bug this guards: the gallery starts a whole new pass whenever its input signature
+    // The bug this guards: `useSessionEvidence` starts a whole new pass whenever its input signature
     // changes, which it legitimately does mid-session when the scale pass grafts
     // `verticalOscillationCm` in. Each pass's own `for await` orders only its OWN clips, so
     // nothing stopped the passes from doubling up — measured at three concurrent 4K decoders.

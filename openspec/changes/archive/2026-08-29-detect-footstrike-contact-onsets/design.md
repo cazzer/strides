@@ -29,6 +29,36 @@ A→C = 1.26 s and B→D = 1.24 s. Three independent corroborations of that rhyt
 `cadence` reads 91.2 spm off a completely separate spectral fit, the frame count gives 92.7 spm, and
 the fitted bounce frequency is 1.52 Hz.
 
+> ⚠️ **CORRECTION (addendum 2026-08-31, `strides-dly`) — these onsets are 1.5 to 4 frames EARLY.
+> The table above is left exactly as measured; do not read it as ground truth.** `strides-cjl`
+> re-pulled the keyframes at 0.04 s intervals with a grid overlay and judged shoe-versus-shadow
+> again, and every one of the four moved later:
+>
+> | contact | recorded above (ffmpeg) | keyframe-confirmed (ffmpeg) | error |
+> |---|---|---|---|
+> | A (left) | 3.90 | **4.00** | 2.5 frames early |
+> | B (left) | 4.60 | **4.66** (airborne at 4.64, down at 4.68) | 1.5 frames early |
+> | C (right) | 5.16 | **5.32** (airborne 5.24, near-touch 5.32, flat 5.36) | 4 frames early |
+> | D (right) | 5.84 | **5.98** | 3.5 frames early |
+>
+> **Corrected app-domain onsets: `4.08 / 4.74 / 5.40 / 6.06`** (the `ffmpeg + 0.08` conversion above
+> is unchanged and correct). The decisive tell is the spacing: this table's 0.70 / 0.56 / 0.68 s is
+> irregular where the corrected set is a uniform **0.66 s**, agreeing with this clip's own fitted
+> step period of 0.658 s to 0.3%. The rhythm corroborations quoted above are therefore still right —
+> it is the individual PHASES that were wrong, and an irregular set spaced around a regular mean is
+> exactly what reading a shoe-shadow contact a frame or two early, inconsistently, produces. A
+> second, independent check agrees: the app's own `ankle.x` goes stationary (325 px/s against the
+> hip's 1617 px/s) from app ≈ 4.84, i.e. a touchdown at app ≈ 4.74–4.80, not 4.68.
+>
+> **Everything downstream in THIS document that quotes a lag against these onsets is off by the
+> same amount** — D9's predictions, D15's "instants land within 1–2 frames" verdict, and D15.1's
+> "+0.24 s lands 55–67% through stance" in particular. Measured against the corrected set, the
+> instants this change shipped have a mean lag of **+0.03 s** rather than +0.20 s uniformly late,
+> and their defect is SCATTER (spread 0.340 s) rather than bias — which is the finding that
+> motivated `strides-cjl` and does not change this change's conclusion, only its arithmetic.
+> Full derivation: `openspec/changes/archive/2026-08-31-derive-footstrike-timing-from-bounce-phase/design.md`
+> **D11.1**.
+
 **What the detector emitted**, app `4.00 / 5.04 / 5.60` → ffmpeg `3.92 / 4.96 / 5.52`:
 
 | ffmpeg `t` | what is happening on that frame |
@@ -475,6 +505,13 @@ is user-facing copy on another change's file, so it is reported rather than edit
 ---
 
 ## D15. Round 2 measured, and the phase residual is a limit of the signal — stopping here
+
+> ⚠️ **Read D1's correction addendum first (`strides-dly`, 2026-08-31).** Every lag in this section
+> is stated against Demo 1 onsets now known to be 1.5–4 frames early, so the offsets below
+> (−0.06 / +0.24 / +0.24 / +0.16 s) overstate how late these instants are. Against the corrected
+> onsets the mean lag is **+0.03 s**, and the real defect is that the four lags SCATTER over 0.340 s
+> rather than share a bias. That strengthens D15.2's conclusion — no constant can repair this — and
+> invalidates only the specific percentages in D15.1. Numbers below left exactly as measured.
 
 Round 2 fixed what it was built to fix and left one thing it structurally cannot.
 

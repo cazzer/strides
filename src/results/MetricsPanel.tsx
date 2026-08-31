@@ -136,8 +136,9 @@ function cardSlot(chart: ReactNode): ReactNode | undefined {
  *
  * The images are the extractor's own canvas elements, adopted by `EvidenceCanvas` — never a data
  * URL, blob or download. Display size is CSS and nothing else: the extractor caps its output at
- * `EVIDENCE_OUTPUT_MAX_SIDE_PX` and every crop is square by spec, so a card thumbnail is the SAME
- * image the gallery showed at `w-56`, drawn smaller. No second extraction at a second resolution.
+ * `EVIDENCE_OUTPUT_MAX_SIDE_PX` and every crop is square by spec, so the card thumbnail below is
+ * that one canvas drawn at `w-36` (144 CSS px nominal, 142 measured). No second extraction at a
+ * second resolution, and no size the extractor has to be told about.
  *
  * The caption is the metric's own words for that instant. It never restates the card's number:
  * what is pictured is a per-instant measurement, and the card's value is an aggregate over the

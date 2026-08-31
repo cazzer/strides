@@ -4,8 +4,8 @@ export interface EvidenceCanvasProps {
   canvas: HTMLCanvasElement
   alt: string
   /** Extra classes for the host box — the caller's sizing decision. The extractor's canvas is
-   * capped at `EVIDENCE_OUTPUT_MAX_SIDE_PX` and every crop is square by construction, so a gallery
-   * figure and a card thumbnail are the SAME image at two CSS sizes, never two extractions. */
+   * capped at `EVIDENCE_OUTPUT_MAX_SIDE_PX` and every crop is square by construction, so two
+   * surfaces at two CSS sizes are the SAME image, never two extractions. */
   className?: string
 }
 
@@ -23,8 +23,9 @@ export interface EvidenceCanvasProps {
  * at every width and at every size (design D13) — a card carrying one thumbnail and a card carrying
  * two read as the same set.
  *
- * Lifted out of the since-deleted `EvidenceGallery.tsx` unchanged by `strides-ac9.2`, so the metric card adopts the
- * node exactly as the gallery does rather than reimplementing the one mechanism that must not drift.
+ * Lifted out of the since-deleted `EvidenceGallery.tsx` unchanged by `strides-ac9.2`, so the metric
+ * card adopts the node exactly as that component did rather than reimplementing the one mechanism
+ * that must not drift.
  */
 export function EvidenceCanvas({ canvas, alt, className = '' }: EvidenceCanvasProps) {
   const hostRef = useRef<HTMLDivElement>(null)

@@ -49,8 +49,8 @@ import { metricTier } from './metricConfidence'
  * constants for every metric, not a per-metric table: per-metric framing already exists one layer
  * up, in the seed ∪ context keypoint set each metric names on its own exemplars, so a foot crop
  * and a full-body crop already differ by an order of magnitude before any padding. A second
- * per-metric table would vary apparent subject scale across the gallery, which is the one thing a
- * single aspect ratio exists to hold constant.
+ * per-metric table would vary apparent subject scale across the evidence images, which is the one
+ * thing a single aspect ratio exists to hold constant.
  *
  * Lower than the tracking crop's 1.75 because the two buy different things. The tracking crop pads
  * for MOTION — its box is one frame old and the subject moves before the next inference. This box
@@ -67,8 +67,9 @@ export const EVIDENCE_CROP_PADDING_MULTIPLIER = 1.6
  * hip with no resolvable context, or a knee/hip/ankle that nearly align), and without the floor
  * that crop is empty.
  *
- * Chosen against the VIEWER rather than a detector: a gallery image is on the order of 200-400 CSS
- * px, so 320 native px survives a 2× DPR display without upscaling to mush. Note
+ * Chosen against the VIEWER rather than a detector: an evidence image renders at a couple of
+ * hundred CSS px at most — the inline card thumbnail is `w-36`, i.e. 144 CSS px nominal and 142
+ * measured — so 320 native px survives a 2× DPR display without upscaling to mush. Note
  * `computeCropRect` applies its `min(frameWidth, frameHeight)` cap LAST, so on a small source
  * (a 320×240 webcam clip) the cap wins and this floor can never demand pixels the source lacks.
  */
@@ -161,9 +162,12 @@ export const EVIDENCE_NEAR_IDENTICAL_IOU = 0.98
  * **2.5, from the framing contract and bracketed by measurement.** A single frames its subject to
  * span `1 / EVIDENCE_CROP_PADDING_MULTIPLIER` = 62.5% of the image's side; growth `R` shrinks that
  * to `62.5% / R`. Requiring the better-framed instant to still span a QUARTER of the side gives
- * `0.625 / 0.25 = 2.5`. A quarter is the display floor: these images render as small as a 112 px
- * card thumbnail (`strides-ac9.2`), where a quarter is ~28 px of subject — about the least at
- * which a human figure is still a figure.
+ * `0.625 / 0.25 = 2.5`. A quarter is the display floor: these images render as small as the inline
+ * card thumbnail, which was 112 px when this number was derived (`strides-ac9.2`) and is 144 px
+ * nominal / 142 measured since the cards were widened — a quarter of the smaller is ~28 px of
+ * subject, about the least at which a human figure is still a figure. Derived against the 112 px
+ * reading and deliberately NOT re-derived when the thumbnail grew: a larger display only makes
+ * the same threshold more comfortable.
  *
  * Both sides of that number are pinned by images that were extracted from real clips and looked
  * at, not by taste (`strides-ac9.11`, 3 trials, bit-identical). It must exceed 2.190 —
@@ -319,7 +323,7 @@ export interface EvidenceFramePlan {
   base: EvidenceInstantPlan
   /** `null` for a single-instant exemplar, and for a pair that collapsed to its base. */
   ghost: EvidenceInstantPlan | null
-  /** Square, in native video pixels — the display size is the gallery's decision, not this one. */
+  /** Square, in native video pixels — the display size is the renderer's decision, not this one. */
   crop: CropRectPx
   /**
    * Which way the runner is travelling across the frame, clip-wide. `trunkLean` (`:171`),
@@ -652,7 +656,7 @@ function isUsableFrameSize(frameSize: EvidenceFrameSize): boolean {
  * Padding, squaring and clamping all come from `computeCropRect`, reused rather than
  * reimplemented: it already clamps to the frame by SHIFTING rather than shrinking, so the returned
  * side is always exactly what the padding/floor/cap math produced, and a subject half out of frame
- * yields an in-bounds rect rather than a negative-width one. Squareness is what makes the gallery
+ * yields an in-bounds rect rather than a negative-width one. Squareness is what makes the evidence
  * read as a coherent set rather than a ragged pile.
  */
 export function computeEvidenceCropRect(
@@ -1150,7 +1154,7 @@ export function planExemplarWithFallback(
  * The quality gate and the per-metric budget are re-applied here rather than trusted from
  * upstream. Both are the same constants imported from the same module, so the two layers cannot
  * drift; re-asserting them means an exemplar that reached a `MetricResult` without going through
- * the shared selector still cannot render as evidence, and the gallery gets a hard bound on how
+ * the shared selector still cannot render as evidence, and the renderer gets a hard bound on how
  * many images one card can grow. The budget is applied AFTER this layer's own drops, so a metric
  * whose first choice cannot be resolved here still spends its second — and without re-sorting,
  * because the emitting metric already ranked them and a second ranking here could disagree.

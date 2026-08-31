@@ -63,10 +63,12 @@ import {
 /**
  * Cap on the side of the canvas a crop is drawn into, in device pixels. The crop rect itself is in
  * NATIVE video pixels and can be 2160 px on the demo clips — a full-resolution canvas per exemplar
- * is ~18 MB, and the gallery may hold two per metric across eleven metrics. Derived from the same
- * viewer-side reasoning that fixed `EVIDENCE_CROP_MIN_SIDE_PX` at 320: a gallery image is on the
- * order of 200-400 CSS px, so 640 device px covers it at 2x DPR. The crop is never UPSCALED to
- * reach this — it is a cap, not a target — so the display size stays the gallery's decision.
+ * is ~18 MB, and one session's evidence cache may hold two per metric across eleven metrics.
+ * Derived from the same viewer-side reasoning that fixed `EVIDENCE_CROP_MIN_SIDE_PX` at 320: an
+ * evidence image renders at a couple of hundred CSS px at most — the inline card thumbnail is
+ * `w-36`, i.e. 144 CSS px nominal and 142 measured — so 640 device px covers it at 2x DPR with
+ * room to spare. The crop is never UPSCALED to reach this — it is a cap, not a target — so the
+ * display size stays the renderer's decision.
  */
 export const EVIDENCE_OUTPUT_MAX_SIDE_PX = 640
 
@@ -133,7 +135,7 @@ export interface ExtractedEvidenceFrame {
 }
 
 /**
- * Mirrors `MetricEvidencePlan`'s discrimination so the gallery branches once. A plan that could not
+ * Mirrors `MetricEvidencePlan`'s discrimination so the renderer branches once. A plan that could not
  * be turned into pixels degrades to `'extraction-failed'` — a named verdict, never a pending
  * spinner.
  */

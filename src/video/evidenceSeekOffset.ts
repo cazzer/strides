@@ -37,16 +37,17 @@ import { resolveSamplingRobustnessConfig } from '../results/samplingRobustnessCo
  * `canUseSequentialDecode(blob)`. Both are pure functions of the blob and the environment, neither
  * of which changes between sampling and extraction in the same session, so the answer agrees with
  * what actually ran. (The alternative — surfacing the fact out of `useVideoAnalysis` onto the clip
- * session — needs a prop threaded through `MultiClipVideoSession`/`EvidenceGallery`; see this
+ * session — needs a prop threaded through `MultiClipVideoSession`/`useSessionEvidence`; see this
  * module's ticket for why that seam was not taken here.)
  *
  * **Never mutates `robustFrames[].timestamp`.** That array is the sampling layer's own truth and is
  * correct in its own domain; this is a seek-time calibration and nothing else reads it.
  */
 
-/** A Blob is stable for a clip's lifetime, so one derivation per clip is enough — and the gallery
- * legitimately re-runs extraction mid-session when the scale pass grafts `verticalOscillationCm`
- * in, which would otherwise pay for a second full demux to reach the same answer. */
+/** A Blob is stable for a clip's lifetime, so one derivation per clip is enough — and the session
+ * evidence pass legitimately re-runs extraction mid-session when the scale pass grafts
+ * `verticalOscillationCm` in, which would otherwise pay for a second full demux to reach the same
+ * answer. */
 const cache = new WeakMap<Blob, Promise<number>>()
 
 /**
