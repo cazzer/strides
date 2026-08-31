@@ -26,8 +26,9 @@ requiring any additional instrumentation of the sampling or robustness layers.
   `sagittalExcursionRatio`), the per-side size and composition of the sagittal excursion population
   (`sagittalExcursionSampleCount`, reported even for a side whose count was too small to yield a
   range, and `sagittalExcursionInterpolatedFraction`, the share of that side's resolvable samples
-  EXCLUDED as interpolated — the inverse of `MetricResult.interpolatedFraction`'s sense), and
-  `frameCoverage` — not a recomputation of any of them
+  EXCLUDED as interpolated — the same statistic `MetricResult.interpolatedFraction` reports for
+  samples a metric used, reported here for samples this signal discarded), and `frameCoverage` —
+  not a recomputation of any of them
 
 #### Scenario: Sampling counts distinguish detected from missing frames
 

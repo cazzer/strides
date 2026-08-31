@@ -61,16 +61,29 @@ measured signal.
 Two policies govern what a signal then does with an interpolated sample, and which applies SHALL be
 decided by the signal's own reduction, not by the signal's importance:
 
-- **A signal reduced by a median or a mean SHALL DISCOUNT.** It keeps interpolated samples, tracks
-  what fraction of its resolved input was interpolated rather than directly detected, and factors
-  that fraction into its confidence. Every metric falls here, as does view detection's Bilateral
-  Spread Ratio.
+- **A signal reduced by a median or a mean SHALL DISCOUNT.** Every metric falls here: it keeps
+  interpolated samples, tracks what fraction of its resolved input was interpolated rather than
+  directly detected, and factors that fraction into its confidence.
 - **A signal reduced by an extreme quantile SHALL EXCLUDE.** It discards interpolated samples from
-  its population outright, because an interpolated sample lies strictly between its own flanking
-  detections and therefore cannot carry a real extreme — it can only add probability mass near one,
-  which moves an extreme quantile toward whatever the flanking detections got wrong. Excluding
-  cannot discard a real extreme the retained anchors do not already carry; including can
-  manufacture one. View detection's Sagittal Excursion Ratio falls here.
+  its population outright, because an interpolated sample is placed on the straight line between
+  its own flanking detections, so wherever those anchors bound it, it cannot carry a real extreme —
+  it can only add probability mass near one, which moves an extreme quantile toward whatever the
+  anchors got wrong. Where they bound it, excluding cannot discard a real extreme the retained
+  anchors do not already carry, whereas including can manufacture one. View detection's Sagittal
+  Excursion Ratio falls here.
+
+Where a signal is derived from several keypoint channels, each interpolated independently over its
+own run boundaries, that bound holds exactly only when the contributing channels were reconstructed
+together. The excluding rule SHALL therefore be applied on the conservative side: a sample SHALL be
+excluded whenever ANY contributing point was interpolated, accepting that this can also discard a
+genuine reading. That is the safe direction for an extreme-quantile range, because excluding can
+only narrow it — never widen it — so the worst case is a signal that abstains rather than one that
+votes confidently for the wrong answer.
+
+View detection's Bilateral Spread Ratio is reduced by a median and so falls under the discounting
+rule. It keeps its interpolated samples, which is what that rule requires of it; it is a signal
+inside the classifier rather than a metric, and nothing requires it to publish an interpolated
+fraction or to discount the classifier's own confidence by one.
 
 An excluding signal SHALL NOT report a value from a population too small for its estimator to trim
 at both ends; it SHALL report the signal as unavailable instead of silently degrading to a

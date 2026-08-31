@@ -24,7 +24,8 @@
       `ViewDetectionResult.diagnostics`, documented as reported even where the floor rejected that
       side.
 - [x] 2.2 Add required `sagittalExcursionInterpolatedFraction: { left, right }`, documented as the
-      INVERSE of `MetricResult.interpolatedFraction`'s meaning.
+      same statistic `MetricResult.interpolatedFraction` reports, for samples DISCARDED rather than
+      used — explicitly not its complement.
 
 ## 3. Fixture literals
 
@@ -35,9 +36,10 @@
 
 ## 4. Tests
 
-- [x] 4.1 Bump `framesWithSignals`'s default count 20 → 22 (must clear the floor; must stay even so
-      the two-valued series still splits exactly) and record why in the fixture's doc. Confirmed the
-      alternative — lowering the floor — would undo the change: at 20, four existing tests fail.
+- [x] 4.1 Bump `framesWithSignals`'s default count 20 → 22 (it must clear the floor; evenness is a
+      convention, not a requirement — the floor test calls it with 21) and record why in the
+      fixture's doc. Confirmed the alternative — lowering the floor — would undo the change: at 20,
+      four existing tests fail.
 - [x] 4.2 New test: the defect reproduced and fixed — 34 detections at SER 0.33 plus a 6-frame
       interpolated block at 5× the excursion; the ratio is exactly the detected-only value, not
       dragged to 0.99.
@@ -61,7 +63,31 @@
 - [x] 5.3 `npm run lint` clean.
 - [x] 5.4 `npm test -- --run` green (1372 → 1377).
 
-## 6. Out of this change
+## 6. Review round 1 — documentation only, no code changes requested
 
-- [ ] 6.1 The live three-clip, two-backend A/B that the bead's acceptance criterion requires — run
-      separately, against a baseline captured before this change.
+- [x] 6.1 Spec delta no longer writes a SHALL the code does not satisfy: the discounting clause
+      claimed BSR tracks an interpolated fraction and discounts confidence for it, which it does
+      neither of. Restated to say what BSR actually does and why that is in scope.
+- [x] 6.2 The hull-bound argument now carries its qualification (exact only when both channels were
+      reconstructed over the same run) plus the safety property that makes the conservative rule
+      right anyway — exclusion can only narrow a range, so the worst case is abstention, never a
+      confident wrong label. In `computeSagittalRange`'s docstring, `design.md` D1.1, `proposal.md`,
+      and softened in the spec delta's normative sentence.
+- [x] 6.3 Corrected the test comment that said an SER of 0.99 "abstains": 0.99 ≥ 0.8, so the
+      corrupted signal casts an ACTIVE SIDE vote on a front-view clip. Ambiguous by disagreement,
+      not by abstention — and the real defect is worse than the comment claimed.
+- [x] 6.4 Dropped "the INVERSE of `MetricResult.interpolatedFraction`" everywhere (types.ts,
+      viewDetection.ts, design.md D4, the analysis-diagnostics delta): both are
+      `interpolated / resolvable`. What differs is the consequence, not the number.
+- [x] 6.5 Nits: the fixture doc no longer claims evenness is load-bearing; `mathUtils.ts` no longer
+      names a symbol private to another module; `detectView`'s orphaned docstring block (it sat
+      above `viewPhrase`'s own, attaching to nothing) moved onto `detectView`.
+- [x] 6.6 Folded the live A/B into `design.md` D9, including the result that refutes this change's
+      own premise — the MoveNet path is NOT interpolation-free, and 15–20% of the ankle samples
+      feeding view detection are synthesized on all three clips.
+
+## 7. Out of this change
+
+- [x] 7.1 The live three-clip, two-backend A/B the bead's acceptance criterion requires — run by
+      the coordinator against a pre-change baseline; results in `design.md` D9. All four
+      pre-registered ship conditions met.

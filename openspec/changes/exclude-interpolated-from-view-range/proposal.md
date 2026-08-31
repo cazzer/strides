@@ -39,10 +39,18 @@ label that gates every metric.
 - **The rule that distinguishes this from the rest of the pipeline is stated, not left implicit.**
   A signal reduced by a **median or a mean** keeps interpolated samples and discounts the
   confidence for them; a signal reduced by an **extreme quantile** excludes them. The reason is
-  asymmetric and settles it: a lerped sample lies strictly between its own flanking detections, so
-  it can never carry a real extreme — all it can add is probability mass NEAR one, which is exactly
-  what walks a p95 into an outlier cluster. Excluding therefore cannot discard a real extreme that
-  the anchors do not already carry, whereas including can invent one.
+  asymmetric and settles it: a lerped sample sits on the straight line between its own flanking
+  detections, so where those anchors bound it, it cannot carry a real extreme — all it can add is
+  probability mass NEAR one, which is exactly what walks a p95 into an outlier cluster. Excluding
+  therefore cannot discard a real extreme that the anchors do not already carry, whereas including
+  can invent one.
+- **That bound is exact only when both channels were reconstructed together, and the rule is
+  deliberately conservative about it.** `interpolateChannel` fills each keypoint independently and
+  the measured quantity is `ankle.x − hip.x`, so a lerped hip against a *detected* ankle can be a
+  genuine extreme outside both anchors — and it is discarded anyway. The residual error is
+  one-directional: exclusion can only NARROW a range, so a mis-excluded sample biases SER downward,
+  toward abstention or a front vote. On a genuine side view the worst case is degrade-to-ambiguous,
+  never a confident wrong label. See `design.md` D1.1.
 - **The range refuses to be computed below 21 detected samples.** `percentile` interpolates at
   index `p·(n−1)`, so the largest sample influences the p95 exactly while `0.95(n−1) > n−2`, i.e.
   while `n < 21`, and symmetrically for the smallest and the p5. Below 21 the estimator is partly a
@@ -57,9 +65,13 @@ label that gates every metric.
   `sagittalExcursionSampleCount` (detected-only samples the range was, or would have been, computed
   from — reported even where the floor rejected the side, so "18, just short of 21" is legible
   rather than a bare null) and `sagittalExcursionInterpolatedFraction` (the share of resolvable
-  samples DISCARDED, the inverse of `MetricResult.interpolatedFraction`'s meaning).
+  samples DISCARDED — numerically the same statistic as `MetricResult.interpolatedFraction`,
+  reported for samples excluded rather than used; not its complement).
 - **The Bilateral Spread Ratio is untouched.** It reduces by a median, so it falls on the
-  discounting side of the rule above, and `resolveBilateralPair` does not even surface the flag.
+  discounting side of the rule above. It keeps its interpolated samples, which is what that side of
+  the rule asks; it surfaces no interpolated fraction of its own and discounts no confidence for
+  them, because `resolveBilateralPair` does not carry the flag through — and nothing obliges a
+  signal inside the classifier to do what a metric does.
 
 ## Impact
 
@@ -71,9 +83,12 @@ label that gates every metric.
 - **No vote logic, confidence branch, plausibility computation or coverage early-return changed.**
   The only new way to reach `sagittalExcursionRatio: null` is the floor, and it lands on the branch
   that already handles an unavailable signal.
-- **Expected to be a no-op on the MoveNet path**, which interpolates nothing on this repo's three
-  clips — asserted as a unit test rather than assumed. The live A/B across all three clips, on both
-  backends, is the acceptance criterion and is run separately from this change.
+- **A clip with nothing interpolated is a no-op**, asserted as a unit test rather than assumed. The
+  expectation that the MoveNet path IS such a clip was **wrong**, and the live A/B caught it: Demo 2
+  moved 0.328358 → 0.334267 there. `sampling.detectedFrames` counts FRAMES, and a keypoint inside a
+  detected frame can still be interpolated — measured at **15–20% of the ankle samples feeding view
+  detection, on all three clips, on the default path**. No metric value, confidence or tier moved
+  anywhere. Full numbers: `design.md` D9.
 - **Not sufficient on its own for Demo 2's front label, and not aimed at it.** At SER 0.650
   MediaPipe still casts no SER vote (front needs ≤ 0.4, side ≥ 0.8), so that clip stays
   `'ambiguous'` by abstention. This is a correctness fix to a corrupted signal, not a label fix.

@@ -21,10 +21,10 @@ export function mean(values: number[]): number {
 /**
  * Linear-interpolation percentile (matches the common "linear" method, e.g. numpy's default).
  * Used for the sagittal-excursion-ratio signal in view detection specifically because it's
- * robust to a single stray bad detection in a way a plain min/max range wouldn't be — but only
- * once there are enough samples for the quantile to sit off the end of the sorted array, which is
- * why that caller carries its own minimum (`MIN_SAGITTAL_RANGE_SAMPLES`) rather than reading this
- * as an unconditional guarantee.
+ * robust to a single stray bad detection in a way a plain min/max range wouldn't be — but only once
+ * there are enough samples for the quantile to sit off the end of the sorted array, which is why
+ * that caller carries its own minimum sample count rather than reading this as an unconditional
+ * guarantee.
  */
 export function percentile(values: number[], p: number): number {
   const sorted = [...values].sort((a, b) => a - b)

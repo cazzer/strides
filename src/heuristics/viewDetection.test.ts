@@ -59,12 +59,13 @@ const TORSO_PX = 100
  * an even, evenly-split sample the p95-p5 range of a two-valued series is exactly that gap — so
  * each side's sagittal range, and therefore SER, is exactly `ser`.
  *
- * The default count is 22, and both of its properties are load-bearing — it is not an arbitrary
- * round number to be tidied back to 20. It has to clear `computeSagittalRange`'s 21-sample floor,
- * under which that function reports no range at all and every clip built here would read
- * `'ambiguous'`; and it has to stay EVEN, so the two-valued series splits exactly in half and the
- * exactness argument above (p95 and p5 landing strictly inside the high and the low block) still
- * holds.
+ * The default count is 22 rather than 20 for one load-bearing reason: it has to clear
+ * `computeSagittalRange`'s 21-sample floor, under which that function reports no range at all and
+ * every clip built here would read `'ambiguous'`. Do not tidy it back below the floor.
+ *
+ * Evenness is a convention, not a requirement — for any n >= 21 the p95 and p5 indices land
+ * strictly inside the high and the low block either way, so the exactness argument above holds for
+ * an odd count too (the floor test below calls this with 21 and reads its `ser` back exactly).
  */
 function framesWithSignals(bsr: number, ser: number, count = 22): RobustPoseFrame[] {
   const spread = bsr * TORSO_PX
@@ -442,8 +443,10 @@ describe('detectView', () => {
       detectView(detectedOnly).diagnostics.sagittalExcursionRatio,
     )
     // And the consequence that makes it worth excluding: at BSR 0.5 the clip is a front view, but
-    // an SER of 0.99 clears neither threshold, so SER abstains and the label collapses to
-    // ambiguous — a corrupted signal silently degrading the view that gates every metric.
+    // an SER of 0.99 is at or above `sideViewMinSagittalExcursionRatio` (0.8), so the corrupted
+    // signal does not fall silent — it casts an ACTIVE SIDE vote on a front-view clip, and the
+    // label collapses to ambiguous by disagreement rather than by abstention. A corrupted signal
+    // voting for the wrong view is worse than one that says nothing, and it gates every metric.
     expect(result.view).toBe('front')
   })
 
@@ -499,8 +502,9 @@ describe('detectView', () => {
     )
 
     expect(mixed.diagnostics.sagittalExcursionSampleCount).toEqual({ left: 34, right: 34 })
-    // The fraction is DISCARDED over resolvable — the inverse of `MetricResult`'s
-    // `interpolatedFraction`, which counts interpolated samples a metric used.
+    // The fraction is DISCARDED over resolvable — the same statistic `MetricResult`'s
+    // `interpolatedFraction` reports, there for samples a metric USED, here for samples this
+    // signal refused. Same number, different consequence; not a complement.
     expect(mixed.diagnostics.sagittalExcursionInterpolatedFraction).toEqual({
       left: 6 / 40,
       right: 6 / 40,

@@ -102,10 +102,10 @@ export interface ViewDetectionResult {
      * than as an unexplained null ratio. */
     sagittalExcursionSampleCount: { left: number; right: number }
     /** Per side, the share of resolvable ankle+hip samples DISCARDED as interpolated; 0 when
-     * nothing was resolvable. The INVERSE of `MetricResult.interpolatedFraction`'s meaning: that
-     * one counts interpolated samples a metric USED and discounted itself for, this one counts
-     * samples the sagittal range refused to look at, because an extreme-quantile range excludes
-     * them rather than discounting them. */
+     * nothing was resolvable. Numerically the same statistic as `MetricResult.interpolatedFraction`
+     * — interpolated over resolvable — reported for samples this signal DISCARDED rather than used,
+     * because an extreme-quantile range excludes them where a median or mean discounts them. Not a
+     * complement: do not read it as `1 − interpolatedFraction`. */
     sagittalExcursionInterpolatedFraction: { left: number; right: number }
     frameCoverage: number
   }

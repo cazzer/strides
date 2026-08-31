@@ -41,14 +41,28 @@ interface SagittalRange {
  *
  * The population is DIRECTLY-DETECTED samples only. A frame where the robustness layer had to
  * interpolate either point is discarded outright rather than discounted, and the asymmetry with
- * the rest of the pipeline is the point: a lerped sample lies strictly between its own flanking
- * detections, so it can never carry a real extreme — all it can add is probability mass NEAR one,
- * which is exactly what walks an extreme quantile into an outlier cluster. Excluding therefore
- * cannot discard a real extreme that the anchors do not already carry. A signal reduced by a
- * median or a mean has the opposite trade and keeps interpolated samples (`stepWidth`, the
+ * the rest of the pipeline is the point: a lerped sample sits on the straight line between its own
+ * flanking detections, so it cannot carry a real extreme — all it can add is probability mass NEAR
+ * one, which is exactly what walks an extreme quantile into an outlier cluster. A signal reduced by
+ * a median or a mean has the opposite trade and keeps interpolated samples (`stepWidth`, the
  * bilateral-spread ratio below). Measured on a front-view clip where the detector missed ten
  * consecutive frames between two bad anchors: interpolation grew the outlier population from ~4
  * samples to ~14 and inflated this clip's SER 2.45x (`strides-kxn`).
+ *
+ * ⚠️ That bound is EXACT only when the two channels were reconstructed together. `interpolateChannel`
+ * fills each keypoint independently, with its own run boundaries, and the measured quantity here is
+ * `ankle.x − hip.x` — a difference of two channels. When both were lerped across the same run (the
+ * whole-frame dropout that produced the measurement above) the difference is bounded by its own
+ * anchors and the argument holds outright. When only one was, it need not: a lerped hip against a
+ * DETECTED ankle is the sharp case, since the hip travels near-linearly across a short gap while the
+ * ankle is the fast non-linear swing channel, so their difference can be a genuine extreme lying
+ * outside both anchors' `relX`. The disjunction below discards it anyway.
+ *
+ * That is deliberate, and it is safe in one direction only — which is why this is the conservative
+ * rule rather than the exact one. Excluding samples can only NARROW a range, never widen it, so the
+ * worst case is an SER that reads low. A low SER pushes toward the front threshold or toward casting
+ * no vote at all, so on a genuine side view the failure mode is degrade-to-ambiguous, never a
+ * confident wrong label — the same asymmetry the whole two-signal agreement rule is built on.
  *
  * A percentile range rather than a plain min/max so that one stray detection cannot masquerade as
  * "large sagittal reach" — but that robustness is n-dependent rather than unconditional. The trim
@@ -89,9 +103,10 @@ function computeSagittalRange(
  * The share of one side's resolvable ankle+hip samples that `computeSagittalRange` EXCLUDED as
  * interpolated; 0 when nothing was resolvable at all.
  *
- * Note this is the inverse of `MetricResult.interpolatedFraction`'s meaning: that one reports
- * interpolated samples a metric USED and then discounted its confidence for, whereas this reports
- * samples the range refused to look at.
+ * Numerically the same statistic as `MetricResult.interpolatedFraction` — interpolated over
+ * resolvable — reported for samples this signal DISCARDED rather than used. The number means the
+ * same thing; only the consequence differs, and that difference is the discount-versus-exclude
+ * rule above. It is NOT a complement: do not read it as `1 − interpolatedFraction`.
  */
 function discardedFraction({ detectedSamples, interpolatedSamples }: SagittalRange): number {
   const resolvable = detectedSamples + interpolatedSamples
@@ -175,6 +190,23 @@ function computeCommittedConfidence(
 }
 
 /**
+ * The view, as an article-qualified noun phrase for user-facing copy: `'a side view'`,
+ * `'a front view'`, `'an ambiguous view'`.
+ *
+ * Exists because eight metrics independently interpolated the view into a caveat as
+ * `` `from a ${view} view` ``, which reads "from a ambiguous view" on the one label that takes
+ * `an`. That branch is reachable in shipped output rather than theoretical: the background
+ * MediaPipe scale pass can classify a clip `ambiguous` where the primary pass does not, and the
+ * caveat then rides onto a grafted metric's card (`strides-fn4`).
+ *
+ * A helper rather than eight inline ternaries, and it lives here because this module owns what a
+ * `View` means. Each metric keeps its own sentence — only the shared phrase moves.
+ */
+export function viewPhrase(view: View): string {
+  return `${view === 'ambiguous' ? 'an' : 'a'} ${view} view`
+}
+
+/**
  * Classifies a clip's camera framing from keypoint geometry/motion alone (no face keypoints
  * exist in this pipeline). Two independent signals must AGREE before committing to a label:
  *
@@ -206,23 +238,6 @@ function computeCommittedConfidence(
  * `strides-2iw`: the front view's BSR margin saturated at twice its threshold, a value no human
  * body can produce, capping a flawless front clip near 0.5 while a side clip routinely read 0.77.
  */
-/**
- * The view, as an article-qualified noun phrase for user-facing copy: `'a side view'`,
- * `'a front view'`, `'an ambiguous view'`.
- *
- * Exists because eight metrics independently interpolated the view into a caveat as
- * `` `from a ${view} view` ``, which reads "from a ambiguous view" on the one label that takes
- * `an`. That branch is reachable in shipped output rather than theoretical: the background
- * MediaPipe scale pass can classify a clip `ambiguous` where the primary pass does not, and the
- * caveat then rides onto a grafted metric's card (`strides-fn4`).
- *
- * A helper rather than eight inline ternaries, and it lives here because this module owns what a
- * `View` means. Each metric keeps its own sentence — only the shared phrase moves.
- */
-export function viewPhrase(view: View): string {
-  return `${view === 'ambiguous' ? 'an' : 'a'} ${view} view`
-}
-
 export function detectView(
   frames: RobustPoseFrame[],
   config: HeuristicsConfig = DEFAULT_HEURISTICS_CONFIG,
