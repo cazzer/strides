@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { BoundingBoxPx } from '../pose/backends/movenetCrop'
-import { computeCropRect } from '../pose/backends/movenetCrop'
+import { computeBoundingBoxIoU, computeCropRect } from '../pose/backends/movenetCrop'
 import type { VideoMetadata } from '../video/types'
 import { buildFrame } from '../heuristics/__fixtures__/testFrames'
 import {
@@ -34,6 +34,7 @@ import {
   EVIDENCE_GHOST_BLEND_ALPHA,
   EVIDENCE_GHOST_MARK_OPACITY,
   EVIDENCE_MAX_PAIR_CROP_GROWTH,
+  EVIDENCE_MIN_PAIR_SEPARATION_INTERVALS,
   EVIDENCE_NEAR_IDENTICAL_IOU,
   boundingBoxOfPoints,
   computeEvidenceCropRect,
@@ -47,6 +48,7 @@ import {
   evidenceTravelDirection,
   frameCropBox,
   isNearIdenticalPair,
+  isTooCloseInTimePair,
   isTooFarApartPair,
   planClipEvidence,
   planExemplarFrames,
@@ -104,25 +106,32 @@ function hipFrame(
  * box-width clear of each other (IoU 0, so they are not near-identical either).
  */
 function separatedPair(ghostY: number): RobustPoseFrame[] {
-  return [hipFrame(0, 500, 540), hipFrame(0.1, 700, ghostY)]
+  return [hipFrame(0, 500, 540), hipFrame(0.4, 700, ghostY)]
 }
 
 /**
- * A 0.1 s grid whose subject moves 200 px per sample, so a pair's separation — and therefore
+ * A 0.1 s grid whose subject moves 80 px per sample, so a pair's separation — and therefore
  * whether `isTooFarApartPair` rejects it — is a pure function of how many samples apart its two
  * instants are chosen. That is what a fallback test needs: one exemplar's worth of instants where
  * some pairings are drawable and others are not.
  *
  * The arithmetic, so a future edit can stay inside it: two default 100 px-wide hip boxes `s` px
  * apart union to `100 + s`, and against a solo crop pinned at the 320 px floor the growth is
- * `max((100 + s) × 1.6, 320) / 320`. One sample apart (`s` = 200) reads 1.5 and is drawn; TWO
- * samples apart (`s` = 400) reads exactly 2.5 and is rejected, `EVIDENCE_MAX_PAIR_CROP_GROWTH`
- * being inclusive; three apart reads 3.5. The 5 px of vertical drift per sample keeps the boxes
- * from being byte-identical in shape without materially moving any of those numbers.
+ * `max((100 + s) × 1.6, 320) / 320`. FOUR samples apart (`s` = 320) reads 2.1 and is drawn; FIVE
+ * (`s` = 400) reads exactly 2.5 and is rejected, `EVIDENCE_MAX_PAIR_CROP_GROWTH` being inclusive;
+ * six reads 2.9. The 5 px of vertical drift per sample keeps the boxes from being byte-identical
+ * in shape without materially moving any of those numbers.
+ *
+ * **Four samples is the tightest drawable pairing on purpose** (`strides-r41`): the grid's median
+ * interval is 0.1 s, so `EVIDENCE_MIN_PAIR_SEPARATION_INTERVALS` puts the near floor at three
+ * samples, and a fixture whose "drawable" case sat one or two samples apart would be collapsed by
+ * that floor before the far-apart guard it is meant to exercise ever ran. Spacing was reduced from
+ * 200 px to 80 px per sample to buy that room while keeping the 2.5 boundary landing exactly on a
+ * sample.
  */
 function crossingFrames(): RobustPoseFrame[] {
-  return [0, 1, 2, 3].map((i) =>
-    hipFrame(Number((i * 0.1).toFixed(2)), 500 + i * 200, 540 + i * 5),
+  return [0, 1, 2, 3, 4, 5, 6].map((i) =>
+    hipFrame(Number((i * 0.1).toFixed(2)), 500 + i * 80, 540 + i * 5),
   )
 }
 
@@ -995,6 +1004,63 @@ describe('isNearIdenticalPair', () => {
   })
 })
 
+describe('isTooCloseInTimePair', () => {
+  // `toleranceSeconds` is half the median sampled interval, so 0.05 models a 0.1 s grid and the
+  // floor sits at three intervals = 0.3 s.
+  const TOLERANCE = 0.05
+
+  it('rejects a pair fewer than three sampled intervals apart, and keeps one at three', () => {
+    expect(isTooCloseInTimePair(3.516667, 3.55, TOLERANCE)).toBe(true)
+    expect(isTooCloseInTimePair(0, 0.2, TOLERANCE)).toBe(true)
+    expect(isTooCloseInTimePair(0, 0.30001, TOLERANCE)).toBe(false)
+    expect(isTooCloseInTimePair(0, 0.4, TOLERANCE)).toBe(false)
+    expect(EVIDENCE_MIN_PAIR_SEPARATION_INTERVALS).toBe(3)
+    // Deliberately NOT asserted at exactly three intervals: `3 * (2 * 0.05)` is
+    // 0.30000000000000004 in binary floating point, so a separation of precisely 0.3 lands on
+    // whichever side the representation error puts it. Both neighbours of that point are pinned
+    // above, and which way an exact tie falls is not a behaviour worth depending on — a real pair
+    // sitting on the boundary to sixteen digits does not occur.
+  })
+
+  it('is symmetric — which instant is the base cannot change the verdict', () => {
+    expect(isTooCloseInTimePair(3.55, 3.516667, TOLERANCE)).toBe(true)
+    expect(isTooCloseInTimePair(0.4, 0, TOLERANCE)).toBe(false)
+  })
+
+  it('scales with the sampler, so a sparse clip gets a proportionally wider floor', () => {
+    // The same 0.2 s separation is two intervals on a 0.1 s grid and twenty on a 0.01 s one.
+    expect(isTooCloseInTimePair(0, 0.2, 0.05)).toBe(true)
+    expect(isTooCloseInTimePair(0, 0.2, 0.005)).toBe(false)
+  })
+
+  it('declines to fire when there is no interval to judge against', () => {
+    // A guard that cannot form its own criterion must not reject everything.
+    expect(isTooCloseInTimePair(0, 0.001, 0)).toBe(false)
+    expect(isTooCloseInTimePair(0, 0.001, -1)).toBe(false)
+    expect(isTooCloseInTimePair(0, 0.001, Number.NaN)).toBe(false)
+    expect(isTooCloseInTimePair(0, 0.001, Number.POSITIVE_INFINITY)).toBe(false)
+  })
+
+  it('is the guard box IoU cannot be, on the real pair that motivated it', () => {
+    // `strides-r41`, measured on `e2e/fixtures/multiperson-track.mp4`: the two-sampled-frame
+    // `kneeFlexion` pair reads IoU 0.2476 while Demo 2's legible bounce reads 0.8330, so IoU
+    // orders the two BACKWARDS and no threshold on it can separate them. These two boxes
+    // reproduce that ordering.
+    const brokenBase = { minX: 0, minY: 0, maxX: 100, maxY: 100 }
+    const brokenGhost = { minX: 55, minY: 20, maxX: 175, maxY: 130 }
+    const goodBase = { minX: 0, minY: 0, maxX: 100, maxY: 100 }
+    const goodGhost = { minX: 3, minY: 3, maxX: 103, maxY: 103 }
+    expect(computeBoundingBoxIoU(brokenBase, brokenGhost)).toBeLessThan(
+      computeBoundingBoxIoU(goodBase, goodGhost),
+    )
+    expect(isNearIdenticalPair(brokenBase, brokenGhost)).toBe(false)
+    expect(isNearIdenticalPair(goodBase, goodGhost)).toBe(false)
+    // Time separates them where the boxes do not.
+    expect(isTooCloseInTimePair(3.516667, 3.55, TOLERANCE)).toBe(true)
+    expect(isTooCloseInTimePair(0, 0.1668, 0.008335)).toBe(false)
+  })
+})
+
 describe('evidencePairCropGrowth / isTooFarApartPair', () => {
   /** `w`×`h`, with its left edge `left` px in. Heights are what dominate a human box, so these are
    * written the way a torso or a leg really sits. */
@@ -1271,7 +1337,7 @@ describe('planExemplarFrames', () => {
     const paired = separatedPair(540)
     const plan = planExemplarFrames(
       'trunkLean',
-      exemplar({ timestamp: 0, pairedTimestamp: 0.1 }),
+      exemplar({ timestamp: 0, pairedTimestamp: 0.4 }),
       paired,
       HD,
       0.05,
@@ -1281,7 +1347,7 @@ describe('planExemplarFrames', () => {
       opacity: EVIDENCE_BASE_OPACITY,
     })
     expect(plan?.ghost).toMatchObject({
-      timestamp: 0.1,
+      timestamp: 0.4,
       opacity: EVIDENCE_GHOST_BLEND_ALPHA,
     })
     expect(plan?.demotedFromPair).toBe(false)
@@ -1320,7 +1386,7 @@ describe('planExemplarFrames', () => {
     const paired = separatedPair(620)
     const plan = planExemplarFrames(
       'trunkLean',
-      exemplar({ timestamp: 0, pairedTimestamp: 0.1 }),
+      exemplar({ timestamp: 0, pairedTimestamp: 0.4 }),
       paired,
       HD,
       0.05,
@@ -1346,7 +1412,7 @@ describe('planExemplarFrames', () => {
       exemplar({
         kind: 'stepWidthStrike',
         timestamp: 0,
-        pairedTimestamp: 0.1,
+        pairedTimestamp: 0.4,
         measuredSide: 'left',
         pairedMeasuredSide: 'right',
       }),
@@ -1368,7 +1434,7 @@ describe('planExemplarFrames', () => {
       exemplar({
         kind: 'overstrideRange',
         timestamp: 0,
-        pairedTimestamp: 0.1,
+        pairedTimestamp: 0.4,
         measuredSide: 'right',
         pairedMeasuredSide: 'left',
       }),
@@ -1386,7 +1452,7 @@ describe('planExemplarFrames', () => {
     const paired = separatedPair(620)
     const plan = planExemplarFrames(
       'trunkLean',
-      exemplar({ timestamp: 0, pairedTimestamp: 0.1 }),
+      exemplar({ timestamp: 0, pairedTimestamp: 0.4 }),
       paired,
       HD,
       0.05,
@@ -1406,7 +1472,7 @@ describe('planExemplarFrames', () => {
       exemplar({
         kind: 'kneeFlexionPeak',
         timestamp: 0,
-        pairedTimestamp: 0.1,
+        pairedTimestamp: 0.4,
         side: 'right',
       }),
       paired,
@@ -1507,10 +1573,10 @@ describe('planExemplarFrames', () => {
   })
 
   it('demotes a near-identical pair to its base for a kind that reads as a single', () => {
-    const paired = [boxFrame(0, 500, 440), boxFrame(0.1, 500.5, 440)]
+    const paired = [boxFrame(0, 500, 440), boxFrame(0.4, 500.5, 440)]
     const plan = planExemplarFrames(
       'stepWidth',
-      exemplar({ kind: 'stepWidthStrike', timestamp: 0, pairedTimestamp: 0.1 }),
+      exemplar({ kind: 'stepWidthStrike', timestamp: 0, pairedTimestamp: 0.4 }),
       paired,
       HD,
       0.05,
@@ -1524,19 +1590,18 @@ describe('planExemplarFrames', () => {
   })
 
   it('drops a near-identical pair for a kind with nothing to say from one instant', () => {
-    const paired = [boxFrame(0, 500, 440), boxFrame(0.1, 500.5, 440)]
+    const paired = [boxFrame(0, 500, 440), boxFrame(0.4, 500.5, 440)]
     for (const kind of [
       'trunkLeanRange',
       'overstrideRange',
       'bounceCycle',
       'armSwingCycle',
       'stridePair',
-      'kneeFlexionPeak',
     ] satisfies MetricExemplarKind[]) {
       expect(
         planExemplarFrames(
           'trunkLean',
-          exemplar({ kind, timestamp: 0, pairedTimestamp: 0.1 }),
+          exemplar({ kind, timestamp: 0, pairedTimestamp: 0.4 }),
           paired,
           HD,
           0.05,
@@ -1545,13 +1610,31 @@ describe('planExemplarFrames', () => {
     }
   })
 
+  it('demotes a near-identical kneeFlexionPeak, whose value is a single-instant angle', () => {
+    // `strides-r41`. The peak angle the card reports is read off ONE frame and the annotation
+    // draws that frame's own arc, so the surviving still shows exactly what the number is about —
+    // unlike a cycle or a range, whose number IS the difference between two instants. Grouping it
+    // with those had the effect that the rules meant to REPLACE a bad ghost with an honest still
+    // deleted this metric's evidence instead.
+    const paired = [boxFrame(0, 500, 440), boxFrame(0.4, 500.5, 440)]
+    const plan = planExemplarFrames(
+      'kneeFlexion',
+      exemplar({ kind: 'kneeFlexionPeak', timestamp: 0, pairedTimestamp: 0.4 }),
+      paired,
+      HD,
+      0.05,
+    )
+    expect(plan?.ghost).toBeNull()
+    expect(plan?.demotedFromPair).toBe(true)
+  })
+
   it('drops a far-apart pair for EVERY kind, including the ones a collapse would demote', () => {
     // The asymmetry with the near-identical rule above, asserted rather than described: a
     // near-identical `stepWidthStrike` demotes to its base, a far-apart one does not. Its label
     // ('Opposite-foot plants either side of the hip midline') is a statement about two instants,
     // and here both instants are real and simply cannot share a frame — so keeping one under that
     // caption would picture a measurement the image does not show.
-    const paired = [hipFrame(0, 400, 540), hipFrame(0.1, 1400, 540)]
+    const paired = [hipFrame(0, 400, 540), hipFrame(0.4, 1400, 540)]
     expect(
       frameCropBox(paired[0], [...HIP_SEED]) &&
         frameCropBox(paired[1], [...HIP_SEED]) &&
@@ -1574,7 +1657,7 @@ describe('planExemplarFrames', () => {
       expect(
         planExemplarFrames(
           'trunkLean',
-          exemplar({ kind, timestamp: 0, pairedTimestamp: 0.1 }),
+          exemplar({ kind, timestamp: 0, pairedTimestamp: 0.4 }),
           paired,
           HD,
           0.05,
@@ -1598,15 +1681,15 @@ describe('planExemplarFrames', () => {
   })
 
   it('keeps a pair whose boxes overlap just below the threshold', () => {
-    const paired = [boxFrame(0, 500, 440), boxFrame(0.1, 502, 440)]
+    const paired = [boxFrame(0, 500, 440), boxFrame(0.4, 502, 440)]
     const plan = planExemplarFrames(
       'trunkLean',
-      exemplar({ timestamp: 0, pairedTimestamp: 0.1 }),
+      exemplar({ timestamp: 0, pairedTimestamp: 0.4 }),
       paired,
       HD,
       0.05,
     )
-    expect(plan?.ghost?.timestamp).toBe(0.1)
+    expect(plan?.ghost?.timestamp).toBe(0.4)
   })
 
   it('collapses a pair whose two instants snap to the same sampled frame', () => {
@@ -1648,11 +1731,11 @@ describe('planExemplarFrames', () => {
   })
 
   it('collapses a pair whose ghost frame has no resolvable crop keypoint', () => {
-    const paired = [hipFrame(0, 500, 540), buildFrame({}, 0.1)]
+    const paired = [hipFrame(0, 500, 540), buildFrame({}, 0.4)]
     expect(
       planExemplarFrames(
         'stepWidth',
-        exemplar({ kind: 'stepWidthStrike', timestamp: 0, pairedTimestamp: 0.1 }),
+        exemplar({ kind: 'stepWidthStrike', timestamp: 0, pairedTimestamp: 0.4 }),
         paired,
         HD,
         0.05,
@@ -1661,7 +1744,7 @@ describe('planExemplarFrames', () => {
     expect(
       planExemplarFrames(
         'trunkLean',
-        exemplar({ timestamp: 0, pairedTimestamp: 0.1 }),
+        exemplar({ timestamp: 0, pairedTimestamp: 0.4 }),
         paired,
         HD,
         0.05,
@@ -1715,59 +1798,60 @@ describe('planExemplarWithFallback', () => {
     planExemplarWithFallback('trunkLean', candidate, FRAMES, HD, TOLERANCE)
 
   it('draws the winner and reports no alternative when the winner is drawable', () => {
-    // One sample apart: growth 1.5, comfortably inside the guard. The alternative exists purely so
-    // that "it walked past the winner" would be observable if it happened.
-    const plan = planFor(range(0, 0.1, 0.9, [range(0.1, 0.2, 0.6)]))
+    // Four samples apart: growth 2.1, comfortably inside the guard and clear of the near floor.
+    // The alternative exists purely so that "it walked past the winner" would be observable if it
+    // happened.
+    const plan = planFor(range(0, 0.4, 0.9, [range(0.1, 0.5, 0.6)]))
 
     expect(plan!.base.timestamp).toBe(0)
-    expect(plan!.ghost!.timestamp).toBeCloseTo(0.1, 10)
+    expect(plan!.ghost!.timestamp).toBeCloseTo(0.4, 10)
     expect(plan!.quality).toBe(0.9)
-    expect(plan!.cropGrowth).toBeCloseTo(1.5, 10)
+    expect(plan!.cropGrowth).toBeCloseTo(2.1, 10)
   })
 
   it('falls back past every undrawable pair to the best-ranked drawable one', () => {
-    // Winner three samples apart (growth 3.5) and first alternative two apart (exactly 2.5, the
+    // Winner six samples apart (growth 2.9) and first alternative five apart (exactly 2.5, the
     // inclusive boundary) — both rejected — so the walk has to reach the third entry.
     const plan = planFor(
-      range(0, 0.3, 0.9, [range(0, 0.2, 0.7), range(0, 0.1, 0.6)]),
+      range(0, 0.6, 0.9, [range(0, 0.5, 0.7), range(0, 0.4, 0.6)]),
     )
 
     expect(plan).not.toBeNull()
     expect(plan!.base.timestamp).toBe(0)
-    expect(plan!.ghost!.timestamp).toBeCloseTo(0.1, 10)
+    expect(plan!.ghost!.timestamp).toBeCloseTo(0.4, 10)
   })
 
   it('reports the pair it drew, never the pair it rejected', () => {
     // The whole point of the walk being observable: `quality` and `cropGrowth` ride to the
     // `[evidence-coverage]` line, and a reader told about the winner would be told about an image
     // that was never rendered.
-    const plan = planFor(range(0, 0.3, 0.9, [range(0, 0.1, 0.6)]))
+    const plan = planFor(range(0, 0.6, 0.9, [range(0, 0.4, 0.6)]))
 
     expect(plan!.quality).toBe(0.6)
-    expect(plan!.cropGrowth).toBeCloseTo(1.5, 10)
-    expect(plan!.ghost!.timestamp).not.toBeCloseTo(0.3, 10)
+    expect(plan!.cropGrowth).toBeCloseTo(2.1, 10)
+    expect(plan!.ghost!.timestamp).not.toBeCloseTo(0.6, 10)
   })
 
   it('falls back on a failure that is not the far-apart guard', () => {
     // A ghost outside the snap tolerance collapses the pair, and a range kind is dropped rather
     // than demoted — undrawable for a completely different reason, and just as recoverable.
-    const plan = planFor(range(0, 9, 0.9, [range(0, 0.1, 0.6)]))
+    const plan = planFor(range(0, 9, 0.9, [range(0, 0.4, 0.6)]))
 
-    expect(plan!.ghost!.timestamp).toBeCloseTo(0.1, 10)
+    expect(plan!.ghost!.timestamp).toBeCloseTo(0.4, 10)
     expect(plan!.demotedFromPair).toBe(false)
   })
 
   it('is null when no offered pair can be drawn', () => {
     // The honest empty result: falling back is not permission to render something that failed a
     // drop rule.
-    expect(planFor(range(0, 0.3, 0.9, [range(0, 0.2, 0.7)]))).toBeNull()
-    expect(planFor(range(0, 0.3, 0.9))).toBeNull()
+    expect(planFor(range(0, 0.6, 0.9, [range(0, 0.5, 0.7)]))).toBeNull()
+    expect(planFor(range(0, 0.6, 0.9))).toBeNull()
   })
 
   it('will not fall back onto a pair below the shared minimum quality', () => {
-    const belowGate = range(0, 0.1, MIN_EXEMPLAR_QUALITY - 0.001)
+    const belowGate = range(0, 0.4, MIN_EXEMPLAR_QUALITY - 0.001)
 
-    expect(planFor(range(0, 0.3, 0.9, [belowGate]))).toBeNull()
+    expect(planFor(range(0, 0.6, 0.9, [belowGate]))).toBeNull()
   })
 
   it('leaves a single-instant exemplar alone', () => {
@@ -1814,9 +1898,9 @@ describe('planMetricEvidence', () => {
         exemplars: [
           exemplar({
             timestamp: 0,
-            pairedTimestamp: 0.3,
+            pairedTimestamp: 0.6,
             quality: 0.9,
-            alternates: [exemplar({ timestamp: 0, pairedTimestamp: 0.2, quality: 0.7 })],
+            alternates: [exemplar({ timestamp: 0, pairedTimestamp: 0.5, quality: 0.7 })],
           }),
         ],
       }),
