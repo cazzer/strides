@@ -58,6 +58,17 @@ interface ClipEvidenceInputs {
   clipId: string
   heuristics: FormHeuristicsResult
   frames: RobustPoseFrame[]
+  /**
+   * The background scale pass's own frames, present exactly when that pass grafted its two
+   * centimetre metrics into `heuristics` (`strides-3a1`). `planClipEvidence` plans those two
+   * against these instead of against `frames`; `null` on every run with no completed graft.
+   *
+   * It belongs in the comparison below for the same reason `heuristics` does: it arrives with
+   * the graft, one render after the primary result, and an extraction that already ran must
+   * re-run when it lands. In practice it changes identity at the same instant `heuristics` does —
+   * they are written in one literal — so this adds a guard, not a re-extraction.
+   */
+  graftedFrames: RobustPoseFrame[] | null
   frameSize: EvidenceFrameSize
   sourceBlob: Blob | null
 }
@@ -84,6 +95,11 @@ function collectClipInputs(clips: ClipSession[]): ClipEvidenceInputs[] | null {
       clipId: clip.clipId,
       heuristics,
       frames: robustFrames,
+      // Read off the scale-pass state rather than inferred from the heuristics: only that state
+      // knows whether these metrics were grafted, and it carries the frames in the same literal
+      // as the graft. `undefined` on every non-'done' status, normalised to null here so the
+      // comparison below and `planClipEvidence` see one absence rather than two.
+      graftedFrames: clip.analysis.scalePass.robustFrames ?? null,
       // Deliberately destructured rather than passed whole: `durationSec` is unguarded against
       // the `Infinity` a MediaRecorder WebM blob reports, and nothing downstream may read it.
       frameSize: { width: metadata.width, height: metadata.height },
@@ -98,6 +114,7 @@ function sameClipInputs(a: ClipEvidenceInputs, b: ClipEvidenceInputs): boolean {
     a.clipId === b.clipId &&
     a.heuristics === b.heuristics &&
     a.frames === b.frames &&
+    a.graftedFrames === b.graftedFrames &&
     a.frameSize.width === b.frameSize.width &&
     a.frameSize.height === b.frameSize.height &&
     a.sourceBlob === b.sourceBlob
@@ -195,7 +212,12 @@ function startRun(
   }
 
   const plans = inputs.map((input) =>
-    planClipEvidence(input.heuristics, input.frames, input.frameSize),
+    planClipEvidence(
+      input.heuristics,
+      input.frames,
+      input.frameSize,
+      input.graftedFrames,
+    ),
   )
   const reused = inputs.map((input) => {
     const cached = cache.get(input.clipId)

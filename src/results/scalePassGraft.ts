@@ -1,4 +1,25 @@
-import type { FormHeuristicsResult, MetricResult } from '../heuristics/types'
+import type { FormHeuristicsResult, MetricId, MetricResult } from '../heuristics/types'
+
+/**
+ * The metrics `graftScalePassResult` replaces — the ones whose value comes from the background
+ * MediaPipe scale pass rather than from the primary pass, stated once, here, by the module that
+ * does the replacing.
+ *
+ * It exists because a grafted metric's *value* and its *frames* have to travel together, and the
+ * consumer that needs to know which is which (`evidenceFrames.ts`, planning that metric's
+ * evidence) sits below the annotation layer that first needed the same list. A set here rather
+ * than a second reading of this file's body, and `graftScalePassResult` is pinned against it by
+ * test so the two cannot drift.
+ *
+ * **Membership is not by itself a claim that a given result WAS grafted.** A MediaPipe-primary run
+ * computes both of these in the primary pass and no graft happens at all. Whether a particular
+ * result's copies came from the scale pass is answered by whether that pass's frames are present
+ * beside them — see `ScalePassState.robustFrames` — never by this set alone.
+ */
+export const GRAFTED_METRIC_IDS: ReadonlySet<MetricId> = new Set<MetricId>([
+  'verticalOscillationCm',
+  'stepWidthCm',
+])
 
 /**
  * Appended to the grafted metric's caveat so the one scale-pass-sourced number on the panel
@@ -40,14 +61,34 @@ function withProvenance<T extends MetricResult>(scaleMetric: T): T {
  * - Every other metric, and `view`, stay reference-identical to `primary`'s — the scale pass's
  *   versions of them are deliberately discarded (MoveNet remains the better primary for the
  *   rest; see the change's proposal.md for the assessed evidence).
- * - `exemplars` carry with the grafted objects, unaltered. They are the scale pass's OWN instants,
- *   but both passes sampled the same clip on the same media clock, so the timestamps stay
- *   meaningful. What does NOT carry is the scale pass's `RobustPoseFrame[]`: they never leave
- *   `useVideoAnalysis`'s scale-pass effect, so the only frames any consumer holds are the primary
- *   pass's, and a grafted exemplar's crop geometry therefore resolves against those — the same
- *   body at the same instant, as a different detector estimated its joints. A grafted timestamp
- *   with no primary frame inside the snap tolerance yields no evidence; widening the tolerance to
- *   rescue one would be inventing a frame.
+ * - `exemplars` carry with the grafted objects, unaltered — the scale pass's OWN instants, and
+ *   both passes sample the same clip on the same media clock, so the timestamps stay meaningful.
+ *   (Measured on all three test clips: every sampled timestamp is shared EXACTLY between the two
+ *   passes — 228/228, 99/99, 233/233 — so this is an equality, not a near-miss.)
+ *
+ *   The scale pass's `RobustPoseFrame[]` now carry too, alongside the metrics, on
+ *   `ScalePassState.robustFrames` (`strides-3a1`). They have to: an exemplar's timestamp names an
+ *   instant, but everything an annotation draws at that instant — each joint's position, and the
+ *   hip ORDER a caliper's polarity is read from — is a property of the FRAME, and reading it off
+ *   the primary pass's frame attributes one detector's estimate to another detector's measurement.
+ *
+ *   That was not a theoretical tidiness point. Measured live, 2026-08-31, real GPU, at every
+ *   instant where both passes resolved both hips: the two order the hips OPPOSITELY on 15/57
+ *   instants of the side-view demo (26%), 15/87 of the multi-person clip (17%), and 0/98 of the
+ *   front-approach demo — the front view separates the hips by ~93 px, where the other two leave
+ *   them ~9-32 px apart and a few pixels of detector disagreement flips the sign. Of the twelve
+ *   grafted exemplar instants those three clips actually plan, THREE carry the inverse ordering.
+ *   Positions disagree materially too: hip-mid lands a median 31.5 px apart on the side-view demo,
+ *   ~7% of a torso length.
+ *
+ *   `scalePassSubjectAgreement.ts` does not and cannot catch this: it compares bounding-box HULLS,
+ *   which are identical under a left/right relabelling. The side-view demo reports `'agreed'` at
+ *   52/53 on the same run where 26% of its instants order the hips oppositely — the two passes
+ *   agree about WHO, and disagree about WHICH SIDE. Both statements are true at once and neither
+ *   substitutes for the other.
+ *
+ *   A grafted timestamp still yields no evidence where no frame of its own pass resolves it;
+ *   widening a tolerance to rescue one would be inventing a frame.
  * - `calibration` carries by reference, preserving the identity invariant #36 established
  *   (`scalePass.diagnostics.scaleCalibration === grafted.verticalOscillationCm.calibration`).
  *   `stepWidthCm` has no such companion object to carry — see its own module doc for why.

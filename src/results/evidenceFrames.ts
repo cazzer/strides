@@ -24,6 +24,7 @@ import { estimateTravelDirection } from '../heuristics/travelDirection'
 import { trimToPresenceWindow } from '../heuristics/presenceWindow'
 import { findNearestFrame } from './skeletonGeometry'
 import { metricTier } from './metricConfidence'
+import { GRAFTED_METRIC_IDS } from './scalePassGraft'
 
 /**
  * The PURE half of evidence-frame extraction: given a metric's exemplars plus that clip's
@@ -579,21 +580,28 @@ export function resolveInstantKeypoints(
  * one side would make `sideHip.x - hipMid.x` identically zero and the sign meaningless, which is
  * the exact bug that file was fixed for.
  *
- * **"Verbatim" holds for the PRIMARY pass only — it is FALSE for the two GRAFTED metrics.**
- * `stepWidthCm` and `verticalOscillationCm` arrive from the background MediaPipe scale pass
- * (`scalePassGraft.ts:43-50`), which carries its exemplars' timestamps but NOT its
- * `RobustPoseFrame[]`: "the only frames any consumer holds are the primary pass's". Every caller
- * of this function passes a primary-pass (MoveNet) frame snapped to the grafted timestamp, so for
- * those two metrics the polarity below is recomputed from a DIFFERENT detector's estimate of the
- * same instant, not from the frame the metric measured. At a near-frontal step-width strike the
- * two hips sit a few pixels apart and the two detectors can order them oppositely, so the sign
- * here can be the inverse of the one `stepWidth.ts:222` used — which would label a crossover
- * strike as landing on its own side, contradicting that file's own crossover caveat (`:273-277`).
+ * **"Verbatim" is now true for the GRAFTED metrics too, and only because `planClipEvidence`
+ * routes them** (`strides-3a1`). `stepWidthCm` and `verticalOscillationCm` arrive from the
+ * background MediaPipe scale pass carrying its exemplars' timestamps; that pass's own
+ * `RobustPoseFrame[]` now travel with them, and the planner hands THOSE to this function for
+ * those two metrics. This function itself is unconditional — it reads whatever frame it is
+ * handed — so the guarantee lives entirely in which frame the caller chose. Hand it the primary
+ * pass's frame for a grafted metric and the sign below is a different detector's opinion about
+ * the same instant, silently.
  *
- * The annotation layer therefore refuses to orient any mark for a grafted metric — see
- * `GRAFTED_METRICS` in `evidenceAnnotations.ts`, which is where that decision is recorded. This
- * function keeps returning the value, because it is still the correct polarity for the frame it
- * was handed; what is not correct is attributing it to a grafted metric's measurement.
+ * That is a measured failure, not a hypothetical one. On this repo's own footage the two
+ * detectors order the hips OPPOSITELY at 26% of the side-view demo's instants and 17% of the
+ * multi-person clip's (0% of the front-approach demo's, where the hips sit ~93 px apart rather
+ * than 9-32 px). Three of the twelve grafted exemplar instants those clips plan carry the inverse
+ * ordering, one of them a step-width strike whose two hips the scale pass placed 4.4 px apart —
+ * which drawn oriented would label a crossover strike as landing on its own side, contradicting
+ * `stepWidth.ts`'s own crossover caveat in the same viewport. See `scalePassGraft.ts` for the
+ * full measurement, and for why the subject-agreement check cannot see any of it.
+ *
+ * `evidenceAnnotations.ts`'s `GRAFTED_METRICS` still refuses to orient a grafted metric's marks.
+ * After this routing that suppression guards nothing — the polarity it withholds is the correct
+ * one — and its own doc comment states a premise that is no longer true. Removing it is a
+ * separate single-file change, deliberately not made here.
  *
  * `null` rather than the metric's `|| 1` fallback where the sign is zero. The metric needs a
  * number to finish an arithmetic expression and records the frame as `degenerate` so the exemplar
@@ -1317,22 +1325,50 @@ export function planMetricEvidence(
  * One clip's whole plan, one entry per metric. Iterates the heuristics result's own property order
  * (minus `view`, which is not a metric) the same way `computeAnalysisDiagnostics` does, so the key
  * order is fixed and the coverage line downstream stays diffable between runs.
+ *
+ * **`graftedFrames` is the background scale pass's own `RobustPoseFrame[]`, and passing it is what
+ * makes a grafted metric's evidence describe the pass that measured it** (`strides-3a1`). Where it
+ * is non-null, every metric in `GRAFTED_METRIC_IDS` is planned against IT — its frames, its own
+ * snap tolerance, its own travel direction — and every other metric against `frames` exactly as
+ * before. Where it is null nothing is routed and this behaves as it always did.
+ *
+ * Its presence, not membership of `GRAFTED_METRIC_IDS`, is what says a graft happened: the state
+ * that carries it is written in the same object literal as the grafted metrics themselves, so
+ * "these two metrics came from the scale pass" and "here are the scale pass's frames" are one fact
+ * committed together. A MediaPipe-PRIMARY run grafts nothing, carries no scale-pass frames, and
+ * correctly plans its centimetre metrics against `frames` — which already ARE the frames that
+ * measured them.
+ *
+ * The two arrays are not interchangeable and the routing is not a preference. A frame carries the
+ * joint positions an annotation draws and the hip ORDER a caliper's polarity is read from, and the
+ * two detectors disagree about that ordering on a quarter of the side-view demo's instants while
+ * agreeing about which PERSON they are looking at — see `scalePassGraft.ts` for the measurement,
+ * and for why `scalePassSubjectAgreement.ts` structurally cannot see it.
  */
 export function planClipEvidence(
   heuristics: FormHeuristicsResult,
   frames: RobustPoseFrame[],
   frameSize: EvidenceFrameSize,
+  graftedFrames: RobustPoseFrame[] | null = null,
 ): ClipEvidencePlan {
   const metricEntries = Object.entries(heuristics).filter(
     (entry): entry is [MetricId, FormHeuristicsResult[MetricId]] =>
       entry[0] !== 'view',
   )
   // Once per clip, not once per metric: it costs three passes over every frame and eleven metrics
-  // asking the same question of the same array would get the same answer eleven times.
+  // asking the same question of the same array would get the same answer eleven times. The grafted
+  // direction is derived the same way from the other array, and only when there is one — it is a
+  // property of the clip AS THAT PASS SAMPLED IT, and two passes can read it differently for the
+  // same reason they read anything else differently.
   const travelDirection = evidenceTravelDirection(frames)
+  const graftedTravelDirection: EvidenceTravelDirection =
+    graftedFrames === null ? 0 : evidenceTravelDirection(graftedFrames)
   const plan = {} as ClipEvidencePlan
   for (const [id, metric] of metricEntries) {
-    plan[id] = planMetricEvidence(metric, frames, frameSize, travelDirection)
+    const useGrafted = graftedFrames !== null && GRAFTED_METRIC_IDS.has(id)
+    plan[id] = useGrafted
+      ? planMetricEvidence(metric, graftedFrames, frameSize, graftedTravelDirection)
+      : planMetricEvidence(metric, frames, frameSize, travelDirection)
   }
   return plan
 }

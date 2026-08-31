@@ -3,12 +3,14 @@ import {
   dropGraftedExemplars,
   graftScalePassResult,
   withSubjectDivergenceCaveat,
+  GRAFTED_METRIC_IDS,
   SCALE_PASS_PROVENANCE_CAVEAT,
   SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT,
 } from './scalePassGraft'
 import type {
   FormHeuristicsResult,
   MetricExemplar,
+  MetricId,
   MetricResult,
   ScaleCalibratedVerticalOscillation,
   VerticalOscillationCmResult,
@@ -481,5 +483,47 @@ describe('dropGraftedExemplars', () => {
     dropGraftedExemplars(result)
 
     expect(JSON.stringify(result)).toBe(before)
+  })
+})
+
+describe('GRAFTED_METRIC_IDS', () => {
+  /**
+   * The set is DERIVED from the graft rather than compared against a hand-written literal, so it
+   * cannot drift from the function it describes. A third grafted metric that forgot to join the
+   * set would not merely be untidy: `planClipEvidence` reads this set to decide which metrics get
+   * the scale pass's own frames, so an omission plans that metric's evidence from the wrong
+   * detector — silently, and looking entirely deliberate. That class of divergence has already
+   * happened once in this area (`stepWidthExemplars.ts`'s two copied builders).
+   */
+  function metricsGraftScalePassResultReplaces(): MetricId[] {
+    const primary = makeResult(makeVerticalOscillationCm(), makeStepWidthCm())
+    const scale = makeResult(
+      makeVerticalOscillationCm({ value: 9.99 }),
+      makeStepWidthCm({ value: 8.88 }),
+    )
+    const grafted = graftScalePassResult(primary, scale)
+    return (Object.keys(primary) as Array<keyof FormHeuristicsResult>)
+      .filter((key): key is MetricId => key !== 'view')
+      .filter((id) => grafted[id] !== primary[id])
+  }
+
+  it('names exactly the metrics graftScalePassResult replaces', () => {
+    expect([...GRAFTED_METRIC_IDS].sort()).toEqual(
+      metricsGraftScalePassResultReplaces().sort(),
+    )
+  })
+
+  it('names exactly the metrics dropGraftedExemplars strips', () => {
+    // The other consumer of the same fact, checked the same way, so a metric can never be grafted
+    // by one path and forgotten by the other.
+    const withExemplars = makeResult(
+      makeVerticalOscillationCm({ exemplars: [makeExemplar()] }),
+      makeStepWidthCm({ exemplars: [makeExemplar({ kind: 'stepWidthStrike' })] }),
+    )
+    const stripped = dropGraftedExemplars(withExemplars)
+    const changed = (Object.keys(withExemplars) as Array<keyof FormHeuristicsResult>)
+      .filter((key): key is MetricId => key !== 'view')
+      .filter((id) => stripped[id] !== withExemplars[id])
+    expect(changed.sort()).toEqual([...GRAFTED_METRIC_IDS].sort())
   })
 })
