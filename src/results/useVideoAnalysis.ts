@@ -651,9 +651,19 @@ export function useVideoAnalysis(
         setState((s) => ({
           ...s,
           // The one write the scale pass makes outside its own status object. `diagnostics`
-          // stays the primary's — the scale pass's live on scalePass.diagnostics instead.
+          // stays the primary's — the scale pass's live on scalePass.diagnostics instead, and so
+          // do its frames.
           heuristics: displayed,
-          scalePass: { status: 'done', diagnostics: scaleDiagnostics, subjectAgreement },
+          // `robustFrames` rides in the SAME literal as the grafted `heuristics` deliberately
+          // (`strides-3a1`): the evidence planner treats their presence as the statement that a
+          // graft happened, and committing them apart would let a render observe grafted metrics
+          // with no frames to plan them from — which is precisely the old, wrong behaviour.
+          scalePass: {
+            status: 'done',
+            diagnostics: scaleDiagnostics,
+            subjectAgreement,
+            robustFrames: scaleRobustFrames,
+          },
         }))
       } catch (err) {
         failPass(err instanceof Error ? err.message : 'Scale pass failed unexpectedly.')

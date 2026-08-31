@@ -34,6 +34,20 @@ export interface ScalePassState {
    * `calibration` by reference). Set only when status is 'done' — the primary run's
    * `diagnostics` field never reflects the scale pass. */
   diagnostics: AnalysisDiagnostics | null
+  /**
+   * The scale pass's OWN robust frames, the ones its grafted metrics were measured from
+   * (`strides-3a1`). Set only when status is `'done'` — and then always, in the same object
+   * literal that commits the graft, so its presence and "a graft happened" are one fact rather
+   * than two that could disagree.
+   *
+   * The evidence planner needs it: an exemplar's timestamp names an instant, but the joint
+   * positions an annotation draws there — and the hip ORDER a caliper's polarity is read from —
+   * are properties of the FRAME, and the two detectors demonstrably disagree about both while
+   * agreeing about which person they are watching. Not stored for display: nothing renders a
+   * scale-pass skeleton overlay, and `robustFrames` on the analysis state stays the primary
+   * pass's.
+   */
+  robustFrames?: RobustPoseFrame[]
 }
 
 export interface VideoAnalysisState {

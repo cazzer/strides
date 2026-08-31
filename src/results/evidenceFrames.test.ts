@@ -2115,6 +2115,178 @@ describe('planClipEvidence', () => {
   })
 })
 
+/**
+ * `strides-3a1`. The background scale pass measures `verticalOscillationCm` and `stepWidthCm` from
+ * ITS OWN frames and then grafts the numbers onto a result whose other metrics — and, until this
+ * change, whose only frames — are the primary pass's.
+ *
+ * The fixtures below reduce the two passes' disagreement to its essential form: the SAME body at
+ * the SAME instants, with the two hips LABELLED the opposite way round. That is not a contrived
+ * shape. Measured live on 2026-08-31 (real GPU, both passes' frames captured at the graft), the
+ * two detectors order the hips oppositely on 15/57 instants of the side-view demo, 15/87 of the
+ * multi-person clip, and 0/98 of the front-approach demo — the front view separates the hips by a
+ * median 93 px, while the other two leave them 9-32 px apart, where a few pixels of detector
+ * disagreement flips the sign. Three of the twelve grafted exemplar instants those clips plan
+ * carry the inverse ordering.
+ *
+ * Swapping the labels and nothing else is deliberate: the hip point SET is identical, so every
+ * crop box, every gate and the travel direction are identical too, and the only thing the two
+ * arrays can disagree about is the one thing under test.
+ */
+describe('planClipEvidence with the grafting pass’s own frames', () => {
+  /** Eleven samples travelling +x, with the hip (and shoulder) LABELS swapped when asked. */
+  function labelledFrames(swapped: boolean): RobustPoseFrame[] {
+    return Array.from({ length: 11 }, (_, i) => {
+      const x = 500 + i * 40
+      const leftX = swapped ? x + 50 : x - 50
+      const rightX = swapped ? x - 50 : x + 50
+      return buildFrame(
+        {
+          left_shoulder: { x: leftX, y: 300 },
+          right_shoulder: { x: rightX, y: 300 },
+          left_hip: { x: leftX, y: 500 },
+          right_hip: { x: rightX, y: 500 },
+        },
+        Number((i * 0.1).toFixed(2)),
+      )
+    })
+  }
+
+  /** Both step-width metrics, same single-instant exemplar, so one plan answers the A/B. */
+  function stepWidthPair() {
+    const strike = () =>
+      exemplar({ kind: 'stepWidthStrike', timestamp: 0.5, measuredSide: 'left' })
+    return heuristicsResult({
+      stepWidth: { exemplars: [strike()] },
+      stepWidthCm: { exemplars: [strike()] },
+    })
+  }
+
+  function outwardSignOf(plan: ClipEvidencePlan, metric: MetricId) {
+    const entry = plan[metric]
+    return entry.status === 'planned' ? entry.items[0].base.outwardSign : null
+  }
+
+  it('reads a grafted metric’s hip polarity from the pass that measured it', () => {
+    const primary = labelledFrames(false)
+    const scale = labelledFrames(true)
+    // The premise: the same instant, ordered oppositely by the two passes.
+    expect(resolveOutwardSigns(primary[5])).toEqual({ left: -1, right: 1 })
+    expect(resolveOutwardSigns(scale[5])).toEqual({ left: 1, right: -1 })
+
+    const plan = planClipEvidence(stepWidthPair(), primary, HD, scale)
+
+    // `stepWidthCm` arrives by graft, so its caliper's polarity must come from `scale`...
+    expect(outwardSignOf(plan, 'stepWidthCm')).toEqual({ left: 1, right: -1 })
+    // ...while `stepWidth` is the primary pass's own and must be untouched by the routing.
+    expect(outwardSignOf(plan, 'stepWidth')).toEqual({ left: -1, right: 1 })
+  })
+
+  it('carries the OLD, wrong polarity when the grafting pass’s frames are withheld', () => {
+    // The defect, stated as a test rather than as a comment: hand the same plan only the primary
+    // pass's frames and `stepWidthCm` reports the primary's ordering under a number the scale
+    // pass measured — the inverse of the assertion above, from identical inputs.
+    const plan = planClipEvidence(stepWidthPair(), labelledFrames(false), HD)
+    expect(outwardSignOf(plan, 'stepWidthCm')).toEqual({ left: -1, right: 1 })
+  })
+
+  it('draws a grafted metric’s joints at the positions its own pass estimated', () => {
+    // Polarity is one field of a frame; every drawn joint is the rest of it. Measured live, the
+    // two passes' hip-mid lands a median 31.5 px apart on the side-view demo — about 7% of a
+    // torso — so this is a visible mis-registration, not a rounding difference.
+    const primary = sampledFrames()
+    const scale = primary.map((frame) =>
+      boxFrame(frame.timestamp, 500 + frame.timestamp * 400, 640),
+    )
+    const plan = planClipEvidence(
+      heuristicsResult({
+        stepWidth: { exemplars: [exemplar({ timestamp: 0.5 })] },
+        stepWidthCm: { exemplars: [exemplar({ timestamp: 0.5 })] },
+      }),
+      primary,
+      HD,
+      scale,
+    )
+    const yOf = (metric: MetricId) => {
+      const entry = plan[metric]
+      if (entry.status !== 'planned') return undefined
+      const hip = entry.items[0].base.keypoints.find((k) => k.name === 'left_hip')
+      return hip !== undefined && hip.status !== 'unrecoverable' ? hip.y : undefined
+    }
+    // `boxFrame` puts `left_hip` at the box's own top-left corner, so the two arrays' 440 vs 640
+    // seeds separate cleanly.
+    expect(yOf('stepWidth')).toBe(440)
+    expect(yOf('stepWidthCm')).toBe(640)
+  })
+
+  it('gives a grafted metric the travel direction ITS pass sampled', () => {
+    // The direction is a property of the clip as each pass saw it, so it is derived per array
+    // rather than computed once and shared. Two arrays travelling opposite ways is the only
+    // fixture that can tell a per-array derivation from a single shared one.
+    const primary = travellingFrames()
+    const scale = travellingFrames(11, -40)
+    expect(evidenceTravelDirection(primary)).toBe(1)
+    expect(evidenceTravelDirection(scale)).toBe(-1)
+
+    const plan = planClipEvidence(
+      heuristicsResult({
+        trunkLean: { exemplars: [exemplar()] },
+        stepWidthCm: { exemplars: [exemplar({ kind: 'stepWidthStrike' })] },
+      }),
+      primary,
+      HD,
+      scale,
+    )
+    const directionOf = (metric: MetricId) => {
+      const entry = plan[metric]
+      return entry.status === 'planned' ? entry.items[0].travelDirection : null
+    }
+    expect(directionOf('trunkLean')).toBe(1)
+    expect(directionOf('stepWidthCm')).toBe(-1)
+  })
+
+  it('resolves a grafted instant the primary pass never sampled', () => {
+    // The two passes share every timestamp on all three test clips today, so this is a
+    // structural guarantee rather than an observed case — but the old code resolved a grafted
+    // timestamp by snapping it into the PRIMARY array, so an instant only the scale pass sampled
+    // was evidence the app could not show. It has one frame; it is not a missing frame.
+    const primary = sampledFrames()
+    const scale = [...primary, boxFrame(5, 900, 440)]
+    const plan = planClipEvidence(
+      heuristicsResult({
+        stepWidthCm: { exemplars: [exemplar({ timestamp: 5 })] },
+      }),
+      primary,
+      HD,
+      scale,
+    )
+    expect(plan.stepWidthCm.status).toBe('planned')
+    expect(reasonOf(planClipEvidence(
+      heuristicsResult({ stepWidthCm: { exemplars: [exemplar({ timestamp: 5 })] } }),
+      primary,
+      HD,
+    ).stepWidthCm)).toBe('all-gated-out')
+  })
+
+  it('leaves every non-grafted metric byte-identical to the un-routed plan', () => {
+    // The routing must be invisible to the other nine metrics: they are planned from the same
+    // array, with the same shared travel direction, as they were before this parameter existed.
+    const primary = travellingFrames()
+    const heuristics = heuristicsResult({
+      trunkLean: { exemplars: [exemplar()] },
+      overstriding: { exemplars: [exemplar({ kind: 'overstrideRange' })] },
+      footStrikePattern: {
+        exemplars: [exemplar({ kind: 'footStrike', side: 'left' })],
+      },
+    })
+    const withGraft = planClipEvidence(heuristics, primary, HD, travellingFrames(11, -40))
+    const without = planClipEvidence(heuristics, primary, HD)
+    for (const metric of ['trunkLean', 'overstriding', 'footStrikePattern'] as MetricId[]) {
+      expect(withGraft[metric]).toEqual(without[metric])
+    }
+  })
+})
+
 describe('summarizeEvidenceCoverage', () => {
   const frames = sampledFrames()
 

@@ -946,6 +946,55 @@ describe('useVideoAnalysis', () => {
       )
     })
 
+    it('keeps the scale pass’s OWN frames beside the metrics it grafted', async () => {
+      // `strides-3a1`. A grafted metric's value comes from the scale pass while its evidence used
+      // to be planned from the primary pass's frames — a different detector's estimate of the
+      // same instant, which orders the hips oppositely on a quarter of the side-view demo's
+      // instants. The frames have to travel with the numbers, and in the SAME state write, so no
+      // render can observe grafted metrics without the frames that measured them.
+      const scaleFrames: RobustPoseFrame[] = [
+        { timestamp: 0, keypoints: makeFakeKeypoints(), source: 'detected', pixelsPerMeter: 870 },
+      ]
+      mockBothPassesResolving()
+      applyRobustnessMock
+        .mockReturnValueOnce(FAKE_ROBUST_FRAMES)
+        .mockReturnValueOnce(scaleFrames)
+      computeFormHeuristicsMock
+        .mockReturnValueOnce(FAKE_HEURISTICS)
+        .mockReturnValueOnce(FAKE_SCALE_HEURISTICS)
+
+      const videoSource = makeVideoSource()
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.scalePass.status).toBe('done'))
+      expect(result.current.scalePass.robustFrames).toBe(scaleFrames)
+      // And the analysis state's own frames stay the PRIMARY pass's — nothing renders a
+      // scale-pass skeleton, and every non-grafted metric still plans against these.
+      expect(result.current.robustFrames).toBe(FAKE_ROBUST_FRAMES)
+    })
+
+    it('carries no scale-pass frames on a pass that failed', async () => {
+      // The presence of these frames is what tells the evidence planner a graft happened, so a
+      // pass that grafted nothing must leave the field absent rather than stale or empty.
+      sampleClipMock
+        .mockImplementationOnce(() => ({
+          promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+          handle: makeFakeHandle(),
+        }))
+        .mockImplementationOnce(() => ({
+          promise: Promise.reject(new Error('scale sampling broke')),
+          handle: makeFakeHandle(),
+        }))
+
+      const videoSource = makeVideoSource()
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.scalePass.status).toBe('failed'))
+      expect(result.current.scalePass.robustFrames).toBeUndefined()
+    })
+
     it('marks the pass failed and leaves the primary result untouched when scale sampling rejects', async () => {
       sampleClipMock
         .mockImplementationOnce(() => ({
