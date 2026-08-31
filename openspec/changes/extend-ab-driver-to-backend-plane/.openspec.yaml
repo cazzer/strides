@@ -1,0 +1,7 @@
+schema: spec-driven
+created: 2026-08-31
+# No spec delta. `openspec/specs/` describes the app's behaviour contract; this change touches only
+# `scripts/ab-person-selection.mjs`, measurement tooling that asserts nothing, is not wired into
+# CI, and has no requirement anywhere in `openspec/specs/`. The app's config-override contract
+# (`__STRIDES_POSE_BACKEND_OVERRIDE__`'s shape) is unchanged — this change only reads it.
+skip_specs: true

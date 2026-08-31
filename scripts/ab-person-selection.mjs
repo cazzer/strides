@@ -19,6 +19,12 @@
  *                         (src/results/samplingRobustnessConfig.ts) assigned to
  *                         window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ before any page
  *                         script runs. Use `{}` for an unmodified baseline arm.
+ *   --backend-arm <label>=<json>
+ *                         Repeatable. The second override plane: a partial PoseDetectorConfig
+ *                         (src/pose/detector.ts) assigned to
+ *                         window.__STRIDES_POSE_BACKEND_OVERRIDE__ the same way. Arms are joined
+ *                         to --arm by LABEL, so one arm may set either plane or both; a label
+ *                         named on only one plane gets `{}` on the other.
  *   --clips <a,b,c>       demo1 | demo2 | multiperson (default: all three)
  *   --trials <n>          Trials per (clip, arm). Default 3.
  *   --timeout <ms>        Per-trial wait for "Analysis complete". Default 300000.
@@ -38,6 +44,11 @@
  *     --arm 'off={"personSelection":{"enabled":false}}' \
  *     --arm 'on={"personSelection":{"enabled":true}}' \
  *     --clips demo2 --trials 3
+ *
+ *   node scripts/ab-person-selection.mjs \
+ *     --backend-arm 'off={"trackingCrop":{"enabled":false}}' \
+ *     --backend-arm 'on={"trackingCrop":{"enabled":true}}' \
+ *     --clips demo1,demo2 --trials 3
  *
  * Progress goes to stderr; only the report goes to stdout, with no timestamps and a fixed field
  * order, so `node scripts/ab-person-selection.mjs ... > before.txt` and a second run's
@@ -87,11 +98,16 @@ const EVIDENCE_SETTLE_MS = 8_000
 const EVIDENCE_MAX_WAIT_MS = 180_000
 
 /**
- * Every key an arm override may set, nested planes included. The app merges an override key-by-key
- * and ignores what it doesn't recognise, so a typo produces an arm bit-identical to baseline —
- * indistinguishable in the report from a real "no effect", which is the conclusion these A/Bs
- * exist to reach honestly. Checking only the top level would miss the likeliest typo of all
- * (`{personSelection: {enable: true}}`), since the misspelling lives one level down.
+ * Every key an arm override may set, at any depth. `null` marks a leaf; an object marks a nested
+ * plane whose own keys are checked in turn. The app merges an override key-by-key and ignores what
+ * it doesn't recognise, so a typo produces an arm bit-identical to baseline — indistinguishable in
+ * the report from a real "no effect", which is the conclusion these A/Bs exist to reach honestly.
+ * Checking only the top level would miss the likeliest typo of all (`{personSelection: {enable:
+ * true}}`), since the misspelling lives one level down.
+ *
+ * The shape is recursive rather than a fixed two levels because the backend plane below goes
+ * three deep (`personOfInterest.continuityGate.enabled`), and a validator that stops short of a
+ * plane's depth is a validator that waves through exactly the typos it was written to catch.
  *
  * Mirrors `SamplingRobustnessConfig` (src/results/samplingRobustnessConfig.ts) and the three
  * nested shapes it composes: `RobustnessConfig` (src/pose/robustness/types.ts),
@@ -103,17 +119,64 @@ const EVIDENCE_MAX_WAIT_MS = 180_000
 const ARM_KEYS = {
   maxConsecutiveErrors: null,
   detectionTimeoutMs: null,
-  robustness: ['minKeypointConfidence', 'maxGapSeconds'],
-  sequentialSampling: ['enabled', 'targetSamplesPerSecond'],
-  personSelection: [
-    'enabled',
-    'minBoundingBoxAreaFraction',
-    'minKeypointConfidence',
-    'minConfidentKeypoints',
-    'maxAreaRatio',
-    'maxCenterSpeedSidesPerSecond',
-    'maxContinuityGapSeconds',
-  ],
+  robustness: { minKeypointConfidence: null, maxGapSeconds: null },
+  sequentialSampling: { enabled: null, targetSamplesPerSecond: null },
+  personSelection: {
+    enabled: null,
+    minBoundingBoxAreaFraction: null,
+    minKeypointConfidence: null,
+    minConfidentKeypoints: null,
+    maxAreaRatio: null,
+    maxCenterSpeedSidesPerSecond: null,
+    maxContinuityGapSeconds: null,
+  },
+}
+
+/**
+ * The same, for the SECOND override plane: `window.__STRIDES_POSE_BACKEND_OVERRIDE__`, a partial
+ * `PoseDetectorConfig` (src/pose/detector.ts) resolved by `resolvePoseDetectorConfig`
+ * (src/pose/poseBackendConfig.ts). `trackingCrop` and `personOfInterest` merge shallowly one level
+ * deep over the default, and `personOfInterest.continuityGate` one level deeper still — the only
+ * field on either plane that is itself an object, and the reason this schema is walked recursively.
+ *
+ * Mirrors `TrackingCropConfig` (src/pose/backends/trackingCropConfig.ts) plus
+ * `PersonOfInterestConfig`/`ContinuityGateConfig` (src/pose/backends/personOfInterestConfig.ts).
+ */
+const BACKEND_ARM_KEYS = {
+  backend: null,
+  movenetModelType: null,
+  trackingCrop: {
+    enabled: null,
+    minKeypointConfidence: null,
+    minConfidentKeypoints: null,
+    paddingMultiplier: null,
+    minCropSidePx: null,
+    reacquisitionLossThreshold: null,
+  },
+  personOfInterest: {
+    enabled: null,
+    continuityGate: {
+      enabled: null,
+      maxCenterSpeedSidesPerSecond: null,
+      maxAreaRatio: null,
+    },
+  },
+}
+
+/**
+ * Closed unions whose VALUES are checkable, so they are checked. The sampling plane has no
+ * equivalent — its leaves are all open numerics — but `backend` and `movenetModelType` each admit
+ * a fixed set, and an unrecognised id is the same silent failure as an unrecognised key:
+ * `createPoseDetector` falls through to its default and the arm reads as baseline.
+ *
+ * `blazepose` and `posenet` are admitted despite both being known-broken in this environment
+ * (CLAUDE.md, "Known issues"). The driver's job is to run the arm it was asked for; refusing an id
+ * the app itself accepts would make the harness disagree with the app about what is expressible,
+ * and such a trial fails loudly on its own.
+ */
+const BACKEND_ARM_ENUMS = {
+  backend: ['movenet', 'blazepose', 'posenet', 'mediapipePoseLandmarker'],
+  movenetModelType: ['lightning', 'thunder'],
 }
 
 /**
@@ -136,47 +199,77 @@ function requireValue(flag, value) {
   return value
 }
 
-function parseArm(value) {
+/**
+ * Walks `value` against a recursive key schema, throwing on the first key the app would silently
+ * ignore. `where` names the flag and label so the error identifies which arm is wrong, and `path`
+ * accumulates the dotted key so a failure three levels down still says exactly where.
+ */
+function assertKnownKeys(schema, value, where, path = '') {
+  for (const key of Object.keys(value)) {
+    const dotted = path ? `${path}.${key}` : key
+    if (!(key in schema)) {
+      throw new Error(
+        `${where}: unknown key "${dotted}" — known: ${Object.keys(schema)
+          .map((known) => (path ? `${path}.${known}` : known))
+          .join(', ')}`,
+      )
+    }
+    const nestedSchema = schema[key]
+    if (nestedSchema === null) continue
+    const nested = value[key]
+    if (nested === null || typeof nested !== 'object' || Array.isArray(nested)) {
+      throw new Error(`${where}: "${dotted}" must be a JSON object`)
+    }
+    assertKnownKeys(nestedSchema, nested, where, dotted)
+  }
+}
+
+/** Checks the leaves whose value sets are closed (see `BACKEND_ARM_ENUMS`). */
+function assertKnownValues(enums, value, where) {
+  for (const [key, allowed] of Object.entries(enums)) {
+    if (!(key in value)) continue
+    if (!allowed.includes(value[key])) {
+      throw new Error(
+        `${where}: "${key}" must be one of ${allowed.join(' | ')}, got ${JSON.stringify(value[key])}`,
+      )
+    }
+  }
+}
+
+/**
+ * Parses one `<label>=<json>` arm on either override plane. `flag` and `schema` are what differ;
+ * everything else — the label split, the JSON parse, the object check, the recursive key check —
+ * is shared, so the two planes cannot drift into validating to different standards.
+ */
+function parseArmOnPlane(flag, schema, enums, value) {
   const split = value.indexOf('=')
-  if (split < 1) throw new Error(`--arm needs <label>=<json>, got: ${value}`)
+  if (split < 1) throw new Error(`${flag} needs <label>=<json>, got: ${value}`)
   const label = value.slice(0, split)
   const json = value.slice(split + 1)
+  const where = `${flag} ${label}`
 
   let override
   try {
     override = JSON.parse(json)
   } catch (error) {
-    throw new Error(`--arm ${label}: override is not valid JSON`, { cause: error })
+    throw new Error(`${where}: override is not valid JSON`, { cause: error })
   }
   if (override === null || typeof override !== 'object' || Array.isArray(override)) {
-    throw new Error(`--arm ${label}: override must be a JSON object, got ${json}`)
+    throw new Error(`${where}: override must be a JSON object, got ${json}`)
   }
-  for (const key of Object.keys(override)) {
-    if (!(key in ARM_KEYS)) {
-      throw new Error(
-        `--arm ${label}: unknown key "${key}" — known: ${Object.keys(ARM_KEYS).join(', ')}`,
-      )
-    }
-    const nestedKeys = ARM_KEYS[key]
-    if (nestedKeys === null) continue
-    const nested = override[key]
-    if (nested === null || typeof nested !== 'object' || Array.isArray(nested)) {
-      throw new Error(`--arm ${label}: "${key}" must be a JSON object`)
-    }
-    for (const nestedKey of Object.keys(nested)) {
-      if (!nestedKeys.includes(nestedKey)) {
-        throw new Error(
-          `--arm ${label}: unknown key "${key}.${nestedKey}" — known: ${nestedKeys.join(', ')}`,
-        )
-      }
-    }
-  }
+  assertKnownKeys(schema, override, where)
+  if (enums) assertKnownValues(enums, override, where)
   return { label, override }
 }
+
+const parseArm = (value) => parseArmOnPlane('--arm', ARM_KEYS, null, value)
+const parseBackendArm = (value) =>
+  parseArmOnPlane('--backend-arm', BACKEND_ARM_KEYS, BACKEND_ARM_ENUMS, value)
 
 function parseArgs(argv) {
   const options = {
     arms: [],
+    backendArms: [],
     clips: Object.keys(CLIPS),
     trials: 3,
     timeoutMs: 300_000,
@@ -193,6 +286,10 @@ function parseArgs(argv) {
     switch (flag) {
       case '--arm':
         options.arms.push(parseArm(requireValue(flag, value)))
+        i += 1
+        break
+      case '--backend-arm':
+        options.backendArms.push(parseBackendArm(requireValue(flag, value)))
         i += 1
         break
       case '--clips':
@@ -246,13 +343,40 @@ function parseArgs(argv) {
     }
   }
 
-  if (options.arms.length === 0) {
-    throw new Error('at least one --arm <label>=<json> is required (use `{}` for a baseline arm)')
+  for (const [flag, parsed] of [
+    ['--arm', options.arms],
+    ['--backend-arm', options.backendArms],
+  ]) {
+    const labels = new Set(parsed.map((arm) => arm.label))
+    if (labels.size !== parsed.length) {
+      throw new Error(`${flag} labels must be unique`)
+    }
   }
-  const labels = new Set(options.arms.map((arm) => arm.label))
-  if (labels.size !== options.arms.length) {
-    throw new Error('arm labels must be unique')
+  if (options.arms.length === 0 && options.backendArms.length === 0) {
+    throw new Error(
+      'at least one --arm or --backend-arm <label>=<json> is required (use `{}` for a baseline arm)',
+    )
   }
+
+  // Arms are joined by LABEL across the two planes, so one arm can carry a sampling override, a
+  // backend override, or both, and an arm named on only one plane gets `{}` on the other. Order is
+  // first appearance, sampling plane first, so a report's column order is a property of the
+  // command line rather than of which plane happened to be parsed first.
+  const byLabel = new Map()
+  for (const [plane, parsed] of [
+    ['override', options.arms],
+    ['backendOverride', options.backendArms],
+  ]) {
+    for (const arm of parsed) {
+      const existing = byLabel.get(arm.label)
+      if (existing) existing[plane] = arm.override
+      else byLabel.set(arm.label, { label: arm.label, override: {}, backendOverride: {}, [plane]: arm.override })
+    }
+  }
+  options.arms = [...byLabel.values()]
+  // Kept only so the report can tell "this arm set no backend override" from "this run used no
+  // backend plane at all" — the latter suppresses the header lines entirely.
+  options.usesBackendPlane = options.backendArms.length > 0
   return options
 }
 
@@ -394,12 +518,21 @@ async function warmUpAndReadRenderer(launchArgs, baseURL) {
  * for a fix that demonstrably works. The defect reproduces either way; it is the FIX that goes
  * invisible. A context is not enough — the shift survives `browser.newContext()`.
  */
-async function runTrial(browser, { baseURL, clip, clipName, override, timeoutMs, evidence }) {
+async function runTrial(
+  browser,
+  { baseURL, clip, clipName, override, backendOverride, timeoutMs, evidence },
+) {
   const context = await browser.newContext()
   try {
+    // Both planes go in via `addInitScript`, never `evaluate`: auto-analyze can start before an
+    // `evaluate()` after `goto()` lands, and the backend override is read once per detector
+    // creation — earlier still than the sampling one.
     await context.addInitScript((value) => {
       window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = value
     }, override)
+    await context.addInitScript((value) => {
+      window.__STRIDES_POSE_BACKEND_OVERRIDE__ = value
+    }, backendOverride)
 
     const page = await context.newPage()
 
@@ -666,6 +799,14 @@ function report({ renderer, baseURL, provenance, commit, options, results }) {
     `# browser: ${options.reuseBrowser ? 'ONE process reused across trials (--reuse-browser)' : 'fresh process per trial'}`,
     `# trials: ${options.trials}`,
     ...options.arms.map((arm) => `# arm ${arm.label}: ${JSON.stringify(arm.override)}`),
+    // Emitted only when this run used the backend plane at all, so a report produced without
+    // `--backend-arm` is byte-identical to one produced before that flag existed — `> before.txt`
+    // / `> after.txt` diffs spanning this change stay clean on the sampling plane.
+    ...(options.usesBackendPlane
+      ? options.arms.map(
+          (arm) => `# backend-arm ${arm.label}: ${JSON.stringify(arm.backendOverride)}`,
+        )
+      : []),
   ]
 
   for (const clipName of options.clips) {
@@ -773,6 +914,7 @@ async function main() {
               clip: CLIPS[clipName],
               clipName,
               override: arm.override,
+              backendOverride: arm.backendOverride,
               timeoutMs: options.timeoutMs,
               evidence: options.evidence,
             })
@@ -808,6 +950,8 @@ async function main() {
             commit,
             renderer,
             trials: options.trials,
+            // Each entry carries BOTH planes (`override`, `backendOverride`), so a record read
+            // back months later says which arm set what without needing the command line.
             arms: options.arms,
             // One entry per (clip, arm), in the same order the report prints them.
             rows: options.clips.flatMap((clipName) =>
