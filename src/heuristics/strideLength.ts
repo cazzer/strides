@@ -202,6 +202,15 @@ export { STRIDE_PERIOD_TOLERANCE }
  * Step 4a's period gate is the defense, and it needs a reference the pair set cannot supply itself
  * (see the mitigation notes below).
  *
+ * **Updated 2026-08-29 (`derive-footstrike-timing-from-bounce-phase`).** The measurement above is
+ * the record of what the ankle-difference detector did and is left as measured, but on a clip whose
+ * hip-bounce fit clears cadence's bar `detectFootstrikes` no longer reads per-side ankle-y maxima
+ * at all: it emits one instant per fitted bounce cycle, so consecutive same-side instants are two
+ * bounce periods — one stride — apart by construction and a "stride" pair CANNOT span one step.
+ * The halving bias is therefore removed at source on that path, and step 4a's gate becomes a
+ * cross-check rather than the only defense. It remains exactly as described on the fallback path,
+ * which is what a clip with no fittable rhythm still gets.
+ *
  * ### A third, unrelated bias
  *
  * Subtler and about displacement rather than timing: the `d > 0` filter truncates the noise

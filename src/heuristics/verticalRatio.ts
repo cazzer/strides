@@ -203,11 +203,18 @@ function buildStridePairExemplar(pairs: StridePair[]): MetricExemplar[] {
  * `stepFrequencyHz` reference, so each candidate same-side footstrike pair's elapsed TIME is
  * checked against the expected stride period (`2 / fit.frequencyHz`, since a stride is two steps)
  * before its displacement can become the denominator. Without that check the denominator was the
- * one half of this ratio nothing verified: `detectFootstrikes` labels trailing-leg ankle-y maxima
- * as same-side strikes, so a "stride" pair can span one STEP and make this metric read ~2× high at
- * high confidence — measured on the Demo 1 track clip, see `strideLength.ts`'s halving-bias note.
- * The reference is free (the fit is already computed and already gated by then) and carries no
- * calibrated coefficient.
+ * one half of this ratio nothing verified: `detectFootstrikes` labelled trailing-leg ankle-y maxima
+ * as same-side strikes, so a "stride" pair could span one STEP and make this metric read ~2× high
+ * at high confidence — measured on the Demo 1 track clip, see `strideLength.ts`'s halving-bias
+ * note. The reference is free (the fit is already computed and already gated by then) and carries
+ * no calibrated coefficient.
+ *
+ * Since 2026-08-29 the same fit reaches the denominator a second way: `detectFootstrikes` times its
+ * instants from this fit's PHASE whenever it clears `cadenceMinFitR2`, so on that path same-side
+ * strikes are one stride apart by construction and the gate has nothing left to reject. The two
+ * uses do not conflict — one places the instants, the other checks the interval — but they now
+ * share a failure: a clip whose fit is below the bar gets both the old instants and no gate, which
+ * is exactly the pre-2026-08-29 behaviour rather than a new one.
  *
  * ## Gate reuse — no separate `verticalRatioMinFitR2`
  *

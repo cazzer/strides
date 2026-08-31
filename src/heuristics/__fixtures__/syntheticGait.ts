@@ -52,6 +52,29 @@ const HIP_BASE_Y = 400
  * override. */
 const TRAVEL_SPEED_PX_PER_SEC = 100
 
+/**
+ * Phase offset of the vertical bounce relative to the ankle sway, radians. **Half a bounce period**
+ * — and the value is the whole point.
+ *
+ * This fixture defines a footstrike as the ankle's peak forward sway, `sin(2π·f·t) = 1`. Without
+ * this offset the bounce term `sin(2π·2f·t)` evaluates to `sin(π) = 0` **and falling** there — so
+ * the body would be at its LOWEST a quarter-step BEFORE contact and at its HIGHEST a quarter-step
+ * after it: at its apex the instant the foot lands, and at its floor in mid-flight. That is not a
+ * runner. A real body reaches its lowest point at MIDSTANCE and its highest in mid-flight.
+ *
+ * Nothing could observe the error before 2026-08-29: `verticalOscillation` reads only the
+ * amplitude, `cadence` only the frequency, `trunkLean` and view detection read geometry a uniform
+ * y-shift leaves alone, and every footstrike consumer read the ankles only. Footstrike timing from
+ * the fitted hip-bounce phase (`footstrikes.ts`) is the first thing in this package to read the two
+ * signals' RELATIVE phase, and it reads it backwards on the old fixture.
+ *
+ * A phase shift changes no amplitude and no frequency, so every hand-computed expectation built on
+ * either is unaffected by construction. With the shift the body's low point lands 0.29 of a step
+ * after contact — a stance of 0.58 step, i.e. a **duty factor of 0.29**, squarely inside the
+ * running range.
+ */
+const BOUNCE_PHASE_RADIANS = Math.PI
+
 /** Left/right shoulder and hip nearly coincide in side view — a small fixed offset, not zero, so
  * bilateral-pair resolution always has two distinct points to work with. */
 const SIDE_VIEW_BILATERAL_OFFSET_PX = 6
@@ -117,7 +140,9 @@ function torsoOffset(leanDeg: number): { dx: number; dy: number } {
  * Vertical bounce (hip/shoulder y) oscillates at 2x stride frequency (two bounces per full gait
  * cycle — once per footstrike, left and right), amplitude `verticalBouncePx / 2` so that
  * consecutive extrema differ by exactly `verticalBouncePx` (peak-to-trough), making the expected
- * vertical-oscillation value hand-computable as `verticalBouncePx / TORSO_LENGTH_PX`.
+ * vertical-oscillation value hand-computable as `verticalBouncePx / TORSO_LENGTH_PX`. Its phase
+ * relative to the ankle sway is set by `BOUNCE_PHASE_RADIANS` so the body is lowest AFTER contact
+ * rather than before it — read that constant's doc before touching either term.
  *
  * Each ankle sways sagittally at stride frequency, left and right in opposite phase (when one leg
  * is forward the other is back). Ankle-y is built as a monotone function of that same sway phase
@@ -176,7 +201,7 @@ export function generateSyntheticGait(params: SyntheticGaitParams): RobustPoseFr
 
     const hipMidX = HIP_BASE_X + travelSpeedPxPerSec * t
     const hipMidY =
-      HIP_BASE_Y + (verticalBouncePx / 2) * Math.sin(2 * Math.PI * (2 * strideFreqHz) * t)
+      HIP_BASE_Y + (verticalBouncePx / 2) * Math.sin(2 * Math.PI * (2 * strideFreqHz) * t + BOUNCE_PHASE_RADIANS)
 
     const { dx, dy } = torsoOffset(lean)
     const shoulderMidX = hipMidX + dx
@@ -209,7 +234,7 @@ export function generateSyntheticGait(params: SyntheticGaitParams): RobustPoseFr
     const headBounceAmplitude = (verticalBouncePx * headBounceDamping) / 2
     const headMidX = shoulderMidX
     const headMidY =
-      headBaseY + headBounceAmplitude * Math.sin(2 * Math.PI * (2 * strideFreqHz) * t)
+      headBaseY + headBounceAmplitude * Math.sin(2 * Math.PI * (2 * strideFreqHz) * t + BOUNCE_PHASE_RADIANS)
     const earSpread = view === 'side' ? SIDE_VIEW_EAR_SPREAD_PX : FRONT_VIEW_EAR_SPREAD_PX
     const leftEarX = headMidX - earSpread / 2
     const rightEarX = headMidX + earSpread / 2

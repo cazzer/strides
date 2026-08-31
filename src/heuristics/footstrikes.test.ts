@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { detectFootstrikes } from './footstrikes'
+import { detectFootstrikes, detectFootstrikesBetweenAnkles } from './footstrikes'
+import { estimateBodyScale } from './bodyScale'
 import { findLocalExtrema } from './extrema'
 import { analyzeHipBounce } from './hipBounce'
 import { resolvePoint } from './keypoints'
@@ -31,6 +32,10 @@ const HIP_BASE_Y = 100
 const TORSO_PX = 100
 const STANCE_END = 0.35
 const HEEL_OFF_START = 0.2
+/** Where heel-off begins as a fraction of stance, so a fixture with a different `stanceEnd` keeps
+ * the same push-off shape rather than a differently-proportioned one. `0.2 / 0.35` — the default
+ * pair, restated as a ratio, so `stanceEnd: STANCE_END` reproduces the original geometry exactly. */
+const HEEL_OFF_FRACTION_OF_STANCE = HEEL_OFF_START / STANCE_END
 const APEX = 0.55
 const APEX_LIFT_PX = 55
 const FRAMES_PER_STRIDE = 30
@@ -55,13 +60,32 @@ interface GaitShape {
    * contralateral-apex test at the end of this file. Real runners vary it; a slow jogger's apex
    * comes later in the cycle than a sprinter's. */
   apex?: number
+  /**
+   * Phase of this foot's own cycle at which its stance ends (toe-off). Defaults to `STANCE_END`.
+   * Expressed against a step — half a stride — this is `2 * stanceEnd`, and that quantity is what
+   * sets the HIP-PHASE detector's residual: a single fitted sinusoid puts its inflection a quarter
+   * period before its extremum, i.e. it assumes stance is exactly half a step, so the lag is
+   * `(stance − T/2) / 2`. See the stance-sweep test at the end of this file. Real runners vary it;
+   * duty factor (stance ÷ stride) runs roughly 0.25–0.35 in running, i.e. `stanceEnd` 0.25–0.35.
+   */
+  stanceEnd?: number
 }
 
 const wrapPhase = (phase: number) => phase - Math.floor(phase)
 
+/** This shape's stance end, and the heel-off start that scales with it. */
+const stanceEndOf = (shape: GaitShape) => shape.stanceEnd ?? STANCE_END
+const heelOffStartOf = (shape: GaitShape) => stanceEndOf(shape) * HEEL_OFF_FRACTION_OF_STANCE
+
+/**
+ * The whole body's screen y. The `-stanceEnd/2` phase offset is the physical claim this fixture
+ * makes and the one the hip-phase detector is measured against: the body is at its LOWEST (largest
+ * image-y) at MIDSTANCE, halfway through this foot's own stance, and highest in mid-flight.
+ */
 function bodyY(phase: number, shape: GaitShape): number {
   return (
-    HIP_BASE_Y + shape.bounceHalfPx * Math.cos(4 * Math.PI * (wrapPhase(phase) - STANCE_END / 2))
+    HIP_BASE_Y +
+    shape.bounceHalfPx * Math.cos(4 * Math.PI * (wrapPhase(phase) - stanceEndOf(shape) / 2))
   )
 }
 
@@ -85,14 +109,16 @@ function bodyY(phase: number, shape: GaitShape): number {
  */
 function ankleY(phase: number, shape: GaitShape): number {
   const p = wrapPhase(phase)
+  const stanceEnd = stanceEndOf(shape)
+  const heelOffStart = heelOffStartOf(shape)
   const stanceLift =
-    p <= HEEL_OFF_START
+    p <= heelOffStart
       ? 0
       : shape.toeOffLiftPx *
-        Math.sin((Math.PI / 2) * ((p - HEEL_OFF_START) / (STANCE_END - HEEL_OFF_START)))
-  if (p <= STANCE_END) return GROUND_Y - stanceLift
+        Math.sin((Math.PI / 2) * ((p - heelOffStart) / (stanceEnd - heelOffStart)))
+  if (p <= stanceEnd) return GROUND_Y - stanceLift
 
-  const relAtToeOff = GROUND_Y - shape.toeOffLiftPx - bodyY(STANCE_END, shape)
+  const relAtToeOff = GROUND_Y - shape.toeOffLiftPx - bodyY(stanceEnd, shape)
   const relAtContact = GROUND_Y - bodyY(0, shape)
   const apex = shape.apex ?? APEX
   const relAtApex = relAtContact - APEX_LIFT_PX
@@ -100,7 +126,7 @@ function ankleY(phase: number, shape: GaitShape): number {
   if (p <= apex) {
     const rel =
       relAtApex +
-      (relAtToeOff - relAtApex) * Math.cos((Math.PI / 2) * ((p - STANCE_END) / (apex - STANCE_END)))
+      (relAtToeOff - relAtApex) * Math.cos((Math.PI / 2) * ((p - stanceEnd) / (apex - stanceEnd)))
     return bodyY(p, shape) + rel
   }
   if (p <= shape.hangEnd) return bodyY(p, shape) + relAtApex
@@ -186,6 +212,40 @@ function detectedFrames(frames: RobustPoseFrame[]) {
   return detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG).map(
     (candidate) => [candidate.side, candidate.frameIndex] as [string, number],
   )
+}
+
+/**
+ * The FALLBACK path alone, on the same clip — the ankle-difference detector, reached directly
+ * rather than through `detectFootstrikes`.
+ *
+ * This is the only way to measure it on a fixture that HAS a bounce: with a fittable bounce present
+ * the hip-phase path always wins, so the older path would otherwise be unreachable from exactly the
+ * fixtures the comparison needs.
+ */
+function ankleOnlyFrames(frames: RobustPoseFrame[]) {
+  const bodyScale = estimateBodyScale(frames)
+  if (bodyScale === null) return []
+  const { fit } = analyzeHipBounce(frames, DEFAULT_HEURISTICS_CONFIG)
+  return detectFootstrikesBetweenAnkles(
+    frames,
+    DEFAULT_HEURISTICS_CONFIG,
+    bodyScale.torsoLengthPx,
+    fit,
+  ).map((candidate) => [candidate.side, candidate.frameIndex] as [string, number])
+}
+
+/**
+ * Each LEFT candidate's lag behind its own true touchdown, in sampled frames. Left touchdowns are
+ * every `FRAMES_PER_STRIDE` frames from 0 by construction, so the nearest one is just the rounded
+ * quotient.
+ */
+function leftLags(detected: Array<[string, number]>) {
+  return detected
+    .filter(([side]) => side === 'left')
+    .map(
+      ([, frameIndex]) =>
+        frameIndex - Math.round(frameIndex / FRAMES_PER_STRIDE) * FRAMES_PER_STRIDE,
+    )
 }
 
 describe('detectFootstrikes', () => {
@@ -323,16 +383,18 @@ describe('detectFootstrikes — ground contact vs. airborne ankle-y maxima', () 
       0.8, 2.0, 3.2,
     ])
 
-    // None of them survives, and every true contact does: 7 candidates, strictly alternating, each
-    // within one sampled frame of its touchdown.
+    // None of them survives, and every true contact the fitted bounce has room for does: 6
+    // candidates, strictly alternating, each within two sampled frames of its touchdown. The
+    // seventh true contact sits on the clip's LAST frame, and the fitted cycle that would carry it
+    // predicts a touchdown just past the sampled span, so there is no frame to snap it to — a
+    // boundary effect of a clip that ends exactly on a contact, not a missed contact.
     expect(detectedFrames(frames)).toEqual([
       ['left', 1],
       ['right', 16],
       ['left', 31],
-      ['right', 46],
-      ['left', 61],
-      ['right', 76],
-      ['left', 90],
+      ['right', 47],
+      ['left', 62],
+      ['right', 77],
     ])
   })
 
@@ -349,15 +411,15 @@ describe('detectFootstrikes — ground contact vs. airborne ankle-y maxima', () 
     expect(rawSecondStride).toHaveLength(1)
     expect(rawSecondStride[0].index).toBe(39)
 
-    // The same contact, now reported one frame after its onset instead of nine.
+    // The same contact, now reported one frame after its onset instead of nine — and reported from
+    // the hip's own rhythm, which never looked at the plateau at all.
     expect(detectedFrames(frames)).toEqual([
       ['left', 1],
       ['right', 16],
       ['left', 31],
-      ['right', 46],
-      ['left', 61],
-      ['right', 76],
-      ['left', 90],
+      ['right', 47],
+      ['left', 62],
+      ['right', 77],
     ])
   })
 
@@ -407,9 +469,11 @@ describe('detectFootstrikes — ground contact vs. airborne ankle-y maxima', () 
     expect(secondStride[0].value).toBeGreaterThan(secondStride[1].value)
     expect(secondStride[2].value).toBeLessThan(0)
 
-    // Only the contacts survive. The artifact loses on amplitude to the contact 0.40 s before it,
+    // Only the contacts survive, on BOTH paths, for two independent reasons.
+    //
+    // The fallback rejects the artifact on amplitude: it loses to the contact 0.40 s before it,
     // which is inside this clip's own shortest plausible stride (2 / 1.66 Hz / 1.15 = 1.05 s).
-    expect(detectedFrames(frames)).toEqual([
+    expect(ankleOnlyFrames(frames)).toEqual([
       ['left', 0],
       ['right', 16],
       ['left', 31],
@@ -417,6 +481,17 @@ describe('detectFootstrikes — ground contact vs. airborne ankle-y maxima', () 
       ['left', 61],
       ['right', 76],
       ['left', 90],
+    ])
+
+    // The shipped path never considers the artifact at all: it emits one instant per fitted bounce
+    // cycle, so a second maximum inside one stance has nothing to win.
+    expect(detectedFrames(frames)).toEqual([
+      ['left', 1],
+      ['right', 16],
+      ['left', 31],
+      ['right', 47],
+      ['left', 62],
+      ['right', 77],
     ])
   })
 
@@ -435,7 +510,11 @@ describe('detectFootstrikes — ground contact vs. airborne ankle-y maxima', () 
   it('reports every candidate within two sampled frames of a true touchdown, on all four shapes', () => {
     for (const shape of [TRAILING_LEG_SHAPE, CLEAN_SHAPE, FLAT_STANCE_SHAPE, ARTIFACT_SHAPE]) {
       const detected = detectedFrames(buildGait(shape))
-      expect(detected).toHaveLength(TRUE_CONTACT_FRAMES.length)
+      // A prefix of the true contacts rather than all of them: the hip-phase path predicts one
+      // touchdown per fitted bounce cycle, and the cycle carrying the clip's final contact lands
+      // just past the sampled span on the three shapes that have a bounce to fit. Nothing spurious
+      // is added and nothing in the interior is missed — only the trailing boundary differs.
+      expect(detected.length).toBeGreaterThanOrEqual(TRUE_CONTACT_FRAMES.length - 1)
       detected.forEach(([side, frameIndex], i) => {
         const [trueSide, trueFrame] = TRUE_CONTACT_FRAMES[i]
         expect(side).toBe(trueSide)
@@ -456,65 +535,249 @@ describe('detectFootstrikes — ground contact vs. airborne ankle-y maxima', () 
   })
 })
 
-describe('detectFootstrikes — the phase residual, pinned as a known limit', () => {
-  /**
-   * What the detector actually reports is the instant of maximum separation between the two
-   * ankles, and that instant is the CONTRALATERAL foot's swing apex — not this foot's touchdown.
-   * The two are different gait events, and the gap between them is a property of the runner's
-   * swing mechanics rather than a constant.
-   *
-   * The contralateral foot touched down half a stride before this one, so its apex falls at
-   * `apex - 0.5` of a stride after this foot's touchdown. Sweeping that and reading the emitted
-   * lag back out shows it tracking one-for-one, which is what makes this a limitation of the
-   * SIGNAL rather than a tuning problem:
-   *
-   * | apex | contralateral apex after touchdown | emitted lag |
-   * |---|---|---|
-   * | 0.55 | 1.5 frames | 1 frame |
-   * | 0.60 | 3.0 | 3 |
-   * | 0.65 | 4.5 | 5 |
-   * | 0.69 | 5.7 | 6 |
-   * | 0.75 | 7.5 | 11 |
-   *
-   * Measured live on Demo 1, the lag is +0.24 s on two of four contacts — 6 frames at 25 fps,
-   * which is the `apex = 0.69` row, a slow jogger's late swing apex. No single offset could
-   * correct all five rows, so no offset is correct at all. See design.md D15.
-   */
-  it('the emitted instant tracks the contralateral swing apex, one for one', () => {
-    const lagsByApex = [0.55, 0.6, 0.65, 0.69, 0.75].map((apex) => {
-      const frames = buildGait({ bounceHalfPx: 12, hangEnd: 0.9, toeOffLiftPx: 22, apex }, 4)
-      const leftFrames = detectedFrames(frames)
-        .filter(([side]) => side === 'left')
-        .map(([, frameIndex]) => frameIndex)
-      // True left touchdowns are every FRAMES_PER_STRIDE frames from 0.
-      return leftFrames.map(
-        (frameIndex) => frameIndex - Math.round(frameIndex / FRAMES_PER_STRIDE) * FRAMES_PER_STRIDE,
+describe('detectFootstrikes — timing derived from the fitted bounce phase', () => {
+  const SHAPE = { bounceHalfPx: 12, hangEnd: 0.85, toeOffLiftPx: 22 }
+
+  it('places each instant a quarter fitted period before a fitted low point, one per bounce cycle', () => {
+    const frames = buildGait(SHAPE, 4)
+    const { fit } = analyzeHipBounce(frames, DEFAULT_HEURISTICS_CONFIG)
+    expect(fit.ok).toBe(true)
+    if (!fit.ok) return
+
+    // `analyzeHipBounce` fits raw image-y, which grows DOWNWARD, so the fitted MAXIMUM is the
+    // runner's LOWEST point. Touchdown is the inflection a quarter period before it.
+    const period = 1 / fit.frequencyHz
+    const omega = 2 * Math.PI * fit.frequencyHz
+    const firstLowest = fit.tMeanSeconds + (Math.PI / 2 - fit.phaseRadians) / omega
+    const nearestPredicted = (t: number) => {
+      const k = Math.round((t - (firstLowest - period / 4)) / period)
+      return firstLowest - period / 4 + k * period
+    }
+
+    const candidates = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)
+    // Half the median frame interval — the snap tolerance, so "within it" means the instant landed
+    // on the nearest frame there was rather than merely somewhere nearby.
+    const tolerance = 1 / FPS / 2
+    for (const candidate of candidates) {
+      expect(Math.abs(candidate.timestamp - nearestPredicted(candidate.timestamp))).toBeLessThanOrEqual(
+        tolerance,
       )
+    }
+
+    // One per bounce cycle inside the span, and the hip bounces once per STEP — so consecutive
+    // instants are one step apart and consecutive SAME-SIDE instants are one stride apart, by
+    // construction rather than by a spacing rule.
+    const span = frames[frames.length - 1].timestamp - frames[0].timestamp
+    expect(candidates.length).toBeGreaterThanOrEqual(Math.floor(span / period) - 1)
+    expect(candidates.length).toBeLessThanOrEqual(Math.floor(span / period) + 1)
+    for (let i = 1; i < candidates.length; i += 1) {
+      expect(candidates[i].side).not.toBe(candidates[i - 1].side)
+      expect(candidates[i].timestamp - candidates[i - 1].timestamp).toBeCloseTo(period, 1)
+    }
+  })
+
+  it('names the feet by alternation, and one swapped instant cannot flip the assignment', () => {
+    const frames = buildGait(SHAPE, 4)
+    const baseline = detectedFrames(frames)
+
+    // A stride is two steps, one per foot, so consecutive touchdowns alternate. The instants are
+    // one step apart by construction, so this must hold for every emitted pair.
+    for (let i = 1; i < baseline.length; i += 1) {
+      expect(baseline[i][0]).not.toBe(baseline[i - 1][0])
+    }
+
+    // Swap the two ankles' vertical positions at the FIRST emitted instant — the failure MoveNet
+    // actually produces on side-view footage, where the legs cross and occlude every step. Read
+    // per-instant, that frame now names the wrong foot. Read as one magnitude-weighted vote across
+    // every instant, it is outvoted and nothing moves.
+    const swapAt = baseline[0][1]
+    const swapped: RobustPoseFrame[] = frames.map((frame, index) => {
+      if (index !== swapAt) return frame
+      const left = frame.keypoints.find((k) => k.name === 'left_ankle')!
+      const right = frame.keypoints.find((k) => k.name === 'right_ankle')!
+      return {
+        ...frame,
+        keypoints: frame.keypoints.map((k) =>
+          k.name === 'left_ankle'
+            ? { ...k, y: right.y }
+            : k.name === 'right_ankle'
+              ? { ...k, y: left.y }
+              : k,
+        ),
+      }
     })
 
-    // Each apex placement produces ONE lag, repeated on every stride -- the residual is systematic
-    // within a clip, not noise. (The clip's closing frame is a touchdown by construction, so a
-    // zero lag there is the boundary, not a sixth value.)
-    const distinctLags = lagsByApex.map((lags) => [...new Set(lags.filter((lag) => lag !== 0))])
-    for (const lags of distinctLags) expect(lags).toHaveLength(1)
-
-    // And the lag grows monotonically with how late the contralateral apex falls. That is the
-    // whole finding: the detector is reporting the apex, so it inherits the apex's phase.
-    const lag = distinctLags.map(([only]) => only)
-    expect(lag).toEqual([1, 3, 5, 6, 11])
-    for (let i = 1; i < lag.length; i += 1) expect(lag[i]).toBeGreaterThan(lag[i - 1])
+    expect(detectedFrames(swapped)).toEqual(baseline)
   })
 
-  it('no single offset could correct it, which is why none is applied', () => {
-    // The spread across plausible swing mechanics is 1 to 11 frames -- 0.04s to 0.44s at 25fps,
-    // wider than a whole stance phase. A constant shift fitted to one clip would be wrong on any
-    // runner whose swing apex falls elsewhere, so the detector applies none and the residual is
-    // reported instead.
-    const earliest = buildGait({ bounceHalfPx: 12, hangEnd: 0.9, toeOffLiftPx: 22, apex: 0.55 }, 4)
-    const latest = buildGait({ bounceHalfPx: 12, hangEnd: 0.9, toeOffLiftPx: 22, apex: 0.75 }, 4)
-    const firstLeftLag = (frames: RobustPoseFrame[]) =>
-      detectedFrames(frames).filter(([side]) => side === 'left')[0][1]
+  it('falls back to the ankle detector when the fit clears its bar but no instant can be attributed', () => {
+    // A bouncing body — so the hip fit resolves and clears cadence's bar — but the right ankle is
+    // unresolvable in every frame, so no predicted instant contributes any evidence about which
+    // foot is which and the parity vote sums to exactly zero. The phase path emits nothing and the
+    // clip keeps exactly the single-leg behaviour it had before that path existed.
+    const full = buildGait(SHAPE, 4)
+    const frames: RobustPoseFrame[] = full.map((frame) => ({
+      ...frame,
+      keypoints: frame.keypoints.map((keypoint) =>
+        keypoint.name === 'right_ankle'
+          ? { ...keypoint, x: null, y: null, score: 0, status: 'unrecoverable' as const }
+          : keypoint,
+      ),
+    }))
 
-    expect(firstLeftLag(latest) - firstLeftLag(earliest)).toBeGreaterThan(FRAMES_PER_STRIDE * 0.3)
+    const { fit } = analyzeHipBounce(frames, DEFAULT_HEURISTICS_CONFIG)
+    expect(fit.ok && fit.sinusoidR2 >= DEFAULT_HEURISTICS_CONFIG.cadenceMinFitR2).toBe(true)
+
+    const bodyScale = estimateBodyScale(frames)!
+    expect(detectedFrames(frames)).toEqual(
+      detectFootstrikesBetweenAnkles(
+        frames,
+        DEFAULT_HEURISTICS_CONFIG,
+        bodyScale.torsoLengthPx,
+        fit,
+      ).map((candidate) => [candidate.side, candidate.frameIndex]),
+    )
+    expect(detectedFrames(frames).every(([side]) => side === 'left')).toBe(true)
+  })
+
+  it('emits no instant for a bounce cycle that falls in a sampling gap', () => {
+    const full = buildGait(SHAPE, 4)
+    // Drop a contiguous run of frames spanning more than a full step, leaving the fit intact (the
+    // spectral fit contributes no equations for a gap rather than inventing samples across it) but
+    // leaving one predicted touchdown with no frame inside the snap tolerance.
+    const gapStart = 45
+    const gapEnd = 62
+    const frames = full.filter((_, index) => index < gapStart || index > gapEnd)
+
+    const candidates = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)
+    const gapOpens = full[gapStart - 1].timestamp
+    const gapCloses = full[gapEnd + 1].timestamp
+    for (const candidate of candidates) {
+      expect(
+        candidate.timestamp <= gapOpens || candidate.timestamp >= gapCloses,
+      ).toBe(true)
+    }
+    // And nothing was snapped onto the frames bracketing the hole, which is what a missing
+    // tolerance check would have produced.
+    const bracketing = candidates.filter(
+      (candidate) => candidate.timestamp === gapOpens || candidate.timestamp === gapCloses,
+    )
+    expect(bracketing).toHaveLength(0)
   })
 })
+
+describe('detectFootstrikes — what each path’s phase residual is a function of', () => {
+  const SWING_SHAPE = { bounceHalfPx: 12, hangEnd: 0.9, toeOffLiftPx: 22 }
+
+  /**
+   * **The acceptance evidence for moving footstrike timing onto the hip-bounce phase.** Both paths,
+   * the same five fixtures, the same measurement.
+   *
+   * The ankle-difference path reports the maximum of `y_S − y_opposite`, and with S planted that
+   * instant is decided entirely by the other ankle: it is the CONTRALATERAL FOOT'S SWING APEX. The
+   * contralateral foot touched down half a stride earlier, so its apex falls `apex − 0.5` of a
+   * stride after this foot's touchdown, and the emitted lag tracks that one for one — 1 frame to 11
+   * across ordinary swing mechanics, 0.04 s to 0.44 s at 25 fps, WIDER THAN A WHOLE STANCE PHASE.
+   * No single offset can be right for all five rows, which is why none is applied to it.
+   *
+   * The hip-phase path does not read the swinging foot at all. Its instants come from the fitted
+   * bounce's inflections, so the same sweep moves them by NOTHING.
+   */
+  it('the ankle path tracks the contralateral swing apex; the hip-phase path does not move at all', () => {
+    const apexes = [0.55, 0.6, 0.65, 0.69, 0.75]
+    const clips = apexes.map((apex) => buildGait({ ...SWING_SHAPE, apex }, 4))
+
+    // One lag per apex, repeated on every stride — the residual is systematic within a clip, not
+    // noise. (The clip's closing frame is a touchdown by construction, so a zero lag there is the
+    // boundary, not a sixth value.)
+    const ankleLags = clips.map((frames) => [
+      ...new Set(leftLags(ankleOnlyFrames(frames)).filter((lag) => lag !== 0)),
+    ])
+    for (const lags of ankleLags) expect(lags).toHaveLength(1)
+    expect(ankleLags.map(([only]) => only)).toEqual([1, 3, 5, 6, 11])
+
+    // Demo 1's measured +0.24 s is 6 frames at 25 fps — the `apex = 0.69` row, a slow jogger's late
+    // swing apex. The spread across the five rows is 10 frames, which is what a constant offset
+    // would have to be simultaneously right about.
+    const ankleSpread = Math.max(...ankleLags.flat()) - Math.min(...ankleLags.flat())
+    expect(ankleSpread).toBe(10)
+
+    // The same five clips through the shipped detector: every row identical, spread zero. The
+    // 1-to-2 drift WITHIN each row is the frequency grid (1.66 Hz fitted against this fixture's
+    // 1.667 Hz true step rate, accumulating ~0.4 frames over four strides) plus integer frame
+    // snapping — it is present in every row equally and is not a function of the apex.
+    const phaseLags = clips.map((frames) => leftLags(detectedFrames(frames)))
+    for (const lags of phaseLags) expect(lags).toEqual(phaseLags[0])
+    expect(phaseLags[0]).toEqual([1, 1, 2, 2])
+  })
+
+  /**
+   * The hip-phase path's OWN residual, and the closed form for it.
+   *
+   * A single fitted sinusoid puts its inflection exactly a quarter period before its extremum, i.e.
+   * it assumes stance lasts exactly half a step. Real stance is longer, so the model lands late by
+   * half the excess:
+   *
+   * ```
+   * lag = stance/2 − T/4 = (stance − T/2) / 2
+   * ```
+   *
+   * In this fixture's units a step is half a stride, so with `stanceEnd` in stride units the lag is
+   * `(stanceEnd − 0.25) / 2` of a stride. That is the whole of design D3's error budget, and it is
+   * what makes weakness 2 ("a single sinusoid forces stance = flight") a measured quantity rather
+   * than a worry.
+   *
+   * The ankle path's residual does NOT track stance — its lag is set by the swing apex, which this
+   * sweep holds fixed. The two tests together are the point: each path's error is a function of a
+   * different thing, and only one of those things is bounded.
+   */
+  it('the hip-phase path’s lag follows (stance − halfStep) / 2; the ankle path’s does not', () => {
+    const stanceEnds = [0.25, 0.28, 0.3, 0.32, 0.35]
+    const clips = stanceEnds.map((stanceEnd) => buildGait({ ...SWING_SHAPE, stanceEnd }, 4))
+
+    // Predicted, from the formula alone, in sampled frames.
+    const predicted = stanceEnds.map((stanceEnd) => ((stanceEnd - 0.25) / 2) * FRAMES_PER_STRIDE)
+    expect(predicted.map((p) => Number(p.toFixed(2)))).toEqual([0, 0.45, 0.75, 1.05, 1.5])
+
+    // Measured. Every emitted instant is within one frame of its own prediction — the residual is
+    // the formula, snapped to the frame grid.
+    const measured = clips.map((frames) => leftLags(detectedFrames(frames)))
+    measured.forEach((lags, i) => {
+      for (const lag of lags) expect(Math.abs(lag - predicted[i])).toBeLessThanOrEqual(1)
+    })
+
+    // And it is monotone in stance: a longer stance is later, never earlier.
+    const medians = measured.map((lags) => [...lags].sort((a, b) => a - b)[lags.length >> 1])
+    for (let i = 1; i < medians.length; i += 1) {
+      expect(medians[i]).toBeGreaterThanOrEqual(medians[i - 1])
+    }
+    expect(medians[medians.length - 1]).toBeGreaterThan(medians[0])
+
+    // The ankle path is blind to this sweep — its lag is set by the swing apex, held fixed here.
+    const ankleMedians = clips.map((frames) => {
+      const lags = leftLags(ankleOnlyFrames(frames))
+      return [...lags].sort((a, b) => a - b)[lags.length >> 1]
+    })
+    expect(new Set(ankleMedians).size).toBe(1)
+  })
+
+  /**
+   * The hip-phase path reads NOTHING about the swinging foot's shape. Three fixtures that differ
+   * only in swing-hang length and push-off lift — the three that make the ankle-difference signal
+   * hard — produce byte-identical instants.
+   */
+  it('is unaffected by swing-hang length and toe-off lift, which the ankle path is not', () => {
+    const shapes = [
+      { bounceHalfPx: 12, hangEnd: 0.85, toeOffLiftPx: 22 },
+      { bounceHalfPx: 12, hangEnd: APEX, toeOffLiftPx: 0 },
+      { bounceHalfPx: 18, hangEnd: 0.9, toeOffLiftPx: 22 },
+    ]
+    const detected = shapes.map((shape) => detectedFrames(buildGait(shape)))
+    for (const frames of detected) expect(frames).toEqual(detected[0])
+
+    // The ankle path is not identical across the same three — its first instant moves.
+    const ankle = shapes.map((shape) => ankleOnlyFrames(buildGait(shape)))
+    expect(ankle.some((frames) => JSON.stringify(frames) !== JSON.stringify(ankle[0]))).toBe(true)
+  })
+})
+
