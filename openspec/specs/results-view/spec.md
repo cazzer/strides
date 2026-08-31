@@ -678,6 +678,19 @@ backend structurally cannot produce SHALL be treated as absent rather than as po
 be well-defined from the exemplar's core keypoints alone, and an annotation SHALL omit a mark it has
 no resolved position for rather than anchoring it at the coordinate origin.
 
+An exemplar's named keypoints SHALL bound the region the image must show **at both instants of a
+pair**, not at whichever instant happens to sit more comfortably inside the frame. A pair whose two
+instants differ along an axis has, by construction, one instant nearer each edge on that axis; a
+keypoint set that stops short of the subject therefore does not clip the pair evenly, it clips the
+extreme instant. Where a metric pairs two instants that differ in the runner's vertical position,
+the named keypoints SHALL reach the head, so that the instant at the top of the motion keeps it.
+
+That is a statement about which instant is harmed, not about tidiness. The system draws one instant
+solid and the other faint, and names the solid one in the caption; if the crop removes the solid
+instant's head while keeping the faint one's, the image contains exactly one complete face and it
+is the wrong one. A reader anchors on the face that is there, and then reads correctly-placed marks
+on the other body as mis-registered.
+
 A crop SHALL additionally carry a minimum side in native pixels, so that a degenerate keypoint box —
 a seed resolving to a single point, or to a set that nearly collapses onto a line — does not produce
 an empty image. That minimum is a **display** guarantee about pixel count and SHALL NOT be treated as
@@ -709,10 +722,43 @@ follows from that: it reserves the same margin at both ends of the axis, which i
 obtainable at either end, and is therefore the placement that best protects an extent the system
 cannot observe. The system SHALL NOT infer from this box that the subject ends where it ends.
 
-A pair whose two instants are indistinguishable — near-identical crop regions, or both resolving to
-the same sampled frame — SHALL be demoted to a single frame, or dropped when the metric has no honest
+A pair whose two instants are indistinguishable — near-identical crop regions, both resolving to the
+same sampled frame, or **separated by fewer sampled frame intervals than can express a difference in
+gait phase** — SHALL be demoted to a single frame, or dropped when the metric has no honest
 single-instant meaning. A blurred double exposure of two identical frames is worse than one clean
 still.
+
+Those tests are complementary and the system SHALL apply all of them. A comparison of the two
+instants' crop REGIONS cannot see a pair that is merely too close in time: a bounding box is blind to
+motion inside itself, so a limb swinging within its own hull changes the pose completely while barely
+moving the box, and a small distant limb box changes shape a great deal between two adjacent frames
+while depicting one pose. Measured on this repo's own footage, region overlap orders the two
+situations backwards — the broken pair overlaps LESS than a pair that ghosts perfectly — so no
+threshold on region overlap can separate them and the separation test SHALL be made on elapsed time
+instead.
+
+The separation floor SHALL be expressed in the clip's own sampled frame intervals rather than in
+absolute seconds, because a sparsely sampled clip genuinely cannot resolve gait phase as finely as a
+densely sampled one, and the floor should widen with the interval. It SHALL NOT be applied where no
+usable interval can be derived: a guard that cannot form its own criterion must decline rather than
+reject everything.
+
+**This does not contradict the rule against measuring a too-far-apart pair by elapsed time**, because
+the two ends of the range ask different questions. At the far end the question is whether two bodies
+can share one legible crop — a spatial question, on which a stationary subject seconds apart ghosts
+perfectly and a fast one a fraction of a second apart does not. At the near end the question is
+whether the two instants are the two distinct phases the exemplar's own label names, which is a
+property of the signal and is measured in time.
+
+Whether a collapsed pair is demoted or dropped SHALL be decided by where the REPORTED NUMBER lives,
+not by whether the exemplar arrived as a pair. A quantity read off a single instant — a footstrike
+angle, a step width, a peak joint angle — survives losing its partner, because the surviving frame
+still shows what the card reports and the annotation still draws the geometry that was measured
+there. A quantity that IS a difference between two instants — an amplitude, a stride length, a range
+— does not, because one frame of it depicts no part of the number, and such a pair SHALL be dropped.
+Demoting is the honest outcome wherever it is available: these rules exist to REPLACE a misleading
+ghost with a truthful still, so classifying a single-instant measurement as un-demotable makes them
+delete evidence instead.
 
 Extraction SHALL use a **second, detached** video element created from the clip's own source blob,
 never the clip's own presented element, whose playback state belongs to the reader (it may be paused
@@ -775,6 +821,27 @@ reported at all, the clip's frames are unavailable, or extraction failed).
   sampled frame
 - **THEN** the pair is demoted to a single frame — or dropped entirely for a metric with no honest
   single-instant meaning — and no double exposure is composited
+
+#### Scenario: A bounce pair's crop keeps the head of the instant at the top of the motion
+
+- **WHEN** a metric pairs the highest and lowest points of the runner's vertical oscillation, and the
+  higher instant is the one drawn solid
+- **THEN** the crop contains both instants' heads, so the image does not present the faint instant as
+  the only complete figure in it
+
+#### Scenario: A pair a couple of sampled frames apart is demoted, not ghosted
+
+- **WHEN** an exemplar pairs two instants separated by fewer sampled frame intervals than a change of
+  gait phase can occupy, so the two depict one pose however different their crop regions are
+- **THEN** the pair is demoted to a single frame with the caption that says so, rather than composited
+  into an image whose caption promises a difference the picture does not contain
+
+#### Scenario: A single-instant measurement survives demotion where a difference measurement does not
+
+- **WHEN** a collapsed pair belongs to a metric whose reported value is read off one instant, and
+  separately when it belongs to one whose reported value is the difference between two
+- **THEN** the first is demoted to a single frame that still shows the measured geometry, and the
+  second is dropped, because one frame of a difference depicts no part of the reported number
 
 #### Scenario: A failed seek degrades to no evidence
 
