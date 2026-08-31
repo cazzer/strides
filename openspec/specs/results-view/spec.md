@@ -1598,21 +1598,25 @@ weighting that reads well on one clip is not evidence about another.
 
 Where a mark builder needs to know which side of the body an instant was measured on before it can
 place a mark, it SHALL draw that mark for **every** instant whose side is resolvable, and SHALL
-resolve that side only from what the metric stated — the per-instant side first, falling back to the
-pair-level `side`, whose own contract already covers both instants whenever it is present.
+resolve that side from the instant's own per-instant statement before falling back to the
+exemplar's clip-level one. An exemplar whose two halves were measured on different sides is the
+case this exists for: reading one side for the whole exemplar draws the second half's mark from the
+wrong limb, or — where the builder refuses a mismatch — draws nothing on that half at all.
 
-On a ghosted pair whose two instants were measured on **opposite** sides, that means the mark is
-drawn **twice**: once per half, each anchored on the limb that half's own measurement was taken
-from. Drawing it on only one half would attribute both measurements to one limb, which is the error
-the per-instant side exists to prevent.
+A metric SHALL NOT be exempted from this by its identity. Two metrics reporting the same per-side
+quantity in different units SHALL draw the same measurement geometry: a unit conversion is not a
+reason for one thumbnail to lose the mark its sibling keeps, and a reader comparing the two cards is
+comparing the same measurement.
 
-An unresolvable side SHALL suppress only the marks that genuinely depend on it, and SHALL NOT
-suppress the rest of that metric's geometry. Suppression SHALL be a **visible** absence rather than
-a silent one: an image that keeps its context marks while dropping the mark that depicts the
-measurement itself reads as complete and deliberate, and gives a reader no signal that the thing
-they came to see is missing. Where the measurement mark cannot be drawn for every instant that
-should carry it, that SHALL be observable — in the coverage a test can assert, not only by looking
-at the picture.
+Where a mark is directional, its orientation SHALL be read from the plan the mark is drawn from —
+the frames, travel direction and per-instant signs that plan carries — and never from the metric's
+identity. A directional mark whose orientation is not derivable from its own plan
+(`travelDirection` indeterminate, or a degenerate per-instant sign) SHALL still draw its measured
+span, unoriented; withholding a direction SHALL NOT withhold the measurement. There SHALL be no
+set of metric ids whose polarity is suppressed independently of what their plan supports: a metric
+whose evidence is planned from the pass that measured it has a derivable, correct polarity, and
+withholding it would withhold a correct answer while leaving the reader no way to tell that from a
+genuinely underivable one.
 
 This is the rendering half of `form-heuristics`'s per-instant-side contract, and it is stated
 because the two halves failed independently: a metric can satisfy its own contract's letter while
@@ -1642,10 +1646,16 @@ picture of everything except the measurement.
 
 #### Scenario: A suppressed polarity still draws the span
 
-- **WHEN** a metric's directional polarity is deliberately withheld, as it is for a metric grafted
-  from a different pass
+- **WHEN** a directional mark's orientation is not derivable from its own plan
 - **THEN** the measured span is still drawn, unoriented, and only its direction indicator is
   withheld — withholding a direction never withholds the measurement
+
+#### Scenario: A grafted metric orients its marks from the pass that measured it
+
+- **WHEN** a metric grafted from the background scale pass plans a directional mark, and that
+  plan's frames are the scale pass's own
+- **THEN** the mark is oriented from that plan exactly as its non-grafted unit sibling would be,
+  and its polarity is not withheld on account of the metric's identity
 
 ### Requirement: A grafted metric's evidence is planned from the frames that measured it
 
