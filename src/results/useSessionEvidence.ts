@@ -277,6 +277,13 @@ export function useSessionEvidence(
     )
 
     if (run !== null && run.batch.length > 0) {
+      // No rejection handler, deliberately — the same decision, on the same terms, as
+      // `useClipPoster.ts`'s derivation call, where the full reasoning is recorded (`strides-9yb`).
+      // In short: `extractSessionEvidence` resolves every failure it knows about (a clip's metrics
+      // come back `extraction-failed`, never a throw), so a rejection is a bug in the extractor;
+      // this app has no error channel to catch it into; and a `.catch` would suppress the browser's
+      // unhandled-rejection report, which is both louder and the only machine-detectable signal.
+      // An abort is NOT a rejection on this path — `AbortController` teardown resolves normally.
       void extractSessionEvidence(run.batch, { signal: controller.signal }).then((extracted) => {
         // A superseded run's canvases are simply dropped here — never parented, never cached.
         if (runIdRef.current !== runId) return

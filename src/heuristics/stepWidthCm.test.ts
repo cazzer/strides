@@ -4,6 +4,30 @@ import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildStrikeFrames } from './__fixtures__/strikeFrames'
 import { buildFrame } from './__fixtures__/testFrames'
 import type { RobustPoseFrame } from '../pose/robustness/types'
+import { planMetricEvidence } from '../results/evidenceFrames'
+import { planEvidenceAnnotations } from '../results/evidenceAnnotations'
+import type { EvidenceCaliperOp } from '../results/evidenceAnnotations'
+
+/**
+ * Translates the whole body a little further right on each frame.
+ *
+ * Without it the two opposite-foot plants sit at near-identical crops and `isNearIdenticalPair`
+ * correctly demotes the pair to its base alone — which still exercises the defect, but only on one
+ * half. A single pixel per frame is enough to keep both instants (and stays far under
+ * `EVIDENCE_MAX_PAIR_CROP_GROWTH`), so the assertion can be about the ghost as well as the base.
+ */
+function withPerFrameDrift(
+  frames: RobustPoseFrame[],
+  perFramePx: number,
+): RobustPoseFrame[] {
+  return frames.map((frame, i) => ({
+    ...frame,
+    keypoints: frame.keypoints.map((kp) => ({
+      ...kp,
+      x: kp.x === null ? kp.x : kp.x + i * perFramePx,
+    })),
+  }))
+}
 
 const BASE_PARAMS = {
   durationSec: 4,
@@ -269,5 +293,48 @@ describe('computeStepWidthCm exemplars', () => {
     expect(result.sampleSize).toBe(1)
     expect(result.exemplars).toHaveLength(1)
     expect(result.exemplars![0].timestamp).toBeCloseTo(5 / 30, 10)
+  })
+
+  it('names each instant’s own foot, so both halves of the pair get their caliper drawn', () => {
+    // REGRESSION (`strides-b5o`). This module's `buildExemplars` was a line-for-line copy of
+    // `stepWidth.ts`'s that had lost `measuredSide`/`pairedMeasuredSide`. Neither module sets a
+    // pair-level `side` (deliberately — the two instants are opposite feet), so without them
+    // `resolveInstantSide` resolves `null` for BOTH halves and `buildStepWidthMarks` returns on
+    // `side === null` before reaching `builder.caliper`. The hip-width segment and hip-midline
+    // plumb still drew, so the image looked deliberate rather than broken.
+    //
+    // Asserted end to end rather than only on the exemplar, because the two-field omission is
+    // invisible at the metric layer — the missing caliper is the whole consequence, and this
+    // metric is tier-3 on every clip this repo has, so no live image can show it.
+    const frames = withPerFrameDrift(
+      buildStrikeFrames({
+        ankleOffsetsPx: OFFSETS,
+        alternateFeet: true,
+        pixelsPerMeter: 400,
+      }),
+      1,
+    )
+
+    const result = computeStepWidthCm(frames, 'front')
+    const [evidence] = result.exemplars!
+
+    // The metric-layer contract, stated exactly as `stepWidth.test.ts` states it for the sibling.
+    expect(evidence.pairedTimestamp).not.toBeUndefined()
+    expect(evidence).not.toHaveProperty('side')
+    expect(evidence.measuredSide).not.toBeUndefined()
+    expect(evidence.pairedMeasuredSide).not.toBeUndefined()
+    expect(evidence.measuredSide).not.toBe(evidence.pairedMeasuredSide)
+
+    // ...and its consequence: a caliper on each half of a genuinely two-instant ghost.
+    const plan = planMetricEvidence(result, frames, { width: 1920, height: 1080 })
+    expect(plan.status).toBe('planned')
+    const item = (plan as Extract<typeof plan, { status: 'planned' }>).items[0]
+    expect(item.ghost).not.toBeNull()
+
+    const calipers = planEvidenceAnnotations(item, 640).ops.filter(
+      (op): op is EvidenceCaliperOp =>
+        op.kind === 'caliper' && op.role === 'ankleOffsetCaliper',
+    )
+    expect(calipers.map((op) => op.instant).sort()).toEqual(['base', 'ghost'])
   })
 })
