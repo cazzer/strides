@@ -50,10 +50,13 @@ reported range, which is why `overstriding`'s and `footStrikePattern`'s Demo 1 s
   per bounce cycle — which is one per step, the correct rate. `spectralFit` already exposes
   `phaseRadians` and `tMeanSeconds` for exactly this purpose, and an existing requirement already
   governs deriving instants from them.
-- **Sides still come from the ankles.** At a predicted touchdown the planted foot is the LOWER of
-  the two — the same "a foot cannot be planted while the other foot is below it" fact da8 already
-  uses as an admissibility check, now read as the side selector. Timing is the only thing that
-  moves.
+- **Sides still come from the ankles, but as one decision for the clip rather than one per
+  instant.** A stride is two steps, one per foot, so consecutive touchdowns alternate; the instants
+  are one step apart by construction, so the only free bit is which parity is which foot. It is
+  decided by summing the ankle difference across every instant, signed by cycle parity and weighted
+  by magnitude — since two ankles at the same height say nothing about which is planted. Reading it
+  per instant was tried and measured failing on side-view footage, where the legs cross and the
+  detector swaps their labels.
 - **The ankle-difference detector is retained verbatim as the FALLBACK**, used whenever the hip fit
   does not clear the bar (or yields no attributable instant). This is what bounds the coupling risk:
   a clip whose hip fit is unusable gets **exactly today's behaviour**, not a null. Nothing that
@@ -86,9 +89,31 @@ reported range, which is why `overstriding`'s and `footStrikePattern`'s Demo 1 s
   reads the hip fit (its period gate takes `stepFrequencyHz` and degrades gracefully to no gate when
   it is absent), so a footstrike-consuming metric reading the hip fit is a precedent here, not a new
   category of coupling.
-- Expected user-visible movement: `overstriding` and `footStrikePattern` on Demo 1 shift by 4–6
-  frames of phase. da8 registered a falsifiable prediction about the size and direction of that
-  shift; this change tests it. Measured before/after per clip is in `design.md` D8.
-- Regression anchor to hold: Demo 1 `verticalOscillationCm` = `4.421467928439415` with
-  `fit.frequencyHz × 60` = 91.2 = `cadence.value`. This change reads the same fit the anchor reads,
-  so the anchor is load-bearing here rather than routine.
+- **Measured live**, real GPU, `scripts/ab-person-selection.mjs`, both arms the same tree with only
+  `footstrikes.ts` swapped. Fresh process, 3 trials, every field identical across trials:
+
+  | clip | metric | before | after |
+  |---|---|---|---|
+  | Demo 1 | `overstriding` | 0.29735 @ conf 1.000 | **0.325743 @ 0.875** |
+  | Demo 1 | `footStrikePattern` | −0.0251745 @ 1.000 | **0.00108462 @ 0.875** |
+  | Demo 1 | `verticalRatio` | 0.0353716 @ 0.239737 | **0.0310419 @ 0.479473** |
+  | Demo 2 | `stepWidth` (its own metric, tier 1) | 0.140625 @ 1.000 | **0.225311 @ 1.000** |
+  | multiperson | `overstriding` | 0.211673 @ 1.000 | **0.499656 @ 0.800** |
+  | multiperson | `footStrikePattern` | −0.218509 @ 1.000 | **0.111699 @ 0.800** |
+
+  Everything else is bit-identical on all three clips, `cadence` and the whole vertical-oscillation
+  family included. **No metric changed tier and none went to `null`** — the fallback's whole
+  purpose. The confidence drops from a falsely-perfect 1.000 are the interpolation penalty landing
+  honestly: the phase path places instants where the rhythm says a foot landed rather than
+  preferentially on well-tracked frames.
+- **The dispersion that motivated the ticket collapses.** Under the reused-browser regime the 73% /
+  78% figures were measured in, 5 trials: `overstriding` **73.0% → 1.15%** of median, and
+  `footStrikePattern`'s absolute spread **0.0914 → 0.0068**. The underlying cold/warm split is
+  untouched — what stops is these two metrics *amplifying* one flipped detection into a 73% swing.
+- **Demo 1's recorded ground truth is wrong and is corrected here.** Keyframes at 0.04 s intervals
+  put the contacts at ffmpeg `4.00 / 4.66 / 5.32 / 5.98`, not da8's `3.90 / 4.60 / 5.16 / 5.84` —
+  1.5 to 4 frames early, and irregularly spaced where the corrected set is a uniform 0.66 s against
+  a fitted 0.658 s step. da8's falsifiable prediction was computed against the wrong numbers and is
+  **falsified**; see `design.md` D12.1.
+- Regression anchor holds: Demo 1 `verticalOscillationCm` = `4.421467928439415` with
+  `fit.frequencyHz × 60` = 91.2 = `cadence.value`, on every trial of both arms.

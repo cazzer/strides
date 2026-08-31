@@ -23,9 +23,23 @@ for its extremes, on the terms the spectral-fit requirement already states; and 
 snapped to an actual sampled frame and dropped when no sampled frame lies within the snapping
 tolerance.
 
-The **side** of each emitted footstrike SHALL be the foot that is lower at that instant, since a
-foot cannot be planted while the other foot is below it. This SHALL have no tolerance parameter. An
-instant whose frame cannot resolve both ankles SHALL be dropped rather than attributed by guess.
+The **sides** of the emitted footstrikes SHALL alternate, because a stride is two steps, one per
+foot, and these instants are one step apart by construction. The system SHALL therefore make a
+single assignment for the whole clip rather than reading each instant independently: each instant
+carries the index of the bounce cycle that produced it, which keeps alternating correctly across an
+instant that had to be dropped, so the only remaining question is which parity is which foot.
+
+That question SHALL be answered by the ankles, summed across every emitted instant and weighted by
+how far apart the two ankles were at each — since a foot cannot be planted while the other foot is
+below it, and two ankles at the same height are no evidence at all. The system SHALL NOT decide a
+side from a single instant's ankles: on side-view footage the two ankles cross and occlude each
+other every step and their labels are sometimes swapped outright, so a single reading is one coin
+flip on the noisiest quantity in the clip. This weighting SHALL have no threshold and no tolerance
+parameter.
+
+When the summed evidence is exactly zero — no instant resolved both ankles, or a perfect tie —
+nothing in the clip names the feet, and the system SHALL fall back rather than choose a parity
+arbitrarily.
 
 This timing SHALL be used only when the hip-bounce fit clears the same fit-quality bar cadence
 itself requires before reporting a value — the same bar and the same configuration key the
@@ -64,11 +78,18 @@ NOT change any value cadence or the vertical-oscillation family reports.
   amount by which stance exceeds half a step period
 - **AND** the lag is zero when stance is exactly half a step period
 
-#### Scenario: The lower foot is the striking foot
+#### Scenario: Emitted footstrikes alternate feet
 
-- **WHEN** footstrikes are detected from the fitted phase on a clip where both ankles are resolvable
-- **THEN** at every emitted candidate's frame, the striking side's ankle is at or below the opposite
-  side's ankle
+- **WHEN** footstrikes are detected from the fitted phase
+- **THEN** no two consecutive emitted candidates carry the same side
+- **AND** consecutive same-side candidates are two bounce periods — one stride — apart
+
+#### Scenario: One instant with swapped ankles cannot flip the assignment
+
+- **GIVEN** a clip in which the two ankles' vertical positions are transposed at one emitted
+  instant, as a pose detector does when the legs cross
+- **WHEN** footstrikes are detected
+- **THEN** every emitted candidate's side is the same as it was without the transposition
 
 #### Scenario: A predicted instant with no nearby sampled frame is not emitted
 
@@ -86,8 +107,8 @@ NOT change any value cadence or the vertical-oscillation family reports.
 
 #### Scenario: A clip whose fit passes but yields no attributable instant keeps today's detector
 
-- **GIVEN** a clip whose hip-bounce fit clears the bar but for which no predicted touchdown can be
-  snapped to a frame that resolves both ankles
+- **GIVEN** a clip whose hip-bounce fit clears the bar but in which no emitted instant resolves both
+  ankles, so nothing names the feet
 - **WHEN** footstrikes are detected
 - **THEN** the instants are those the ankle-separation detector produces, rather than an empty list
 
