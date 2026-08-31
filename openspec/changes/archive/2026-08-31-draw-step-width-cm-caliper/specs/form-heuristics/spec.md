@@ -40,8 +40,8 @@ end and extremeness is only a tie-break — which nothing constrains to one foot
 
 That per-instant side SHALL be **stated by the metric that took the measurement**, and a consumer
 SHALL NOT infer it from the order of `cropKeypoints`. The measured limb's keypoint does happen to be
-ordered first in both metrics' crop sets, but that ordering is a private consequence of how those two
-modules concatenate their per-instant seeds, is not part of this contract, and would invert silently
+ordered first in all three metrics' crop sets, but that ordering is a private consequence of how those
+three modules concatenate their per-instant seeds, is not part of this contract, and would invert silently
 if either module reordered a seed. An instant whose side no metric stated SHALL be represented as an
 explicit absence rather than defaulted to a side: a mark anchored on a guessed limb is a confident
 picture of a measurement nobody took.

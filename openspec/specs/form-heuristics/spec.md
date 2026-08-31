@@ -1346,19 +1346,26 @@ A metric whose exemplar pairs two instants that need **not** share a side SHALL 
 the side each instant's own measurement was about, per instant. `side` cannot express this: it is a
 pair-level claim, present only when both instants share a side, so on a deliberately opposite-side
 pair it is absent — and with it goes any way for a consumer to know which limb each half of the
-evidence was measured from. Two metrics are in this position, and for both the mixed pair is the
-common case rather than an edge: step width constructs its pair from adjacent **opposite-foot**
-strikes, and overstriding pairs a far-reaching strike with a close-landing one — one drawn from
+evidence was measured from. Three metrics are in this position, and for all three the mixed pair is the
+common case rather than an edge: **both** step-width metrics — the hip-width ratio and its
+centimetre sibling, which are separate `MetricId`s emitting their own exemplars — construct
+their pair from adjacent **opposite-foot** strikes, and overstriding pairs a far-reaching strike with a close-landing one — one drawn from
 each end of its range, where each end is filled by the best-scoring surviving candidate at that
 end and extremeness is only a tie-break — which nothing constrains to one foot.
 
 That per-instant side SHALL be **stated by the metric that took the measurement**, and a consumer
 SHALL NOT infer it from the order of `cropKeypoints`. The measured limb's keypoint does happen to be
-ordered first in both metrics' crop sets, but that ordering is a private consequence of how those two
-modules concatenate their per-instant seeds, is not part of this contract, and would invert silently
+ordered first in all three metrics' crop sets, but that ordering is a private consequence of how those
+three modules concatenate their per-instant seeds, is not part of this contract, and would invert silently
 if either module reordered a seed. An instant whose side no metric stated SHALL be represented as an
 explicit absence rather than defaulted to a side: a mark anchored on a guessed limb is a confident
 picture of a measurement nobody took.
+
+This obligation SHALL be satisfied by **every** metric with that shape, and SHALL NOT be counted per
+measured quantity: two metrics reporting the same quantity in different units are two emitters, and
+each states its own per-instant sides. Where several metrics share this construction, they SHALL
+share **one implementation** of it rather than parallel copies, so that the obligation cannot be met
+by one and silently dropped by another.
 
 A metric SHALL emit **at most two** exemplars, ranked by `quality` descending, where a two-instant
 ghosted pair counts as one exemplar. A metric with no instant clearing the gate SHALL omit the field
@@ -1405,6 +1412,13 @@ Emitting exemplars SHALL NOT change any metric's `value`, `confidence`, `viewFit
   strikes fall on different feet
 - **THEN** the exemplar carries no single pair-level `side`, and each instant separately names the
   side its own measurement was taken on, so the two differ
+
+#### Scenario: A unit sibling of a per-side metric states its own per-instant sides
+
+- **WHEN** two metrics report the same per-side quantity in different units, and both emit an
+  opposite-side paired exemplar for the same clip
+- **THEN** each metric's own exemplar names both instants' sides, and neither relies on the other
+  having done so
 
 #### Scenario: A per-instant side is never inferred from keypoint ordering
 
