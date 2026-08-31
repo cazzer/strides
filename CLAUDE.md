@@ -1265,6 +1265,26 @@ evidence input signature, correctly triggers a re-extraction, and emits a second
 Demo 1: line 1 has `verticalOscillationCm: metric-excluded`, line 2 has it `planned`. Whether a
 harness sees one line or two is a race against the scale pass.
 
+⚠️ **The "take the LAST line" rule still stands, but a second line no longer implies a second
+decode** (2026-08-31, `strides-3ui`). The graft still supersedes the run and still emits a second
+line; what changed is that `useSessionEvidence` now decides reuse by comparing the recomputed
+**plan** (plus the source blob) against the cached one, rather than by the identity of the
+`heuristics` object the graft rebuilds. Where the plan is unchanged the whole clip is reused, no
+decoder opens, and the second line arrives **~4 ms** after
+`[analysis-diagnostics:scale-pass] status=done` instead of ~800 ms — measured on a 13.2 s clip,
+twice. Where the plan genuinely moves (Demo 1's `metric-excluded` → `planned`) a real second
+extraction still runs. So do not time the gap between the two lines and read it as extraction cost,
+and do not infer from a fast second line that the graft did not happen.
+
+Also fixed there: the cards no longer blank while a re-extraction runs. `SessionEvidenceState`'s
+`extracting` now carries the previous pass's sections, and `MultiClipVideoSession` renders sections
+from both non-idle states, so only `idle` means "no imagery". **The demo clips cannot observe either
+the old bug or the fix** — the scale pass finishes before the first extraction settles on both
+(Demo 1 2.1 s vs 3.8 s, Demo 2 1.6 s vs 3.3 s), so the first run is superseded before it ever
+paints. Reproducing needs a clip long enough to invert that ordering; the one used was
+`park-approach.mp4` concatenated 8× (`ffmpeg -f concat -c copy`, 13.2 s), uploaded through the
+Upload tab, with a 100 ms DOM poll counting `main canvas`.
+
 **Coverage** (✅ = images produced; count is images, a ghosted pair being 1). ⚠️ **The table
 immediately below is the 2026-08-17/18 reading and is NO LONGER the number to check a regression
 against** — jump to "Coverage re-measured 2026-08-31" a few paragraphs down for the current one.

@@ -204,7 +204,11 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   // them. A second caller of this hook would mean a second cache, a second batch and a second
   // decoder — so there is exactly one, here.
   const evidenceState = useSessionEvidence(clips, sourceIndices)
-  const evidence = evidenceState.status === 'settled' ? evidenceState.sections : NO_EVIDENCE
+  // Read from BOTH non-idle states, deliberately: `extracting` carries the sections the previous
+  // pass produced, so a re-extraction — which the scale-pass graft triggers on every default run —
+  // leaves the imagery on screen instead of blanking every card for the length of a decode
+  // (`strides-3ui`). Only `idle` means "nothing has been produced for this session".
+  const evidence = evidenceState.status === 'idle' ? NO_EVIDENCE : evidenceState.sections
 
   const handleTryAgain = useCallback(() => {
     const errored = clips.find((c) => c.analysis.phase === 'error')

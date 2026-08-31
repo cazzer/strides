@@ -44,16 +44,32 @@ export interface EvidenceSection {
   items: ExtractedEvidenceFrame[]
 }
 
+/**
+ * `extracting` carries sections for the same reason `settled` does: a re-extraction is not a reason
+ * to take imagery off the screen. An analysis result is not final when it first renders — the
+ * background scale pass grafts its centimetre metrics one clip-replay later — so a run that has
+ * already settled can legitimately be superseded, and a status with nowhere to put the previous
+ * sections would make that supersession destructive by construction.
+ *
+ * `idle` is the only state with no sections, and it means what it says: nothing has been produced
+ * for this session, or everything that was has been invalidated.
+ */
 export type SessionEvidenceState =
   | { status: 'idle' }
-  | { status: 'extracting' }
+  | { status: 'extracting'; sections: EvidenceSection[] }
   | { status: 'settled'; sections: EvidenceSection[] }
 
 const IDLE_STATE: SessionEvidenceState = { status: 'idle' }
-const EXTRACTING_STATE: SessionEvidenceState = { status: 'extracting' }
+const NO_SECTIONS: EvidenceSection[] = []
 
-/** What one clip's plan is derived from. Compared by reference, field by field, to decide whether
- * a clip already extracted is still the same clip. */
+/**
+ * What one clip's plan is derived from.
+ *
+ * Compared by reference, field by field, as the CHEAP outer layer of a two-layer comparison
+ * (`sameClipInputs`). It answers "did anything upstream move at all", which is asked on every
+ * render; whether the extraction may actually be REUSED is a separate, structural question about
+ * the resulting plan, answered by `canReuseCachedEvidence`.
+ */
 interface ClipEvidenceInputs {
   clipId: string
   heuristics: FormHeuristicsResult
@@ -63,19 +79,30 @@ interface ClipEvidenceInputs {
    * centimetre metrics into `heuristics` (`strides-3a1`). `planClipEvidence` plans those two
    * against these instead of against `frames`; `null` on every run with no completed graft.
    *
-   * It belongs in the comparison below for the same reason `heuristics` does: it arrives with
-   * the graft, one render after the primary result, and an extraction that already ran must
-   * re-run when it lands. In practice it changes identity at the same instant `heuristics` does —
-   * they are written in one literal — so this adds a guard, not a re-extraction.
+   * It belongs in the cheap comparison below for the same reason `heuristics` does: it arrives
+   * with the graft, one render after the primary result, and a plan that already ran must be
+   * recomputed when it lands. In practice it changes identity at the same instant `heuristics`
+   * does — they are written in one literal — so this adds a guard, not a re-plan.
+   *
+   * Note it no longer decides whether the extraction RE-RUNS. It reaches that decision only
+   * through the plan it produces, which is what `canReuseCachedEvidence` compares.
    */
   graftedFrames: RobustPoseFrame[] | null
   frameSize: EvidenceFrameSize
   sourceBlob: Blob | null
 }
 
-/** One clip's extraction cache entry: what it was extracted from, and what came out. */
+/**
+ * One clip's extraction cache entry: what it was extracted from, and what came out.
+ *
+ * `plan` is stored rather than re-derived from `evidence` because it is what the reuse decision
+ * compares against, and it is the exact object the batch was built from. Reconstructing it with
+ * `settledPlan` would round-trip through the extraction RESULT, which equals the plan only where
+ * every planned metric actually produced pixels.
+ */
 interface CachedClipEvidence {
   inputs: ClipEvidenceInputs
+  plan: ClipEvidencePlan
   evidence: ClipEvidence
 }
 
@@ -109,6 +136,14 @@ function collectClipInputs(clips: ClipSession[]): ClipEvidenceInputs[] | null {
   return inputs
 }
 
+/**
+ * The every-render early-out. `clips` is rebuilt on every render of the session component, so this
+ * runs constantly and is kept to reference comparisons for that reason.
+ *
+ * A `false` here is NOT a decision to re-extract — it only means the effect must look properly.
+ * `startRun` then compares the recomputed plan against the cached one and reuses the images
+ * wherever they would come out the same.
+ */
 function sameClipInputs(a: ClipEvidenceInputs, b: ClipEvidenceInputs): boolean {
   return (
     a.clipId === b.clipId &&
@@ -124,6 +159,55 @@ function sameClipInputs(a: ClipEvidenceInputs, b: ClipEvidenceInputs): boolean {
 function sameInputList(a: ClipEvidenceInputs[] | null, b: ClipEvidenceInputs[] | null): boolean {
   if (a === null || b === null) return a === b
   return a.length === b.length && a.every((entry, i) => sameClipInputs(entry, b[i]))
+}
+
+/**
+ * Whether the clip SET is the same one, ignoring everything about each clip's contents.
+ *
+ * Gates carrying previous sections forward, and nothing else. `EvidenceSection.clipIndex` is a
+ * POSITION in the session's clip list and drives the card's "From clip N of M" attribution, so a
+ * removed clip shifts every later index and would re-attribute imagery to a clip it did not come
+ * from. Appending happens to leave existing indices intact, but that is not special-cased: "same
+ * ids, same order" is one obviously-correct condition, where "appended only" is a second path to
+ * get wrong for the sake of one render.
+ */
+function sameClipSet(a: ClipEvidenceInputs[] | null, b: ClipEvidenceInputs[]): boolean {
+  return (
+    a !== null && a.length === b.length && a.every((entry, i) => entry.clipId === b[i].clipId)
+  )
+}
+
+/**
+ * Whether a clip's cached evidence can be reused for a freshly computed plan.
+ *
+ * This compares what DETERMINES THE PIXELS, and it is sufficient rather than heuristic:
+ * `extractSessionEvidence` receives `ClipEvidenceInput`, which is exactly `{ sourceBlob, plan }`,
+ * so its output is a pure function of those two and equality of both means the extraction would
+ * reproduce the images already held.
+ *
+ * It deliberately does NOT compare `heuristics`, `frames`, `graftedFrames` or `frameSize`. Those
+ * are upstream of the plan, not inputs to the extractor: `frameSize` reaches it only through the
+ * crop rectangles it produced, and the other three only through the instants they selected — all
+ * of which are already in the plan being compared. Comparing them instead was this hook's bug
+ * (`strides-3ui`): the scale-pass graft rebuilds the `heuristics` OBJECT while carrying nine of
+ * eleven metric results through by reference, so a reference check on the container reported
+ * "everything changed" and threw away a whole clip's images to re-decode them identically.
+ *
+ * Structural comparison via `JSON.stringify` is sound here because a plan is pure data and both
+ * sides come from the same `planClipEvidence` path, so key insertion order matches and the one
+ * optional key (`EvidenceFramePlan.side`) is omitted identically on both. `NaN`/`-0` would
+ * serialise lossily, which can only make the check more permissive; neither is producible in a
+ * plan, and a plan carrying either would be reusing an identical image anyway.
+ */
+function canReuseCachedEvidence(
+  cached: CachedClipEvidence,
+  input: ClipEvidenceInputs,
+  plan: ClipEvidencePlan,
+): boolean {
+  return (
+    cached.inputs.sourceBlob === input.sourceBlob &&
+    JSON.stringify(cached.plan) === JSON.stringify(plan)
+  )
 }
 
 function planEntries(plan: ClipEvidencePlan): Array<[MetricId, MetricEvidencePlan]> {
@@ -219,9 +303,11 @@ function startRun(
       input.graftedFrames,
     ),
   )
-  const reused = inputs.map((input) => {
+  const reused = inputs.map((input, index) => {
     const cached = cache.get(input.clipId)
-    return cached !== undefined && sameClipInputs(cached.inputs, input) ? cached.evidence : null
+    return cached !== undefined && canReuseCachedEvidence(cached, input, plans[index])
+      ? cached.evidence
+      : null
   })
 
   // Clip index → position in the extraction batch. A clip reused from cache, or with nothing
@@ -240,7 +326,7 @@ function startRun(
       const evidence =
         reused[index] ??
         (position === undefined ? unextractedEvidence(plans[index]) : extracted[position])
-      cache.set(input.clipId, { inputs: input, evidence })
+      cache.set(input.clipId, { inputs: input, plan: plans[index], evidence })
       return evidence
     })
     emitCoverage(inputs, evidenceByClip, sourceIndices)
@@ -271,16 +357,28 @@ export function useSessionEvidence(
   const runIdRef = useRef(0)
   const inputsRef = useRef<ClipEvidenceInputs[] | null>(null)
   // Per-clip, so adding a second clip re-extracts only the new one rather than re-decoding a 4K
-  // clip that has not changed.
+  // clip that has not changed — and, since `canReuseCachedEvidence`, so does any change that
+  // leaves an existing clip's plan intact.
   const cacheRef = useRef(new Map<string, CachedClipEvidence>())
   const abortRef = useRef<AbortController | null>(null)
+  // The sections currently on screen, mirrored out of state so a run starting inside the effect
+  // can carry them forward. A ref rather than the `state` closure or a functional updater: the
+  // eager branch below calls `run.finish([])`, which caches and emits coverage, so it cannot move
+  // inside an updater — React may invoke an updater twice, and both of those are side effects.
+  const sectionsRef = useRef<EvidenceSection[]>(NO_SECTIONS)
 
   // `clips` is rebuilt on every render of the session component, so this effect fires on every
   // render and the reference-equality guard below — not the dependency list — is what makes
   // "extraction driven at most once per clip" true.
   useEffect(() => {
+    // Every write to state goes through here, so the mirror cannot drift from what is rendered.
+    const commit = (next: SessionEvidenceState): void => {
+      sectionsRef.current = next.status === 'idle' ? NO_SECTIONS : next.sections
+      setState(next)
+    }
     const inputs = sourceIndices === null ? null : collectClipInputs(clips)
     if (sameInputList(inputsRef.current, inputs)) return
+    const previousInputs = inputsRef.current
     inputsRef.current = inputs
     const runId = (runIdRef.current += 1)
     // Reached only past the signature guard above, so this fires when a run is genuinely
@@ -294,8 +392,18 @@ export function useSessionEvidence(
         ? null
         : startRun(inputs, cacheRef.current, sourceIndices)
 
-    setState(
-      run === null ? IDLE_STATE : run.batch.length === 0 ? run.finish([]) : EXTRACTING_STATE,
+    // Whether the sections already on screen may stay there while this run works. They may
+    // whenever the clip SET is unchanged — the common case, and the one this guard exists for: the
+    // scale-pass graft supersedes a run that has already settled, and blanking every card for the
+    // length of a decode is the thing that made a correct re-extraction look like a bug.
+    const carried = sameClipSet(previousInputs, inputs ?? []) ? sectionsRef.current : NO_SECTIONS
+
+    commit(
+      run === null
+        ? IDLE_STATE
+        : run.batch.length === 0
+          ? run.finish([])
+          : { status: 'extracting', sections: carried },
     )
 
     if (run !== null && run.batch.length > 0) {
@@ -309,7 +417,7 @@ export function useSessionEvidence(
       void extractSessionEvidence(run.batch, { signal: controller.signal }).then((extracted) => {
         // A superseded run's canvases are simply dropped here — never parented, never cached.
         if (runIdRef.current !== runId) return
-        setState(run.finish(extracted))
+        commit(run.finish(extracted))
       })
     }
   }, [clips, sourceIndices])
@@ -335,11 +443,13 @@ export function useSessionEvidence(
     // The ref OBJECT, not its value: the controller to abort is whichever one is current at
     // cleanup time, not the one that existed at mount.
     const abort = abortRef
+    const sections = sectionsRef
     return () => {
       runIdRef.current += 1
       abort.current?.abort()
       abort.current = null
       inputsRef.current = null
+      sections.current = NO_SECTIONS
       cache.clear()
     }
   }, [])
