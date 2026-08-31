@@ -10,6 +10,8 @@ import {
 import { resolvePoint } from './keypoints'
 import { findLocalExtrema } from './extrema'
 import type { Extremum } from './extrema'
+import { median } from './mathUtils'
+import type { SpectralFitResult, SpectralFitSuccess } from './spectralFit'
 
 export interface FootstrikeCandidate {
   frameIndex: number
@@ -220,21 +222,45 @@ function selectFootstrikes(
  *
  * No cycle: `cadence` reads this fit but does not read footstrikes — it stopped doing so precisely
  * because of the defect this module is fixing (`cadence.ts`'s module doc).
+ *
+ * The same predicate decides whether `detectFromBouncePhase` may time the footstrikes at all, which
+ * is deliberate: two independently movable gates on one fit would let this module hold two opinions
+ * about whether the clip has a measurable rhythm.
  */
+function isRhythmTrustworthy(
+  fit: SpectralFitResult,
+  config: HeuristicsConfig,
+): fit is SpectralFitSuccess {
+  return fit.ok && fit.sinusoidR2 >= config.cadenceMinFitR2
+}
+
 function resolveStepFrequencyHz(
-  frames: RobustPoseFrame[],
+  fit: SpectralFitResult,
   config: HeuristicsConfig,
 ): number | undefined {
-  const { fit } = analyzeHipBounce(frames, config)
-  if (!fit.ok) return undefined
-  if (fit.sinusoidR2 < config.cadenceMinFitR2) return undefined
-  return fit.frequencyHz
+  return isRhythmTrustworthy(fit, config) ? fit.frequencyHz : undefined
 }
 
 /**
- * Detects footstrike candidates across both legs of a pose-frame sequence — the shared basis for
- * overstriding, cadence, and foot-strike-pattern, all of which need "when did a foot plant"
- * without each reimplementing ankle-extrema detection and dedup.
+ * The ankle-difference detector: **the fallback path**, and the whole of what this module did
+ * before footstrike timing moved to the fitted hip-bounce phase (`detectFromBouncePhase`). It runs
+ * unchanged whenever that phase is unavailable — see `detectFootstrikes` for the exact condition.
+ *
+ * It is exported so the unit suite can measure BOTH paths on the same fixture. That comparison is
+ * the acceptance evidence for the phase detector and it cannot be written any other way: on a clip
+ * with a fittable bounce the phase path always wins, so the older path would otherwise be
+ * unreachable from a test that also wants a bounce present.
+ *
+ * ## Its phase residual is a property of the signal, and no offset can correct it
+ *
+ * The instant this selects is the maximum of `d_S`, which with S planted is decided entirely by the
+ * OTHER ankle — it is the **contralateral foot's swing apex**, a real gait event that is not
+ * touchdown and is not a fixed distance from it. Sweeping the fixture's apex phase moves the
+ * emitted lag from 1 frame to 11 (0.04–0.44 s at 25 fps), one for one and monotonically — a range
+ * wider than a whole stance phase, so a constant fitted to one runner is wrong for the next. Every
+ * constant-free alternative on this same signal marks a different wrong event. Measured and
+ * enumerated in `openspec/changes/archive/2026-08-29-detect-footstrike-contact-onsets/design.md`
+ * D15, pinned in `footstrikes.test.ts`, and **not to be re-litigated by picking a better offset.**
  *
  * Per side, builds the contact series — this ankle's y MINUS the opposite ankle's y, see
  * `buildContactSeries` for the full argument and for the gap/fallback rules — runs it through
@@ -270,23 +296,20 @@ function resolveStepFrequencyHz(
  * candidate for consumers (overstriding, foot-strike-pattern) that need to resolve a per-leg point
  * at that instant.
  *
- * Returns `[]` when there's no resolvable body-scale reference at all (no shoulders/hips to
- * measure torso length from) — there's no way to size the prominence threshold without one, so no
- * candidates can be extracted. Callers that need to distinguish "no body scale" from "body scale
- * present but zero footstrikes found" (as `computeOverstriding` does, for a more specific caveat
- * message) should call `estimateBodyScale` themselves first.
+ * `torsoLengthPx` sizes the prominence threshold; `fit` is the caller's already-computed hip-bounce
+ * fit, passed in rather than re-derived so that the two paths cannot end up reading two different
+ * fits of the same clip.
  */
-export function detectFootstrikes(
+export function detectFootstrikesBetweenAnkles(
   frames: RobustPoseFrame[],
   config: HeuristicsConfig,
+  torsoLengthPx: number,
+  fit: SpectralFitResult,
 ): FootstrikeCandidate[] {
-  const bodyScale = estimateBodyScale(frames)
-  if (bodyScale === null) return []
-
-  const minProminenceAbs = config.footstrikeMinProminenceRatio * bodyScale.torsoLengthPx
+  const minProminenceAbs = config.footstrikeMinProminenceRatio * torsoLengthPx
 
   const expectedStridePeriodSeconds = resolveExpectedStridePeriodSeconds(
-    resolveStepFrequencyHz(frames, config),
+    resolveStepFrequencyHz(fit, config),
   )
   const minIntervalSeconds = Math.max(
     config.footstrikeMinIntervalSeconds,
@@ -304,4 +327,198 @@ export function detectFootstrikes(
 
   candidates.sort((a, b) => a.timestamp - b.timestamp)
   return candidates
+}
+
+/**
+ * Index of the sampled frame nearest `t`, ties resolving toward the EARLIER frame — the same
+ * tie-breaking `selectFootstrikes` applies on a flat plateau, and the same search
+ * `skeletonGeometry.ts`'s `findNearestFrame` performs. It is re-stated here rather than reused
+ * because a `FootstrikeCandidate` carries a frame INDEX, which that helper does not return.
+ *
+ * Assumes `frames` is timestamp-ordered, which every caller of this module guarantees.
+ */
+function nearestFrameIndex(frames: RobustPoseFrame[], t: number): number {
+  let lo = 0
+  let hi = frames.length - 1
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (frames[mid].timestamp < t) lo = mid + 1
+    else hi = mid
+  }
+  if (lo === 0) return 0
+  return Math.abs(frames[lo].timestamp - t) < Math.abs(frames[lo - 1].timestamp - t) ? lo : lo - 1
+}
+
+/**
+ * Half the median interval between consecutive frames — beyond this distance a continuous instant
+ * is closer to some other frame than to the one the search returned, so snapping it would be a
+ * silent lie about which frame was depicted. Same derivation, and same reason, as
+ * `bounceInstants.ts`'s own snap tolerance. `null` for a clip too short to have an interval.
+ */
+function snapToleranceSeconds(frames: RobustPoseFrame[]): number | null {
+  if (frames.length < 2) return null
+  const intervals: number[] = []
+  for (let i = 1; i < frames.length; i += 1) {
+    intervals.push(frames[i].timestamp - frames[i - 1].timestamp)
+  }
+  const half = median(intervals) / 2
+  return Number.isFinite(half) && half > 0 ? half : null
+}
+
+/**
+ * Which foot is on the ground at this frame: **the lower one**, since a foot cannot be planted
+ * while the other foot is below it. `null` when either ankle is unresolvable, because without both
+ * there is nothing to compare and a guess would attribute a real contact to the wrong leg.
+ *
+ * This is the identical fact `selectFootstrikes` uses as an admissibility check (`value >= 0` on
+ * the differenced series); read here as the selector rather than as a filter. It has no tolerance
+ * parameter, and an exact tie resolves to `'left'` only because a tie means the two ankles are at
+ * the same height, which at a real contact does not happen.
+ */
+function plantedSide(frame: RobustPoseFrame): 'left' | 'right' | null {
+  const left = resolvePoint(frame, ANKLE_NAME.left)
+  const right = resolvePoint(frame, ANKLE_NAME.right)
+  if (left === null || right === null) return null
+  return left.y >= right.y ? 'left' : 'right'
+}
+
+/**
+ * **Footstrike timing from the fitted hip-bounce phase** — the primary path, and the reason this
+ * module no longer reports the contralateral swing apex as a touchdown.
+ *
+ * ## Why the inflections of the vertical trajectory ARE the contact events
+ *
+ * The body's vertical acceleration is `−g` throughout flight and net upward throughout stance,
+ * because in flight gravity is the only force on it and in stance the ground pushes back harder
+ * than gravity pulls (that is what holds a runner up). The sign therefore flips exactly at
+ * touchdown, and again at toe-off. Curvature is the sign of acceleration, so the trajectory's
+ * INFLECTION POINTS are the contact events — a statement about contact itself, carrying no
+ * coefficient and no per-runner tuning.
+ *
+ * For a sinusoid the inflections are its zero crossings, a quarter period either side of each
+ * extremum. `analyzeHipBounce` fits raw image-y, which grows DOWNWARD, so the fitted MAXIMUM is
+ * the body's LOWEST point (midstance), and:
+ *
+ * ```
+ * lowest_k   = tMeanSeconds + (π/2 − φ)/ω + k·T      ω = 2π·f,  T = 1/f
+ * touchdown_k = lowest_k − T/4
+ * ```
+ *
+ * The hip-mid trace bounces ONCE PER STEP (`cadence.ts`'s module doc — it is why cadence reports
+ * `frequencyHz × 60` with no harmonic correction), so this emits one touchdown per step: the right
+ * rate by construction, rather than by selecting a subset of candidates and hoping.
+ *
+ * ## Its own residual, in closed form
+ *
+ * Taking the bounce's low point as midstance, and writing `stance` for the stance duration:
+ *
+ * ```
+ * lag = stance/2 − T/4 = (stance − T/2) / 2
+ * ```
+ *
+ * — half the amount by which stance exceeds half a step period, which is exactly the error a single
+ * sinusoid makes by forcing stance = flight. On Demo 1 (`T = 0.658 s`, stances 0.36 s and 0.44 s)
+ * that is 0.0155 s and 0.0555 s: **0.4 and 1.4 frames at 25 fps**, against the 4–6 frames the
+ * ankle-difference path is late by on the same clip. Across all of running it stays inside
+ * `0 … 0.10·T`, which is where the ankle path's residual STARTS. The residual is pinned executably
+ * by a stance sweep in `footstrikes.test.ts`; the point of that sweep is that the swing-apex sweep,
+ * which moves the other path from 1 frame to 11, does not move this one at all.
+ *
+ * ## What is deliberately NOT here
+ *
+ * No constant is added, subtracted or fitted anywhere. `T/4` is the distance from a sinusoid's
+ * extremum to its inflection and nothing else. The quality bar is `cadenceMinFitR2`, read through
+ * the same `isRhythmTrustworthy` predicate the spacing floor uses.
+ *
+ * Returns `[]` — never a partial guess — when the rhythm is untrustworthy, when the clip is too
+ * short to have a snap tolerance, or when no predicted instant lands on a frame that resolves both
+ * ankles. `detectFootstrikes` reads an empty result as "fall back", so the failure mode of this
+ * path is that the clip keeps the behaviour it had before this path existed.
+ */
+function detectFromBouncePhase(
+  frames: RobustPoseFrame[],
+  fit: SpectralFitResult,
+  config: HeuristicsConfig,
+): FootstrikeCandidate[] {
+  if (!isRhythmTrustworthy(fit, config)) return []
+  if (!Number.isFinite(fit.frequencyHz) || fit.frequencyHz <= 0) return []
+
+  const tolerance = snapToleranceSeconds(frames)
+  if (tolerance === null) return []
+
+  const period = 1 / fit.frequencyHz
+  const omega = 2 * Math.PI * fit.frequencyHz
+  const firstLowest = fit.tMeanSeconds + (Math.PI / 2 - fit.phaseRadians) / omega
+  const firstTouchdown = firstLowest - period / 4
+
+  const spanStart = frames[0].timestamp
+  const spanEnd = frames[frames.length - 1].timestamp
+  const firstK = Math.ceil((spanStart - firstTouchdown) / period)
+  const lastK = Math.floor((spanEnd - firstTouchdown) / period)
+
+  const candidates: FootstrikeCandidate[] = []
+  const claimedFrames = new Set<number>()
+  for (let k = firstK; k <= lastK; k += 1) {
+    const predicted = firstTouchdown + k * period
+    const index = nearestFrameIndex(frames, predicted)
+    if (Math.abs(frames[index].timestamp - predicted) > tolerance) continue
+    if (claimedFrames.has(index)) continue
+    const side = plantedSide(frames[index])
+    if (side === null) continue
+    claimedFrames.add(index)
+    candidates.push({ frameIndex: index, timestamp: frames[index].timestamp, side })
+  }
+
+  return candidates
+}
+
+/**
+ * Detects footstrike candidates across both legs of a pose-frame sequence — the shared basis for
+ * overstriding, foot-strike-pattern, step width and stride length, all of which need "when did a
+ * foot plant" without each reimplementing it.
+ *
+ * ## Two paths, one of which is a strict safety net for the other
+ *
+ * 1. **Timing from the fitted hip-bounce phase** (`detectFromBouncePhase`), whenever this clip's
+ *    bounce fit clears the same bar cadence itself clears before publishing a number. Touchdown is
+ *    a quarter period before each fitted low point, one per step, sides taken from the ankles.
+ * 2. **The ankle-difference detector** (`detectFootstrikesBetweenAnkles`), otherwise — and
+ *    "otherwise" includes the case where path 1 clears its gate but yields nothing attributable.
+ *
+ * Stating the fallback as "path 1 produced no instant at all" rather than as a count threshold
+ * keeps a number out of it, and buys the property that bounds this module's coupling to the hip
+ * signal: **a clip that reports footstrike-derived metrics without path 1 keeps reporting them with
+ * it.** The worst case of a poor hip fit is no improvement, never a new failure. That matters
+ * because timing is now a function of a signal `overstriding` and `footStrikePattern` previously
+ * did not depend on at all.
+ *
+ * The emitted instants are **ground-contact onsets** — the moment a foot arrives — not "the frame
+ * within stance where this ankle read lowest", and not the contralateral foot's swing apex. That is
+ * what every consumer actually wants: `overstriding` and `footStrikePattern` measure a touchdown
+ * geometry, `stepWidth` measures a touchdown position, and `strideLength` measures the interval
+ * between touchdowns.
+ *
+ * Returns candidates from both legs combined into one timestamp-ordered list (not grouped or
+ * interleaved by side), while `side` is still carried on each candidate for consumers that need to
+ * resolve a per-leg point at that instant.
+ *
+ * Returns `[]` when there's no resolvable body-scale reference at all (no shoulders/hips to measure
+ * torso length from) — the fallback path has no way to size its prominence threshold without one,
+ * and a clip with no resolvable hips has no bounce to fit either. Callers that need to distinguish
+ * "no body scale" from "body scale present but zero footstrikes found" (as `computeOverstriding`
+ * does, for a more specific caveat message) should call `estimateBodyScale` themselves first.
+ */
+export function detectFootstrikes(
+  frames: RobustPoseFrame[],
+  config: HeuristicsConfig,
+): FootstrikeCandidate[] {
+  const bodyScale = estimateBodyScale(frames)
+  if (bodyScale === null) return []
+
+  const { fit } = analyzeHipBounce(frames, config)
+
+  const fromPhase = detectFromBouncePhase(frames, fit, config)
+  if (fromPhase.length > 0) return fromPhase
+
+  return detectFootstrikesBetweenAnkles(frames, config, bodyScale.torsoLengthPx, fit)
 }

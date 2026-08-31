@@ -102,6 +102,12 @@ function isNearGridEdge(frequencyHz: number, config: HeuristicsConfig): boolean 
  * untouched and still serves `overstriding`/`footStrikePattern` — only cadence stopped consuming
  * it.
  *
+ * Since 2026-08-29 the dependency runs the other way: `detectFootstrikes` TIMES its instants from
+ * this same fit's phase (a quarter period before each fitted low point), while cadence still reads
+ * only the frequency. There is still no cycle — cadence does not read footstrikes — and cadence's
+ * own numbers are unaffected, but note that `detectFootstrikes` now shares this metric's fate on a
+ * clip whose fit is poor, and gates on this metric's own `cadenceMinFitR2` to decide it.
+ *
  * ## Quality gate
  *
  * Gated on `cadenceMinFitR2` (default 0.30), reusing vertical oscillation's exact calibration —
