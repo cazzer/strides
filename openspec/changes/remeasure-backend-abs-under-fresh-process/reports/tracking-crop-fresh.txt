@@ -1,0 +1,124 @@
+# scripts/ab-person-selection.mjs
+# baseURL: http://localhost:5262/strides/ (started by this run, identity verified)
+# commit: 1c159bb
+# renderer: ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)
+# browser: fresh process per trial
+# trials: 3
+# arm off: {}
+# arm on: {}
+# backend-arm off: {"trackingCrop":{"enabled":false}}
+# backend-arm on: {"trackingCrop":{"enabled":true}}
+
+## demo1
+field                                     off                on
+----------------------------------------  -----------------  -----------------
+trials                                    3/3 ok             3/3 ok
+sampling.detectedFrames                   53                 59
+sampling.missingFrames                    175                169
+sampling.path                             sequential         sequential
+sampling.totalSamples                     228                228
+personSelection.bridgedCuts               1                  0
+personSelection.detectedSamplesIn         66                 70
+personSelection.detectedSamplesOut        53                 59
+personSelection.minBoundingBoxAreaPx      1658.88            1658.88
+personSelection.rejectedBelowFloor        0                  0
+personSelection.rejectedOtherSegment      10                 9
+personSelection.rejectedOutsideEvidence   3                  2
+personSelection.segmentCount              4                  3
+personSelection.separationRatio           2374.07            3363.66
+personSelection.skipReason                null               null
+personSelection.status                    selected           selected
+personSelection.totalSamples              228                228
+segments[0].endTimestamp                  6.32               7.16
+segments[0].frameCount                    53                 59
+segments[0].integratedAreaPx              24966400           28363000
+segments[0].medianAreaPx                  492789             480009
+segments[0].startTimestamp                0.08               0.08
+view.confidence                           0.761527           0.72114
+view.diagnostics.bilateralSpreadRatio     0.1335             0.138435
+view.diagnostics.frameCoverage            1                  1
+view.diagnostics.sagittalExcursionRatio   1.57444            1.52298
+view.plausibility.ambiguous               0                  0
+view.plausibility.front                   0                  0
+view.plausibility.side                    1                  1
+view.view                                 side               side
+metrics.armSwingSymmetry.value            0.905228           0.757111
+metrics.armSwingSymmetry.confidence       0.0105064          0.0147432
+metrics.cadence.value                     91.2               91.2
+metrics.cadence.confidence                0.634055           0.727912
+metrics.footStrikePattern.value           0.00108462         0.0256825
+metrics.footStrikePattern.confidence      0.875              1
+metrics.kneeFlexion.value                 120.69             115.016
+metrics.kneeFlexion.confidence            0.863636           0.991525
+metrics.overstriding.value                0.325743           0.343684
+metrics.overstriding.confidence           0.875              1
+metrics.stepWidth.value                   4.25696            5.83542
+metrics.stepWidth.confidence              0.0875             0.1
+metrics.stepWidthCm.value                 null               null
+metrics.stepWidthCm.confidence            0                  0
+metrics.trunkLean.value                   13.2968            13.1588
+metrics.trunkLean.confidence              0.940678           0.991525
+metrics.verticalOscillation.value         0.163293           0.16867
+metrics.verticalOscillation.confidence    0.71921            0.825671
+metrics.verticalOscillationCm.value       null               null
+metrics.verticalOscillationCm.confidence  0                  0
+metrics.verticalRatio.value               0.0310419          0.0317956
+metrics.verticalRatio.confidence          0.479473           0.550448
+elapsedMs                                 5612 [5504..6379]  5403 [5347..6050]
+
+## demo2
+field                                     off                on
+----------------------------------------  -----------------  -----------------
+trials                                    3/3 ok             3/3 ok
+sampling.detectedFrames                   99                 99
+sampling.missingFrames                    0                  0
+sampling.path                             sequential         sequential
+sampling.totalSamples                     99                 99
+personSelection.bridgedCuts               0                  0
+personSelection.detectedSamplesIn         99                 99
+personSelection.detectedSamplesOut        99                 99
+personSelection.minBoundingBoxAreaPx      1658.88            1658.88
+personSelection.rejectedBelowFloor        0                  0
+personSelection.rejectedOtherSegment      0                  0
+personSelection.rejectedOutsideEvidence   0                  0
+personSelection.segmentCount              1                  1
+personSelection.separationRatio           null               null
+personSelection.skipReason                null               null
+personSelection.status                    selected           selected
+personSelection.totalSamples              99                 99
+segments[0].endTimestamp                  1.66833            1.66833
+segments[0].frameCount                    99                 99
+segments[0].integratedAreaPx              19153500           19402600
+segments[0].medianAreaPx                  132926             133710
+segments[0].startTimestamp                0.033367           0.033367
+view.confidence                           0.548582           0.587854
+view.diagnostics.bilateralSpreadRatio     0.550987           0.565173
+view.diagnostics.frameCoverage            1                  1
+view.diagnostics.sagittalExcursionRatio   0.328358           0.329717
+view.plausibility.ambiguous               0                  0
+view.plausibility.front                   1                  1
+view.plausibility.side                    0                  0
+view.view                                 front              front
+metrics.armSwingSymmetry.value            0.606563           0.596884
+metrics.armSwingSymmetry.confidence       0.384572           0.38759
+metrics.cadence.value                     181.2              181.2
+metrics.cadence.confidence                0.37247            0.155874
+metrics.footStrikePattern.value           -0.01797           -0.0830056
+metrics.footStrikePattern.confidence      0.05               0.05
+metrics.kneeFlexion.value                 106.103            177.686
+metrics.kneeFlexion.confidence            0.0666667          0.0886364
+metrics.overstriding.value                -0.0305607         -0.0272227
+metrics.overstriding.confidence           0.05               0.05
+metrics.stepWidth.value                   0.225311           0.0717871
+metrics.stepWidth.confidence              1                  1
+metrics.stepWidthCm.value                 null               null
+metrics.stepWidthCm.confidence            0                  0
+metrics.trunkLean.value                   3.00206            2.87751
+metrics.trunkLean.confidence              0.0497475          0.05
+metrics.verticalOscillation.value         0.204221           0.172904
+metrics.verticalOscillation.confidence    0.37247            0.155874
+metrics.verticalOscillationCm.value       null               null
+metrics.verticalOscillationCm.confidence  0                  0
+metrics.verticalRatio.value               null               null
+metrics.verticalRatio.confidence          0                  0
+elapsedMs                                 3217 [2856..4489]  3199 [3134..3209]

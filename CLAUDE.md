@@ -1448,6 +1448,45 @@ different problem (upstream resize before *any* detection) that remains unbuilt.
 tables: `openspec/changes/archive/*movenet-tracking-crop/design.md` "Revival note". Enable for
 experiments via `{ trackingCrop: { enabled: true } }` in the backend override.
 
+⚠️ **ADDENDUM 2026-08-29/31 (`strides-09k`) — the pre-registered rule NO LONGER FIRES, and the
+default stays OFF on a DIFFERENT basis. The 2026-08-13 table above is left exactly as measured.**
+Re-run with `scripts/ab-person-selection.mjs --backend-arm`, **3 fresh-process trials per arm**,
+both demo clips, real GPU, dev server identity-verified. Every field had **zero spread except
+`elapsedMs`**, so there is no range column to read a conclusion out of.
+
+Re-adjudicated cell by cell across all 11 metrics on both clips
+(`metricConfidence.ts` boundaries: `normal` ≥ 0.7, else `caveated`, `excluded` on a null value):
+
+| clip | tiers that DEGRADE | tiers that IMPROVE |
+|---|---|---|
+| demo1 (track) | **none** | `cadence` caveated → **normal** (0.634 → 0.728) |
+| demo2 (park) | **none** | none |
+
+**"Any median tier degrades → default off" does not fire.** The cell the 2026-08-13 decision
+turned on still degrades — park `cadence`/`verticalOscillation` confidence **0.37247 → 0.155874**,
+more than halved — but no longer crosses a tier boundary, because the *off-arm baseline itself*
+moved down: 0.63–0.69 then, **0.372 today**, already caveated. There is no tier left to lose. The
+cold-trial artifact is gone outright: park `detectedFrames` read 62/75/76 (on) vs 75/75/76 (off) in
+2026-08-13 and is now **99/99 in both arms, no spread** — that penalty was the regime, not the arm.
+
+On demo1 the crop is uniformly BETTER: `detectedFrames` 53 → **59**, `segmentCount` 4 → **3**,
+`segments[0].endTimestamp` 6.32 → **7.16**, and confidence up on `kneeFlexion` (0.864 → 0.992),
+`trunkLean` (0.941 → 0.992), `footStrikePattern` (0.875 → **1.0**), `overstriding` (0.875 → **1.0**),
+`verticalOscillation` (0.719 → 0.826), `verticalRatio` (0.479 → 0.550).
+
+**The default stays `enabled: false` anyway, and the reason is new.** A rule that does not fire
+removes a reason to keep the crop off; it supplies no reason to switch it on. Meanwhile the fresh
+run surfaces what the 2026-08-13 table structurally could not, because that table reported
+confidences and not values:
+
+| demo2, **`normal` tier in both arms** | off | on | ratio |
+|---|---|---|---|
+| `stepWidth.value` @ confidence **1.000** both arms | 0.225311 | **0.0717871** | **3.1×** |
+| `kneeFlexion.value` (caveated both arms) | 106.103° | **177.686°** | a straight knee at peak flexion |
+
+A full-confidence card reads 3× differently on the same clip with nothing noticing. Flipping a
+shipped default on evidence that also shows that is not a defensible trade. Filed as `strides-90l`.
+
 Person-of-interest (multi-pose acquisition/reacquisition) shipped 2026-08-15 on
 `openspec/changes/multi-person-acquisition/` (branch `claude/detection-pipeline-person-id-xh63ni`,
 not yet merged to this branch/main as of this writing) — the MoveNet backend gains a
@@ -1484,6 +1523,43 @@ re-verification-only contributions — `POST_ACQUISITION_SETTLE_FRAMES`/
 would need a temporary code patch not made in this A/B; the number above is the combined,
 ship-relevant cost. Full table: `openspec/changes/multi-person-acquisition/design.md`'s
 "Live-browser A/B results" section.
+
+⚠️ **ADDENDUM 2026-08-29/31 (`strides-09k`) — most of the cost figure above is WITHDRAWN. The
+default is NOT under review and does not change. The 2026-08-15 numbers are left as measured.**
+Same regime as the tracking-crop addendum: `--backend-arm`, 3 fresh-process trials per arm, both
+demo clips, real GPU, zero spread on every field but `elapsedMs`.
+
+**First, the 2026-08-15 figure was measured on a quantity that has since changed meaning.** It read
+`sampling.detectedFrames`, which became **post-person-selection on 2026-08-16** — one day later,
+when `retroactive-person-selection` shipped. The comparable pre-selection count today is
+`personSelection.detectedSamplesIn`. Both are given, because they say different things and only one
+is user-visible:
+
+| | demo1 off → on | Δ | demo2 off → on | Δ |
+|---|---|---|---|---|
+| `detectedSamplesIn` (pre-selection — the 2026-08-15 quantity) | 84 → 66 | **−21.4%** | 99 → 99 | **0%** |
+| `sampling.detectedFrames` (post-selection — what a user gets) | 47 → **53** | **+12.8%** | 99 → 99 | **0%** |
+| `sampling.totalSamples` | 228 → 228 | **0%** | 99 → 99 | **0%** |
+| `elapsedMs` | 3753 → 5765 | **+53.6%** | 2448 → 3134 | **+28.0%** |
+
+- Track's pre-selection cost is **real and slightly larger than claimed** (−21.4% vs −16%).
+- **Park's −25% is WITHDRAWN** — measured exactly 0 on both counts, no spread.
+- **The "~4% of samples" cost is WITHDRAWN on both clips** — `totalSamples` is identical everywhere.
+- **User-visible throughput on track is a GAIN, +12.8%**, because selection keeps far more of what
+  the POI path detects than of what it detects without it.
+- **The real cost is wall-clock, +28% to +54%, and 2026-08-15 did not report it.**
+
+The mechanism is visible in the selection counters and directly corroborates the ship decision:
+with POI **off**, demo1's winning segment does not begin until `segments[0].startTimestamp`
+**4.36 s** and `rejectedOtherSegment` is **32**; with it **on**, the winner runs from **0.08 s**
+with **10** rejected and `separationRatio` 689 → **2374**.
+
+⚠️ **One honest contradiction: "confidence tiers hold" does NOT fully reproduce.** On demo1
+`cadence` degrades `normal` → `caveated` with POI on (0.7176 → 0.6341); no other tier moves either
+way on either clip. Read it with the values beside it — `cadence.value` 93.6 (off) vs **91.2**
+(on), and **91.2 is this repo's own standing anchor** for that clip
+(`fit.frequencyHz × 60 = 91.2 == cadence.value`, re-confirmed three times). The higher-confidence
+arm is the one that disagrees with ground truth. Filed as `strides-bfv`.
 
 **Validation gap — the actual reported bug is not yet confirmed fixed on real footage.** This
 change also added this repo's first e2e/Playwright test infrastructure

@@ -1,0 +1,8 @@
+schema: spec-driven
+created: 2026-08-31
+# No spec delta. Both A/Bs were re-measured and neither shipped default changes: tracking crop
+# stays `enabled: false` and person-of-interest stays `enabled: true`. What changes is the
+# EVIDENCE recorded for each — the pre-registered rule behind tracking-crop's default no longer
+# fires, and person-of-interest's throughput cost figure is restated — plus CLAUDE.md addenda and
+# two follow-up beads. No behaviour contract is touched.
+skip_specs: true
