@@ -576,11 +576,45 @@ describe('detectFootstrikes — timing derived from the fitted bounce phase', ()
     }
   })
 
+  it('names the feet by alternation, and one swapped instant cannot flip the assignment', () => {
+    const frames = buildGait(SHAPE, 4)
+    const baseline = detectedFrames(frames)
+
+    // A stride is two steps, one per foot, so consecutive touchdowns alternate. The instants are
+    // one step apart by construction, so this must hold for every emitted pair.
+    for (let i = 1; i < baseline.length; i += 1) {
+      expect(baseline[i][0]).not.toBe(baseline[i - 1][0])
+    }
+
+    // Swap the two ankles' vertical positions at the FIRST emitted instant — the failure MoveNet
+    // actually produces on side-view footage, where the legs cross and occlude every step. Read
+    // per-instant, that frame now names the wrong foot. Read as one magnitude-weighted vote across
+    // every instant, it is outvoted and nothing moves.
+    const swapAt = baseline[0][1]
+    const swapped: RobustPoseFrame[] = frames.map((frame, index) => {
+      if (index !== swapAt) return frame
+      const left = frame.keypoints.find((k) => k.name === 'left_ankle')!
+      const right = frame.keypoints.find((k) => k.name === 'right_ankle')!
+      return {
+        ...frame,
+        keypoints: frame.keypoints.map((k) =>
+          k.name === 'left_ankle'
+            ? { ...k, y: right.y }
+            : k.name === 'right_ankle'
+              ? { ...k, y: left.y }
+              : k,
+        ),
+      }
+    })
+
+    expect(detectedFrames(swapped)).toEqual(baseline)
+  })
+
   it('falls back to the ankle detector when the fit clears its bar but no instant can be attributed', () => {
     // A bouncing body — so the hip fit resolves and clears cadence's bar — but the right ankle is
-    // unresolvable in every frame, so no predicted instant can be told which foot it belongs to.
-    // The phase path emits nothing and the clip keeps exactly the single-leg behaviour it had
-    // before that path existed.
+    // unresolvable in every frame, so no predicted instant contributes any evidence about which
+    // foot is which and the parity vote sums to exactly zero. The phase path emits nothing and the
+    // clip keeps exactly the single-leg behaviour it had before that path existed.
     const full = buildGait(SHAPE, 4)
     const frames: RobustPoseFrame[] = full.map((frame) => ({
       ...frame,

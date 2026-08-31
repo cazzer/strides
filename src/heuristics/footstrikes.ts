@@ -366,20 +366,77 @@ function snapToleranceSeconds(frames: RobustPoseFrame[]): number | null {
 }
 
 /**
- * Which foot is on the ground at this frame: **the lower one**, since a foot cannot be planted
- * while the other foot is below it. `null` when either ankle is unresolvable, because without both
- * there is nothing to compare and a guess would attribute a real contact to the wrong leg.
+ * `y_left − y_right` at this frame: positive when the LEFT ankle is the lower of the two, which is
+ * the one thing "this foot was on the ground" necessarily implies — a foot cannot be planted while
+ * the other foot is below it. `null` when either ankle is unresolvable.
  *
- * This is the identical fact `selectFootstrikes` uses as an admissibility check (`value >= 0` on
- * the differenced series); read here as the selector rather than as a filter. It has no tolerance
- * parameter, and an exact tie resolves to `'left'` only because a tie means the two ankles are at
- * the same height, which at a real contact does not happen.
+ * The MAGNITUDE is the point, not just the sign: two ankles half a swing apart are strong evidence
+ * about which is planted, and two ankles at the same height are none at all. `attributeSides`
+ * consumes it as a weight, which is why this returns the difference rather than a side.
  */
-function plantedSide(frame: RobustPoseFrame): 'left' | 'right' | null {
+function ankleDifference(frame: RobustPoseFrame): number | null {
   const left = resolvePoint(frame, ANKLE_NAME.left)
   const right = resolvePoint(frame, ANKLE_NAME.right)
   if (left === null || right === null) return null
-  return left.y >= right.y ? 'left' : 'right'
+  return left.y - right.y
+}
+
+/**
+ * Names the foot at each phase-derived instant — **one decision for the whole clip, not one per
+ * instant.**
+ *
+ * A stride is two steps, one per foot, so consecutive touchdowns alternate feet. The instants here
+ * are already one step apart by construction (one per fitted bounce cycle) and each carries its own
+ * cycle index `k`, which counts steps and therefore keeps alternating correctly across an instant
+ * that had to be dropped. So the entire question reduces to a single bit: does an even `k` mean
+ * left, or right?
+ *
+ * That bit is decided by summing `ankleDifference` across every instant, signed by the parity of
+ * `k` — a magnitude-weighted vote, where each instant contributes in proportion to how far apart
+ * the two ankles were and therefore to how much it actually knows.
+ *
+ * ## Why not read the lower ankle at each instant independently
+ *
+ * Because it was measured doing the wrong thing. On the Demo 1 track clip the per-instant reading
+ * emitted `left, left, right, right`: the two middle instants carry 351 px and 373 px of ankle
+ * separation and are unambiguous, while the two outer ones carry 41 px — a frame inside a
+ * nine-frame interpolation ramp, so its ankles are a straight-line fabrication — and 23 px. The two
+ * consecutive same-side instants that produced were one STEP apart, `strideLength`'s period gate
+ * correctly rejected the pair, and `verticalRatio` went from `0.0354` to `null`. Summed and
+ * weighted, the same four instants decide the parity by 660 px one way against 660 px the other and
+ * come out `right, left, right, left`, whose same-side pairs are 1.32 s — one stride at this clip's
+ * fitted 1.52 Hz, to within 0.3%. `verticalRatio` resolves again, at **twice** its previous
+ * confidence, because it now has two period-consistent pairs instead of one.
+ *
+ * Side-view footage is exactly where this matters: the two ankles cross and occlude each other
+ * every step, and MoveNet swaps their labels outright on some frames (visible on Demo 1 around
+ * t = 5.6). A per-instant reading is N independent coin flips on the noisiest quantity in the clip;
+ * this is one decision informed by all N, and a swapped or fabricated frame is outvoted rather than
+ * obeyed.
+ *
+ * Returns `null` when the evidence sums to exactly zero — no ankle resolved at any instant, or a
+ * perfect tie. There is then nothing in the clip that names the feet, and the caller falls back to
+ * the ankle detector rather than picking a parity arbitrarily.
+ */
+function attributeSides(
+  frames: RobustPoseFrame[],
+  instants: Array<{ frameIndex: number; cycle: number }>,
+): FootstrikeCandidate[] | null {
+  let evidence = 0
+  for (const instant of instants) {
+    const difference = ankleDifference(frames[instant.frameIndex])
+    if (difference === null) continue
+    evidence += instant.cycle % 2 === 0 ? difference : -difference
+  }
+  if (evidence === 0) return null
+
+  const evenCycleSide = evidence > 0 ? 'left' : 'right'
+  const oddCycleSide = OPPOSITE_SIDE[evenCycleSide]
+  return instants.map((instant) => ({
+    frameIndex: instant.frameIndex,
+    timestamp: frames[instant.frameIndex].timestamp,
+    side: instant.cycle % 2 === 0 ? evenCycleSide : oddCycleSide,
+  }))
 }
 
 /**
@@ -418,22 +475,37 @@ function plantedSide(frame: RobustPoseFrame): 'left' | 'right' | null {
  *
  * — half the amount by which stance exceeds half a step period, which is exactly the error a single
  * sinusoid makes by forcing stance = flight. On Demo 1 (`T = 0.658 s`, stances 0.36 s and 0.44 s)
- * that is 0.0155 s and 0.0555 s: **0.4 and 1.4 frames at 25 fps**, against the 4–6 frames the
- * ankle-difference path is late by on the same clip. Across all of running it stays inside
- * `0 … 0.10·T`, which is where the ankle path's residual STARTS. The residual is pinned executably
- * by a stance sweep in `footstrikes.test.ts`; the point of that sweep is that the swing-apex sweep,
- * which moves the other path from 1 frame to 11, does not move this one at all.
+ * that is 0.0155 s and 0.0555 s: sub-frame to 1.4 frames at 25 fps. Measured on the real Demo 1
+ * clip against keyframe-confirmed contacts it is larger — a systematic **+0.11 s** — so the
+ * bounce's low point on real footage trails midstance by more than the model allows. That is the
+ * first of the two known weaknesses; see the change's design D6 and D11.
+ *
+ * **What actually changes is the SCATTER, and that is the point.** Same clip, same run, same
+ * frames, keyframe-confirmed contacts: the ankle-difference path's four instants land at
+ * −0.16 / +0.18 / +0.08 / +0.02 s (spread **0.34 s**, wider than a stance phase); this path's land
+ * at +0.12 / +0.10 / +0.12 / +0.10 s (spread **0.02 s**). A per-clip systematic offset is a bias
+ * every instant shares, so a runner's metric reads consistently and the offset is a property of
+ * their own duty factor. A per-instant scatter is not a bias at all, and it is what put
+ * `overstriding`'s and `footStrikePattern`'s Demo 1 dispersion at 73%/78%.
+ *
+ * The residual is pinned executably by a stance sweep in `footstrikes.test.ts`; the point of that
+ * sweep is that the swing-apex sweep, which moves the other path from 1 frame to 11, does not move
+ * this one at all.
  *
  * ## What is deliberately NOT here
  *
- * No constant is added, subtracted or fitted anywhere. `T/4` is the distance from a sinusoid's
- * extremum to its inflection and nothing else. The quality bar is `cadenceMinFitR2`, read through
- * the same `isRhythmTrustworthy` predicate the spacing floor uses.
+ * No constant is added, subtracted or fitted anywhere — **including no correction for the measured
+ * +0.11 s.** It is a real, reproducible offset on one clip, and fitting it would repeat exactly the
+ * mistake the ankle path's phase error was a proof against: the right value is a function of the
+ * runner's duty factor and of how far the hip's low point trails their midstance, neither of which
+ * this pipeline measures. `T/4` is the distance from a sinusoid's extremum to its inflection and
+ * nothing else. The quality bar is `cadenceMinFitR2`, read through the same `isRhythmTrustworthy`
+ * predicate the spacing floor uses.
  *
  * Returns `[]` — never a partial guess — when the rhythm is untrustworthy, when the clip is too
- * short to have a snap tolerance, or when no predicted instant lands on a frame that resolves both
- * ankles. `detectFootstrikes` reads an empty result as "fall back", so the failure mode of this
- * path is that the clip keeps the behaviour it had before this path existed.
+ * short to have a snap tolerance, when no predicted instant snaps to a frame, or when nothing in
+ * the clip names the feet. `detectFootstrikes` reads an empty result as "fall back", so the failure
+ * mode of this path is that the clip keeps the behaviour it had before this path existed.
  */
 function detectFromBouncePhase(
   frames: RobustPoseFrame[],
@@ -456,20 +528,18 @@ function detectFromBouncePhase(
   const firstK = Math.ceil((spanStart - firstTouchdown) / period)
   const lastK = Math.floor((spanEnd - firstTouchdown) / period)
 
-  const candidates: FootstrikeCandidate[] = []
+  const instants: Array<{ frameIndex: number; cycle: number }> = []
   const claimedFrames = new Set<number>()
   for (let k = firstK; k <= lastK; k += 1) {
     const predicted = firstTouchdown + k * period
     const index = nearestFrameIndex(frames, predicted)
     if (Math.abs(frames[index].timestamp - predicted) > tolerance) continue
     if (claimedFrames.has(index)) continue
-    const side = plantedSide(frames[index])
-    if (side === null) continue
     claimedFrames.add(index)
-    candidates.push({ frameIndex: index, timestamp: frames[index].timestamp, side })
+    instants.push({ frameIndex: index, cycle: k })
   }
 
-  return candidates
+  return attributeSides(frames, instants) ?? []
 }
 
 /**
