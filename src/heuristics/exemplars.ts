@@ -24,7 +24,7 @@ import { median } from './mathUtils'
  *
  * **This is a judgment call, not a derived number**, in the same spirit as
  * `presenceMinConsecutiveFrames`'s own doc. It is pre-registered for measurement: per-clip,
- * per-metric coverage gets reported once the gallery runs on real footage, and a metric gated out
+ * per-metric coverage gets reported once evidence extraction runs on real footage, and a metric gated out
  * on EVERY clip is a finding to report rather than a number to quietly tune down.
  */
 export const MIN_EXEMPLAR_QUALITY = 0.5

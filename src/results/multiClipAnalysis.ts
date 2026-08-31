@@ -26,7 +26,7 @@ export interface ClipSession {
    * `null` again once the source is replaced or cleared.
    *
    * A live `<canvas>` held in memory for the session, never a data URL, blob or stored asset — the
-   * same no-export rule the evidence gallery follows. Its owner is the `ClipSlot` that derived it
+   * same no-export rule the evidence pipeline follows. Its owner is the `ClipSlot` that derived it
    * (`useClipPoster`); a consumer renders it and must never mutate or release it.
    */
   poster: ClipPoster | null
@@ -120,7 +120,7 @@ export function computeAggregateAnalysisState(clips: ClipSession[]): VideoAnalys
  * the fused numbers, this one says where each came from, and both read the same `clips` in the
  * same order, so `clips[indices[metricId]]` is the clip that produced `heuristics[metricId]`.
  *
- * The evidence gallery is the consumer: a fused metric's exemplar timestamps are on its *own*
+ * Session evidence is the consumer: a fused metric's exemplar timestamps are on its *own*
  * clip's media clock and must be resolved against that clip's `analysis.robustFrames` (crop
  * geometry) and `videoSource.sourceBlob` (extraction), never against whichever clip is on screen.
  * Both of those are on `ClipSession` already — `multiClipAnalysis`'s aggregate nulls

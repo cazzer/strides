@@ -4,11 +4,11 @@ import { METRIC_LABELS } from './metricConfidence'
 /**
  * The words that go around an evidence image, wherever it renders.
  *
- * Lifted out of the since-deleted `EvidenceGallery.tsx` unchanged (inline-annotated-evidence, `strides-ac9.2`) so the
- * metric card and the gallery caption the same picture with the same sentence rather than each
- * growing its own copy. The gallery is scheduled for deletion (`strides-ac9.3`); these strings are
- * not, and the spec's migration note keeps them "verbatim in intent", so they live here rather than
- * in the component that goes away.
+ * Lifted out of `EvidenceGallery.tsx` unchanged (inline-annotated-evidence, `strides-ac9.2`) so
+ * that the metric card and that component would caption the same picture with the same sentence
+ * rather than each growing its own copy. The component was then deleted (`strides-ac9.3`); these
+ * strings were not, and the spec's migration note keeps them "verbatim in intent", so they live
+ * here rather than in the component that went away. The card is the only caller today.
  */
 
 function formatSeconds(seconds: number): string {
@@ -26,7 +26,7 @@ function formatSeconds(seconds: number): string {
  * A ghosted pair gets no sentence disclaiming that it is one runner rather than two people. Every
  * paired label this repo emits already says one instant is *ghosted against* another, which names a
  * single subject at two moments; the disclaimer restated it at four times the length, under an image
- * that is now a thumbnail in a card rather than the gallery figure it was written for. `altFor`
+ * that is now a thumbnail in a card rather than the standalone figure it was written for. `altFor`
  * below keeps the framing, because alt text is read with none of that card around it.
  */
 export function captionFor(plan: EvidenceFramePlan): string {

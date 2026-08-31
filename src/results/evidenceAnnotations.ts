@@ -63,7 +63,7 @@ import type {
  * caveat in the same viewport. Option (c) — accept it — has no argument available: the mechanism is
  * confirmed and the failure lands exactly where the metric lives. Option (b) — joints only — pays
  * for that with `verticalOscillationCm`, whose marks carry no polarity at all and which is the one
- * grafted metric measured as reaching the gallery on all three test clips.
+ * grafted metric measured as reaching a rendered card on all three test clips.
  *
  * Concretely this suppresses `stepWidthCm`'s caliper POLARITY (the caliper still draws, as the
  * unsigned lateral span it honestly is) and costs `verticalOscillationCm` nothing. It is written

@@ -29,7 +29,7 @@ import type { ClipSession } from './multiClipAnalysis'
  * component may render a given canvas, so the thing that PRODUCES canvases cannot be one of the
  * things that renders them.
  *
- * Every discipline the gallery enforced moved here unchanged, because none of it was ever about
+ * Every discipline that component enforced moved here unchanged, because none of it was ever about
  * display: extraction at most once per clip per input signature, a per-clip cache keyed by
  * `clipId`, a run-id guard that drops a superseded run's canvases rather than parenting them, the
  * sequential one-decoder-at-a-time batch inside `extractSessionEvidence`, and a teardown that
