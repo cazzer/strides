@@ -1,0 +1,5 @@
+schema: spec-driven
+created: 2026-08-31
+# No spec delta. Diagnosis only: the 1.79x gap is explained and a trustworthiness judgement is
+# recorded for strides-wac. No behaviour changes here; the fixes are filed as their own beads.
+skip_specs: true

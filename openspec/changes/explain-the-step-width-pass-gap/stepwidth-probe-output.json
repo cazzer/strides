@@ -1,0 +1,117 @@
+{
+  "lines": 2,
+  "primary": {
+    "view": "front",
+    "value": 0.22531124981116724,
+    "hipWidthPx": 91.38268527014452,
+    "candidateCount": 5,
+    "usableStrikeCount": 5,
+    "interpolatedFraction": 0,
+    "strikes": [
+      {
+        "t": 0.1001,
+        "side": "left",
+        "ratio": 0.37567609722199713
+      },
+      {
+        "t": 0.433767,
+        "side": "right",
+        "ratio": 0.07780504850424295
+      },
+      {
+        "t": 0.767433,
+        "side": "left",
+        "ratio": -0.1660523422016528
+      },
+      {
+        "t": 1.1011,
+        "side": "right",
+        "ratio": 0.22531124981116724
+      },
+      {
+        "t": 1.418083,
+        "side": "left",
+        "ratio": 0.3483186249294107
+      }
+    ],
+    "candidateInstants": [
+      {
+        "t": 0.1001,
+        "side": "left"
+      },
+      {
+        "t": 0.433767,
+        "side": "right"
+      },
+      {
+        "t": 0.767433,
+        "side": "left"
+      },
+      {
+        "t": 1.1011,
+        "side": "right"
+      },
+      {
+        "t": 1.418083,
+        "side": "left"
+      }
+    ]
+  },
+  "scalePass": {
+    "view": "ambiguous",
+    "value": 0.4042384817261593,
+    "hipWidthPx": 88.46258997917175,
+    "candidateCount": 5,
+    "usableStrikeCount": 5,
+    "interpolatedFraction": 0,
+    "strikes": [
+      {
+        "t": 0.417083,
+        "side": "right",
+        "ratio": 0.8493383694077762
+      },
+      {
+        "t": 0.75075,
+        "side": "left",
+        "ratio": -0.00792523168622748
+      },
+      {
+        "t": 1.117783,
+        "side": "right",
+        "ratio": 0.1630577670144886
+      },
+      {
+        "t": 1.434767,
+        "side": "left",
+        "ratio": 0.4042384817261593
+      },
+      {
+        "t": 1.668333,
+        "side": "right",
+        "ratio": 1.3805093585918105
+      }
+    ],
+    "candidateInstants": [
+      {
+        "t": 0.417083,
+        "side": "right"
+      },
+      {
+        "t": 0.75075,
+        "side": "left"
+      },
+      {
+        "t": 1.117783,
+        "side": "right"
+      },
+      {
+        "t": 1.434767,
+        "side": "left"
+      },
+      {
+        "t": 1.668333,
+        "side": "right"
+      }
+    ]
+  }
+}

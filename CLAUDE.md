@@ -1067,6 +1067,58 @@ must not ship until that is understood. Filed as `strides-87x`, which now also b
 Full tables, per-hypothesis verdicts and the retraction:
 `openspec/changes/archive/2026-08-31-diagnose-mediapipe-front-view-ankles/design.md`.
 
+### The 1.79× `stepWidth` gap — EXPLAINED, and the puzzle was the premise (2026-08-31, `strides-87x`)
+
+`strides-boc` left this open, noting a median ought to shrug off a concentrated outlier cluster. It
+does not, **because n = 5**.
+
+One probe inside `computeStepWidth`, both passes in one run (primary line first, scale pass second),
+Demo 2, cold page load, real GPU:
+
+| | primary (MoveNet) | scale pass (MediaPipe) |
+|---|---|---|
+| `value` | **0.225311** | **0.404238** |
+| `hipWidthPx` | 91.383 | 88.463 → **ratio 0.968** |
+| candidates / usable | 5 / 5 | 5 / 5 |
+| `interpolatedFraction` | 0.000 | **0.000** |
+
+**The two passes sample DIFFERENT INSTANTS — a different set, not an offset.** The scale pass misses
+the primary's first strike (t = 0.10010) entirely and gains one the primary never sees
+(t = **1.66833, the clip's final sampled frame**); the four in between sit 0.010–0.020 s apart. Since
+`strides-cjl`, `detectFootstrikes` derives touchdown from the fitted hip-bounce phase, so two passes
+fitting different curves get different instants by construction — and they do differ, 3.02 Hz
+(primary cadence 181.2 spm) vs 3.12 Hz (scale pass), ~0.17 of a cycle accumulated over 1.67 s.
+
+**Both of the scale pass's outliers sit on contaminated frames**: t = 0.41708 (+0.84934) at the edge
+of the clip-opening window above, and t = 1.66833 (+1.38051) on the final frame, with no following
+frame to confirm it.
+
+⚠️ **A median over five is not outlier-robust, and that is the whole answer.** At n = 5 the median IS
+the third-largest value, so two high outliers promote the third-smallest into the middle slot:
+
+```
+scale pass ratios sorted: [-0.00793, 0.16306, 0.40424, 0.84934, 1.38051]
+median of all five               = 0.40424   <- the reported value
+median of the three non-outliers = 0.16306      ratio 2.48x
+```
+
+Strip the two and the same data reads **below** the primary's 0.22531 rather than 1.79× above it.
+**This is not a MediaPipe problem** — the primary also has `usableStrikeCount` 5 here and reports
+confidence **1.0**, so a MoveNet-only run is one bad strike from the same failure with nothing
+flagging it. Filed as `strides-h6r` (small-n median) and `strides-aah` (boundary strikes).
+
+**REFUTED: the denominator.** `hipWidthPx` ratio 0.968 — the scale pass's is 3% *smaller*, which
+moves `stepWidth` 3% *up*, not 79%. And `interpolatedFraction` is 0.000 on both sides, so unlike the
+SER defect **interpolation is not involved in this gap at all**. The two defects are separate.
+
+⚠️ **JUDGEMENT FOR `strides-wac`: `stepWidthCm` on Demo 2 is NOT trustworthy.** `strides-fn4`'s
+caution was right but its reason was wrong — it withheld the fix because "MediaPipe's ankles are
+bad", and the ankles are mostly fine (cross-backend median ankle distance ~20 px). The real problem
+is **which instants get sampled, and how few of them there are**. `strides-wac` must not simply
+inherit the primary's view and render 4.53 cm; it is now blocked on `strides-h6r` as well.
+
+Full tables: `openspec/changes/archive/2026-08-31-explain-the-step-width-pass-gap/design.md`.
+
 **2. `armSwingSymmetry` is fitted, not scanned** (`strides-gzl`, `2ed7f0b`, archived
 `2026-08-29-fit-arm-swing-amplitude`). The prominence-threshold extremum scan was latching onto
 sub-cycle wiggles — 9 half-swings per side on Demo 2 across a window holding ~4.8, with spacings
