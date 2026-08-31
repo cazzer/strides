@@ -678,6 +678,37 @@ backend structurally cannot produce SHALL be treated as absent rather than as po
 be well-defined from the exemplar's core keypoints alone, and an annotation SHALL omit a mark it has
 no resolved position for rather than anchoring it at the coordinate origin.
 
+A crop SHALL additionally carry a minimum side in native pixels, so that a degenerate keypoint box —
+a seed resolving to a single point, or to a set that nearly collapses onto a line — does not produce
+an empty image. That minimum is a **display** guarantee about pixel count and SHALL NOT be treated as
+a statement about framing.
+
+Where that minimum is what makes a crop wider than the subject on an axis, the system SHALL place the
+crop **centred on the subject** along that axis rather than on the measured region, provided the
+subject is at least as large as the crop on the other axis. The subject's extent SHALL be derived from
+every keypoint that resolves at the frames the crop is drawn through, not only the ones the exemplar
+named for its crop — a limb box says where the measurement was, and only the whole keypoint set says
+where the runner is. Both conditions are required:
+
+- The **minimum**, and not the padding, SHALL be what made the crop wider than the subject. A crop the
+  padding sized is framed as the padding intended, and re-placing it would move an image whose
+  composition nothing had inflated.
+- The crop SHALL be smaller than the subject on the other axis, so that it is a detail of one body
+  rather than a scene containing a whole one. When a crop already holds the entire subject, moving it
+  only exchanges one region of background for another, and the system has no evidence with which to
+  prefer either.
+
+That placement SHALL change only the rectangle's position. The crop's side SHALL be exactly what the
+padding, minimum and frame-bound arithmetic produced, so that everything judging a crop by its
+size — including the ghosted-pair growth ratio — is unaffected.
+
+The subject extent SHALL be treated as a **lower bound** on the subject rather than as its outline,
+because a pose backend that cannot produce a keypoint contributes nothing to it: on a backend with no
+foot keypoints the extent stops at the ankles while the runner's shoes continue below it. Centring
+follows from that: it reserves the same margin at both ends of the axis, which is the largest margin
+obtainable at either end, and is therefore the placement that best protects an extent the system
+cannot observe. The system SHALL NOT infer from this box that the subject ends where it ends.
+
 A pair whose two instants are indistinguishable — near-identical crop regions, or both resolving to
 the same sampled frame — SHALL be demoted to a single frame, or dropped when the metric has no honest
 single-instant meaning. A blurred double exposure of two identical frames is worse than one clean
@@ -721,6 +752,23 @@ reported at all, the clip's frames are unavailable, or extraction failed).
 - **THEN** the crop rectangle is clamped inside the frame with a positive size and the same aspect
   ratio every other crop uses, rather than a negative or out-of-bounds rectangle
 
+#### Scenario: A minimum-sized limb crop is placed on the runner, not on the limb
+
+- **WHEN** an exemplar names a small limb region whose padded box falls below the crop's minimum side,
+  and the runner is narrower than that minimum but taller than it
+- **THEN** the crop is centred horizontally on the runner's own keypoint extent rather than on the
+  limb box, so the enlargement the minimum introduced is spent on the runner instead of on whatever
+  stands beside them, while the crop's side, its aspect ratio and the limb region's presence in the
+  image are all unchanged
+
+#### Scenario: A crop that already holds the whole subject is left where it is
+
+- **WHEN** a minimum-sized crop is larger than the subject on both axes — a distant runner in a foot
+  or knee close-up, say
+- **THEN** the crop is not re-placed, because moving it would exchange one region of background for
+  another with nothing to choose between them, and a crop that rode up the body would reframe a foot
+  close-up as a whole-body shot and pull whatever stands behind the runner into the middle of it
+
 #### Scenario: A near-identical pair is demoted rather than blended
 
 - **WHEN** a pair's two instants produce near-identical crop regions, or both resolve to the same
@@ -740,6 +788,13 @@ reported at all, the clip's frames are unavailable, or extraction failed).
   produce, so they carry no position
 - **THEN** those keypoints are omitted from the crop derivation and the crop is computed from the
   exemplar's core keypoints alone — never anchored at the coordinate origin
+
+#### Scenario: A foot close-up is framed the same way whether or not the backend resolves feet
+
+- **WHEN** the same footstrike instant is planned on a backend that produces heel and toe keypoints
+  and on one that does not, so the subject's derived extent stops at the ankles on the second
+- **THEN** both produce the identical crop rectangle, and neither reframes the close-up around a
+  subject extent it read as an outline
 
 #### Scenario: Annotation geometry is decided with no canvas in reach
 
