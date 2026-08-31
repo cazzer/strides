@@ -1,21 +1,17 @@
 import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
-import type { HeuristicsConfig, MetricExemplar, MetricResult, View } from './types'
+import type { HeuristicsConfig, MetricResult, View } from './types'
 import { resolveBilateralPair, resolvePoint } from './keypoints'
 import { detectFootstrikes } from './footstrikes'
 import type { FootstrikeCandidate } from './footstrikes'
 import { computeMetricConfidence } from './confidence'
+import { describeDistribution, selectExemplars } from './exemplars'
 import {
-  cropDerivable,
-  cropKeypoints,
-  describeDistribution,
-  pairQuality,
-  scoreExemplarInstant,
-  selectExemplars,
-  selectOppositeSidePair,
-} from './exemplars'
-import type { ExemplarDistribution } from './exemplars'
+  STEP_WIDTH_ANKLE_NAME,
+  buildStepWidthExemplars,
+} from './stepWidthExemplars'
+import type { StepWidthStrikeSample } from './stepWidthExemplars'
 import { median } from './mathUtils'
 
 /**
@@ -25,100 +21,9 @@ import { median } from './mathUtils'
  */
 const MIN_STEP_WIDTH_CM_SAMPLE_SIZE = 4
 
-const ANKLE_NAME: Record<'left' | 'right', KeypointName> = {
-  left: 'left_ankle',
-  right: 'right_ankle',
-}
-
 const HIP_NAME: Record<'left' | 'right', KeypointName> = {
   left: 'left_hip',
   right: 'right_hip',
-}
-
-interface StrikeSample {
-  frame: RobustPoseFrame
-  side: 'left' | 'right'
-  value: number
-  /** The `outwardSign` guard below fell through to its `|| 1` fallback at this strike, inventing a
-   * polarity — the same degenerate case `stepWidth.ts` gates out, for the same reason. */
-  degenerate: boolean
-}
-
-/** The points the metric itself reads at a strike: the striking foot, against the hip midline. */
-function seedFor(sample: StrikeSample): KeypointName[] {
-  return [ANKLE_NAME[sample.side], 'left_hip', 'right_hip']
-}
-
-/**
- * One ghosted pair of OPPOSITE-foot plants, or a single strike when the clip never puts two
- * opposite plants next to each other — `stepWidth.ts`'s construction, over centimetre offsets
- * rather than hip-width ratios. See `selectOppositeSidePair` for why the pair has to be built
- * rather than read off the footstrike list.
- *
- * A strike with no usable `pixelsPerMeter` never becomes a candidate: it never entered `offsetsCm`
- * in the first place, so it has no measured value to be an exemplar of.
- */
-function buildExemplars(
-  samples: StrikeSample[],
-  distribution: ExemplarDistribution,
-): MetricExemplar[] {
-  const eligible = samples.filter(
-    (sample) => !sample.degenerate && cropDerivable(sample.frame, seedFor(sample)),
-  )
-  const instant = (sample: StrikeSample) => ({
-    frame: sample.frame,
-    seed: seedFor(sample),
-    value: sample.value,
-  })
-
-  const pair = selectOppositeSidePair(eligible, distribution)
-  if (pair !== null) {
-    const [first, second] = pair
-    const firstQuality = scoreExemplarInstant(instant(first), 'representative', distribution)
-    const secondQuality = scoreExemplarInstant(instant(second), 'representative', distribution)
-    if (firstQuality !== null && secondQuality !== null) {
-      const base =
-        Math.abs(first.value - distribution.median) <=
-        Math.abs(second.value - distribution.median)
-          ? first
-          : second
-      const ghost = base === first ? second : first
-      return [
-        {
-          kind: 'stepWidthStrike',
-          timestamp: base.frame.timestamp,
-          pairedTimestamp: ghost.frame.timestamp,
-          quality: pairQuality(firstQuality, secondQuality),
-          label: 'Opposite-foot plants either side of the hip midline',
-          cropKeypoints: cropKeypoints(
-            [...seedFor(base), ...seedFor(ghost)],
-            [],
-            [base.frame, ghost.frame],
-          ),
-        },
-      ]
-    }
-  }
-
-  const singles: MetricExemplar[] = []
-  for (const sample of eligible) {
-    const quality = scoreExemplarInstant(instant(sample), 'representative', distribution)
-    if (quality === null) continue
-    singles.push({
-      kind: 'stepWidthStrike',
-      timestamp: sample.frame.timestamp,
-      side: sample.side,
-      quality,
-      label: `Footstrike measured against the hip midline (${sample.side} foot)`,
-      cropKeypoints: cropKeypoints(
-        seedFor(sample),
-        [ANKLE_NAME[sample.side === 'left' ? 'right' : 'left']],
-        [sample.frame],
-      ),
-    })
-  }
-  singles.sort((a, b) => b.quality - a.quality)
-  return singles.slice(0, 1)
 }
 
 /**
@@ -214,10 +119,10 @@ export function computeStepWidthCm(
   let interpolatedCount = 0
   const offsetsCm: number[] = []
   // Index-parallel to `offsetsCm`, not to `candidates` — the `continue` below skips strikes.
-  const strikeSamples: StrikeSample[] = []
+  const strikeSamples: StepWidthStrikeSample[] = []
   for (const candidate of candidates) {
     const frame = frames[candidate.frameIndex]
-    const ankle = resolvePoint(frame, ANKLE_NAME[candidate.side])
+    const ankle = resolvePoint(frame, STEP_WIDTH_ANKLE_NAME[candidate.side])
     // Strict bilateral resolution for hip-mid: both hips must independently resolve, or the
     // frame is discarded. `resolveMidpoint`'s tolerant single-hip fallback would silently stand
     // in "my own hip" for the midline when the other side is briefly unresolved — harmless for a
@@ -306,7 +211,7 @@ export function computeStepWidthCm(
   }
 
   const exemplars = selectExemplars(
-    buildExemplars(strikeSamples, describeDistribution(offsetsCm)),
+    buildStepWidthExemplars(strikeSamples, describeDistribution(offsetsCm)),
   )
 
   return {

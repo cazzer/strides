@@ -38,6 +38,31 @@ export function useClipPoster(videoSource: VideoSource): ClipPoster | null {
     let active = true
     let owned: ClipPoster | null = null
 
+    // ### No rejection handler, deliberately (`strides-9yb`)
+    //
+    // `deriveClipPoster` resolves `null` for every failure it knows about, so a REJECTION here can
+    // only mean a bug inside the derivation — not a clip this app cannot poster. The question that
+    // settles is where such a bug should become visible, and the answer is: exactly where it does
+    // now, as an unhandled rejection.
+    //
+    // A `.catch` would make it strictly LESS visible, not more. There is no error channel in this
+    // app to catch it INTO — no telemetry, no error boundary, and not one `console.error` anywhere
+    // in `src/` — so a handler could only write a log line, while suppressing the browser's own
+    // unhandled-rejection report, which carries a stack, is marked an error, and is the one signal
+    // automated harnesses actually hook (`page.on('pageerror')`, vitest's unhandled-rejection
+    // failure, `window.onunhandledrejection`). Quieter and machine-invisible is the wrong trade for
+    // a condition that is by definition a defect.
+    //
+    // An error boundary is not an alternative either: boundaries catch throws from render,
+    // lifecycle and constructors. A rejection inside this `.then` is not on React's call stack, so
+    // no boundary at any depth would ever see it.
+    //
+    // It is also already bounded — `poster` stays `null` and the strip simply shows no thumbnail,
+    // so nothing downstream is corrupted by leaving it loud. And `posterFrame.test.ts` deliberately
+    // PINS `deriveClipPoster` rejecting (and pins that the shared decoder queue survives it), so a
+    // handler here would quietly contradict an asserted contract — the same call `strides-k03` made
+    // when it fixed the matching doc rather than the code. `useSessionEvidence.ts` carries the
+    // identical decision at its own extraction call.
     void deriveClipPoster(sourceBlob, metadata).then((result) => {
       if (!active) {
         // Landed after this effect run was torn down (unmount, reset, or a new source). Nothing
