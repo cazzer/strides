@@ -38,7 +38,10 @@ import {
   boundingBoxOfPoints,
   computeEvidenceCropRect,
   evidenceOutputSide,
+  evidenceCropPaddedSide,
   evidenceCropSideDemand,
+  frameSubjectExtentBox,
+  subjectCentredCropRect,
   evidencePairCropGrowth,
   evidenceSnapToleranceSeconds,
   evidenceTravelDirection,
@@ -625,6 +628,318 @@ describe('computeEvidenceCropRect', () => {
         height: 1080,
       }),
     ).toBeNull()
+  })
+})
+
+/**
+ * A whole body, laid out so every number a crop rule reads is arithmetic rather than anatomy:
+ * the head sits at `top`, the ankles at `bottom`, and the torso/limbs span `left`..`right`.
+ *
+ * `feet` is the backend switch that `strides-e9b` turns on. MoveNet never resolves
+ * `left_heel`/`right_heel`/`left_foot_index`/`right_foot_index` — they arrive `'unrecoverable'` —
+ * so on the default backend a subject's box stops at the ankles and the shoes hang below it. Pass
+ * `feet: true` for the MediaPipe shape, where they resolve 30 px lower.
+ */
+function bodyFrame({
+  timestamp = 0,
+  left,
+  right,
+  top,
+  bottom,
+  feet = false,
+}: {
+  timestamp?: number
+  left: number
+  right: number
+  top: number
+  bottom: number
+  feet?: boolean
+}): RobustPoseFrame {
+  const midY = (top + bottom) / 2
+  return buildFrame(
+    {
+      nose: { x: (left + right) / 2, y: top },
+      left_ear: { x: left, y: top },
+      right_ear: { x: right, y: top },
+      left_shoulder: { x: left, y: top + (bottom - top) * 0.2 },
+      right_shoulder: { x: right, y: top + (bottom - top) * 0.2 },
+      left_elbow: { x: left, y: midY },
+      right_elbow: { x: right, y: midY },
+      left_wrist: { x: left, y: midY },
+      right_wrist: { x: right, y: midY },
+      left_hip: { x: left, y: midY },
+      right_hip: { x: right, y: midY },
+      left_knee: { x: left, y: (midY + bottom) / 2 },
+      right_knee: { x: right, y: (midY + bottom) / 2 },
+      left_ankle: { x: left, y: bottom },
+      right_ankle: { x: right, y: bottom },
+      ...(feet
+        ? {
+            left_heel: { x: left, y: bottom + 30 },
+            right_heel: { x: right, y: bottom + 30 },
+            left_foot_index: { x: left, y: bottom + 30 },
+            right_foot_index: { x: right, y: bottom + 30 },
+          }
+        : {}),
+    },
+    timestamp,
+  )
+}
+
+/** Adds a small extra keypoint cluster to a body, so an exemplar can name a LIMB-sized crop set
+ * whose box is a fraction of the subject's — the shape the display floor inflates. */
+function withLimb(
+  frame: RobustPoseFrame,
+  box: { minX: number; maxX: number; minY: number; maxY: number },
+): RobustPoseFrame {
+  const keypoints = frame.keypoints.map((keypoint) => {
+    if (keypoint.name === 'left_shoulder')
+      return { ...keypoint, x: box.minX, y: box.minY, status: 'detected' as const, score: 0.9 }
+    if (keypoint.name === 'left_wrist')
+      return { ...keypoint, x: box.maxX, y: box.maxY, status: 'detected' as const, score: 0.9 }
+    return keypoint
+  })
+  return { ...frame, keypoints }
+}
+
+const LIMB_SEED = ['left_shoulder', 'left_wrist'] as const
+
+describe('frameSubjectExtentBox', () => {
+  it('spans every keypoint that resolves, not just the ones a crop names', () => {
+    const frame = bodyFrame({ left: 750, right: 950, top: 250, bottom: 850 })
+    expect(frameSubjectExtentBox([frame])).toEqual({
+      minX: 750,
+      maxX: 950,
+      minY: 250,
+      maxY: 850,
+    })
+  })
+
+  it('unions across the drawn frames, because one crop is drawn through both', () => {
+    const base = bodyFrame({ left: 750, right: 950, top: 250, bottom: 850 })
+    const ghost = bodyFrame({ timestamp: 0.1, left: 850, right: 1050, top: 300, bottom: 900 })
+    expect(frameSubjectExtentBox([base, ghost])).toEqual({
+      minX: 750,
+      maxX: 1050,
+      minY: 250,
+      maxY: 900,
+    })
+  })
+
+  it('stops at the ankles on MoveNet and reaches the shoes on MediaPipe', () => {
+    const movenet = bodyFrame({ left: 750, right: 950, top: 250, bottom: 850 })
+    const mediapipe = bodyFrame({
+      left: 750,
+      right: 950,
+      top: 250,
+      bottom: 850,
+      feet: true,
+    })
+    // The difference is exactly the four foot names, and it is 30 px of real runner that the
+    // default backend cannot see. Anything reading this box as "where the body ends" mis-frames
+    // every MoveNet subject's feet.
+    expect(frameSubjectExtentBox([movenet])?.maxY).toBe(850)
+    expect(frameSubjectExtentBox([mediapipe])?.maxY).toBe(880)
+  })
+
+  it('is null exactly when no keypoint resolves', () => {
+    expect(frameSubjectExtentBox([buildFrame({}, 0)])).toBeNull()
+    expect(frameSubjectExtentBox([])).toBeNull()
+  })
+
+  it('contains the crop box, so a crop that holds it holds the measured region too', () => {
+    const frame = withLimb(
+      bodyFrame({ left: 750, right: 950, top: 250, bottom: 850 }),
+      { minX: 900, maxX: 950, minY: 350, maxY: 450 },
+    )
+    const subject = frameSubjectExtentBox([frame])!
+    const crop = frameCropBox(frame, [...LIMB_SEED])!
+    expect(crop.minX).toBeGreaterThanOrEqual(subject.minX)
+    expect(crop.maxX).toBeLessThanOrEqual(subject.maxX)
+    expect(crop.minY).toBeGreaterThanOrEqual(subject.minY)
+    expect(crop.maxY).toBeLessThanOrEqual(subject.maxY)
+  })
+})
+
+describe('subjectCentredCropRect', () => {
+  /** The measured Demo 2 shape at 1080p arithmetic: a 50×100 arm box pads to 160, the 320 px
+   * display floor doubles that, and the runner is 200 px wide — narrower than the crop the floor
+   * produced and much taller than it. */
+  const armFrame = () =>
+    withLimb(bodyFrame({ left: 750, right: 950, top: 250, bottom: 850 }), {
+      minX: 900,
+      maxX: 950,
+      minY: 350,
+      maxY: 450,
+    })
+
+  it('centres a floor-inflated limb crop on the subject instead of on the limb', () => {
+    const frame = armFrame()
+    const roi = frameCropBox(frame, [...LIMB_SEED])!
+    expect(evidenceCropPaddedSide(roi)).toBe(160)
+    const crop = computeEvidenceCropRect([frame], [...LIMB_SEED], HD)!
+    expect(crop.side).toBe(EVIDENCE_CROP_MIN_SIDE_PX)
+    // Centred on the arm the crop would sit at x = 925 - 160 = 765 and spend 110 px of the floor's
+    // own surplus on whatever is to the right of the runner. Centred on the runner it sits at
+    // x = 850 - 160 = 690 and holds all 200 px of them with 60 px to spare on each side.
+    expect(crop.x).toBe(690)
+    // The unqualifying axis does not move: the subject is 600 px tall, the crop 320.
+    expect(crop.y).toBe(400 - EVIDENCE_CROP_MIN_SIDE_PX / 2)
+  })
+
+  it('keeps the measured region inside the picture when it moves', () => {
+    const frame = armFrame()
+    const roi = frameCropBox(frame, [...LIMB_SEED])!
+    const crop = computeEvidenceCropRect([frame], [...LIMB_SEED], HD)!
+    expect(roi.minX).toBeGreaterThanOrEqual(crop.x)
+    expect(roi.maxX).toBeLessThanOrEqual(crop.x + crop.side)
+    expect(roi.minY).toBeGreaterThanOrEqual(crop.y)
+    expect(roi.maxY).toBeLessThanOrEqual(crop.y + crop.side)
+  })
+
+  it('never changes the side, so nothing that reads a crop size can observe it', () => {
+    const frame = armFrame()
+    const roi = frameCropBox(frame, [...LIMB_SEED])!
+    const subject = frameSubjectExtentBox([frame])!
+    const unplaced = computeCropRect(
+      roi,
+      HD.width,
+      HD.height,
+      EVIDENCE_CROP_PADDING_MULTIPLIER,
+      EVIDENCE_CROP_MIN_SIDE_PX,
+    )
+    const placed = subjectCentredCropRect(unplaced, roi, subject, HD)
+    expect(placed.side).toBe(unplaced.side)
+    expect(placed.x).not.toBe(unplaced.x)
+  })
+
+  it('declines when the crop already holds the whole subject — the multiperson kneeFlexion shape', () => {
+    // A 116×290 runner and a 99×146 knee box: padded 233.6, floored to 320, which is larger than
+    // the runner on BOTH axes. Centring vertically here rides 66 px up the body, which is what
+    // promoted a walking bystander from a pair of legs at the top edge into the middle of the
+    // picture. The crop must not move.
+    const frame = withLimb(
+      bodyFrame({ left: 400, right: 516, top: 500, bottom: 790 }),
+      { minX: 410, maxX: 509, minY: 600, maxY: 746 },
+    )
+    const roi = frameCropBox(frame, [...LIMB_SEED])!
+    expect(evidenceCropPaddedSide(roi)).toBeCloseTo(233.6, 10)
+    const crop = computeEvidenceCropRect([frame], [...LIMB_SEED], HD)!
+    expect(crop.side).toBe(EVIDENCE_CROP_MIN_SIDE_PX)
+    expect(crop.x).toBeCloseTo(459.5 - 160, 10)
+    expect(crop.y).toBeCloseTo(673 - 160, 10)
+  })
+
+  it('declines for a foot close-up, whether or not the backend resolved the feet', () => {
+    // The multiperson footStrikePattern shape: a tiny foot box under a runner shorter than the
+    // 320 px floor. Centring vertically rides ~100 px up the body and reframes a foot close-up as
+    // a whole-body shot with the sole clipped off — the exact failure this clause exists to stop.
+    // Asserted on BOTH backend shapes, so the framing of a foot crop cannot depend on whether
+    // `left_heel` and friends came back.
+    const foot = { minX: 430, maxX: 451, minY: 700, maxY: 775 }
+    const movenet = withLimb(
+      bodyFrame({ left: 400, right: 535, top: 490, bottom: 779 }),
+      foot,
+    )
+    const mediapipe = withLimb(
+      bodyFrame({ left: 400, right: 535, top: 490, bottom: 779, feet: true }),
+      foot,
+    )
+    const cropped = (frame: RobustPoseFrame) =>
+      computeEvidenceCropRect([frame], [...LIMB_SEED], HD)
+    expect(cropped(movenet)).toEqual(cropped(mediapipe))
+    expect(cropped(movenet)).toEqual({
+      x: 440.5 - 160,
+      y: 737.5 - 160,
+      side: EVIDENCE_CROP_MIN_SIDE_PX,
+    })
+  })
+
+  it('declines when the PADDING, not the floor, made the crop wider than the subject', () => {
+    // The Demo 2 `verticalOscillation` shape: a 180×450 hip-to-ankle box pads to 720 on a runner
+    // 283 px wide — four times wider than the body, nowhere near the floor. That crop's own
+    // bystander is `strides-a8y`, a different mechanism, and this rule must not touch it.
+    const portrait: EvidenceFrameSize = { width: 2160, height: 3840 }
+    const frame = withLimb(
+      bodyFrame({ left: 738, right: 1021, top: 1591, bottom: 2359 }),
+      { minX: 800, maxX: 980, minY: 1700, maxY: 2150 },
+    )
+    const roi = frameCropBox(frame, [...LIMB_SEED])!
+    expect(evidenceCropPaddedSide(roi)).toBe(720)
+    const crop = computeEvidenceCropRect([frame], [...LIMB_SEED], portrait)!
+    expect(crop.side).toBe(720)
+    expect(crop.x).toBe(890 - 360)
+    expect(crop.y).toBe(1925 - 360)
+  })
+
+  it('declines when the frame cap bound the side — a capped crop can never qualify', () => {
+    // `side < paddedSide` whenever the cap wins, and the rule needs `paddedSide <= extent < side`,
+    // so the chain is unsatisfiable by arithmetic rather than by a special case.
+    const small: EvidenceFrameSize = { width: 400, height: 300 }
+    const frame = withLimb(
+      bodyFrame({ left: 20, right: 370, top: 10, bottom: 290 }),
+      { minX: 40, maxX: 340, minY: 20, maxY: 280 },
+    )
+    const roi = frameCropBox(frame, [...LIMB_SEED])!
+    expect(evidenceCropPaddedSide(roi)).toBeGreaterThan(small.height)
+    expect(computeEvidenceCropRect([frame], [...LIMB_SEED], small)).toEqual({
+      x: 190 - 150,
+      y: 0,
+      side: 300,
+    })
+  })
+
+  it('shifts rather than shrinks at a frame edge, exactly as computeCropRect clamps', () => {
+    // Same qualifying shape as the arm case, pushed against the right edge so centring on the
+    // subject would run the crop out of the frame. The scenario "A subject near the frame edge
+    // yields a valid crop" is the one this must not break.
+    const frame = withLimb(
+      bodyFrame({ left: 1790, right: 1990, top: 250, bottom: 850 }),
+      { minX: 1940, maxX: 1990, minY: 350, maxY: 450 },
+    )
+    const crop = computeEvidenceCropRect([frame], [...LIMB_SEED], HD)!
+    expect(crop.side).toBe(EVIDENCE_CROP_MIN_SIDE_PX)
+    expect(crop.x).toBe(HD.width - EVIDENCE_CROP_MIN_SIDE_PX)
+    expect(crop.x).toBeGreaterThanOrEqual(0)
+    expect(crop.x + crop.side).toBeLessThanOrEqual(HD.width)
+    // The same centre through `computeCropRect`'s own clamp lands in the same place — this rule
+    // repeats those two lines rather than calling it, and that is what pins them together.
+    const viaCropRect = computeCropRect(
+      { minX: 1890, maxX: 1890, minY: 400, maxY: 400 },
+      HD.width,
+      HD.height,
+      1,
+      EVIDENCE_CROP_MIN_SIDE_PX,
+    )
+    expect(crop).toEqual(viaCropRect)
+  })
+
+  it('is a no-op on an unusable frame size', () => {
+    const box: BoundingBoxPx = { minX: 0, maxX: 10, minY: 0, maxY: 10 }
+    const crop = { x: 5, y: 5, side: 320 }
+    expect(subjectCentredCropRect(crop, box, box, { width: 0, height: 0 })).toBe(
+      crop,
+    )
+  })
+
+  it('can only move vertically on a subject WIDER than the crop, and still holds the crop box', () => {
+    // The one shape where MoveNet's missing feet could bias a placement: the vertical axis
+    // qualifies only when the subject is wider than the crop and shorter than it, which an upright
+    // runner never is — no exemplar on any of the three test clips reaches it. Constructed here so
+    // the guarantee that survives it is asserted rather than assumed: the measured region stays in
+    // the picture.
+    const frame = withLimb(
+      bodyFrame({ left: 300, right: 700, top: 400, bottom: 680 }),
+      { minX: 480, maxX: 520, minY: 500, maxY: 600 },
+    )
+    const roi = frameCropBox(frame, [...LIMB_SEED])!
+    const crop = computeEvidenceCropRect([frame], [...LIMB_SEED], HD)!
+    expect(crop.side).toBe(EVIDENCE_CROP_MIN_SIDE_PX)
+    // Vertical moved (subject 280 tall < 320, subject 400 wide >= 320); horizontal did not.
+    expect(crop.y).toBe(540 - 160)
+    expect(crop.x).toBe(500 - 160)
+    expect(roi.minY).toBeGreaterThanOrEqual(crop.y)
+    expect(roi.maxY).toBeLessThanOrEqual(crop.y + crop.side)
   })
 })
 

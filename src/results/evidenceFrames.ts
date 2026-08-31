@@ -1,4 +1,5 @@
 import type { KeypointName } from '../pose/types'
+import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { BoundingBoxPx, CropRectPx } from '../pose/backends/movenetCrop'
 import {
@@ -665,13 +666,138 @@ export function computeEvidenceCropRect(
     .filter((box): box is BoundingBoxPx => box !== null)
   const union = unionBoxes(boxes)
   if (union === null) return null
-  return computeCropRect(
+  const crop = computeCropRect(
     union,
     frameSize.width,
     frameSize.height,
     EVIDENCE_CROP_PADDING_MULTIPLIER,
     EVIDENCE_CROP_MIN_SIDE_PX,
   )
+  const subject = frameSubjectExtentBox(frames)
+  return subject === null
+    ? crop
+    : subjectCentredCropRect(crop, union, subject, frameSize)
+}
+
+/**
+ * The subject's own extent across the drawn instants: the box over EVERY keypoint name that
+ * resolves at those frames, not just the ones this exemplar named for its crop.
+ *
+ * **This is a LOWER BOUND on the subject, and treating it as one is the whole design.** It is
+ * built from `COMMON_KEYPOINT_NAMES` through the same `resolvePoint` the crop uses, so a name the
+ * pipeline could not recover simply does not contribute — and on MoveNet, the default backend,
+ * `left_heel`/`right_heel`/`left_foot_index`/`right_foot_index` NEVER recover, so this box ends at
+ * the ankles and the runner's shoes hang below it. `frameCropBox`'s doc records the same fact for
+ * the crop set. Anything reading this box as "where the body ends" will therefore mis-frame the
+ * bottom of every MoveNet subject; `subjectCentredCropRect` reads it as "where the body certainly
+ * IS" instead, which is a claim the data supports.
+ *
+ * Unioned across the frames rather than per frame, because one crop is drawn through both
+ * instants and a box that described only one of them would describe neither picture.
+ *
+ * `null` when nothing resolves at any frame. The crop set is a subset of these names, so a null
+ * here implies a null crop box: a caller that already has a crop box can rely on this being
+ * non-null, and on the crop box being CONTAINED in it.
+ */
+export function frameSubjectExtentBox(
+  frames: RobustPoseFrame[],
+): BoundingBoxPx | null {
+  const points: Array<{ x: number; y: number }> = []
+  for (const frame of frames) {
+    for (const name of COMMON_KEYPOINT_NAMES) {
+      const point = resolvePoint(frame, name)
+      if (point !== null) points.push(point)
+    }
+  }
+  return boundingBoxOfPoints(points)
+}
+
+/**
+ * Re-places an already-sized crop so that, on an axis where the DISPLAY FLOOR made it wider than
+ * the subject, it is centred on the subject instead of on the measured region. Same `side`, same
+ * frame, only `x`/`y` move — so nothing that reads a crop's size (`evidencePairCropGrowth`,
+ * `isTooFarApartPair`, the coverage line's `cropSidePx`) can observe this at all.
+ *
+ * **The defect (`strides-e9b`).** `EVIDENCE_CROP_MIN_SIDE_PX` is a floor on PIXELS, sized against
+ * the viewer so a thumbnail is not upscaled mush; it is not a framing decision and it knows nothing
+ * about what is beside the runner. On a three-keypoint limb box it roughly doubles the crop, and
+ * because `computeCropRect` centres on the box it always was, half of that new area is spent on
+ * whichever side of the arm has no runner in it. On `park-approach.mp4` that side holds a man in a
+ * yellow shirt, who then reads as a second body in a ghosted composite whose caption describes one.
+ *
+ * **What is available to fix it, and what is not.** There is no per-frame record of anybody else:
+ * detection is single-person, `RobustPoseFrame` carries no bounding box, and
+ * `selectRetroactivePersonOfInterest` derives per-frame boxes only to rank tracks and then discards
+ * them. So a bystander cannot be looked up and cannot be avoided by name. What IS in hand at this
+ * exact point is the frame's complete keypoint set, and therefore the SUBJECT's own extent — and
+ * covering the subject is the same act as not covering what is beside them.
+ *
+ * **The two conditions, per axis, both load-bearing.**
+ *
+ * 1. `paddedSide <= subjectExtent < side` — the FLOOR, not the padding, is what made the crop
+ *    wider than the subject here. Below the floor the crop would have been `paddedSide`, which this
+ *    says is no wider than the subject; at the floor it is wider. That is the precise statement of
+ *    "area the metric did not ask for", and it is what keeps this away from crops the padding sized:
+ *    Demo 2's `verticalOscillation` crop is 720 px over a 283 px-wide subject, four times wider than
+ *    the body and nowhere near the floor, and it must not be re-framed by this rule (its own
+ *    bystander problem is `strides-a8y`, and it is not this mechanism). Note this subsumes the
+ *    frame cap too: a capped crop has `side < paddedSide`, which the chain cannot satisfy.
+ * 2. `subjectExtent(other axis) >= side` — the crop is a BAND ACROSS one body, a detail rather than
+ *    a scene that contains a whole person. When the crop is larger than the subject on both axes it
+ *    already holds all of them, and moving it only swaps one piece of background for another with
+ *    nothing in hand to prefer either. Dropping this clause is not a theoretical loss: on
+ *    `multiperson-track.mp4` it is what stops `kneeFlexion` from riding 66 px up the body (which
+ *    promotes a walking bystander from a pair of legs at the edge into the centre of the picture)
+ *    and `footStrikePattern` from riding 104 px up (which reframes a foot close-up as a whole-body
+ *    shot with the sole clipped off). Both were measured, both on this clip, both prevented here.
+ *
+ * **Why CENTRED and not flush.** Centring leaves `(side − subjectExtent) / 2` of margin at BOTH
+ * ends of the axis, which is the largest margin obtainable at either end — the minimax placement
+ * under uncertainty about where the subject really stops. That matters because
+ * `frameSubjectExtentBox` is a lower bound: on MoveNet the shoes are below the box, and the
+ * placement that best protects an unobserved extension is the one that reserves the most room at
+ * every end. The alternative — sliding just far enough to contain the box — reserves nothing on the
+ * side it slid toward, which is exactly where an unobserved foot would be.
+ *
+ * **The measured region cannot leave the picture.** `cropBox` is built from a SUBSET of the names
+ * `frameSubjectExtentBox` reads, so `cropBox ⊆ subjectBox`; on a qualifying axis the whole subject
+ * box fits inside `side`, so the crop contains all of it and hence all of the measured region. The
+ * un-qualifying axis does not move. No clamp on the shift is needed for that guarantee and none is
+ * applied — a cap would only trade picture quality for a property that already holds.
+ *
+ * The frame clamp repeats `computeCropRect`'s two positioning lines rather than calling it: passing
+ * a reconstructed square back through it risks a one-ulp change in `side`, and `side` is on the
+ * coverage line. Same shift-not-shrink behaviour, pinned by a test against `computeCropRect` itself.
+ */
+export function subjectCentredCropRect(
+  crop: CropRectPx,
+  cropBox: BoundingBoxPx,
+  subjectBox: BoundingBoxPx,
+  frameSize: EvidenceFrameSize,
+): CropRectPx {
+  if (!isUsableFrameSize(frameSize)) return crop
+  const paddedSide = evidenceCropPaddedSide(cropBox)
+  const subjectWidth = subjectBox.maxX - subjectBox.minX
+  const subjectHeight = subjectBox.maxY - subjectBox.minY
+  const qualifies = (own: number, other: number) =>
+    paddedSide <= own && own < crop.side && other >= crop.side
+
+  const centerX = qualifies(subjectWidth, subjectHeight)
+    ? (subjectBox.minX + subjectBox.maxX) / 2
+    : crop.x + crop.side / 2
+  const centerY = qualifies(subjectHeight, subjectWidth)
+    ? (subjectBox.minY + subjectBox.maxY) / 2
+    : crop.y + crop.side / 2
+
+  const x = Math.min(
+    Math.max(centerX - crop.side / 2, 0),
+    frameSize.width - crop.side,
+  )
+  const y = Math.min(
+    Math.max(centerY - crop.side / 2, 0),
+    frameSize.height - crop.side,
+  )
+  return { x, y, side: crop.side }
 }
 
 /**
@@ -690,10 +816,21 @@ export function computeEvidenceCropRect(
  * would then return a rect whose position is arithmetic on infinities, and a caller could read it.
  */
 export function evidenceCropSideDemand(box: BoundingBoxPx): number {
-  const padded =
+  return Math.max(evidenceCropPaddedSide(box), EVIDENCE_CROP_MIN_SIDE_PX)
+}
+
+/**
+ * The crop side the exemplar's own keypoints ASK FOR — padding only, before the display floor and
+ * before the frame cap. Split out of `evidenceCropSideDemand` rather than inlined twice because
+ * the difference between this and the returned side is exactly the area the FLOOR added, and
+ * `subjectCentredCropRect` decides what to do with that area. Two copies of the padding arithmetic
+ * would let the two consumers disagree about how much of a crop the metric actually requested.
+ */
+export function evidenceCropPaddedSide(box: BoundingBoxPx): number {
+  return (
     Math.max(box.maxX - box.minX, box.maxY - box.minY) *
     EVIDENCE_CROP_PADDING_MULTIPLIER
-  return Math.max(padded, EVIDENCE_CROP_MIN_SIDE_PX)
+  )
 }
 
 /**
