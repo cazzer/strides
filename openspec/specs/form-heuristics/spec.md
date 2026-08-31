@@ -17,6 +17,13 @@ relative to torso length) — each compared against configurable thresholds
 (`sideViewMaxBilateralSpreadRatio`, `frontViewMinBilateralSpreadRatio`,
 `sideViewMinSagittalExcursionRatio`, `frontViewMaxSagittalExcursionRatio`).
 
+SER SHALL be computed per side as an extreme-quantile range over that side's **directly detected**
+ankle-relative-to-hip samples, excluding every sample whose ankle or whose own hip the robustness
+layer had to interpolate, and SHALL be reported for a side only where that detected population
+reaches the minimum count the range estimator needs (see "Interpolated samples are excluded from
+extreme-quantile signals rather than discounted"). The clip's SER is the mean over whichever sides
+produced a range, normalized by torso length; where no side produced one, SER is unavailable.
+
 A threshold SHALL be clearable by a clip filmed dead-on for the view it admits, for every plausible
 adult body build. In particular `frontViewMinBilateralSpreadRatio` SHALL sit below the bilateral
 spread ratio a dead-on front view produces for the narrowest such build, so that no runner is
@@ -38,7 +45,8 @@ differently-built runner `'front'`.
 #### Scenario: Signals disagree or are individually inconclusive
 
 - **WHEN** one signal votes side and the other votes front, or either signal doesn't clear either
-  threshold, or a signal is unavailable (no frames yield a usable BSR or SER sample)
+  threshold, or a signal is unavailable — no frames yield a usable BSR sample, or no side yields
+  enough directly-detected samples for a usable SER range
 - **THEN** the clip is classified `'ambiguous'` rather than committing to a possibly-wrong label
 
 #### Scenario: A narrow-built runner filmed dead-on is classified front
@@ -151,8 +159,39 @@ The system SHALL derive every heuristic's input exclusively from `RobustPoseFram
 pose-detection output), resolving bilateral midpoints tolerantly (falling back to a single
 resolvable side, flagged as interpolated, rather than discarding the frame) for center-of-mass
 proxies, and strictly (both sides required) only where the left/right separation itself is the
-measured signal. Every metric SHALL track what fraction of its resolved input was interpolated
-rather than directly detected, and factor that fraction into its confidence.
+measured signal.
+
+Two policies govern what a signal then does with an interpolated sample, and which applies SHALL be
+decided by the signal's own reduction, not by the signal's importance:
+
+- **A signal reduced by a median or a mean SHALL DISCOUNT.** Every metric falls here: it keeps
+  interpolated samples, tracks what fraction of its resolved input was interpolated rather than
+  directly detected, and factors that fraction into its confidence.
+- **A signal reduced by an extreme quantile SHALL EXCLUDE.** It discards interpolated samples from
+  its population outright, because an interpolated sample is placed on the straight line between
+  its own flanking detections, so wherever those anchors bound it, it cannot carry a real extreme —
+  it can only add probability mass near one, which moves an extreme quantile toward whatever the
+  anchors got wrong. Where they bound it, excluding cannot discard a real extreme the retained
+  anchors do not already carry, whereas including can manufacture one. View detection's Sagittal
+  Excursion Ratio falls here.
+
+Where a signal is derived from several keypoint channels, each interpolated independently over its
+own run boundaries, that bound holds exactly only when the contributing channels were reconstructed
+together. The excluding rule SHALL therefore be applied on the conservative side: a sample SHALL be
+excluded whenever ANY contributing point was interpolated, accepting that this can also discard a
+genuine reading. That is the safe direction for an extreme-quantile range, because excluding can
+only narrow it — never widen it — so the worst case is a signal that abstains rather than one that
+votes confidently for the wrong answer.
+
+View detection's Bilateral Spread Ratio is reduced by a median and so falls under the discounting
+rule. It keeps its interpolated samples, which is what that rule requires of it; it is a signal
+inside the classifier rather than a metric, and nothing requires it to publish an interpolated
+fraction or to discount the classifier's own confidence by one.
+
+An excluding signal SHALL NOT report a value from a population too small for its estimator to trim
+at both ends; it SHALL report the signal as unavailable instead of silently degrading to a
+minimum-to-maximum span. That minimum SHALL be derived from the estimator's own arithmetic rather
+than configured.
 
 #### Scenario: Single-side fallback keeps a frame usable
 
@@ -167,6 +206,21 @@ rather than directly detected, and factor that fraction into its confidence.
   `'detected'`, or a large fraction of frames were `'unrecoverable'` (reducing frame coverage)
 - **THEN** the metric's `confidence` is visibly lower than an otherwise-identical computation over
   fully-`'detected'`, fully-covered input, and the computation still completes without throwing
+
+#### Scenario: An extreme-quantile range ignores interpolated samples entirely
+
+- **WHEN** an extreme-quantile signal's input contains interpolated samples clustered at an extreme
+  — as happens when the robustness layer lerps across a run of missed frames whose flanking
+  detections are both bad
+- **THEN** the reported value is exactly the value the directly-detected samples alone produce, and
+  is not moved toward the interpolated cluster
+
+#### Scenario: An extreme-quantile signal with too few detected samples is unavailable
+
+- **WHEN** an extreme-quantile signal's directly-detected population is smaller than the count its
+  estimator needs to trim at both ends
+- **THEN** that signal reports no value rather than a minimum-to-maximum span, and the classification
+  it feeds treats it as an unavailable signal — not as a failure of overall frame coverage
 
 ### Requirement: Output contract — value and confidence are always present, never NaN, never throws
 

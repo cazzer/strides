@@ -7,6 +7,7 @@ builds so low-confidence results can be diagnosed programmatically across many t
 instead of only through rendered end-user text.
 ## Requirements
 ### Requirement: Diagnostics aggregation
+
 The system SHALL provide a pure function that computes an `AnalysisDiagnostics` object from a
 completed run's `PoseSample[]`, `RobustPoseFrame[]`, `FormHeuristicsResult`, which sampler (the
 WebCodecs sequential-decode path or the `<video>`-playback path) produced those samples, and the
@@ -16,29 +17,39 @@ their null frames were nulled by person selection rather than missed by the dete
 requiring any additional instrumentation of the sampling or robustness layers.
 
 #### Scenario: Keypoint resolution is aggregated across the whole clip
+
 - **WHEN** diagnostics are computed for a set of `RobustPoseFrame[]`
 - **THEN** the result includes, per keypoint name, a count of frames where that keypoint was
   `'detected'`, `'interpolated'`, and `'unrecoverable'`, summing to the total frame count
 
 #### Scenario: View detection diagnostics are surfaced verbatim
+
 - **WHEN** diagnostics are computed
 - **THEN** the result includes the `FormHeuristicsResult.view` object's own `view`, `confidence`,
-  and `diagnostics` (`bilateralSpreadRatio`, `sagittalExcursionRatio`, `frameCoverage`) fields,
-  not a recomputation of them
+  and every field of its `diagnostics` — the two signal values (`bilateralSpreadRatio`,
+  `sagittalExcursionRatio`), the per-side size and composition of the sagittal excursion population
+  (`sagittalExcursionSampleCount`, reported even for a side whose count was too small to yield a
+  range, and `sagittalExcursionInterpolatedFraction`, the share of that side's resolvable samples
+  EXCLUDED as interpolated — the same statistic `MetricResult.interpolatedFraction` reports for
+  samples a metric used, reported here for samples this signal discarded), and `frameCoverage` —
+  not a recomputation of any of them
 
 #### Scenario: Sampling counts distinguish detected from missing frames
+
 - **WHEN** diagnostics are computed from the run's `PoseSample[]`
 - **THEN** the result includes the total sample count and how many had a non-null `frame` versus
   a null `frame` — counted over the POST-person-selection sequence, which is what every later
   stage sees
 
 #### Scenario: Sampling diagnostics report which sampler produced the run
+
 - **WHEN** diagnostics are computed for a run
 - **THEN** the result's sampling summary includes which sampler produced the samples —
   `'sequential'` for the WebCodecs decode-order path or `'playback'` for the
   `<video>`-`requestVideoFrameCallback` path — reflecting exactly what that run actually used
 
 #### Scenario: Per-metric confidence inputs are included for every metric
+
 - **WHEN** diagnostics are computed
 - **THEN** the result includes, for every metric in `FormHeuristicsResult`, its `value`,
   `confidence`, `viewFit`, `frameCoverage`, `interpolatedFraction`, `sampleSize`, and `caveat` —
