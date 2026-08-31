@@ -48,34 +48,6 @@ import type {
  */
 
 /**
- * Metrics whose exemplars arrive by GRAFT from the background MediaPipe scale pass, while the only
- * `RobustPoseFrame[]` any consumer holds is the PRIMARY pass's (`scalePassGraft.ts:43-50`;
- * `useSessionEvidence` hands `planClipEvidence` `clip.analysis.robustFrames`, MoveNet's). Their joint
- * positions AND their hip polarity are therefore resolved off a primary-pass frame snapped within
- * tolerance — never the MediaPipe frame the metric actually measured.
- *
- * **Decision (a): no signed or oriented mark for a grafted metric.** The positions are still
- * honest — they are the primary detector's own estimate of the same body at the same instant, and
- * they land on the image the extractor draws — but a POLARITY is a semantic claim, and at a
- * near-frontal step-width strike the two hips sit a few pixels apart, which is precisely where the
- * two detectors' orderings become a coin flip. A caliper carrying the inverse polarity would label
- * a crossover strike as landing on its own side, contradicting `stepWidth.ts:273-277`'s crossover
- * caveat in the same viewport. Option (c) — accept it — has no argument available: the mechanism is
- * confirmed and the failure lands exactly where the metric lives. Option (b) — joints only — pays
- * for that with `verticalOscillationCm`, whose marks carry no polarity at all and which is the one
- * grafted metric measured as reaching a rendered card on all three test clips.
- *
- * Concretely this suppresses `stepWidthCm`'s caliper POLARITY (the caliper still draws, as the
- * unsigned lateral span it honestly is) and costs `verticalOscillationCm` nothing. It is written
- * as a set rather than inlined so a future grafted metric is covered without a second reading of
- * `scalePassGraft.ts`.
- */
-export const GRAFTED_METRICS: ReadonlySet<MetricId> = new Set([
-  'verticalOscillationCm',
-  'stepWidthCm',
-])
-
-/**
  * Radius of an angle arc, as a fraction of the shorter of its two rays. Geometry, so it lives
  * here; stroke weights and mark radii are NOT here, because design D5 requires them sized against
  * the output canvas and verified by looking at the result, which is `strides-ac9.8`'s job.
@@ -217,10 +189,17 @@ export interface EvidenceGuideOp extends AnnotationOpBase {
  * A measured span between a reference and a body point.
  *
  * `polarity` is `+1` when the drawn span runs the way the calculation counts as positive, `-1`
- * when it runs the other way, and `null` when the polarity is not derivable (`travelDirection`
- * indeterminate, `outwardSign` degenerate) or is deliberately withheld (a grafted metric, see
- * `GRAFTED_METRICS`). It is NOT a number to render — it is the orientation a directional mark's
- * arrowhead or tick needs, and `null` means "draw this unoriented" rather than "guess".
+ * when it runs the other way, and `null` when the polarity is not derivable — `travelDirection`
+ * indeterminate, or `outwardSign` degenerate. It is NOT a number to render — it is the orientation
+ * a directional mark's arrowhead or tick needs, and `null` means "draw this unoriented" rather
+ * than "guess".
+ *
+ * There is no longer a case where a derivable polarity is deliberately WITHHELD. There used to be:
+ * a grafted metric's marks were suppressed because its positions were resolved off the primary
+ * pass's frames while its value came from the scale pass's. `strides-3a1` closed that seam — a
+ * grafted metric's evidence is planned from the scale pass's own frames — so the polarity now
+ * comes from the detector that took the measurement, and withholding it would withhold a correct
+ * answer.
  */
 export interface EvidenceCaliperOp extends AnnotationOpBase {
   kind: 'caliper'
@@ -667,21 +646,6 @@ interface InstantContext {
   role: 'base' | 'ghost'
   instant: EvidenceInstantPlan
   travelDirection: EvidenceTravelDirection
-  /**
-   * `false` for a grafted metric — see `GRAFTED_METRICS`. One flag rather than a per-builder
-   * reminder: the two directional sources (`plan.travelDirection` and
-   * `EvidenceInstantPlan.outwardSign`) are both resolved from the same wrong pass's frames, so
-   * they are suppressed together or not at all.
-   */
-  polarityAllowed: boolean
-}
-
-/** The direction a polarity is read from, or `0`/`null` when there is none to read. */
-function polaritySource(
-  ctx: InstantContext,
-  direction: EvidenceTravelDirection | null,
-): EvidenceTravelDirection | null {
-  return ctx.polarityAllowed ? direction : null
 }
 
 function buildTrunkLeanMarks(ctx: InstantContext): void {
@@ -764,7 +728,7 @@ function buildOverstrideMarks(ctx: InstantContext): void {
     'horizontal',
     foot,
     ankle,
-    horizontalPolarity(hipMid.x, ankle.x, polaritySource(ctx, ctx.travelDirection)),
+    horizontalPolarity(hipMid.x, ankle.x, ctx.travelDirection),
   )
 }
 
@@ -786,7 +750,7 @@ function buildFootStrikeMarks(ctx: InstantContext): void {
     'horizontal',
     derived(ankle, knee.x, ankle.y),
     ankle,
-    horizontalPolarity(knee.x, ankle.x, polaritySource(ctx, ctx.travelDirection)),
+    horizontalPolarity(knee.x, ankle.x, ctx.travelDirection),
   )
 }
 
@@ -822,11 +786,7 @@ function buildStepWidthMarks(ctx: InstantContext): void {
     'horizontal',
     derived(ankle, hipMid.x, ankle.y),
     ankle,
-    horizontalPolarity(
-      hipMid.x,
-      ankle.x,
-      polaritySource(ctx, instant.outwardSign?.[side] ?? null),
-    ),
+    horizontalPolarity(hipMid.x, ankle.x, instant.outwardSign?.[side] ?? null),
   )
 }
 
@@ -964,11 +924,6 @@ export function planEvidenceAnnotations(
   // to invent one.
   if (plan.metric === 'cadence') return annotation
 
-  // Decision (a): a grafted metric's positions come from the PRIMARY detector's frames while its
-  // value came from the scale pass's, so no polarity derived from those positions is trustworthy.
-  // One flag, checked once, rather than each mark builder remembering.
-  const polarityAllowed = !GRAFTED_METRICS.has(plan.metric)
-
   const buildInstant = INSTANT_MARK_BUILDERS[plan.kind]
   const halves: Array<['base' | 'ghost', EvidenceInstantPlan]> =
     plan.ghost === null
@@ -990,7 +945,6 @@ export function planEvidenceAnnotations(
       role,
       instant,
       travelDirection: plan.travelDirection,
-      polarityAllowed,
     })
     builder.joints(index)
     annotation.ops.push(...builder.ops)
@@ -1018,11 +972,7 @@ export function planEvidenceAnnotations(
         'horizontal',
         derived(a, a.x, y),
         derived(b, b.x, y),
-        horizontalPolarity(
-          a.x,
-          b.x,
-          polarityAllowed ? plan.travelDirection : null,
-        ),
+        horizontalPolarity(a.x, b.x, plan.travelDirection),
       )
       annotation.ops.push(...pairBuilder.ops)
     }

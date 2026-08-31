@@ -28,7 +28,6 @@ import type {
   EvidenceTravelDirection,
 } from './evidenceFrames'
 import {
-  GRAFTED_METRICS,
   planEvidenceAnnotations,
 } from './evidenceAnnotations'
 import type {
@@ -753,15 +752,20 @@ describe('polarity', () => {
   })
 })
 
-describe('grafted metrics resolve annotation off the primary pass’s frames', () => {
-  it('names exactly the two metrics the scale pass grafts', () => {
-    expect([...GRAFTED_METRICS].sort()).toEqual([
-      'stepWidthCm',
-      'verticalOscillationCm',
-    ])
-  })
-
-  it('withholds stepWidthCm’s caliper polarity while stepWidth keeps it on identical geometry', () => {
+describe('a grafted metric orients its marks from its own plan', () => {
+  /**
+   * The inverse of what this block used to assert. `stepWidthCm`'s caliper polarity was withheld
+   * because a grafted metric's positions were resolved off the PRIMARY pass's frames while its
+   * value came from the scale pass's, so a polarity read from those positions was a claim about
+   * the wrong detector's hip ordering. `strides-3a1` closed that seam — `planClipEvidence` now
+   * plans a grafted metric against `ScalePassState.robustFrames` — so the polarity comes from the
+   * detector that took the measurement, and suppressing it would withhold a correct answer.
+   *
+   * Pinned as an equality against the pixel-space sibling on IDENTICAL geometry rather than as a
+   * bare `toBe(1)`: the property being defended is that a metric's id no longer changes how its
+   * marks are oriented, which is exactly what a re-introduced suppression set would break.
+   */
+  it('gives stepWidthCm the same caliper polarity as stepWidth on identical geometry', () => {
     const base = instant(
       [
         pos('left_hip', 300, 400),
@@ -780,13 +784,14 @@ describe('grafted metrics resolve annotation off the primary pass’s frames', (
       )[0] as EvidenceCaliperOp
 
     expect(caliperFor('stepWidth').polarity).toBe(1)
-    expect(caliperFor('stepWidthCm').polarity).toBeNull()
-    // The span itself is unchanged — it is the polarity, a semantic claim, that is withheld.
+    expect(caliperFor('stepWidthCm').polarity).toBe(
+      caliperFor('stepWidth').polarity,
+    )
     expect(caliperFor('stepWidthCm').x1).toBe(caliperFor('stepWidth').x1)
     expect(caliperFor('stepWidthCm').x2).toBe(caliperFor('stepWidth').x2)
   })
 
-  it('costs verticalOscillationCm nothing, because none of its marks carry a polarity', () => {
+  it('leaves verticalOscillationCm identical to its pixel sibling, as it always was', () => {
     const base = instant([pos('left_hip', 300, 400), pos('right_hip', 340, 400)])
     const cm = planEvidenceAnnotations(
       plan({ metric: 'verticalOscillationCm', kind: 'bounceCycle', base }),
