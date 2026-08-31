@@ -301,13 +301,24 @@ function resolveStepFrequencyHz(
  * fits of the same clip.
  *
  * **This path is where the boundary defect lives, by construction rather than by chance**: it
- * consumes `findLocalExtrema`, which emits an unconfirmed trailing pivot at the end of every run BY
- * DESIGN, and `selectFootstrikes` then ranks by descending amplitude — so a boundary pivot on a
- * contaminated frame competes on the strength of its contamination. `detectFootstrikes` excludes
- * those instants after path selection; see `hasFramesEitherSide`. This path is also the one that
- * actually runs more often than the module's shape suggests: Demo 2's background scale pass was
- * measured reaching it, not the phase path, because its hip fit fell below `cadenceMinFitR2` — its
- * emitted frames 25/45/67/86/100 have deltas 20/22/19/14, which no single fixed period can produce.
+ * consumes `findLocalExtrema`, which emits an unconfirmed pivot at the end of every RUN by design,
+ * and the last run's end is the series' last frame. `selectFootstrikes` then ranks by descending
+ * amplitude, so such a pivot on a contaminated frame competes on the strength of its contamination.
+ *
+ * **Eligibility is therefore applied to the extrema BEFORE they are ranked**, not to the candidates
+ * afterwards. The ranking is greedy non-maximum suppression: an ineligible pivot that wins it
+ * suppresses every same-side candidate within `minIntervalSeconds`, so filtering afterwards would
+ * drop the pivot and keep the deletion — trading a confirmed interior contact for an unconfirmable
+ * boundary one. See `hasFramesEitherSide`, which is the single definition of the rule and is
+ * applied again after path selection for the phase path's sake.
+ *
+ * Note the scope: only the SERIES' final frame is reached this way. A run ending at an interior
+ * gap still contributes its own unconfirmed pivot, which this rule deliberately does not touch.
+ *
+ * This path also runs more often than the module's shape suggests: Demo 2's background scale pass
+ * was measured reaching it, not the phase path, because its hip fit fell below `cadenceMinFitR2` —
+ * its emitted frames 25/45/67/86/100 have deltas 20/22/19/14, which no single fixed period can
+ * produce.
  */
 export function detectFootstrikesBetweenAnkles(
   frames: RobustPoseFrame[],
@@ -330,7 +341,12 @@ export function detectFootstrikesBetweenAnkles(
   const candidates: FootstrikeCandidate[] = []
   for (const side of ['left', 'right'] as const) {
     const { series, relative } = buildContactSeries(frames, side)
-    const extrema = findLocalExtrema(series, minProminenceAbs)
+    // Eligibility BEFORE selection, deliberately — see this function's doc and
+    // `hasFramesEitherSide`. `selectFootstrikes` suppresses by amplitude rank, so an ineligible
+    // extremum left in this list would delete a real contact on its way to being dropped itself.
+    const extrema = findLocalExtrema(series, minProminenceAbs).filter((extremum) =>
+      hasFramesEitherSide(extremum.index, frames.length),
+    )
     candidates.push(...selectFootstrikes(extrema, side, minIntervalSeconds, relative))
   }
 
@@ -359,8 +375,8 @@ function nearestFrameIndex(frames: RobustPoseFrame[], t: number): number {
 }
 
 /**
- * Whether this candidate has a sampled frame on BOTH sides of it — i.e. it sits neither on the
- * first nor on the last frame of the analysed series.
+ * Whether the frame at `frameIndex` has a sampled frame on BOTH sides of it — i.e. it sits neither
+ * on the first nor on the last frame of the analysed series.
  *
  * ## The evidence for a ground contact is two-sided
  *
@@ -389,21 +405,46 @@ function nearestFrameIndex(frames: RobustPoseFrame[], t: number): number {
  *
  * - `detectFromBouncePhase` admits the sampled span **inclusively** (`firstK` rounds up from
  *   `spanStart`, `lastK` rounds down from `spanEnd`), so a predicted touchdown lands on a boundary
- *   frame whenever it happens to fall within half a frame of one end — a coincidence of where the
- *   fitted phase sits, not a mechanism.
- * - `findLocalExtrema` emits an unconfirmed trailing pivot at the end of **every** run, BY DESIGN —
- *   see the closing paragraph of `findExtremaInRun`'s doc in `extrema.ts`. That defence is made on
+ *   frame whenever it happens to fall within the snap tolerance of one end — a coincidence of where
+ *   the fitted phase sits, not a mechanism. How often that is depends on the clip's frame interval
+ *   against its step period (half a frame either side of a period), so it is a property of fps ×
+ *   cadence rather than of this path: about 3.0% per end on Demo 1's 25 fps, 2.5% on Demo 2's 60.
+ * - `findLocalExtrema` emits an unconfirmed trailing pivot at the end of every RUN, BY DESIGN — see
+ *   the closing paragraph of `findExtremaInRun`'s doc in `extrema.ts`. That defence is made on
  *   PROMINENCE grounds, which is a claim about the pivot's amplitude and not about the pivot being
  *   a ground contact; it is correct as far as it goes and is not what this predicate disputes.
- *   `selectFootstrikes` then ranks candidates by DESCENDING value, so a boundary pivot sitting on a
+ *   `selectFootstrikes` then ranks candidates by DESCENDING value, so such a pivot sitting on a
  *   contaminated frame competes on the strength of its own contamination — measured on Demo 2's
  *   scale pass, which emitted the clip's final frame at ratio +1.38051 against a primary-pass
  *   maximum of +0.37568.
  *
- * So the rule is applied once, to whichever path won, rather than inside either of them.
+ *   **Scope, stated rather than glossed:** this predicate reaches only the SERIES' first and last
+ *   frame, so of those per-run pivots it removes exactly one — the final run's. A run that ends at
+ *   an interior gap (`buildContactSeries` nulls any frame where either ankle is unresolvable, and
+ *   `strides-boc` documents a 10-of-12 dropout window on Demo 2) still contributes its unconfirmed
+ *   pivot, mid-series, where this rule has nothing to say: such a pivot has sampled frames on both
+ *   sides of it and is unconfirmed for a different reason — missing data rather than a missing
+ *   side. Knowingly out of scope here.
+ *
+ * ## Called from two sites, and it is one rule, not two
+ *
+ * This is the single definition; only the enforcement points are plural, and each is load-bearing:
+ *
+ * 1. **Before the amplitude ranking on the fallback path** (`detectFootstrikesBetweenAnkles`).
+ *    `selectFootstrikes` is greedy non-maximum suppression ranked by DESCENDING contact-series
+ *    value, so an ineligible pivot does not merely get emitted — it wins the ranking first and
+ *    suppresses every same-side candidate within `minIntervalSeconds` of it. Filtering only
+ *    afterwards would drop the pivot and keep the deletion, losing a CONFIRMED interior contact to
+ *    an unconfirmable boundary one. Pinned by a regression test; the shape is
+ *    `[0,10,20,30,40,50,40,0,0,40,90]` at 30 fps, where a post-ranking-only filter returns nothing
+ *    at all rather than the real contact at index 5.
+ * 2. **After path selection** (`detectFootstrikes`), which is the module's single enforcement point
+ *    for the guarantee: it covers the phase path, which never goes through the fallback, and it is
+ *    where a reader can see the contract hold for whichever path won. Idempotent on candidates the
+ *    first site already filtered.
  */
-function hasFramesEitherSide(candidate: FootstrikeCandidate, frameCount: number): boolean {
-  return candidate.frameIndex > 0 && candidate.frameIndex < frameCount - 1
+function hasFramesEitherSide(frameIndex: number, frameCount: number): boolean {
+  return frameIndex > 0 && frameIndex < frameCount - 1
 }
 
 /**
@@ -565,9 +606,11 @@ function attributeSides(
  * mode of this path is that the clip keeps the behaviour it had before this path existed.
  *
  * `firstK`/`lastK` admit the sampled span INCLUSIVELY, so this path can also place an instant on the
- * first or last frame — but only when the fitted phase happens to put a prediction within half a
- * frame of an end, roughly 2.5% of the time per end, rather than by any mechanism. Those instants
- * are excluded downstream on the same terms as the fallback's; see `hasFramesEitherSide`.
+ * first or last frame — but only when the fitted phase happens to put a prediction within the snap
+ * tolerance of an end, rather than by any mechanism. That likelihood is half a frame interval
+ * against a step period, so it is a property of fps × cadence and not of this path: about 3.0% per
+ * end on Demo 1's 25 fps, 2.5% on Demo 2's 60. Those instants are excluded downstream on the same
+ * terms as the fallback's, through the same predicate; see `hasFramesEitherSide`.
  */
 function detectFromBouncePhase(
   frames: RobustPoseFrame[],
@@ -634,6 +677,19 @@ function detectFromBouncePhase(
  * interleaved by side), while `side` is still carried on each candidate for consumers that need to
  * resolve a per-leg point at that instant.
  *
+ * ## No candidate is ever emitted on the first or last frame of `frames`
+ *
+ * A ground contact is read as a REVERSAL, which is a claim about both sides of an instant, and at
+ * either end of the series only one side exists. Both paths can reach an end — the fallback by
+ * construction, the phase path by coincidence — so the rule belongs to this function rather than to
+ * either of them, and every consumer inherits it without restating it. Note that `frames` here is
+ * already the PRESENCE-TRIMMED window (`runClipAnalysisPipeline.ts`), so the excluded frames are
+ * the edges of the subject's own presence, not of the recording. Full argument, and why the
+ * fallback additionally applies it before its own amplitude ranking, in `hasFramesEitherSide`.
+ *
+ * The consequence worth knowing at a call site: a clip whose only detectable contacts sit on its
+ * end frames reports NO footstrikes rather than reporting them unconfirmed.
+ *
  * Returns `[]` when there's no resolvable body-scale reference at all (no shoulders/hips to measure
  * torso length from) — the fallback path has no way to size its prominence threshold without one,
  * and a clip with no resolvable hips has no bounce to fit either. Callers that need to distinguish
@@ -664,5 +720,13 @@ export function detectFootstrikes(
   // which foot is which even though its TIMING is unconfirmable — the two are separate claims about
   // the same frame. Excluding it from the vote would throw away a genuine, often large, ankle
   // separation to protect against a defect that is not in the ankles.
-  return candidates.filter((candidate) => hasFramesEitherSide(candidate, frames.length))
+  //
+  // The fallback ALSO applies this predicate to its extrema before ranking them, and both sites are
+  // needed: that one because its amplitude-ranked suppression would otherwise let an ineligible
+  // pivot delete a real contact before being dropped itself, this one because the phase path never
+  // goes through it and because a single enforcement point is where the module's contract is
+  // legible. One predicate, two enforcement points — not two statements of the rule.
+  return candidates.filter((candidate) =>
+    hasFramesEitherSide(candidate.frameIndex, frames.length),
+  )
 }

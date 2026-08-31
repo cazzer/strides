@@ -39,6 +39,47 @@ documented fallback condition.
   real evidence about which foot is which even though its TIMING is unconfirmable. The two are
   separate claims about the same frame, and only the timing one is unsupported.
 
+### D1a. A second enforcement point on path 2, added in review round 2
+
+The post-selection filter above is **necessary but not sufficient**, and shipping it alone was a
+defect. `selectFootstrikes` is greedy non-maximum suppression ranked by DESCENDING contact-series
+value. D2 below supplies the premise: an ineligible boundary pivot does not merely get included, it
+gets included FIRST. So it wins the ranking, suppresses every same-side candidate within
+`minIntervalSeconds` of it, and is only then dropped — **leaving the suppressed real contact
+deleted.** Reproduced against the round-1 code:
+
+```
+Y = [0, 10, 20, 30, 40, 50, 40, 0, 0, 40, 90]   // 30 fps
+findLocalExtrema      -> max@5 (50), max@10 (90)   // 0.167 s apart, inside the 0.25 s floor
+detectFootstrikesBetweenAnkles -> [10]             // the confirmed contact at 5 is already gone
+detectFootstrikes              -> []               // and now nothing at all
+```
+
+The fix applies `hasFramesEitherSide` to the EXTREMA, before `selectFootstrikes` ranks them. Neither
+justification above forces the downstream placement for path 2: "after path selection" protects
+`fromPhase.length > 0`, which is evaluated on path 1, and "after `attributeSides`" protects the
+parity vote, which path 2 never runs — its sides come straight from which series produced the
+extremum. The only thing that had held it downstream was D1's "a rule stated twice can drift", and
+**one predicate called from two sites is not a rule stated twice**: `hasFramesEitherSide` remains the
+single definition, and the comment at each site says why that site exists.
+
+Both sites are kept. Path 2 needs the pre-ranking one for the reason above; path 1 never reaches it,
+and the post-selection pass is the module's single legible enforcement point for the contract the
+exported JSDoc now states. It is idempotent on anything the first site already removed.
+
+**Why fixing beat accepting.** The A/B (D12) shows the primaries all run path 1, so this is currently
+unobservable on this corpus — an argument for fixing it on principle, not for leaving it. Three
+things weighed against accepting: finding (A) puts Demo 2's scale pass on path 2 with
+`minIntervalSeconds` collapsed to the 0.25 s floor, where at a ~0.66 s same-side stride a real
+contact falling inside that window is roughly a 1-in-3 event; it fights the other half of this change,
+silently thinning the sample the raised minimum exists to price; and it puts pressure on
+`Footstrike candidates are selected by amplitude at the clip's own stride rhythm`, whose scenario *A
+body-motion artifact inside a stance is not emitted* guarantees "the ground contact it sits inside
+is" on the spec's stated assumption that a contact outranks the artifact — while D2 exhibits a
+candidate class that outranks a real contact.
+
+A regression test pins it. Mutation-checked: removing the pre-ranking filter fails 5 tests.
+
 ## D2. Both paths reach a boundary; only one does so by construction
 
 | | how it gets there | frequency |
@@ -222,7 +263,39 @@ caveat, and a seven-strike clip carrying neither.
 ## D10. Predictions
 
 Pre-registered in `proposal.md` before any measurement, and not restated here so there is one copy to
-check against.
+check against. Measured result in D12.
+
+## D12. A/B result — measured
+
+Re-baselined at `d0e4eff` (the driver commit, old heuristics) and measured at `e0c6118`, fresh
+Chromium process per trial, real GPU. **Exactly three fields moved, all `stepWidth.confidence`:**
+
+| clip | before | after | factor |
+|---|---|---|---|
+| demo1 | 0.0875 | **0.05** | × 4/7 |
+| demo2 | 1.0 | **0.714286** | × 5/7 — the pre-registered value, exactly |
+| multiperson | 0.08 | **0.0457143** | × 4/7 |
+
+**No value moved. No `sampleSize` moved. No tier changed.** All six ship conditions met, and Demo 2's
+0.714286 is the pre-registered figure to every digit.
+
+**Two corrections to this change's own assumptions, both from diagnostics the driver commit exposed
+— which is the justification for landing that commit separately:**
+
+1. **demo1 and multiperson sit at `sampleSize` 4, not at or above 7.** The plan predicted demo1
+   "0.0875 if n >= 7". Both were exactly AT the old minimum, so `min(1, 4/4)` was saturating there
+   too: **the saturation defect was corpus-wide, not Demo 2-specific.** Every clip in the corpus was
+   reporting an unearned full sample-size factor, which strengthens D4's "the old constant fails its
+   own docstring" from an argument about arithmetic into an observation about all three clips.
+2. **`sampleSize` is unchanged on all three clips, so the boundary filter removed ZERO strikes from
+   any primary pass.** The entire confidence movement is the 4 → 7 raise. That corroborates finding
+   (A) independently: the primaries all run the phase path, where a boundary landing is a ~2.5–3.0%
+   coincidence rather than a mechanism. It also means D1a's suppression defect is currently
+   unobservable on this corpus — which is why it was fixed on principle rather than left.
+
+Also newly visible, and not otherwise recorded: demo1's `stepWidth.interpolatedFraction` is **0.25**.
+
+The A/B will be re-run after the D1a fix to confirm these three rows remain the only movement.
 
 ## D11. Correction to an archived design
 

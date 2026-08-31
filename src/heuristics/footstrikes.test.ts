@@ -146,9 +146,17 @@ function ankleY(phase: number, shape: GaitShape): number {
 function buildGait(shape: GaitShape, strides = 3): RobustPoseFrame[] {
   const frames: RobustPoseFrame[] = []
   // One frame past the last full stride, so the clip ENDS on a left touchdown rather than
-  // mid-descent — `findLocalExtrema` always emits its trailing pivot, and ending on a real contact
-  // keeps that pivot a real contact instead of an edge artifact this fixture would have to explain
-  // away.
+  // mid-descent. That was originally to keep `findLocalExtrema`'s always-emitted trailing pivot a
+  // real contact rather than an edge artifact — a rationale that has since gone FALSE:
+  // `detectFootstrikes` now declines to emit on the series' first or last frame at all, so this
+  // closing contact is dropped whether or not it is genuine, and three tests below say so in their
+  // own comments. The extra frame is kept because TRUE_CONTACT_FRAMES and every pinned index in
+  // this file are stated against it.
+  //
+  // Padding by one MORE frame, so the closing contact acquires a neighbour and survives, was tried
+  // and REVERTED: it perturbs the spectral fit enough to break two unrelated pinned tests (the
+  // multi-modal contact-series case and the swing-apex sweep) and does not even restore the
+  // contact. Do not retry it.
   for (let i = 0; i <= strides * FRAMES_PER_STRIDE; i += 1) {
     const phase = i / FRAMES_PER_STRIDE
     const body = bodyY(phase, shape)
@@ -232,6 +240,17 @@ function ankleOnlyFrames(frames: RobustPoseFrame[]) {
     bodyScale.torsoLengthPx,
     fit,
   ).map((candidate) => [candidate.side, candidate.frameIndex] as [string, number])
+}
+
+/**
+ * The boundary-eligibility rule `detectFootstrikes` applies, restated once for the tests that need
+ * to build an expected list from an unfiltered source. It mirrors `footstrikes.ts`'s module-private
+ * `hasFramesEitherSide`, which cannot be imported.
+ */
+function interiorOnly<T extends { frameIndex: number }>(candidates: T[], frameCount: number): T[] {
+  return candidates.filter(
+    (candidate) => candidate.frameIndex > 0 && candidate.frameIndex < frameCount - 1,
+  )
 }
 
 /**
@@ -505,14 +524,17 @@ describe('detectFootstrikes — ground contact vs. airborne ankle-y maxima', () 
     //
     // The fallback rejects the artifact on amplitude: it loses to the contact 0.40 s before it,
     // which is inside this clip's own shortest plausible stride (2 / 1.66 Hz / 1.15 = 1.05 s).
+    //
+    // Five, not seven: the fallback filters its extrema for boundary eligibility BEFORE ranking
+    // them, so this fixture's opening contact at frame 0 and its closing one at frame 90 are gone
+    // by the time selection runs. Pre-ranking is the load-bearing part — see the suppression
+    // regression at the end of this file for what a post-ranking-only filter costs.
     expect(ankleOnlyFrames(frames)).toEqual([
-      ['left', 0],
       ['right', 16],
       ['left', 31],
       ['right', 46],
       ['left', 61],
       ['right', 76],
-      ['left', 90],
     ])
 
     // The shipped path never considers the artifact at all: it emits one instant per fitted bounce
@@ -672,18 +694,17 @@ describe('detectFootstrikes — timing derived from the fitted bounce phase', ()
     // tests, is the fallback CONDITION: an attributable-instant failure hands the clip to the ankle
     // detector rather than to an empty list.
     const bodyScale = estimateBodyScale(frames)!
+    const reference = detectFootstrikesBetweenAnkles(
+      frames,
+      DEFAULT_HEURISTICS_CONFIG,
+      bodyScale.torsoLengthPx,
+      fit,
+    )
     expect(detectedFrames(frames)).toEqual(
-      detectFootstrikesBetweenAnkles(
-        frames,
-        DEFAULT_HEURISTICS_CONFIG,
-        bodyScale.torsoLengthPx,
-        fit,
-      )
-        .filter(
-          (candidate) =>
-            candidate.frameIndex > 0 && candidate.frameIndex < frames.length - 1,
-        )
-        .map((candidate) => [candidate.side, candidate.frameIndex]),
+      interiorOnly(reference, frames.length).map((candidate) => [
+        candidate.side,
+        candidate.frameIndex,
+      ]),
     )
     expect(detectedFrames(frames).length).toBeGreaterThan(0)
     expect(detectedFrames(frames).every(([side]) => side === 'left')).toBe(true)
@@ -855,13 +876,15 @@ describe('detectFootstrikes — a candidate needs a sampled frame on both sides 
   it('does not emit a candidate on the last sampled frame, and leaves the interior untouched', () => {
     const frames = singleLegFrames(TRAILING_BOUNDARY_Y)
 
-    // The fixture really does contain the defect: read straight off the ankle detector, with no
-    // eligibility applied, the final frame IS emitted — and it outranks the real contact.
-    expect(ankleOnlyFrames(frames)).toEqual([
-      ['left', 5],
-      ['left', 10],
-    ])
+    // The fixture really does contain the defect. Read at the extremum scan — upstream of every
+    // eligibility check — the final frame IS a prominence-confirmed maximum, and it OUTRANKS the
+    // real contact, which is what makes it dangerous rather than merely spurious.
+    const scanned = rawAnkleYMaxima(frames, 'left')
+    expect(scanned.map((extremum) => extremum.index)).toEqual([5, 10])
+    expect(scanned[1].value).toBeGreaterThan(scanned[0].value)
 
+    // Gone from the fallback detector itself, and gone from the module's output.
+    expect(ankleOnlyFrames(frames)).toEqual([['left', 5]])
     expect(detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)).toEqual([
       { frameIndex: 5, timestamp: 5, side: 'left' },
     ])
@@ -870,11 +893,9 @@ describe('detectFootstrikes — a candidate needs a sampled frame on both sides 
   it('does not emit a candidate on the first sampled frame either', () => {
     const frames = singleLegFrames(LEADING_BOUNDARY_Y)
 
-    expect(ankleOnlyFrames(frames)).toEqual([
-      ['left', 0],
-      ['left', 8],
-    ])
+    expect(rawAnkleYMaxima(frames, 'left').map((extremum) => extremum.index)).toEqual([0, 8])
 
+    expect(ankleOnlyFrames(frames)).toEqual([['left', 8]])
     expect(detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)).toEqual([
       { frameIndex: 8, timestamp: 8, side: 'left' },
     ])
@@ -887,8 +908,41 @@ describe('detectFootstrikes — a candidate needs a sampled frame on both sides 
     // happened to end on.
     const frames = singleLegFrames([0, 10, 20, 30, 40, 50])
 
-    expect(ankleOnlyFrames(frames)).toEqual([['left', 5]])
+    expect(rawAnkleYMaxima(frames, 'left').map((extremum) => extremum.index)).toEqual([5])
+    expect(ankleOnlyFrames(frames)).toEqual([])
     expect(detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)).toEqual([])
+  })
+
+  it('an ineligible pivot cannot delete a real contact on its way to being dropped', () => {
+    // The regression that moved eligibility ahead of the amplitude ranking (review round 2).
+    //
+    // `selectFootstrikes` is greedy non-maximum suppression ranked by DESCENDING contact-series
+    // value, so a boundary pivot that outranks a real contact suppresses every same-side candidate
+    // within `minIntervalSeconds` of it FIRST, and only then gets dropped for being ineligible. The
+    // real contact is already gone by that point.
+    //
+    // At 30 fps these two sit 0.167 s apart, inside the 0.25 s configured floor — the floor that
+    // binds whenever no step rhythm could be fitted, which is exactly the state Demo 2's scale pass
+    // was measured in. Filtered only after selection, this clip reports NOTHING: the interior
+    // contact is deleted and its deleter is discarded.
+    const frames = [0, 10, 20, 30, 40, 50, 40, 0, 0, 40, 90].map((y, i) =>
+      buildFrame({ ...TORSO_POINTS, left_ankle: { x: 0, y } }, i / 30),
+    )
+
+    // Both are real extrema of the scan, and the boundary one is the larger — so it wins the rank.
+    const scanned = rawAnkleYMaxima(frames, 'left')
+    expect(scanned.map((extremum) => extremum.index)).toEqual([5, 10])
+    expect(scanned[1].value).toBeGreaterThan(scanned[0].value)
+    // ...and they are close enough that keeping the larger one would suppress the smaller.
+    expect(frames[10].timestamp - frames[5].timestamp).toBeLessThan(
+      DEFAULT_HEURISTICS_CONFIG.footstrikeMinIntervalSeconds,
+    )
+
+    // The confirmed interior contact survives, which it cannot if the pivot is ranked before it is
+    // excluded.
+    expect(detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)).toEqual([
+      { frameIndex: 5, timestamp: frames[5].timestamp, side: 'left' },
+    ])
   })
 
   it('applies the identical rule to the phase path, which reaches a boundary for its own reason', () => {
@@ -948,10 +1002,7 @@ describe('detectFootstrikes — a candidate needs a sampled frame on both sides 
       const frames = full.slice(0, end)
       const emitted = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)
       if (emitted.length > 0) sawCandidates = true
-      for (const candidate of emitted) {
-        expect(candidate.frameIndex).toBeGreaterThan(0)
-        expect(candidate.frameIndex).toBeLessThan(frames.length - 1)
-      }
+      expect(interiorOnly(emitted, frames.length)).toEqual(emitted)
     }
     expect(sawCandidates).toBe(true)
   })

@@ -26,6 +26,18 @@ const MIN_STRIDE_PX = EXPECTED_STRIDE_PX - ONE_FRAME_TRAVEL_TOLERANCE
 const MAX_STRIDE_PX = EXPECTED_STRIDE_PX + ONE_FRAME_TRAVEL_TOLERANCE
 
 const BOUNCE_HZ = 2.0
+
+/**
+ * Shifts the ankle rhythm's phase so that no block boundary — where the ankle-y trough sits, and
+ * therefore where the RIGHT side's relative contact series peaks and every surviving candidate
+ * lands — coincides with the clip's first or last sampled frame. `detectFootstrikes` declines to
+ * emit an instant with no frame on one side of it, so the unshifted block (troughs at frames 0 and
+ * 60, plus the extremum scan's trailing pivot at frame 119) would have put every one of this
+ * fixture's candidates on a boundary and left the clip with a single strike and no same-side pair
+ * to gate.
+ */
+const ANKLE_BLOCK_PHASE_OFFSET_FRAMES = 10
+
 /**
  * A clip whose ankle rhythm disagrees with its hip-bounce rhythm — the shape of the Demo 1 defect
  * this metric's period gate exists for, built deliberately rather than sampled.
@@ -41,17 +53,6 @@ const BOUNCE_HZ = 2.0
  * Everything else is deliberately healthy: torso length is a constant 100px, hip-x advances 8px a
  * frame so travel direction resolves, and the ankle bumps clear the prominence floor by 10x.
  */
-/**
- * Shifts the ankle rhythm's phase so that no block boundary — where the ankle-y trough sits, and
- * therefore where the RIGHT side's relative contact series peaks and every surviving candidate
- * lands — coincides with the clip's first or last sampled frame. `detectFootstrikes` declines to
- * emit an instant with no frame on one side of it, so the unshifted block (troughs at frames 0 and
- * 60, plus the extremum scan's trailing pivot at frame 119) would have put every one of this
- * fixture's candidates on a boundary and left the clip with a single strike and no same-side pair
- * to gate.
- */
-const ANKLE_BLOCK_PHASE_OFFSET_FRAMES = 10
-
 function framesWithAnkleBlock(blockFrames: number): RobustPoseFrame[] {
   const fps = 30
   const frameCount = 120

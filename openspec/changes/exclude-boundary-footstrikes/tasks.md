@@ -95,5 +95,31 @@
 - [x] 7.2 `npm run lint` clean.
 - [x] 7.3 `npm test -- --run` green.
 - [x] 7.4 `openspec validate exclude-boundary-footstrikes --strict` passes.
-- [ ] 7.5 Live-browser A/B against the predictions in `proposal.md`. **The user runs this**; it is
-  the reason the driver change landed as its own commit first.
+- [x] 7.5 Live-browser A/B against the predictions in `proposal.md`, run by the coordinator against
+  `d0e4eff` → `e0c6118`. Exactly three fields moved, all `stepWidth.confidence`, with demo2 landing
+  on the pre-registered 0.714286 exactly. No value, `sampleSize` or tier moved. Two corrections to
+  this change's assumptions came out of it — recorded in design D12. A confirming re-run after the
+  round-2 fix is the coordinator's.
+
+## 8. Review round 2
+
+- [x] 8.1 🔴 **Fixed, not accepted.** Apply eligibility to the extrema BEFORE `selectFootstrikes`
+  ranks them on the ankle-difference path: its greedy amplitude-ranked suppression let an ineligible
+  boundary pivot delete a confirmed interior contact before being dropped itself. One predicate, two
+  enforcement points, each commented with why it exists. Design D1a; regression test pins it;
+  mutation-checked at 5 failing tests.
+- [x] 8.2 🟡 `stepWidth.ts` no longer labels a prediction "measured" — the five measured ratios stay
+  as measured, the post-exclusion `n = 4` is marked PREDICTED and not yet confirmed.
+- [x] 8.3 🟡 `footstrikes.ts` no longer over-claims coverage: the rule reaches the series' final run's
+  pivot only, and interior run-end pivots (from `buildContactSeries`'s gaps) are stated as knowingly
+  out of scope.
+- [x] 8.4 🟡 `stepWidth.ts` drops the false biconditional — `n >= 2k + 3` is a sufficient condition on
+  the reported number's provenance, is not "exactly when", and does not return the clean median.
+- [x] 8.5 🟡 `buildGait`'s rationale corrected, with the reverted one-frame padding attempt recorded
+  so nobody retries it.
+- [x] 8.6 🟡 `detectFootstrikes`'s exported JSDoc states the eligibility contract, where its five
+  consumers look.
+- [x] 8.7 🟢 `verticalRatio.test.ts`'s new constant moved above the fixture doc it had separated from
+  its function; the ADDED requirement's "SHALL be derived, not chosen" narrowed to the shape;
+  `footstrikes.test.ts`'s inline predicate extracted to one `interiorOnly` helper; the "2.5% per end"
+  figure re-stated as a property of fps × cadence (≈3.0% on Demo 1, ≈2.5% on Demo 2).

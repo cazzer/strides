@@ -24,8 +24,8 @@ import { median } from './mathUtils'
  * Take `n` samples of which `k` are contaminants, all biased the same way — which is the shape
  * contamination actually takes here, since both known mechanisms (a boundary strike, a
  * tracker-dropout window) inflate the offset rather than scattering it. Those `k` then occupy the
- * top `k` ranks, so the median is untouched by them exactly when the middle of the sorted array
- * still lies strictly inside the clean subsample's interior:
+ * top `k` ranks. Requiring every rank the median reads to fall strictly INSIDE the clean subsample —
+ * not merely to be clean, but not to be the clean subsample's own maximum either — gives:
  *
  * ```
  * odd  n:  (n + 1) / 2  <  n − k    ->   n >= 2k + 2
@@ -33,6 +33,14 @@ import { median } from './mathUtils'
  * ```
  *
  * The even case binds, so the requirement is `n >= 2k + 3`: `k = 1` needs 5, `k = 2` needs 7.
+ *
+ * **This is a sufficient condition on the reported number's PROVENANCE, not a claim that the median
+ * is unmoved.** Two things it deliberately does not say. It is not a biconditional: at `n = 2k + 1`
+ * the bound fails and yet the median is still a clean value — it is the clean subsample's MAXIMUM,
+ * which is the outcome the strict-interior requirement exists to rule out. And clearing it does not
+ * return the clean subsample's own median: at `n = 7, k = 2` the reported value moves from the clean
+ * sample's rank 3 to its rank 4. What `2k + 3` buys is that contaminants stop reaching the middle
+ * slot, not that they stop shifting it. `stepWidth.test.ts` pins both caveats executably.
  *
  * **The previous value of 4 fails its own docstring.** It claimed to be the point where a *single*
  * noisy detection stops dominating, and at `n = 4, k = 1` the median is
@@ -49,13 +57,23 @@ import { median } from './mathUtils'
  * and not fixable at this layer) — and the one clip whose per-strike ratios have actually been
  * measured carried exactly `k = 2` of `n = 5`.
  *
- * ## What this does and does not buy, measured
+ * ## What this does and does not buy
  *
- * Demo 2's scale pass reads `n = 4` AFTER the boundary exclusion, so it is a live instance of
- * precisely the `n = 4, k = 1` failure above: `median = mean(0.16306, 0.40424) = 0.28365`, with the
- * clean maximum contributing half. This minimum does not repair that median — nothing at this layer
- * can — it prices it, at `4/7` of whatever the other confidence factors allow, and says so in the
- * caveat.
+ * MEASURED, on Demo 2's background scale pass: five strikes, ratios
+ * `[-0.00793, 0.16306, 0.40424, 0.84934, 1.38051]`, of which the last sits on the clip's final
+ * sampled frame and the second-largest at the edge of `strides-boc`'s contaminated opening window.
+ * Reported median 0.40424 — the clean subsample's maximum, the `n = 5, k = 2` case exactly.
+ *
+ * PREDICTED, and NOT yet confirmed on that pass: with the boundary strike excluded it reads `n = 4`,
+ * making it a live instance of the `n = 4, k = 1` failure above —
+ * `median = mean(0.16306, 0.40424) = 0.28365`, the clean maximum contributing half. That figure is
+ * pre-registered in the change's proposal, and the scale-pass diagnostics line the A/B harness reads
+ * does not carry it, so nobody has yet seen it. It is written as a prediction on purpose: the
+ * docstring this one replaces asserted an untrue thing about `n = 4`, and replacing it with an
+ * unverified claim dressed as a measurement would repeat the defect rather than fix it.
+ *
+ * Either way the minimum does not repair such a median — nothing at this layer can — it prices it,
+ * at `n / 7` of whatever the other confidence factors allow, and says so in the caveat.
  *
  * Below the minimum the metric is DISCOUNTED, never withheld: `min(1, n / 7)` in
  * `computeMetricConfidence` plus the caveat below, never a `null`. The four sibling

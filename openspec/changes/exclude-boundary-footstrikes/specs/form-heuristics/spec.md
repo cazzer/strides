@@ -236,17 +236,25 @@ The boundary SHALL be that of the frame series each heuristic is computed over, 
 **presence-trimmed** window — so the excluded frames are the edges of the subject's own presence in
 the clip, not the edges of the recording.
 
-The rule SHALL be applied **once, after the choice** between the phase-derived timing and the
+The rule SHALL be applied **after the choice** between the phase-derived timing and the
 ankle-difference detector, so that both are covered identically and the system cannot hold two
-opinions about eligibility. It SHALL NOT be applied inside either detector, and SHALL NOT be applied
-before the choice is made — evaluating it earlier would silently redefine the documented fallback
-condition from "the phase path produced no instant at all" to "the phase path produced no instant
-away from the boundary".
+opinions about eligibility. It SHALL NOT be evaluated before that choice is made — doing so would
+silently redefine the documented fallback condition from "the phase path produced no instant at all"
+to "the phase path produced no instant away from the boundary".
 
 The rule SHALL be applied **after** the side-attribution vote. That vote is a single
 magnitude-weighted decision over every instant, and a boundary instant's ankle separation is real
 evidence about which foot is which even though its timing is unconfirmable; the two are separate
 claims about the same frame, and only the timing one is unsupported.
+
+On the ankle-difference detector the rule SHALL **additionally** be applied to the candidate extrema
+**before** they are ranked by amplitude. That detector selects greedily in descending order of
+contact-series value, each accepted candidate excluding every same-side candidate within the spacing
+floor of it, so an ineligible candidate that outranks a real contact would suppress that contact and
+only then be discarded — deleting a confirmed interior ground contact in exchange for an
+unconfirmable boundary one, and thinning the very sample the step-width minimum below exists to
+price. This SHALL be the same rule and the same single definition, applied at a second enforcement
+point; it SHALL NOT be a second, separately-stated rule that could diverge from the first.
 
 Because the exclusion is performed in the detector, every consumer of footstrikes — overstriding,
 foot-strike pattern, step width, step width in centimetres and stride length — receives the reduced
@@ -266,6 +274,14 @@ remains literally true.
 - **GIVEN** a clip whose detector yields a candidate on the first frame of the analysed series
 - **WHEN** footstrikes are detected
 - **THEN** that candidate is not emitted, and the interior candidates are emitted unchanged
+
+#### Scenario: An ineligible candidate cannot suppress a real contact before being dropped
+
+- **GIVEN** a clip on the ankle-difference detector carrying a confirmed interior contact and, on a
+  boundary frame, a candidate of GREATER amplitude within the same-side spacing floor of it
+- **WHEN** footstrikes are detected
+- **THEN** the interior contact is emitted, and the boundary candidate is not
+- **AND** the clip does not report an empty footstrike list
 
 #### Scenario: Both detectors are covered identically
 
@@ -290,7 +306,7 @@ it SHALL report the value discounted rather than withheld: confidence multiplied
 observed and the count recommended. The system SHALL NOT return `null` on account of sample size
 alone.
 
-The minimum SHALL be derived, not chosen. Step width reduces its per-strike offsets with a median,
+The minimum's SHAPE SHALL be derived rather than chosen, and the one quantity that is chosen SHALL be named as such. Step width reduces its per-strike offsets with a median,
 and contamination on this corpus is one-sided — a degenerate or unconfirmable strike inflates the
 offset rather than scattering it — so `k` contaminants occupy the top `k` ranks of `n` samples. The
 median is untouched by them exactly when the middle of the sorted array still lies strictly inside
