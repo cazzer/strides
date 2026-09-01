@@ -262,6 +262,13 @@ export function estimateStrideLength(
   const travelDirection = estimateTravelDirection(frames, bodyScale)
   if (travelDirection === 0) return { ok: false, reason: 'travel-direction-unknown' }
 
+  // Reads `timestamp` and hip-mid only, so this DELIBERATELY ignores `candidate.ankleMeasurable`
+  // and takes every emitted strike. An ankle-label collapse says nothing about when the strike
+  // happened or where the pelvis was, which are the only two things a stride pair is made of.
+  // Not an oversight, and measured rather than assumed: Demo 1's four strikes are
+  // `right@4.20, left@4.84, right@5.52, left@6.16` and the gate marks exactly the outer two
+  // unmeasurable. Skipping those leaves `left@4.84` + `right@5.52` — zero same-side pairs — and
+  // takes `verticalRatio` from `0.0310 @ 0.479` to `null`. See `footstrikes.ts`' "Two gates".
   const candidates: FootstrikeCandidate[] = detectFootstrikes(frames, config)
 
   const bySide: Record<'left' | 'right', FootstrikeCandidate[]> = { left: [], right: [] }

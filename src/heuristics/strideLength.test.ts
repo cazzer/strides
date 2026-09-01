@@ -5,6 +5,7 @@ import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import { median } from './mathUtils'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildFrame } from './__fixtures__/testFrames'
+import { withCollapsedAnklesAt } from './__fixtures__/collapsedAnkles'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 
 const BASE_PARAMS = {
@@ -412,5 +413,42 @@ describe('estimateStrideLength — fitted-period gate', () => {
     })
 
     expect(gated).toEqual({ ok: false, reason: 'no-usable-pairs' })
+  })
+})
+
+describe('estimateStrideLength — a pair with a collapsed-ankle endpoint', () => {
+  /** 1.6s at 170spm emits exactly four strikes, at frames 5 / 16 / 26 / 37 — left, right, left,
+   * right — so both same-side pairs (5→26 and 16→37) have a collapsed endpoint below. */
+  const FOUR_STRIKE_PARAMS = { ...BASE_PARAMS, durationSec: 1.6 }
+
+  it('still contributes, because a stride pair is made of timestamps and hips', () => {
+    // This is the test that would have caught the naive fix. Dropping an unmeasurable strike
+    // inside `detectFootstrikes` instead of annotating it leaves Demo 1 with `left@4.84` +
+    // `right@5.52` — zero same-side pairs — and nulls `verticalRatio`, measured. Stride length
+    // reads only `timestamp` and hip-mid, and an ankle-label collapse touches neither, so it
+    // deliberately ignores `ankleMeasurable`.
+    const clean = generateSyntheticGait(FOUR_STRIKE_PARAMS)
+    const baseline = estimateStrideLength(clean, DEFAULT_HEURISTICS_CONFIG)
+    expect(baseline.ok).toBe(true)
+    if (!baseline.ok) return
+
+    const collapsed = withCollapsedAnklesAt(clean, [5, 37])
+    // Both endpoints really are marked unmeasurable, so the pairs really are the ones at risk.
+    const candidates = detectFootstrikes(collapsed, DEFAULT_HEURISTICS_CONFIG)
+    expect(candidates.filter((c) => !c.ankleMeasurable).map((c) => c.frameIndex)).toEqual([5, 37])
+
+    const result = estimateStrideLength(collapsed, DEFAULT_HEURISTICS_CONFIG)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.strideLengthPx).toBe(baseline.strideLengthPx)
+    expect(result.pairCount).toBe(baseline.pairCount)
+    expect(result.candidatePairCount).toBe(baseline.candidatePairCount)
+    expect(result.periodRejectedPairCount).toBe(baseline.periodRejectedPairCount)
+    // Compared field-by-field rather than by deep equality: a pair carries its own start/end
+    // FRAMES, and those really do differ — the fixture moved the ankles in them. What has to be
+    // identical is the measurement, which is hip-mid displacement.
+    expect(result.pairs.map((pair) => [pair.side, pair.displacementPx])).toEqual(
+      baseline.pairs.map((pair) => [pair.side, pair.displacementPx]),
+    )
   })
 })

@@ -8,6 +8,12 @@ import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { HeuristicsConfig } from './types'
 import { buildFrame } from './__fixtures__/testFrames'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
+import { buildStrikeFrames } from './__fixtures__/strikeFrames'
+import {
+  withAnkleSeparationScaled,
+  withCollapsedAnklesAt,
+  withUnrecoverableRightAnkleAt,
+} from './__fixtures__/collapsedAnkles'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 
 /** shoulder-mid (0,0), hip-mid (0,100) -> torsoLengthPx 100 on every frame, so
@@ -288,7 +294,7 @@ describe('detectFootstrikes', () => {
 
     const result = detectFootstrikes(frames, configWithRatio(0.02)) // 0.02 * 100 = 2
 
-    expect(result).toEqual([{ frameIndex: 5, timestamp: 5, side: 'left' }])
+    expect(result).toEqual([{ frameIndex: 5, timestamp: 5, side: 'left', ankleMeasurable: true }])
   })
 
   it('drops a same-side candidate closer than footstrikeMinIntervalSeconds to the last kept one', () => {
@@ -312,7 +318,7 @@ describe('detectFootstrikes', () => {
 
     const result = detectFootstrikes(frames, configWithRatio(0.03)) // 0.03 * 100 = 3
 
-    expect(result).toEqual([{ frameIndex: 2, timestamp: 0.02, side: 'left' }])
+    expect(result).toEqual([{ frameIndex: 2, timestamp: 0.02, side: 'left', ankleMeasurable: true }])
   })
 
   it('combines both legs into a single timestamp-ordered list, not grouped/appended by side', () => {
@@ -342,9 +348,9 @@ describe('detectFootstrikes', () => {
     const result = detectFootstrikes(frames, configWithRatio(0.02)) // 0.02 * 100 = 2
 
     expect(result).toEqual([
-      { frameIndex: 3, timestamp: 3, side: 'left' },
-      { frameIndex: 6, timestamp: 6, side: 'right' },
-      { frameIndex: 9, timestamp: 9, side: 'left' },
+      { frameIndex: 3, timestamp: 3, side: 'left', ankleMeasurable: true },
+      { frameIndex: 6, timestamp: 6, side: 'right', ankleMeasurable: true },
+      { frameIndex: 9, timestamp: 9, side: 'left', ankleMeasurable: true },
     ])
   })
 
@@ -886,7 +892,7 @@ describe('detectFootstrikes — a candidate needs a sampled frame on both sides 
     // Gone from the fallback detector itself, and gone from the module's output.
     expect(ankleOnlyFrames(frames)).toEqual([['left', 5]])
     expect(detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)).toEqual([
-      { frameIndex: 5, timestamp: 5, side: 'left' },
+      { frameIndex: 5, timestamp: 5, side: 'left', ankleMeasurable: true },
     ])
   })
 
@@ -897,7 +903,7 @@ describe('detectFootstrikes — a candidate needs a sampled frame on both sides 
 
     expect(ankleOnlyFrames(frames)).toEqual([['left', 8]])
     expect(detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)).toEqual([
-      { frameIndex: 8, timestamp: 8, side: 'left' },
+      { frameIndex: 8, timestamp: 8, side: 'left', ankleMeasurable: true },
     ])
   })
 
@@ -941,7 +947,7 @@ describe('detectFootstrikes — a candidate needs a sampled frame on both sides 
     // The confirmed interior contact survives, which it cannot if the pivot is ranked before it is
     // excluded.
     expect(detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)).toEqual([
-      { frameIndex: 5, timestamp: frames[5].timestamp, side: 'left' },
+      { frameIndex: 5, timestamp: frames[5].timestamp, side: 'left', ankleMeasurable: true },
     ])
   })
 
@@ -1005,5 +1011,194 @@ describe('detectFootstrikes — a candidate needs a sampled frame on both sides 
       expect(interiorOnly(emitted, frames.length)).toEqual(emitted)
     }
     expect(sawCandidates).toBe(true)
+  })
+})
+
+describe('detectFootstrikes — a strike whose two ankles have collapsed onto one point', () => {
+  const SHAPE = { bounceHalfPx: 12, hangEnd: 0.85, toeOffLiftPx: 22 }
+  const FLOOR_PX = DEFAULT_HEURISTICS_CONFIG.footstrikeMinAnkleSeparationRatio * TORSO_PX
+
+  /** Every emitted instant's ankle separation, as a fraction of this fixture's torso length. */
+  function separationRatios(frames: RobustPoseFrame[], torsoLengthPx: number) {
+    return detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG).map((candidate) => {
+      const frame = frames[candidate.frameIndex]
+      const left = resolvePoint(frame, 'left_ankle')
+      const right = resolvePoint(frame, 'right_ankle')
+      return left === null || right === null ? null : Math.abs(left.y - right.y) / torsoLengthPx
+    })
+  }
+
+  it('is annotated unmeasurable and still emitted, at the same frame and the same side', () => {
+    const frames = buildGait(SHAPE, 4)
+    const baseline = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)
+    expect(baseline.length).toBeGreaterThan(2)
+    expect(baseline.every((candidate) => candidate.ankleMeasurable)).toBe(true)
+
+    // One interior instant, collapsed to just UNDER the floor rather than to zero — this has to
+    // fail because of where the threshold is, not because the difference degenerated to nothing.
+    const victim = baseline[1]
+    const collapsed = withCollapsedAnklesAt(frames, [victim.frameIndex], FLOOR_PX - 1)
+    const detected = detectFootstrikes(collapsed, DEFAULT_HEURISTICS_CONFIG)
+
+    // Annotated, not dropped: same instants, same feet, same order. That identity is what lets
+    // `strideLength` keep pairing across this strike — see `footstrikes.ts`' "Two gates".
+    expect(detected.map((c) => [c.side, c.frameIndex, c.timestamp])).toEqual(
+      baseline.map((c) => [c.side, c.frameIndex, c.timestamp]),
+    )
+    expect(detected.map((c) => c.ankleMeasurable)).toEqual(
+      baseline.map((c) => c.frameIndex !== victim.frameIndex),
+    )
+  })
+
+  it('is measurable again one pixel above the floor, so the threshold is what decides it', () => {
+    const frames = buildGait(SHAPE, 4)
+    const victim = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)[1]
+
+    const justUnder = detectFootstrikes(
+      withCollapsedAnklesAt(frames, [victim.frameIndex], FLOOR_PX - 1),
+      DEFAULT_HEURISTICS_CONFIG,
+    )
+    const justOver = detectFootstrikes(
+      withCollapsedAnklesAt(frames, [victim.frameIndex], FLOOR_PX + 1),
+      DEFAULT_HEURISTICS_CONFIG,
+    )
+
+    expect(justUnder[1].ankleMeasurable).toBe(false)
+    expect(justOver[1].ankleMeasurable).toBe(true)
+    // Nothing else moved between the two arms.
+    expect(justOver.map((c) => [c.side, c.frameIndex])).toEqual(
+      justUnder.map((c) => [c.side, c.frameIndex]),
+    )
+  })
+
+  it('an unresolvable contralateral ankle is measurable, not gated', () => {
+    // No opposite ankle means no separation to measure, which is the absence of evidence rather
+    // than evidence of a collapse — and it is common: `strides-boc` documents a 10-of-12 detection
+    // dropout on Demo 2. Gating here would delete strikes for having less data, not worse data.
+    const frames = buildGait(SHAPE, 4)
+    const victim = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)[1]
+    const detected = detectFootstrikes(
+      withUnrecoverableRightAnkleAt(frames, [victim.frameIndex]),
+      DEFAULT_HEURISTICS_CONFIG,
+    )
+
+    expect(resolvePoint(
+      withUnrecoverableRightAnkleAt(frames, [victim.frameIndex])[victim.frameIndex],
+      'right_ankle',
+    )).toBeNull()
+    expect(detected.every((candidate) => candidate.ankleMeasurable)).toBe(true)
+  })
+
+  it('the ankle-difference path is exempt, because it already gates the same quantity', () => {
+    // Two antiphase triangle waves 6px apart at their crossings, on a static torso — no bounce, so
+    // the fallback wins — and `findLocalExtrema` confirms maxima at a prominence of 2px. Every
+    // emitted strike sits FAR below the separation floor (6px against 20px) and every one is
+    // reported measurable anyway.
+    //
+    // That is not leniency. `buildContactSeries` IS `ankle_S.y − ankle_opposite.y`, and this
+    // detector selects that series' prominence-confirmed maxima at
+    // `footstrikeMinProminenceRatio × torsoLengthPx` — it has already vetted ankle separation, in
+    // the same units, as its selection criterion. A second floor on top would gate one quantity
+    // through two constants that could disagree. The phase path vets nothing about the pose, which
+    // is why the floor is scoped to it.
+    const leftY = [0, 2, 4, 6, 4, 2, 0, 2, 4, 6, 4, 2]
+    const rightY = [6, 4, 2, 0, 2, 4, 6, 4, 2, 0, 2, 4]
+    const frames = leftY.map((y, i) =>
+      buildFrame(
+        { ...TORSO_POINTS, left_ankle: { x: 0, y }, right_ankle: { x: 0, y: rightY[i] } },
+        i,
+      ),
+    )
+
+    const detected = detectFootstrikes(frames, configWithRatio(0.02))
+    // The fallback really is the path that produced these.
+    expect(detected.map((c) => [c.side, c.frameIndex])).toEqual(ankleOnlyFrames(frames))
+
+    expect(detected.length).toBeGreaterThan(0)
+    for (const candidate of detected) {
+      const frame = frames[candidate.frameIndex]
+      const separation = Math.abs(
+        resolvePoint(frame, 'left_ankle')!.y - resolvePoint(frame, 'right_ankle')!.y,
+      )
+      expect(separation).toBeLessThan(FLOOR_PX)
+      expect(candidate.ankleMeasurable).toBe(true)
+    }
+  })
+
+  it('a clip where EVERY strike is unmeasurable still reports them, rather than changing path', () => {
+    // The ordering guard. The floor is applied to `detectFromBouncePhase`'s OUTPUT, strictly after
+    // `attributeSides`. Applied as a filter on its INPUT instead, a clip like this one — every
+    // instant sub-threshold — would leave that vote with nothing, `attributeSides` would return
+    // null, the phase path would return `[]`, and `detectFootstrikes` would read that as "fall
+    // back" and silently hand the whole clip to the ankle-difference detector. Same emitted count,
+    // different instants, no error anywhere.
+    const frames = buildGait(SHAPE, 4)
+    const baseline = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)
+
+    // Squeeze the two ankles together everywhere, leaving hips (and so the fit, and so the timing)
+    // untouched.
+    const squeezed = withAnkleSeparationScaled(frames, 0.2)
+    expect(separationRatios(squeezed, TORSO_PX).every((r) => r !== null && r < 0.2)).toBe(true)
+
+    const detected = detectFootstrikes(squeezed, DEFAULT_HEURISTICS_CONFIG)
+    expect(detected.map((c) => [c.side, c.frameIndex, c.timestamp])).toEqual(
+      baseline.map((c) => [c.side, c.frameIndex, c.timestamp]),
+    )
+    expect(detected.every((candidate) => candidate.ankleMeasurable === false)).toBe(true)
+
+    // ...and the identity above is evidence, because the fallback would have emitted something
+    // else on this clip.
+    expect(ankleOnlyFrames(squeezed)).not.toEqual(detected.map((c) => [c.side, c.frameIndex]))
+  })
+
+  it('leaves every synthetic fixture in this suite clear of the floor', () => {
+    // The invariant that stops a fixture edit silently deleting strikes across eight test files.
+    // Both generators put the ankles far closer together at contact than real footage does — the
+    // measured genuine minimum on this repo's three clips is 4.65x this floor — so their margins
+    // are the thin ones and they are the ones worth pinning. See
+    // `HeuristicsConfig.footstrikeMinAnkleSeparationRatio` for why the fixtures are NOT to be
+    // widened to fix a failure here.
+    const gaitFloor = DEFAULT_HEURISTICS_CONFIG.footstrikeMinAnkleSeparationRatio
+    for (const strideAmplitudePx of [20, 40, 45, 80]) {
+      for (const view of ['side', 'front'] as const) {
+        const frames = generateSyntheticGait({
+          durationSec: 4,
+          fps: 30,
+          cadenceStepsPerMin: 170,
+          strideAmplitudePx,
+          verticalBouncePx: 20,
+          trunkLeanDeg: 5,
+          view,
+        })
+        const ratios = separationRatios(frames, 150)
+        expect(ratios.length).toBeGreaterThan(0)
+        for (const ratio of ratios) {
+          // 0.3282 measured, against a 0.20 floor.
+          expect(ratio).not.toBeNull()
+          expect(ratio!).toBeGreaterThanOrEqual(gaitFloor * 1.6)
+        }
+        expect(
+          detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG).every((c) => c.ankleMeasurable),
+        ).toBe(true)
+      }
+    }
+
+    // `buildStrikeFrames` is the tighter of the two at exactly ANKLE_LIFT_PX / TORSO_LENGTH_PX =
+    // 40/150. It reaches the FALLBACK path (static hips, no bounce), so it is exempt anyway — the
+    // margin is pinned regardless, because that exemption is a scoping decision that could be
+    // revisited and the fixture must not be what breaks if it is.
+    const strikeFrames = buildStrikeFrames({
+      ankleOffsetsPx: [10, 20, 30, 40],
+      alternateFeet: true,
+    })
+    const strikeRatios = separationRatios(strikeFrames, 150)
+    expect(strikeRatios.length).toBeGreaterThan(0)
+    for (const ratio of strikeRatios) {
+      expect(ratio).not.toBeNull()
+      expect(ratio!).toBeGreaterThanOrEqual(gaitFloor * 1.3)
+    }
+    expect(
+      detectFootstrikes(strikeFrames, DEFAULT_HEURISTICS_CONFIG).every((c) => c.ankleMeasurable),
+    ).toBe(true)
   })
 })

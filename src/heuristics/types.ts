@@ -625,6 +625,46 @@ export interface HeuristicsConfig {
    * runner's fastest plausible cadence, a "second" candidate this soon is almost certainly the
    * same footstrike re-detected across a couple of noisy frames. */
   footstrikeMinIntervalSeconds: number // 0.25
+
+  /**
+   * Minimum vertical separation between the two ankles, as a fraction of torsoLengthPx, for a
+   * PHASE-DERIVED footstrike's ankle position to be measurable at all. At a real touchdown one
+   * foot is planted and the other is mid-swing, so the two ankles are near maximal separation;
+   * two ankles at the same height at a predicted touchdown is a collapsed pose, not a contact.
+   * Below this the strike keeps its timing and its side but contributes no ankle measurement —
+   * see `footstrikes.ts`'s `ankleMeasurable`. It does NOT apply to the ankle-difference detector,
+   * which already gates the identical quantity through `footstrikeMinProminenceRatio`.
+   *
+   * ## Derivation — measured, on the phase path, corpus-wide
+   *
+   * Live-browser probe over all three clips x (primary + background scale pass), fresh Chromium
+   * per clip, real GPU, two bit-identical invocations (`strides-1mt`). Of the phase-path strikes
+   * in that corpus the three lowest are keyframe-confirmed collapsed poses and every other is a
+   * genuine contact:
+   *
+   * ```
+   * degenerate:  0.0086 (demo2 t=0.10010)   0.0558 (demo1 t=6.16)   0.0976 (demo1 t=4.20)
+   *   |                                                 gap x4.76
+   * genuine:     0.4649 (demo2 t=0.76743)   ... up to 1.9102
+   * ```
+   *
+   * A pre-registered rule required every degenerate strike at or below `f/2` and every genuine one
+   * at or above `2f`, which needs a x4 gap to partition at. The feasible window is
+   * **[0.1952, 0.2325]**; 0.20 sits inside it at **2.05x** clearance below and **2.32x** above.
+   *
+   * ⚠️ **The synthetic fixtures sit far lower than the measured genuine population, and that is an
+   * artifact rather than a measurement.** `generateSyntheticGait` separates the ankles by
+   * `ANKLE_LIFT_PX / TORSO_LENGTH_PX` = 50/150 = 0.333 T at contact, and
+   * `buildStrikeFrames({ alternateFeet: true })` by 40/150 = 0.267 T — 1.67x and 1.33x above this
+   * floor, against 4.65x for the lowest genuine strike on real footage. `ANKLE_LIFT_PX`'s own
+   * docstring says it was sized to clear the PROMINENCE threshold and feeds no hand-computed
+   * expectation, so it is arbitrary rather than a claim about running. Do NOT raise it to widen
+   * that margin: `syntheticGait` derives knee-y from the hip/ankle midpoint, so moving it would
+   * move `kneeFlexion`'s hand-computed expectations across the suite. `footstrikes.test.ts` pins
+   * the fixtures' margins against this key directly, so a fixture edit that would silently delete
+   * strikes across eight files fails loudly instead.
+   */
+  footstrikeMinAnkleSeparationRatio: number // 0.20
   /** Documented, tunable qualitative cutoff for a future "flag if ahead by more than this
    * fraction of torso length" UI treatment — not a clinical threshold. */
   overstrideFlagRatio: number // 0.15
@@ -802,6 +842,7 @@ export const DEFAULT_HEURISTICS_CONFIG: HeuristicsConfig = {
   verticalOscillationSignal: 'hipMid',
   footstrikeMinProminenceRatio: 0.05,
   footstrikeMinIntervalSeconds: 0.25,
+  footstrikeMinAnkleSeparationRatio: 0.2,
   overstrideFlagRatio: 0.15,
   kneeFlexionMinProminenceDegrees: 20,
   armSwingMinFitR2: 0.3,

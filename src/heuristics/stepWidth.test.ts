@@ -5,6 +5,7 @@ import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildStrikeFrames, withStaticOppositeAnkle } from './__fixtures__/strikeFrames'
 import { buildFrame } from './__fixtures__/testFrames'
+import { withCollapsedAnklesAt } from './__fixtures__/collapsedAnkles'
 import { median } from './mathUtils'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { KeypointName } from '../pose/types'
@@ -465,5 +466,33 @@ describe('computeStepWidth — how few strikes are priced', () => {
     expect(result.sampleSize).toBe(7)
     expect(result.confidence).toBeCloseTo(1, 12)
     expect(result.caveat).toBeNull()
+  })
+})
+
+describe('computeStepWidth — strikes whose two ankles have collapsed onto one point', () => {
+  /** 1.6s at 170spm emits exactly four strikes, at frames 5 / 16 / 26 / 37. */
+  const FOUR_STRIKE_PARAMS = {
+    durationSec: 1.6,
+    fps: 30,
+    cadenceStepsPerMin: 170,
+    strideAmplitudePx: 80,
+    verticalBouncePx: 20,
+    trunkLeanDeg: 5,
+    view: 'front' as const,
+  }
+
+  it('drops them from the sample and keeps them in the coverage denominator', () => {
+    const clean = generateSyntheticGait(FOUR_STRIKE_PARAMS)
+    expect(computeStepWidth(clean, 'front').sampleSize).toBe(4)
+
+    const result = computeStepWidth(withCollapsedAnklesAt(clean, [5, 37]), 'front')
+
+    // Same rule and the same single definition as overstriding's — see `footstrikes.ts`.
+    expect(result.sampleSize).toBe(2)
+    expect(result.frameCoverage).toBe(0.5)
+    expect(result.value).not.toBeNull()
+    // This metric's own minimum is 7, not 4, so the sample-size factor is 2/7 here — unchanged by
+    // this gate, which deliberately moves no `MIN_*_SAMPLE_SIZE`.
+    expect(result.caveat).toContain('at least 7')
   })
 })

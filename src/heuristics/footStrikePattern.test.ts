@@ -5,6 +5,7 @@ import type { RobustPoseFrame } from '../pose/robustness/types'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildStrikeFrames } from './__fixtures__/strikeFrames'
 import { buildFrame } from './__fixtures__/testFrames'
+import { withCollapsedAnklesAt } from './__fixtures__/collapsedAnkles'
 
 const BASE_PARAMS = {
   durationSec: 4,
@@ -239,5 +240,24 @@ describe('classifyFootStrike', () => {
     expect(classifyFootStrike(0, 0.05)).toBe('midfoot')
     expect(classifyFootStrike(0.05, 0.05)).toBe('midfoot')
     expect(classifyFootStrike(-0.05, 0.05)).toBe('midfoot')
+  })
+})
+
+describe('computeFootStrikePattern — strikes whose two ankles have collapsed onto one point', () => {
+  /** 1.6s at 170spm emits exactly four strikes, at frames 5 / 16 / 26 / 37. */
+  const FOUR_STRIKE_PARAMS = { ...BASE_PARAMS, durationSec: 1.6, view: 'side' as const }
+
+  it('drops them from the sample and keeps them in the coverage denominator', () => {
+    const clean = generateSyntheticGait(FOUR_STRIKE_PARAMS)
+    expect(computeFootStrikePattern(clean, 'side').sampleSize).toBe(4)
+
+    const result = computeFootStrikePattern(withCollapsedAnklesAt(clean, [5, 37]), 'side')
+
+    // Same rule and the same single definition as overstriding's — see `footstrikes.ts`.
+    expect(result.sampleSize).toBe(2)
+    expect(result.frameCoverage).toBe(0.5)
+    // 1 (side) x 0.5 (coverage) x 1 (nothing interpolated) x min(1, 2/4) x 1 (direction known).
+    expect(result.confidence).toBeCloseTo(0.25, 10)
+    expect(result.value).not.toBeNull()
   })
 })

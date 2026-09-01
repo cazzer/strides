@@ -20,9 +20,32 @@ import type { ExemplarDistribution } from './exemplars'
 import { median } from './mathUtils'
 
 /**
- * Roughly one full gait cycle's worth of footstrikes (two per leg) — a judgment-call minimum for
- * a stable median overstride ratio, chosen for the same reason as `verticalOscillationMinCycles`:
- * fewer strikes than this is too easily dominated by a single noisy detection.
+ * Roughly one full gait cycle's worth of footstrikes — two per leg — which is the smallest sample
+ * that has seen both feet do the whole thing once. That is the basis, and it is a GAIT one.
+ *
+ * ## What this constant does NOT claim
+ *
+ * It used to say "fewer strikes than this is too easily dominated by a single noisy detection".
+ * That sentence is false, and `stepWidth.ts:18-83` demolishes it in full for the identical
+ * estimator: at `n = 4` with one contaminant the median is `mean(rank2, rank3)` =
+ * `mean(clean median, clean MAX)`, so half the reported number is the worst clean sample. Four is
+ * dominated by one bad strike. The claim is deleted rather than repaired, because the honest
+ * defence of 4 is the gait cycle above and never was the arithmetic.
+ *
+ * ## Why the derived `n >= 2k + 3` minimum does not pull this to 7
+ *
+ * `stepWidth`'s rule prices `k` contaminants biased the same way, and it chose `k = 2` from the two
+ * contamination mechanisms this repo has measured: boundary strikes (`strides-aah`, excluded in
+ * `detectFootstrikes`) and collapsed-ankle strikes (`strides-1mt`). **Both are now removed at
+ * source**, the second by the `ankleMeasurable` skip above. Post-gate `k = 0` for every mechanism
+ * the corpus documents, `n >= 2(0) + 3 = 3`, and 4 already clears it.
+ *
+ * Raising it to 7 would charge the sample twice — once by deleting the contaminated strikes, once
+ * by pricing the survivors as though they were still in there. On Demo 1 that is the difference
+ * between the honest `min(1, 2/4) = 0.5` and a punitive `2/7 = 0.143`.
+ *
+ * **Revisit if** the phase-path floor is ever measured leaving a contaminated strike inside an
+ * `n >= 4` sample: that would put `k` back above 0 and `2k + 3` back above 4.
  */
 const MIN_OVERSTRIDE_SAMPLE_SIZE = 4
 
@@ -183,6 +206,13 @@ export function computeOverstriding(
   // by however many strikes had no resolvable hip.
   const strikeSamples: StrikeSample[] = []
   for (const candidate of candidates) {
+    // Shares the `continue` below, and belongs with it: a strike whose two ankle labels have
+    // collapsed onto one point IS an ankle that failed to resolve — it merely presents as
+    // resolved, which is what makes it dangerous rather than merely absent. Same bucket, so the
+    // same treatment, including staying in `frameCoverage`'s denominator. Defined once, in
+    // `footstrikes.ts`.
+    if (!candidate.ankleMeasurable) continue
+
     const frame = frames[candidate.frameIndex]
     const ankle = resolvePoint(frame, ANKLE_NAME[candidate.side])
     const hipMid = resolveMidpoint(frame, 'left_hip', 'right_hip')

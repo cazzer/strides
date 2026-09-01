@@ -145,6 +145,12 @@ export function computeStepWidth(
   // Index-parallel to `offsetRatios`, not to `candidates` — the `continue`s below skip strikes.
   const strikeSamples: StepWidthStrikeSample[] = []
   for (const candidate of candidates) {
+    // A strike whose two ankle labels have collapsed onto one point measures nothing about where
+    // the foot landed. Same bucket as the `continue`s below — an ankle that failed to resolve while
+    // presenting as resolved — so it is skipped and stays in `frameCoverage`'s denominator. The
+    // predicate, and why such a strike is annotated rather than dropped, are in `footstrikes.ts`.
+    if (!candidate.ankleMeasurable) continue
+
     const frame = frames[candidate.frameIndex]
     const ankle = resolvePoint(frame, STEP_WIDTH_ANKLE_NAME[candidate.side])
     const hips = resolveBilateralPair(frame, 'left_hip', 'right_hip')

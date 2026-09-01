@@ -184,6 +184,12 @@ export function computeFootStrikePattern(
   // Index-parallel to `offsetRatios`, not to `candidates` — the `continue` above skips strikes.
   const strikeSamples: StrikeSample[] = []
   for (const candidate of candidates) {
+    // A strike whose two ankle labels have collapsed onto one point measures nothing about where
+    // the foot landed. Same bucket as the `continue` below — an ankle that failed to resolve while
+    // presenting as resolved — so it is skipped and stays in `frameCoverage`'s denominator. The
+    // predicate, and why such a strike is annotated rather than dropped, are in `footstrikes.ts`.
+    if (!candidate.ankleMeasurable) continue
+
     const frame = frames[candidate.frameIndex]
     const ankle = resolvePoint(frame, ANKLE_NAME[candidate.side])
     const knee = resolvePoint(frame, KNEE_NAME[candidate.side])

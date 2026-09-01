@@ -3,6 +3,7 @@ import { computeStepWidthCm } from './stepWidthCm'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildStrikeFrames, withStaticOppositeAnkle } from './__fixtures__/strikeFrames'
 import { buildFrame } from './__fixtures__/testFrames'
+import { withCollapsedAnklesAt } from './__fixtures__/collapsedAnkles'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { planMetricEvidence } from '../results/evidenceFrames'
 import { planEvidenceAnnotations } from '../results/evidenceAnnotations'
@@ -383,5 +384,31 @@ describe('computeStepWidthCm exemplars', () => {
         op.kind === 'caliper' && op.role === 'ankleOffsetCaliper',
     )
     expect(calipers.map((op) => op.instant).sort()).toEqual(['base', 'ghost'])
+  })
+})
+
+describe('computeStepWidthCm — strikes whose two ankles have collapsed onto one point', () => {
+  /** 1.6s at 170spm emits exactly four strikes, at frames 5 / 16 / 26 / 37. */
+  const FOUR_STRIKE_PARAMS = {
+    durationSec: 1.6,
+    fps: 30,
+    cadenceStepsPerMin: 170,
+    strideAmplitudePx: 80,
+    verticalBouncePx: 20,
+    trunkLeanDeg: 5,
+    view: 'front' as const,
+    pixelsPerMeter: 300,
+  }
+
+  it('drops them from the sample and keeps them in the coverage denominator', () => {
+    const clean = generateSyntheticGait(FOUR_STRIKE_PARAMS)
+    expect(computeStepWidthCm(clean, 'front').sampleSize).toBe(4)
+
+    const result = computeStepWidthCm(withCollapsedAnklesAt(clean, [5, 37]), 'front')
+
+    // Same rule and the same single definition as overstriding's — see `footstrikes.ts`.
+    expect(result.sampleSize).toBe(2)
+    expect(result.frameCoverage).toBe(0.5)
+    expect(result.value).not.toBeNull()
   })
 })

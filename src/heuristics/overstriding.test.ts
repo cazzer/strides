@@ -6,6 +6,8 @@ import { MIN_EXEMPLAR_QUALITY } from './exemplars'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildStrikeFrames } from './__fixtures__/strikeFrames'
 import { buildFrame } from './__fixtures__/testFrames'
+import { withCollapsedAnklesAt } from './__fixtures__/collapsedAnkles'
+import { resolveMidpoint, resolvePoint } from './keypoints'
 
 const BASE_PARAMS = {
   durationSec: 4,
@@ -216,5 +218,76 @@ describe('computeOverstriding exemplars', () => {
     const frames = buildStrikeFrames({ ankleOffsetsPx: [75, 75, 75, 75, 75] })
 
     expect(computeOverstriding(frames, 'side').exemplars).toBeUndefined()
+  })
+})
+
+describe('computeOverstriding — strikes whose two ankles have collapsed onto one point', () => {
+  /** 1.6s at 170spm emits exactly four strikes, at frames 5 / 16 / 26 / 37. */
+  const FOUR_STRIKE_PARAMS = {
+    ...BASE_PARAMS,
+    durationSec: 1.6,
+    strideAmplitudePx: 80,
+    view: 'side' as const,
+  }
+  /** The outer two — the shape `strides-1mt` measured on Demo 1, where the first and the last of
+   * four strikes were the collapsed ones and happened to be the median's discarded extremes. */
+  const COLLAPSED_FRAMES = [5, 37]
+
+  /** What this metric measures at one strike, computed here rather than taken from the metric. */
+  function ratioAt(frames: RobustPoseFrame[], frameIndex: number, side: 'left' | 'right') {
+    const frame = frames[frameIndex]
+    const ankle = resolvePoint(frame, side === 'left' ? 'left_ankle' : 'right_ankle')!
+    const hip = resolveMidpoint(frame, 'left_hip', 'right_hip')!
+    return (ankle.x - hip.x) / 150
+  }
+
+  it('drops them from the sample, keeps them in the coverage denominator, and prices both', () => {
+    const clean = generateSyntheticGait(FOUR_STRIKE_PARAMS)
+    const baseline = computeOverstriding(clean, 'side')
+    expect(baseline.sampleSize).toBe(4)
+    expect(baseline.frameCoverage).toBe(1)
+
+    const frames = withCollapsedAnklesAt(clean, COLLAPSED_FRAMES)
+    const result = computeOverstriding(frames, 'side')
+
+    // Two of four strikes survive, and the other two are still counted as candidates: a collapsed
+    // ankle pair IS an ankle that failed to resolve, which is exactly what this denominator has
+    // always measured. The thinning is therefore priced twice — once through coverage and once
+    // through the sample-size factor — the same way a strike with no resolvable hip already is.
+    expect(result.sampleSize).toBe(2)
+    expect(result.frameCoverage).toBe(0.5)
+    expect(result.interpolatedFraction).toBe(0)
+    // 1 (side) x 0.5 (coverage) x 1 (nothing interpolated) x min(1, 2/4) x 1 (direction known).
+    expect(result.confidence).toBeCloseTo(0.25, 10)
+
+    // The reported number is the median of the SURVIVORS, computed independently here.
+    const survivors = [ratioAt(frames, 16, 'right'), ratioAt(frames, 26, 'left')]
+    expect(result.value).toBeCloseTo((survivors[0] + survivors[1]) / 2, 10)
+  })
+
+  it('draws its exemplar only from surviving strikes', () => {
+    const clean = generateSyntheticGait(FOUR_STRIKE_PARAMS)
+    const frames = withCollapsedAnklesAt(clean, COLLAPSED_FRAMES)
+    const result = computeOverstriding(frames, 'side')
+
+    const survivingTimestamps = [frames[16].timestamp, frames[26].timestamp]
+    for (const exemplar of result.exemplars ?? []) {
+      expect(survivingTimestamps).toContain(exemplar.timestamp)
+      if (exemplar.pairedTimestamp !== undefined) {
+        expect(survivingTimestamps).toContain(exemplar.pairedTimestamp)
+      }
+    }
+  })
+
+  it('still recommends four strikes, because the minimum is a gait cycle and not a noise budget', () => {
+    // Pins the decision NOT to raise MIN_OVERSTRIDE_SAMPLE_SIZE alongside this gate. `stepWidth`'s
+    // derived `n >= 2k + 3` minimum takes `k = 2` from two contamination mechanisms, and this gate
+    // removes the second of them at source — so post-gate `k = 0`, `n >= 3`, and 4 already clears
+    // it. Raising it to 7 would charge the same thinning twice.
+    const frames = withCollapsedAnklesAt(
+      generateSyntheticGait(FOUR_STRIKE_PARAMS),
+      COLLAPSED_FRAMES,
+    )
+    expect(computeOverstriding(frames, 'side').caveat).toContain('at least 4')
   })
 })

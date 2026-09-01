@@ -17,7 +17,26 @@ export interface FootstrikeCandidate {
   frameIndex: number
   timestamp: number
   side: 'left' | 'right'
+  /**
+   * Whether this instant's ANKLE POSITION may be read. `false` marks a strike whose two ankles
+   * have collapsed onto one point, so the labels no longer name two feet — see
+   * `hasMeasurableAnkles` for the predicate and `detectFootstrikes` for why such a strike is
+   * annotated rather than dropped.
+   *
+   * Consumed by the four metrics that read an ankle AT a strike (`overstriding`,
+   * `footStrikePattern`, `stepWidth`, `stepWidthCm`). Deliberately IGNORED by `strideLength`,
+   * which reads only this instant's timestamp and hip-mid — neither of which an ankle-label
+   * collapse touches.
+   */
+  ankleMeasurable: boolean
 }
+
+/**
+ * A detected instant before `detectFootstrikes` annotates its ankle measurability. The annotation
+ * is applied once, at the point where the winning detector path is known, because the two paths
+ * are not treated alike — see `detectFootstrikes`' "Two gates, and only one of them is new".
+ */
+type TimedInstant = Omit<FootstrikeCandidate, 'ankleMeasurable'>
 
 const ANKLE_NAME: Record<'left' | 'right', KeypointName> = {
   left: 'left_ankle',
@@ -188,7 +207,7 @@ function selectFootstrikes(
   side: 'left' | 'right',
   minIntervalSeconds: number,
   relative: boolean,
-): FootstrikeCandidate[] {
+): TimedInstant[] {
   const admissible = extrema.filter(
     (extremum) => extremum.kind === 'max' && !(relative && extremum.value < 0),
   )
@@ -325,7 +344,7 @@ export function detectFootstrikesBetweenAnkles(
   config: HeuristicsConfig,
   torsoLengthPx: number,
   fit: SpectralFitResult,
-): FootstrikeCandidate[] {
+): TimedInstant[] {
   const minProminenceAbs = config.footstrikeMinProminenceRatio * torsoLengthPx
 
   const expectedStridePeriodSeconds = resolveExpectedStridePeriodSeconds(
@@ -338,7 +357,7 @@ export function detectFootstrikesBetweenAnkles(
       : shortestPlausibleStrideSeconds(expectedStridePeriodSeconds),
   )
 
-  const candidates: FootstrikeCandidate[] = []
+  const candidates: TimedInstant[] = []
   for (const side of ['left', 'right'] as const) {
     const { series, relative } = buildContactSeries(frames, side)
     // Eligibility BEFORE selection, deliberately — see this function's doc and
@@ -480,6 +499,58 @@ function ankleDifference(frame: RobustPoseFrame): number | null {
 }
 
 /**
+ * Whether the two ankles at this frame are far enough apart VERTICALLY for the ankle labels to
+ * still name two different feet — `|ankleDifference| >= footstrikeMinAnkleSeparationRatio *
+ * torsoLengthPx`. The magnitude `attributeSides` already reads as a weight, read here against a
+ * floor.
+ *
+ * ## Why this says anything about whether a contact happened
+ *
+ * Running has no double-support phase, so at a touchdown one foot is on the ground and the other
+ * is mid-swing: the two ankles are near MAXIMAL separation. That is not an incidental correlate —
+ * it is the entire premise `buildContactSeries` is built on. Two ankles at the same height at a
+ * predicted touchdown therefore say the pose is not a contact, or that both labels have latched
+ * onto one foot; measured on Demo 1, both. At t = 6.16 the two "detected" ankles sit 3 px apart
+ * horizontally and 23 px vertically, both on the TRAILING swing foot while the planted foot is at
+ * the frame edge, and `overstriding` read −0.72 — the foot landing 72% of a torso length BEHIND
+ * the hip, which is not a thing a footstrike can do.
+ *
+ * ## Vertical, not horizontal — and the difference is a whole clip
+ *
+ * `|Δx|` separates the feet only on a SIDE view. Face-on the feet separate mostly in DEPTH, which
+ * projects to almost nothing in image-x: on the front-approach Demo 2 the genuine strikes carry
+ * 0.017–0.50 T horizontally, straddling any usable floor, so an `|Δx|` gate would delete the clip's
+ * whole sample and null the three metrics it is the primary view for. The same strikes carry
+ * 0.46–1.91 T vertically. Vertical separation survives the projection because the ground does not
+ * move.
+ *
+ * ## Undecidable passes
+ *
+ * `null` — either ankle unresolvable — returns `true`. There is then no evidence that the pose has
+ * collapsed, and manufacturing a rejection out of missing data would be a different claim from the
+ * one this predicate makes. It matches how the rest of the module treats absent evidence
+ * (`buildContactSeries` falls back rather than refusing; `selectFootstrikes` skips its
+ * non-negativity rule on the fallback series), and it matters in practice: `strides-boc` documents
+ * a 10-of-12 detection dropout on Demo 2, and a single-leg clip has no contralateral ankle at all.
+ *
+ * ## Interpolation is deliberately NOT part of this
+ *
+ * It is neither sufficient nor necessary. Demo 1's t = 6.16 collapse is both ankles `detected`,
+ * and its t = 4.20 collapse is both `interpolated` — the predicate must catch both, and an
+ * interpolation test catches only one. Interpolation is already priced, separately and
+ * proportionally, by `interpolatedFraction × interpolationConfidencePenalty`.
+ */
+function hasMeasurableAnkles(
+  frame: RobustPoseFrame,
+  config: HeuristicsConfig,
+  torsoLengthPx: number,
+): boolean {
+  const difference = ankleDifference(frame)
+  if (difference === null) return true
+  return Math.abs(difference) >= config.footstrikeMinAnkleSeparationRatio * torsoLengthPx
+}
+
+/**
  * Names the foot at each phase-derived instant — **one decision for the whole clip, not one per
  * instant.**
  *
@@ -519,7 +590,7 @@ function ankleDifference(frame: RobustPoseFrame): number | null {
 function attributeSides(
   frames: RobustPoseFrame[],
   instants: Array<{ frameIndex: number; cycle: number }>,
-): FootstrikeCandidate[] | null {
+): TimedInstant[] | null {
   let evidence = 0
   for (const instant of instants) {
     const difference = ankleDifference(frames[instant.frameIndex])
@@ -600,6 +671,11 @@ function attributeSides(
  * nothing else. The quality bar is `cadenceMinFitR2`, read through the same `isRhythmTrustworthy`
  * predicate the spacing floor uses.
  *
+ * **This path asserts nothing about the POSE at the instant it predicts.** It reads the hip's
+ * fitted rhythm and snaps a prediction to the nearest frame; whether the body at that frame looks
+ * like a foot arriving is a question it never asks, and the ankles enter only to name the feet.
+ * That is the gap `hasMeasurableAnkles` covers, and it is why that floor is scoped to this path.
+ *
  * Returns `[]` — never a partial guess — when the rhythm is untrustworthy, when the clip is too
  * short to have a snap tolerance, when no predicted instant snaps to a frame, or when nothing in
  * the clip names the feet. `detectFootstrikes` reads an empty result as "fall back", so the failure
@@ -616,7 +692,7 @@ function detectFromBouncePhase(
   frames: RobustPoseFrame[],
   fit: SpectralFitResult,
   config: HeuristicsConfig,
-): FootstrikeCandidate[] {
+): TimedInstant[] {
   if (!isRhythmTrustworthy(fit, config)) return []
   if (!Number.isFinite(fit.frequencyHz) || fit.frequencyHz <= 0) return []
 
@@ -690,6 +766,46 @@ function detectFromBouncePhase(
  * The consequence worth knowing at a call site: a clip whose only detectable contacts sit on its
  * end frames reports NO footstrikes rather than reporting them unconfirmed.
  *
+ * ## Two gates, and only one of them is new
+ *
+ * `hasFramesEitherSide` and `hasMeasurableAnkles` answer different questions about different
+ * things, and confusing them is the easiest mistake to make in this file:
+ *
+ * | | `hasFramesEitherSide` | `hasMeasurableAnkles` |
+ * |---|---|---|
+ * | about | the INSTANT — is this timing confirmable | the ANKLE PAIR — do the two labels name two feet |
+ * | effect | the candidate is DROPPED, for everyone | the candidate is ANNOTATED, and kept |
+ * | threshold | none, structurally | `footstrikeMinAnkleSeparationRatio`, measured |
+ * | applies to | both paths | the PHASE path only |
+ *
+ * **Annotated, not dropped, and the difference is a metric.** `strideLength` pairs same-side
+ * consecutive strikes and reads only their timestamps and hip-mid, neither of which an ankle-label
+ * collapse touches. Demo 1's four strikes are `right@4.20, left@4.84, right@5.52, left@6.16` and
+ * exactly the outer two collapse; dropping them leaves `left@4.84` + `right@5.52`, which is **zero
+ * same-side pairs**, and `verticalRatio` goes from `0.0310 @ 0.479` to `null`. Measured, not
+ * predicted — the drop was built and run. So the four ankle-reading metrics skip these strikes and
+ * `strideLength` deliberately does not; the asymmetry is the point, and `strideLength.ts` states it
+ * at its call site so nobody "fixes" it.
+ *
+ * **The phase path only, and the exemption is earned rather than conceded.** The ankle-difference
+ * detector runs `findLocalExtrema` over `buildContactSeries`, which IS `ankle_S.y −
+ * ankle_opposite.y` — the same quantity this floor measures — at
+ * `footstrikeMinProminenceRatio × torsoLengthPx`. It already vets ankle separation, in the same
+ * units, as its selection criterion. Stacking a second, differently-shaped check on top would gate
+ * one quantity through two constants that could disagree. The phase path vets nothing about the
+ * pose: it predicts an instant from the hip's fitted rhythm and snaps it to a frame, and
+ * `detectFromBouncePhase`'s own doc says so. That is the gap, and it is the whole of the gap.
+ *
+ * This scoping was not a convenience. Pooling both detectors' strikes into one distribution left
+ * no threshold at all with 2× clearance either side — the honest reading of the pooled corpus was
+ * "stop", and it was reported as such before the scope was narrowed. Separated, the phase-path
+ * population has a 4.76× gap and `footstrikeMinAnkleSeparationRatio` sits inside it with 2.05× /
+ * 2.32×. Numbers and provenance: that key's own doc in `types.ts`.
+ *
+ * ⚠️ **This does NOT address `strides-boc`'s collapse window, and must not be read as doing so.**
+ * There the two ankles are both placed ~310 px from the HIP while remaining ~344 px from EACH
+ * OTHER; a mutual-separation predicate is blind to it by construction, at any threshold.
+ *
  * Returns `[]` when there's no resolvable body-scale reference at all (no shoulders/hips to measure
  * torso length from) — the fallback path has no way to size its prominence threshold without one,
  * and a clip with no resolvable hips has no bounce to fit either. Callers that need to distinguish
@@ -710,10 +826,26 @@ export function detectFootstrikes(
   // produced no instant at all" to "path 1 produced nothing away from the boundary" — a different
   // rule, and one nothing in the spec states.
   const fromPhase = detectFromBouncePhase(frames, fit, config)
-  const candidates =
+
+  // `ankleMeasurable` is annotated HERE, where the winning path is known, because the two paths
+  // are not treated alike — see "Two gates, and only one of them is new" above. Annotating the
+  // phase path's output (rather than inside `detectFromBouncePhase`) also keeps the floor strictly
+  // after `attributeSides`, so the side vote still sees every instant's separation as the weight it
+  // wants: a collapsed pair contributes ~0 to that sum on its own, which is already the right
+  // answer there and needs no help from a threshold.
+  const candidates: FootstrikeCandidate[] =
     fromPhase.length > 0
-      ? fromPhase
-      : detectFootstrikesBetweenAnkles(frames, config, bodyScale.torsoLengthPx, fit)
+      ? fromPhase.map((candidate) => ({
+          ...candidate,
+          ankleMeasurable: hasMeasurableAnkles(
+            frames[candidate.frameIndex],
+            config,
+            bodyScale.torsoLengthPx,
+          ),
+        }))
+      : detectFootstrikesBetweenAnkles(frames, config, bodyScale.torsoLengthPx, fit).map(
+          (candidate) => ({ ...candidate, ankleMeasurable: true }),
+        )
 
   // And AFTER `attributeSides`, which is equally deliberate. That vote is ONE magnitude-weighted
   // decision over every instant, and a boundary instant's ankle separation is real evidence about
