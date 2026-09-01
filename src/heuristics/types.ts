@@ -202,6 +202,34 @@ export interface MetricExemplar {
    * of what a metric measured stays in the module that measures it. */
   cropKeypoints: KeypointName[]
   /**
+   * Which keypoints THIS instant's own measurement was about — the set an ANNOTATION of the
+   * instant at `timestamp` should draw.
+   *
+   * `cropKeypoints` above cannot answer this, and not by accident: the two fields answer different
+   * questions. The CROP is a property of the IMAGE, so on a pair it must be the UNION across both
+   * instants — one photograph has to contain both of them. The ANNOTATION is a property of the
+   * INSTANT, because the joint layer is a statement about what the measurement at that moment was
+   * about. Drawing the union at each instant states that both feet were measured at both moments,
+   * which on a mixed-side pair is false of both halves.
+   *
+   * Omitted where the two coincide — a same-side pair, and every single-instant exemplar. A
+   * consumer falls back to `cropKeypoints`, which on such an exemplar IS the per-instant set by
+   * construction, so the fallback is independently correct rather than a tolerated approximation.
+   *
+   * REQUIRED wherever `measuredSide !== pairedMeasuredSide`: that is exactly the case where the
+   * union names a limb neither instant's own measurement touched.
+   *
+   * **NOT recoverable by side-filtering `cropKeypoints` downstream.** A crop set legitimately
+   * carries context belonging to neither instant's measurement — `stepWidth`'s single exemplar
+   * names the OPPOSITE ankle on purpose, because a width read against the midline is only legible
+   * with the other foot in frame — so filtering by the spelling of a keypoint's name would make
+   * the drawn set a silent function of keypoint naming rather than of what the metric measured.
+   */
+  annotationKeypoints?: KeypointName[]
+  /** The same fact for `pairedTimestamp`. Meaningless — and absent — on a single-instant exemplar,
+   * for the same reason `pairedTimestamp` itself is. */
+  pairedAnnotationKeypoints?: KeypointName[]
+  /**
    * Other ways to draw THIS exemplar, ranked below it by the same score that chose it — the pairs
    * the metric considered and did not pick. Absent where a metric offers none.
    *
@@ -219,8 +247,10 @@ export interface MetricExemplar {
    * so they do not spend against `MAX_EXEMPLARS_PER_METRIC` and at most one of them is ever
    * rendered. They are a full `MetricExemplar` rather than some narrower record because nearly
    * every field genuinely varies per pair — both timestamps, `quality`, `cropKeypoints` (context
-   * points are included only where they resolve in that pair's OWN frames) and, for `overstriding`,
-   * `side`/`measuredSide`/`pairedMeasuredSide`. Only `kind` and `label` are constant across them.
+   * points are included only where they resolve in that pair's OWN frames),
+   * `annotationKeypoints`/`pairedAnnotationKeypoints` (each is that pair's own instant's set) and,
+   * for `overstriding`, `side`/`measuredSide`/`pairedMeasuredSide`. Only `kind` and `label` are
+   * constant across them.
    *
    * Each one has already cleared `MIN_EXEMPLAR_QUALITY`, exactly like the exemplar it hangs off: a
    * pair is not evidence merely because a better one could not be drawn.

@@ -105,6 +105,12 @@ export function buildStepWidthExemplars(
           // caliper from the ankle that half was measured from, and draws neither without them.
           measuredSide: base.side,
           pairedMeasuredSide: ghost.side,
+          // Each instant's own measured points, with no context: exactly this pair's own
+          // `cropKeypoints` call passes none either. The crop below unions both plants because one
+          // photograph holds both; annotating each half with that union would draw the other
+          // plant's ankle on this half's body, in the same cyan, with nothing distinguishing it.
+          annotationKeypoints: seedFor(base),
+          pairedAnnotationKeypoints: seedFor(ghost),
           quality: pairQuality(firstQuality, secondQuality),
           label: 'Opposite-foot plants either side of the hip midline',
           cropKeypoints: cropKeypoints(
@@ -119,6 +125,10 @@ export function buildStepWidthExemplars(
 
   // Demoted: one strike against the hip midline is one whole measurement, so a single frame is
   // still honest here — unlike the range metrics, which have nothing to say from one instant.
+  // Neither annotation field is emitted, deliberately: the opposite ankle in the crop set below is
+  // context this ONE measurement genuinely is about (a width is read against the midline, which is
+  // only legible with the other foot in frame), and there is no second instant for it to be
+  // wrongly attributed to. A consumer falls back to `cropKeypoints`, which is the right set here.
   const singles: MetricExemplar[] = []
   for (const sample of eligible) {
     const quality = scoreExemplarInstant(instant(sample), 'representative', distribution)

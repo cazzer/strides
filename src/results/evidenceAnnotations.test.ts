@@ -141,6 +141,97 @@ function isBone(op: EvidenceAnnotationOp): op is EvidenceBoneOp {
   return op.kind === 'bone'
 }
 
+/** Two frames carrying BOTH legs, far enough apart to stay a pair and close enough not to be
+ * gated out by `isTooFarApartPair`. */
+function leggedFrame(timestamp: number, x: number) {
+  return buildFrame(
+    {
+      left_hip: { x: x - 50, y: 500 },
+      right_hip: { x: x + 50, y: 500 },
+      left_knee: { x: x - 40, y: 620 },
+      right_knee: { x: x + 40, y: 620 },
+      left_ankle: { x: x - 30, y: 740 },
+      right_ankle: { x: x + 30, y: 740 },
+    },
+    timestamp,
+  )
+}
+
+const MIXED_SIDE_FRAMES = [leggedFrame(0, 500), leggedFrame(0.4, 650)]
+
+/**
+ * The two metrics whose exemplar pairs two instants measured on OPPOSITE feet — `overstriding`
+ * because nothing constrains its furthest-reaching and closest-landing strikes to one foot, and
+ * `stepWidth` because opposite feet are what a width *means*. Each carries its real producer's
+ * per-instant annotation sets, and a `plannedWithoutAnnotationSets` twin for the guard that the
+ * narrowing costs no measurement mark.
+ */
+function mixedSideFixture(
+  metric: 'overstriding' | 'stepWidth',
+  kind: MetricExemplarKind,
+  context: KeypointName[],
+) {
+  const seed = (side: 'left' | 'right'): KeypointName[] => [
+    `${side}_ankle`,
+    'left_hip',
+    'right_hip',
+  ]
+  const withKnee = (side: 'left' | 'right'): KeypointName[] =>
+    context.length === 0 ? seed(side) : [...seed(side), `${side}_knee`]
+  const base: MetricExemplar = {
+    kind,
+    timestamp: 0,
+    pairedTimestamp: 0.4,
+    measuredSide: 'left',
+    pairedMeasuredSide: 'right',
+    quality: 0.9,
+    label: 'fixture',
+    cropKeypoints: [
+      'left_ankle',
+      'left_hip',
+      'right_hip',
+      'right_ankle',
+      ...context,
+    ],
+  }
+  const planFor = (exemplar: MetricExemplar) => {
+    const framePlan = planExemplarFrames(
+      metric,
+      exemplar,
+      MIXED_SIDE_FRAMES,
+      { width: 1920, height: 1080 },
+      0.05,
+      1,
+    )
+    expect(framePlan).not.toBeNull()
+    return framePlan as EvidenceFramePlan
+  }
+  return {
+    metric,
+    baseJoints: withKnee('left'),
+    ghostJoints: withKnee('right'),
+    // `SKELETON_EDGES` yields hip→knee and knee→ankle only when that side's KNEE is named, which is
+    // exactly why `overstriding` keeps the knee in its annotation set and `stepWidth` needs none:
+    // the two bones are what make the marked ankle read as the end of a leg rather than a loose dot.
+    drawsALegChain: context.length > 0,
+    planned: () =>
+      planFor({
+        ...base,
+        annotationKeypoints: withKnee('left'),
+        pairedAnnotationKeypoints: withKnee('right'),
+      }),
+    plannedWithoutAnnotationSets: () => planFor(base),
+  }
+}
+
+const MIXED_SIDE_FIXTURES = [
+  mixedSideFixture('overstriding', 'overstrideRange', [
+    'left_knee',
+    'right_knee',
+  ]),
+  mixedSideFixture('stepWidth', 'stepWidthStrike', []),
+]
+
 /** Every canvas coordinate an op carries, flattened — a guide's single axis position included. */
 function opCoordinates(op: EvidenceAnnotationOp): number[] {
   switch (op.kind) {
@@ -991,6 +1082,88 @@ describe('the joint layer', () => {
     expect(bones).toContainEqual(['left_hip', 'right_hip'])
     expect(bones).toContainEqual(['left_shoulder', 'left_hip'])
     expect(bones).toContainEqual(['right_shoulder', 'right_hip'])
+  })
+
+  describe('on a mixed-side pair, each instant draws only its own limb', () => {
+    for (const fixture of MIXED_SIDE_FIXTURES) {
+      it(`${fixture.metric}: the base draws the left leg and the ghost the right`, () => {
+        const annotation = planEvidenceAnnotations(
+          fixture.planned(),
+          MAX_OUTPUT_SIDE,
+        )
+        const joints = (at: 'base' | 'ghost') =>
+          annotation.ops
+            .filter(isJoint)
+            .filter((op) => op.instant === at)
+            .map((op) => op.name)
+
+        expect(joints('base')).toEqual(fixture.baseJoints)
+        expect(joints('ghost')).toEqual(fixture.ghostJoints)
+
+        // No bone reaches down the leg this half's caliper did not measure. The joint layer draws
+        // in one colour, so an extra leg here reads as a second measurement, not as context. The
+        // pelvis edge is not "the other side": both hips are inputs to this half's own midline.
+        const isLegPoint = (name: KeypointName, side: 'left' | 'right') =>
+          name === `${side}_knee` || name === `${side}_ankle`
+        const touchesLeg = (at: 'base' | 'ghost', side: 'left' | 'right') =>
+          annotation.ops
+            .filter(isBone)
+            .filter((op) => op.instant === at)
+            .some((op) => isLegPoint(op.from, side) || isLegPoint(op.to, side))
+        expect(touchesLeg('base', 'right')).toBe(false)
+        expect(touchesLeg('ghost', 'left')).toBe(false)
+        expect(touchesLeg('base', 'left')).toBe(fixture.drawsALegChain)
+        expect(touchesLeg('ghost', 'right')).toBe(fixture.drawsALegChain)
+      })
+
+      it(`${fixture.metric}: narrowing the drawn set removes no measurement mark`, () => {
+        // The risk this change carries: `builder.point` returns `null` for a name absent from the
+        // index, indistinguishably from a keypoint the robustness layer lost — so a caliper whose
+        // endpoint left the set would be dropped SILENTLY. Build the same plan twice, once with
+        // the per-instant sets and once without, and require the measurement layer to be identical.
+        const narrowed = planEvidenceAnnotations(
+          fixture.planned(),
+          MAX_OUTPUT_SIDE,
+        )
+        const unioned = planEvidenceAnnotations(
+          fixture.plannedWithoutAnnotationSets(),
+          MAX_OUTPUT_SIDE,
+        )
+        const rolesAt = (
+          annotation: ReturnType<typeof planEvidenceAnnotations>,
+          at: 'base' | 'ghost',
+        ) => roles(annotation.ops.filter((op) => op.instant === at))
+        const structureAt = (
+          annotation: ReturnType<typeof planEvidenceAnnotations>,
+          at: 'base' | 'ghost',
+        ) => [
+          ...annotation.ops.filter(isJoint).filter((op) => op.instant === at).map((op) => op.name),
+          ...annotation.ops
+            .filter(isBone)
+            .filter((op) => op.instant === at)
+            .map((op) => `${op.from}|${op.to}`),
+        ]
+
+        for (const at of ['base', 'ghost'] as const) {
+          expect(rolesAt(narrowed, at)).toEqual(rolesAt(unioned, at))
+          expect(rolesAt(narrowed, at).length).toBeGreaterThan(0)
+          // ...and the joint layer really did change, so the comparison above is not vacuous.
+          expect(structureAt(narrowed, at)).not.toEqual(structureAt(unioned, at))
+        }
+      })
+
+      it(`${fixture.metric}: both halves keep the caliper that depicts the measurement`, () => {
+        const annotation = planEvidenceAnnotations(
+          fixture.planned(),
+          MAX_OUTPUT_SIDE,
+        )
+        const calipers = annotation.ops.filter(
+          (op): op is EvidenceCaliperOp =>
+            op.kind === 'caliper' && op.role === 'ankleOffsetCaliper',
+        )
+        expect(calipers.map((op) => op.instant).sort()).toEqual(['base', 'ghost'])
+      })
+    }
   })
 })
 

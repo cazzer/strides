@@ -369,14 +369,16 @@ export interface EvidenceInstantPlan {
   timestamp: number
   opacity: number
   /**
-   * The exemplar's own named keypoints, resolved at THIS instant, in the exemplar's order and
-   * deduplicated. Both halves of a ghosted pair carry their own list, so an annotation of the
-   * base and an annotation of the ghost are independently drawable.
+   * The keypoints THIS instant's own measurement was about, resolved at THIS instant, in the
+   * stated order and deduplicated. Both halves of a ghosted pair carry their own list, so an
+   * annotation of the base and an annotation of the ghost are independently drawable.
    *
-   * Deliberately the exemplar's `cropKeypoints` and not the whole skeleton: the metric that
-   * measured the instant is the only layer that knows which points its measurement is about, and
-   * a tight crop drawn with all 21 points is mostly marks for joints outside the frame
-   * (design D5).
+   * Deliberately the exemplar's `annotationKeypoints`/`pairedAnnotationKeypoints` (falling back to
+   * `cropKeypoints`, see `resolveInstantAnnotationKeypoints`) and not the whole skeleton: the
+   * metric that measured the instant is the only layer that knows which points its measurement is
+   * about, and a tight crop drawn with all 21 points is mostly marks for joints outside the frame
+   * (design D5). The CROP still unions both instants of a pair — the image has to contain both —
+   * so a mixed-side pair's two lists are narrower than the crop set and differ from each other.
    */
   keypoints: EvidenceKeypointPosition[]
   /** `null` when this frame's two hips do not both independently resolve, or resolve to the same
@@ -655,6 +657,37 @@ export function resolveInstantSide(
   const measured =
     role === 'base' ? exemplar.measuredSide : exemplar.pairedMeasuredSide
   return measured ?? exemplar.side ?? null
+}
+
+/**
+ * Which keypoint NAMES one instant of an exemplar should be annotated with — the metric's own
+ * per-instant statement where it made one, and `cropKeypoints` where it did not.
+ *
+ * **Not to be confused with `resolveInstantKeypoints` above**, which takes a frame and a list of
+ * names and resolves POSITIONS. This one takes an exemplar and a role and resolves NAMES. They
+ * compose — the planner reads the names here and hands them there — and nothing else about them is
+ * alike.
+ *
+ * The fallback is independently correct, not a tolerated approximation: the per-instant fields are
+ * omitted exactly where the two sets coincide (a same-side pair, and every single-instant
+ * exemplar), so on such an exemplar `cropKeypoints` IS the per-instant set by construction.
+ *
+ * **What this deliberately does NOT do is derive the set by filtering `cropKeypoints` by side.**
+ * A crop set legitimately names points belonging to neither instant's measurement — `stepWidth`'s
+ * single exemplar names the OPPOSITE ankle on purpose, because a width against the hip midline is
+ * only legible with the other foot in frame. Filtering by the spelling of a keypoint's name would
+ * drop that, and would make the drawn set a silent function of keypoint naming rather than of what
+ * the metric measured. The measuring layer states it or nobody does.
+ */
+export function resolveInstantAnnotationKeypoints(
+  exemplar: MetricExemplar,
+  role: 'base' | 'ghost',
+): KeypointName[] {
+  const stated =
+    role === 'base'
+      ? exemplar.annotationKeypoints
+      : exemplar.pairedAnnotationKeypoints
+  return stated ?? exemplar.cropKeypoints
 }
 
 /**
@@ -1097,7 +1130,10 @@ function instantPlan(
   return {
     timestamp: frame.timestamp,
     opacity,
-    keypoints: resolveInstantKeypoints(frame, exemplar.cropKeypoints),
+    keypoints: resolveInstantKeypoints(
+      frame,
+      resolveInstantAnnotationKeypoints(exemplar, role),
+    ),
     outwardSign: resolveOutwardSigns(frame),
     side: resolveInstantSide(exemplar, role),
   }

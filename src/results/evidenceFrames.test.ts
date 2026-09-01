@@ -55,6 +55,7 @@ import {
   planExemplarWithFallback,
   planMetricEvidence,
   resolveExemplarFrames,
+  resolveInstantAnnotationKeypoints,
   resolveInstantKeypoints,
   resolveInstantSide,
   resolveOutwardSigns,
@@ -107,6 +108,63 @@ function hipFrame(
  */
 function separatedPair(ghostY: number): RobustPoseFrame[] {
   return [hipFrame(0, 500, 540), hipFrame(0.4, 700, ghostY)]
+}
+
+/**
+ * Two frames carrying BOTH legs, so a mixed-foot pair's two annotation sets can be told apart by
+ * which limb they name rather than only by which names are missing.
+ *
+ * Stays inside `separatedPair`'s band: each frame's own box is 100x240 (padded 384, above the
+ * 320 px floor) and the union is 250x240 (padded 400), so the growth is ~1.04 — far under
+ * `EVIDENCE_MAX_PAIR_CROP_GROWTH`, with the two boxes not overlapping at all so the pair is not
+ * near-identical either.
+ */
+function leggedFrame(timestamp: number, x: number): RobustPoseFrame {
+  return buildFrame(
+    {
+      left_hip: { x: x - 50, y: 500 },
+      right_hip: { x: x + 50, y: 500 },
+      left_knee: { x: x - 40, y: 620 },
+      right_knee: { x: x + 40, y: 620 },
+      left_ankle: { x: x - 30, y: 740 },
+      right_ankle: { x: x + 30, y: 740 },
+    },
+    timestamp,
+  )
+}
+
+const LEGGED_PAIR: RobustPoseFrame[] = [leggedFrame(0, 500), leggedFrame(0.4, 650)]
+
+/**
+ * The pair `overstriding` calls "the usual case" — a furthest-reaching strike on one foot ghosted
+ * against a closest-landing one on the other, so `side` is absent and the two per-instant sets are
+ * the only carriers of which limb each half is about. Hand-built rather than driven through
+ * `computeOverstriding`, for the reason `overstriding.test.ts` records: no offset series reaches a
+ * mixed-foot exemplar through that metric's own quality gate.
+ */
+const MIXED_FOOT_OVERSTRIDE: MetricExemplar = {
+  kind: 'overstrideRange',
+  timestamp: 0,
+  pairedTimestamp: 0.4,
+  measuredSide: 'left',
+  pairedMeasuredSide: 'right',
+  quality: 0.9,
+  label: 'test exemplar',
+  cropKeypoints: [
+    'left_ankle',
+    'left_hip',
+    'right_hip',
+    'right_ankle',
+    'left_knee',
+    'right_knee',
+  ],
+  annotationKeypoints: ['left_ankle', 'left_hip', 'right_hip', 'left_knee'],
+  pairedAnnotationKeypoints: [
+    'right_ankle',
+    'left_hip',
+    'right_hip',
+    'right_knee',
+  ],
 }
 
 /**
@@ -1519,6 +1577,118 @@ describe('planExemplarFrames', () => {
         'base',
       ),
     ).toBeNull()
+  })
+
+  it('prefers the per-instant annotation set over the crop set, per role', () => {
+    // The crop set is the UNION across a pair, because one photograph has to hold both instants.
+    // The annotation set is per-instant, because the joint layer is a statement about what THIS
+    // moment's measurement was about. Where a metric states the narrower fact, it wins.
+    const mixed = exemplar({
+      kind: 'overstrideRange',
+      cropKeypoints: ['left_ankle', 'left_hip', 'right_hip', 'right_ankle'],
+      annotationKeypoints: ['left_ankle', 'left_hip', 'right_hip'],
+      pairedAnnotationKeypoints: ['right_ankle', 'left_hip', 'right_hip'],
+    })
+    expect(resolveInstantAnnotationKeypoints(mixed, 'base')).toEqual([
+      'left_ankle',
+      'left_hip',
+      'right_hip',
+    ])
+    expect(resolveInstantAnnotationKeypoints(mixed, 'ghost')).toEqual([
+      'right_ankle',
+      'left_hip',
+      'right_hip',
+    ])
+  })
+
+  it('falls back to `cropKeypoints` per role, independently of the other role', () => {
+    // Absent on BOTH: a same-side pair or a single instant, where the crop set IS the per-instant
+    // set by construction — so the fallback is independently correct, not an approximation.
+    const silent = exemplar({ cropKeypoints: ['left_hip', 'right_hip', 'left_knee'] })
+    expect(resolveInstantAnnotationKeypoints(silent, 'base')).toEqual(
+      silent.cropKeypoints,
+    )
+    expect(resolveInstantAnnotationKeypoints(silent, 'ghost')).toEqual(
+      silent.cropKeypoints,
+    )
+
+    // ...and one role stating it never speaks for the other.
+    const halfStated = exemplar({
+      cropKeypoints: ['left_ankle', 'left_hip', 'right_hip', 'right_ankle'],
+      annotationKeypoints: ['left_ankle', 'left_hip', 'right_hip'],
+    })
+    expect(resolveInstantAnnotationKeypoints(halfStated, 'base')).toEqual([
+      'left_ankle',
+      'left_hip',
+      'right_hip',
+    ])
+    expect(resolveInstantAnnotationKeypoints(halfStated, 'ghost')).toEqual(
+      halfStated.cropKeypoints,
+    )
+  })
+
+  it('gives each half of a mixed-foot overstride pair its own leg to draw', () => {
+    const plan = planExemplarFrames(
+      'overstriding',
+      MIXED_FOOT_OVERSTRIDE,
+      LEGGED_PAIR,
+      HD,
+      0.05,
+    )
+    const drawn = (
+      keypoints: ReturnType<typeof resolveInstantKeypoints> | undefined,
+    ) => (keypoints ?? []).map((kp) => kp.name)
+
+    expect(drawn(plan?.base.keypoints)).toEqual([
+      'left_ankle',
+      'left_hip',
+      'right_hip',
+      'left_knee',
+    ])
+    expect(drawn(plan?.ghost?.keypoints)).toEqual([
+      'right_ankle',
+      'left_hip',
+      'right_hip',
+      'right_knee',
+    ])
+    // Disjoint on the legs: neither half draws the limb its own caliper did not measure.
+    const legOf = (names: string[]) =>
+      names.filter((name) => name.endsWith('_ankle') || name.endsWith('_knee'))
+    expect(legOf(drawn(plan?.base.keypoints))).toEqual(['left_ankle', 'left_knee'])
+    expect(legOf(drawn(plan?.ghost?.keypoints))).toEqual([
+      'right_ankle',
+      'right_knee',
+    ])
+  })
+
+  it('leaves the crop untouched by the per-instant annotation sets', () => {
+    // The image still has to contain both instants, so the crop keeps reading the UNION. This is
+    // the one assertion that stops a future narrowing from leaking out of the joint layer.
+    const unstated: MetricExemplar = { ...MIXED_FOOT_OVERSTRIDE }
+    delete unstated.annotationKeypoints
+    delete unstated.pairedAnnotationKeypoints
+
+    const annotated = planExemplarFrames(
+      'overstriding',
+      MIXED_FOOT_OVERSTRIDE,
+      LEGGED_PAIR,
+      HD,
+      0.05,
+    )
+    const plain = planExemplarFrames(
+      'overstriding',
+      unstated,
+      LEGGED_PAIR,
+      HD,
+      0.05,
+    )
+
+    expect(annotated?.crop).toEqual(plain?.crop)
+    expect(annotated?.cropGrowth).toEqual(plain?.cropGrowth)
+    // ...and the plain plan really does draw the union, so the comparison is not vacuous.
+    expect(plain?.base.keypoints.map((kp) => kp.name)).toEqual(
+      MIXED_FOOT_OVERSTRIDE.cropKeypoints,
+    )
   })
 
   it('carries an unrecoverable keypoint as unrecoverable rather than dropping or moving it', () => {

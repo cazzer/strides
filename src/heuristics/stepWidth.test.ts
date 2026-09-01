@@ -3,7 +3,7 @@ import { computeStepWidth } from './stepWidth'
 import { detectFootstrikes } from './footstrikes'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
-import { buildStrikeFrames } from './__fixtures__/strikeFrames'
+import { buildStrikeFrames, withStaticOppositeAnkle } from './__fixtures__/strikeFrames'
 import { buildFrame } from './__fixtures__/testFrames'
 import { median } from './mathUtils'
 import type { RobustPoseFrame } from '../pose/robustness/types'
@@ -288,6 +288,20 @@ describe('computeStepWidth exemplars', () => {
     // measured from — recoverable only by reading `cropKeypoints` order, which is not a contract.
     expect([evidence.measuredSide, evidence.pairedMeasuredSide]).toEqual(sides)
     expect(evidence.measuredSide).not.toBe(evidence.pairedMeasuredSide)
+
+    // ...and each instant names the keypoints its OWN measurement was about, which the crop set
+    // structurally cannot: the crop is the union because one photograph has to hold both plants.
+    expect(evidence.annotationKeypoints).toEqual([
+      `${evidence.measuredSide}_ankle`,
+      'left_hip',
+      'right_hip',
+    ])
+    expect(evidence.pairedAnnotationKeypoints).toEqual([
+      `${evidence.pairedMeasuredSide}_ankle`,
+      'left_hip',
+      'right_hip',
+    ])
+    expect(evidence.cropKeypoints).toEqual(['left_ankle', 'left_hip', 'right_hip', 'right_ankle'])
   })
 
   it('demotes to a single representative strike when every plant is the same foot', () => {
@@ -302,6 +316,29 @@ describe('computeStepWidth exemplars', () => {
     expect(evidence).not.toHaveProperty('pairedTimestamp')
     expect(evidence.side).toBe('left')
     expect(evidence.cropKeypoints).toEqual(['left_ankle', 'left_hip', 'right_hip'])
+  })
+
+  it('keeps the opposite ankle on the demoted single, and states no per-instant set', () => {
+    // The pair and the single are NOT one expression. On the single, the opposite ankle is context
+    // this one measurement genuinely is about — a width is read against the midline, which is only
+    // legible with the other foot in frame — and there is no second instant for it to be
+    // misattributed to. Flattening the two cases would strip it from the drawn set for no reason.
+    const frames = withStaticOppositeAnkle(
+      buildStrikeFrames({ ankleOffsetsPx: OFFSETS }),
+    )
+
+    const [evidence] = computeStepWidth(frames, 'front').exemplars!
+
+    expect(evidence).not.toHaveProperty('pairedTimestamp')
+    expect(evidence.side).toBe('left')
+    expect(evidence.cropKeypoints).toEqual([
+      'left_ankle',
+      'left_hip',
+      'right_hip',
+      'right_ankle',
+    ])
+    expect(evidence).not.toHaveProperty('annotationKeypoints')
+    expect(evidence).not.toHaveProperty('pairedAnnotationKeypoints')
   })
 
   it('gates out every strike whose outward polarity was invented by the sign fallback', () => {

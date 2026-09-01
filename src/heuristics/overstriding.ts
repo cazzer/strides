@@ -31,8 +31,10 @@ const ANKLE_NAME: Record<'left' | 'right', KeypointName> = {
   right: 'right_ankle',
 }
 
-/** Exemplar crop context only — this metric never reads knee position. A hip-to-ankle box with no
- * knee in it reads as an empty diagonal. */
+/** Exemplar context only — this metric never reads knee position. It earns its place twice over:
+ * a hip-to-ankle CROP box with no knee in it reads as an empty diagonal, and in an instant's
+ * ANNOTATION set the knee is what supplies `SKELETON_EDGES`' hip→knee and knee→ankle bones, so the
+ * marked ankle reads as the end of the leg the caliper measured rather than a loose dot. */
 const KNEE_NAME: Record<'left' | 'right', KeypointName> = {
   left: 'left_knee',
   right: 'right_knee',
@@ -93,6 +95,25 @@ function buildExemplars(
       // layer with no way to tell which ankle the offset was taken from.
       measuredSide: base.side,
       pairedMeasuredSide: ghost.side,
+      // What each instant's own measurement was about, as distinct from what the IMAGE has to
+      // contain. The crop below unions both strikes because one photograph holds both; annotating
+      // each instant with that union draws the trailing leg's ankle and knee on a body whose
+      // caliper measured the other foot, which is a picture of a measurement nobody took.
+      //
+      // Filtered against that instant's OWN frame, not both — this makes the set a property of the
+      // instant, so the same strike appearing in two different `alternates` pairs gets the same
+      // one. Visually identical either way: a knee that resolves only in the other instant's frame
+      // comes back `'unrecoverable'` from `resolveInstantKeypoints` and `builder.point` drops it.
+      annotationKeypoints: cropKeypoints(
+        seedFor(base),
+        [KNEE_NAME[base.side]],
+        [base.frame],
+      ),
+      pairedAnnotationKeypoints: cropKeypoints(
+        seedFor(ghost),
+        [KNEE_NAME[ghost.side]],
+        [ghost.frame],
+      ),
       quality,
       label: 'Furthest-reaching footstrike, ghosted against the closest-landing one',
       cropKeypoints: cropKeypoints(

@@ -130,6 +130,12 @@ describe('computeOverstriding exemplars', () => {
     // reaching one here would mean tuning numbers against a gate rather than testing the emission.
     expect(evidence.measuredSide).toBe('left')
     expect(evidence.pairedMeasuredSide).toBe('left')
+    // Same reasoning, same coverage boundary, for the per-instant ANNOTATION sets: they are stated
+    // unconditionally here, and the mixed-foot case where they diverge from `cropKeypoints` is
+    // asserted at the plan layer (`evidenceFrames.test.ts`) and the annotation layer
+    // (`evidenceAnnotations.test.ts`) with a hand-built exemplar, for the reason above.
+    expect(evidence.annotationKeypoints).toBeDefined()
+    expect(evidence.pairedAnnotationKeypoints).toBeDefined()
   })
 
   it('crops around the striking foot and the hip midline, with the knee as context', () => {
@@ -138,6 +144,11 @@ describe('computeOverstriding exemplars', () => {
     const [evidence] = computeOverstriding(frames, 'side').exemplars!
 
     expect(evidence.cropKeypoints).toEqual(['left_ankle', 'left_hip', 'right_hip', 'left_knee'])
+    // On a SAME-side pair the annotation set and the crop set coincide — both instants measured the
+    // same foot, so the union names nothing extra. Asserted rather than assumed, so a future
+    // divergence here surfaces as a failure instead of as a quietly different picture.
+    expect(evidence.annotationKeypoints).toEqual(evidence.cropKeypoints)
+    expect(evidence.pairedAnnotationKeypoints).toEqual(evidence.annotationKeypoints)
   })
 
   it('falls back to the next-furthest strike when the furthest one is interpolated', () => {
@@ -177,6 +188,18 @@ describe('computeOverstriding exemplars', () => {
       expect(alternate.pairedTimestamp).toBeDefined()
       expect(alternate.measuredSide).toBeDefined()
       expect(alternate.pairedMeasuredSide).toBeDefined()
+      // Same obligation for the per-instant annotation sets, and for the same reason: an alternate
+      // is rendered in the winner's place, so it has to be independently drawable — and each set
+      // is built from its OWN instant's frame, so a strike shared with another pairing carries the
+      // same one rather than one shaped by whichever partner it happened to draw.
+      expect(alternate.annotationKeypoints).toBeDefined()
+      expect(alternate.pairedAnnotationKeypoints).toBeDefined()
+      expect(alternate.annotationKeypoints).toContain(
+        `${alternate.measuredSide}_ankle`,
+      )
+      expect(alternate.pairedAnnotationKeypoints).toContain(
+        `${alternate.pairedMeasuredSide}_ankle`,
+      )
       // `side` is a PAIR-level claim, so it may only be present when the pair's two feet agree.
       if (alternate.side !== undefined) {
         expect(alternate.side).toBe(alternate.measuredSide)

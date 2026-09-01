@@ -77,3 +77,33 @@ export function buildStrikeFrames(options: StrikeFrameOptions): RobustPoseFrame[
 
   return frames
 }
+
+/**
+ * Plants a motionless RIGHT ankle above the left ankle's whole range, so the opposite foot is
+ * RESOLVABLE without ever producing a strike of its own.
+ *
+ * Only meaningful on frames built WITHOUT `alternateFeet`, where the right ankle is otherwise
+ * unrecoverable in every frame and therefore cannot be picked up as crop context at all.
+ * `detectFootstrikes` differences the two ankles and requires a relative-series maximum to be
+ * non-negative, so a stationary foot held ABOVE (smaller screen y than) the moving one yields left
+ * strikes only — the right side's series is the exact negation, and its maxima are all negative and
+ * rejected. That is what makes this the demoted-single case with the opposite ankle present.
+ */
+export function withStaticOppositeAnkle(
+  frames: RobustPoseFrame[],
+): RobustPoseFrame[] {
+  return frames.map((frame) => ({
+    ...frame,
+    keypoints: frame.keypoints.map((keypoint) =>
+      keypoint.name === 'right_ankle'
+        ? {
+            ...keypoint,
+            x: HIP_MID_X,
+            y: 500,
+            score: 0.9,
+            status: 'detected' as const,
+          }
+        : keypoint,
+    ),
+  }))
+}

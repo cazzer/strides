@@ -1,3 +1,8 @@
+// The `per-instant annotation sets` block at the bottom reads this directory's own sources off
+// disk, so it opts into Node's ambient types locally the same way `evidenceAnnotations.test.ts`
+// does — `tsconfig.app.json`'s `types` is deliberately just `vite/client`.
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { buildFrame } from './__fixtures__/testFrames'
@@ -681,5 +686,34 @@ describe('the exemplar timestamp invariant across the presence trim', () => {
 
     expect(Object.keys(evidence)).not.toContain('frameIndex')
     expect(Object.keys(evidence)).not.toContain('index')
+  })
+})
+
+describe('per-instant annotation sets accompany per-instant sides', () => {
+  // Resolved off `process.cwd()`, not `import.meta.url`: under vitest's jsdom environment the
+  // latter is a simulated `http://localhost` document URL, not a `file://` one.
+  const DIRECTORY = join(process.cwd(), 'src/heuristics')
+  // Comments are stripped before scanning, same idiom as `evidenceAnnotations.test.ts`: this
+  // module's prose names both fields repeatedly, and scanning it would make every explanation a
+  // pass.
+  const codeOf = (file: string) =>
+    readFileSync(join(DIRECTORY, file), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '')
+
+  it('is emitted by every producer that emits a per-instant side', () => {
+    // `pairedMeasuredSide` marks the exact shape this obligation attaches to: a pair whose two
+    // instants need not share a side. Such a pair's `cropKeypoints` is the UNION across both, so
+    // annotating each instant with it draws the limb that instant's own measurement never touched.
+    // A new producer of that shape has to state both, and this catches it by construction rather
+    // than by somebody remembering.
+    const producers = readdirSync(DIRECTORY)
+      .filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
+      .filter((file) => codeOf(file).includes('pairedMeasuredSide:'))
+
+    expect(producers.sort()).toEqual(['overstriding.ts', 'stepWidthExemplars.ts'])
+    for (const file of producers) {
+      expect(codeOf(file)).toContain('pairedAnnotationKeypoints:')
+    }
   })
 })
