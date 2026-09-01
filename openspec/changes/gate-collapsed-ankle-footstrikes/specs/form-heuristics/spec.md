@@ -38,11 +38,20 @@ interpolated — and it is already priced, separately and proportionally, by the
 interpolated-fraction penalty.
 
 The rule SHALL apply to the phase-derived timing path only, and SHALL NOT apply to the
-ankle-difference detector. That detector selects the prominence-confirmed maxima of the difference
-between the two ankles' vertical positions, which is the identical quantity, against a threshold
-already scaled by torso length — it has vetted ankle separation as its selection criterion. Adding a
-second floor there would gate one quantity through two configurable constants that could disagree.
-The phase path makes no claim about the pose at all, which is the whole of the gap this rule covers.
+ankle-difference detector. That detector selects the prominence-confirmed maxima of the SIGNED
+difference between the two ankles' vertical positions, and prominence bounds a peak's rise above its
+neighbouring trough rather than its absolute value — so that detector does NOT enforce a separation
+floor, and it may emit strikes below this one. What it does guarantee is sufficient: it selects on
+ALTERNATION CONTRAST, and a label collapse destroys alternation because both labels then trace one
+foot and the difference goes flat. The failure this rule exists to catch is therefore suppressed
+there by the selection itself, and adding a second floor would gate one quantity through two
+configurable constants free to disagree. The phase path makes no claim about the pose at all, which
+is the whole of the gap this rule covers.
+
+The consequence SHALL be recorded rather than left to be discovered: a metric computed from a pass
+that runs the ankle-difference detector receives no protection from this rule. That includes the
+centimetre step-width metric on the clips it is designed for, since the background scale pass was
+measured taking that path.
 
 An annotated instant SHALL still be emitted, at the same frame, with the same timestamp and the same
 side: the annotation SHALL NOT remove it from the footstrike list. The four metrics that read an
@@ -266,9 +275,13 @@ than counted, and the system SHALL NOT re-pair across a dropped footstrike (e.g.
 interval.
 
 Stride length SHALL be measured from every emitted footstrike, including one whose ankle position
-the ankle-separation rule marks unmeasurable. A stride pair is made of two timestamps and two
-hip-mid positions, and an ankle-label collapse is evidence about neither; skipping such a strike
-here would remove a measurement on the strength of a defect that does not touch it. This is the one
+the ankle-separation rule marks unmeasurable. A stride pair is made of three things — two
+timestamps, two hip-mid positions, and each strike's side — and an ankle-label collapse damages none
+of them: timing comes from the fitted hip-bounce phase, hip-mid is read from the frame, and side is
+a single clip-level parity carried by each instant's bounce-cycle index and decided by a
+magnitude-weighted vote across ALL instants rather than read from this instant's ankles, in which a
+collapsed pair contributes almost nothing by construction. Skipping such a strike here would remove
+a measurement on the strength of a defect that does not touch it. This is the one
 consumer of footstrikes that SHALL ignore that annotation, and it SHALL be stated at the call site
 so the asymmetry with the four ankle-reading metrics reads as deliberate.
 

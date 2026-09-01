@@ -32,20 +32,36 @@ import { median } from './mathUtils'
  * dominated by one bad strike. The claim is deleted rather than repaired, because the honest
  * defence of 4 is the gait cycle above and never was the arithmetic.
  *
- * ## Why the derived `n >= 2k + 3` minimum does not pull this to 7
+ * ## The derived `n >= 2k + 3` bound does NOT endorse 4, and this docstring will not pretend it does
  *
- * `stepWidth`'s rule prices `k` contaminants biased the same way, and it chose `k = 2` from the two
- * contamination mechanisms this repo has measured: boundary strikes (`strides-aah`, excluded in
- * `detectFootstrikes`) and collapsed-ankle strikes (`strides-1mt`). **Both are now removed at
- * source**, the second by the `ankleMeasurable` skip above. Post-gate `k = 0` for every mechanism
- * the corpus documents, `n >= 2(0) + 3 = 3`, and 4 already clears it.
+ * `stepWidth`'s rule prices `k` contaminants biased the same way. It took `k = 2` from two measured
+ * mechanisms, and only ONE of them has since been removed:
  *
- * Raising it to 7 would charge the sample twice — once by deleting the contaminated strikes, once
- * by pricing the survivors as though they were still in there. On Demo 1 that is the difference
- * between the honest `min(1, 2/4) = 0.5` and a punitive `2/7 = 0.143`.
+ * - boundary strikes (`strides-aah`) — excluded in `detectFootstrikes`, gone;
+ * - detector-dropout windows where surviving detections collapse both ankles onto one point
+ *   (`strides-boc`) — **still present**. `stepWidth.ts:18-83` calls it "NOT fixed and not fixable at
+ *   this layer", and it is not fixable HERE either: that failure puts both ankles far from the HIP
+ *   while leaving them far apart from EACH OTHER, so the separation floor above is blind to it by
+ *   construction (`footstrikes.ts`, "Two gates", and this change's design D11).
  *
- * **Revisit if** the phase-path floor is ever measured leaving a contaminated strike inside an
- * `n >= 4` sample: that would put `k` back above 0 and `2k + 3` back above 4.
+ * The collapsed-ankle strikes this file now skips are a THIRD mechanism, not `stepWidth`'s second
+ * one. So on `stepWidth`'s own accounting `k = 1`, giving `n >= 5` — which **4 does not clear**. At
+ * `n = 4, k = 1` the median is `mean(clean median, clean MAX)`, the exact failure the deleted
+ * sentence above was wrong about.
+ *
+ * ## Why it holds at 4 anyway
+ *
+ * Because the gait cycle is what this constant means, and that argument needs no `k` at all. Moving
+ * it is a separate decision with its own blast radius, which `stepWidth.ts` explicitly reserved when
+ * it declined to sweep its four siblings — and this change is not that decision. Two things bound
+ * the cost of leaving it: the minimum DISCOUNTS, it never withholds (`min(1, n / 4)` plus the caveat
+ * below, never a `null`), and moving it up would compound with the discount this gate already
+ * applies to the same thinning. On Demo 1 that is the difference between `min(1, 2/4) = 0.5` and a
+ * doubly-charged `2/7 = 0.143`.
+ *
+ * **Revisit** when `strides-boc`'s dropout mechanism is addressed — at that point `k` really does
+ * reach 0 and the derived bound becomes `n >= 3`, which is the first moment the arithmetic and this
+ * value agree. Tracked as `strides-dbh`, together with the sibling sweep.
  */
 const MIN_OVERSTRIDE_SAMPLE_SIZE = 4
 
@@ -200,6 +216,9 @@ export function computeOverstriding(
   }
 
   let interpolatedCount = 0
+  /** Strikes skipped for a collapsed ankle pair, kept apart from the hip-unresolvable skips so the
+   * caveat can name the cause the reader can act on. */
+  let unmeasurableAnkleCount = 0
   const overstrideRatios: number[] = []
   // Index-parallel to `overstrideRatios` — and only to it, never to `candidates`, which still
   // holds the strikes skipped below. Recovering a ratio's strike as `candidates[i]` would be off
@@ -211,7 +230,10 @@ export function computeOverstriding(
     // resolved, which is what makes it dangerous rather than merely absent. Same bucket, so the
     // same treatment, including staying in `frameCoverage`'s denominator. Defined once, in
     // `footstrikes.ts`.
-    if (!candidate.ankleMeasurable) continue
+    if (!candidate.ankleMeasurable) {
+      unmeasurableAnkleCount += 1
+      continue
+    }
 
     const frame = frames[candidate.frameIndex]
     const ankle = resolvePoint(frame, ANKLE_NAME[candidate.side])
@@ -227,16 +249,24 @@ export function computeOverstriding(
   }
 
   const usableStrikeCount = overstrideRatios.length
-  // Event-sampled metric: "coverage" here means what fraction of ankle-detected candidate
-  // footstrikes also had a resolvable hip position at that same instant — not the per-frame ratio
-  // the other heuristics use. There's no meaningful "fraction of all frames" for a measure that
-  // only exists at discrete footstrike events.
+  // Event-sampled metric: "coverage" here means what fraction of candidate footstrikes this metric
+  // could actually measure — both a resolvable hip position at that instant AND an ankle pair that
+  // still names two feet (`ankleMeasurable`) — not the per-frame ratio the other heuristics use.
+  // There's no meaningful "fraction of all frames" for a measure that only exists at discrete
+  // footstrike events. A gated strike stays in the DENOMINATOR deliberately: a collapsed ankle pair
+  // is an ankle that failed to resolve while presenting as resolved, which is the same bucket the
+  // hip-unresolvable skip already occupies.
   const frameCoverage = usableStrikeCount / candidateStrikeCount
 
   if (usableStrikeCount === 0) {
     return nullResult(
       viewFitEntry.fit,
-      'Footstrikes were detected, but hip position was not resolvable at any of them.',
+      // Two different failures, and the reader can only act on the right one. Naming the hips when
+      // the hips were fine and the ankles collapsed is the mistake this branch exists to avoid —
+      // and it is reachable: an all-unmeasurable clip is exercised in `footstrikes.test.ts`.
+      unmeasurableAnkleCount === candidateStrikeCount
+        ? 'Footstrikes were detected, but at every one the two ankles were too close together to tell the feet apart.'
+        : 'Footstrikes were detected, but hip position was not resolvable at any of them.',
       frameCoverage,
     )
   }
@@ -267,7 +297,10 @@ export function computeOverstriding(
   }
   if (usableStrikeCount < MIN_OVERSTRIDE_SAMPLE_SIZE) {
     caveats.push(
-      `Only ${usableStrikeCount} footstrike(s) detected (recommend at least ${MIN_OVERSTRIDE_SAMPLE_SIZE}) — confidence reduced accordingly.`,
+      // "usable of detected", not "detected": since the collapsed-ankle gate the two differ, and a
+      // sentence that blames detection for a discount caused by unreadable poses describes a
+      // failure that did not happen.
+      `Only ${usableStrikeCount} of ${candidateStrikeCount} detected footstrike(s) were usable (recommend at least ${MIN_OVERSTRIDE_SAMPLE_SIZE}) — confidence reduced accordingly.`,
     )
   }
 

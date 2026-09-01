@@ -180,6 +180,8 @@ export function computeFootStrikePattern(
   }
 
   let interpolatedCount = 0
+  /** Strikes skipped for a collapsed ankle pair — see the zero-usable caveat below. */
+  let unmeasurableAnkleCount = 0
   const offsetRatios: number[] = []
   // Index-parallel to `offsetRatios`, not to `candidates` — the `continue` above skips strikes.
   const strikeSamples: StrikeSample[] = []
@@ -188,7 +190,10 @@ export function computeFootStrikePattern(
     // the foot landed. Same bucket as the `continue` below — an ankle that failed to resolve while
     // presenting as resolved — so it is skipped and stays in `frameCoverage`'s denominator. The
     // predicate, and why such a strike is annotated rather than dropped, are in `footstrikes.ts`.
-    if (!candidate.ankleMeasurable) continue
+    if (!candidate.ankleMeasurable) {
+      unmeasurableAnkleCount += 1
+      continue
+    }
 
     const frame = frames[candidate.frameIndex]
     const ankle = resolvePoint(frame, ANKLE_NAME[candidate.side])
@@ -204,15 +209,20 @@ export function computeFootStrikePattern(
   }
 
   const usableStrikeCount = offsetRatios.length
-  // Event-sampled metric, same convention as overstriding: "coverage" is what fraction of
-  // ankle-detected candidate footstrikes also had a resolvable same-side knee position at that
-  // same instant, not a per-frame ratio.
+  // Event-sampled metric, same convention as overstriding: "coverage" is what fraction of candidate
+  // footstrikes this metric could measure — a resolvable same-side knee at that instant AND an ankle
+  // pair that still names two feet (`ankleMeasurable`) — not a per-frame ratio.
+  // A gated strike stays in the DENOMINATOR deliberately: a collapsed ankle pair is an ankle that
+  // failed to resolve while presenting as resolved, which is the same bucket the skips below it
+  // already occupy.
   const frameCoverage = usableStrikeCount / candidateStrikeCount
 
   if (usableStrikeCount === 0) {
     return nullResult(
       viewFitEntry.fit,
-      'Footstrikes were detected, but knee position was not resolvable at any of them.',
+      unmeasurableAnkleCount === candidateStrikeCount
+        ? 'Footstrikes were detected, but at every one the two ankles were too close together to tell the feet apart.'
+        : 'Footstrikes were detected, but knee position was not resolvable at any of them.',
       frameCoverage,
     )
   }
@@ -246,7 +256,10 @@ export function computeFootStrikePattern(
   }
   if (usableStrikeCount < MIN_FOOT_STRIKE_SAMPLE_SIZE) {
     caveats.push(
-      `Only ${usableStrikeCount} footstrike(s) detected (recommend at least ${MIN_FOOT_STRIKE_SAMPLE_SIZE}) — confidence reduced accordingly.`,
+      // "usable of detected", not "detected": since the collapsed-ankle gate the two differ, and a
+      // sentence that blames detection for a discount caused by unreadable poses describes a
+      // failure that did not happen.
+      `Only ${usableStrikeCount} of ${candidateStrikeCount} detected footstrike(s) were usable (recommend at least ${MIN_FOOT_STRIKE_SAMPLE_SIZE}) — confidence reduced accordingly.`,
     )
   }
 

@@ -262,9 +262,13 @@ export function estimateStrideLength(
   const travelDirection = estimateTravelDirection(frames, bodyScale)
   if (travelDirection === 0) return { ok: false, reason: 'travel-direction-unknown' }
 
-  // Reads `timestamp` and hip-mid only, so this DELIBERATELY ignores `candidate.ankleMeasurable`
-  // and takes every emitted strike. An ankle-label collapse says nothing about when the strike
-  // happened or where the pelvis was, which are the only two things a stride pair is made of.
+  // Reads three things off a candidate — `timestamp`, `side`, and the frame's hip-mid — and an
+  // ankle-label collapse damages none of them, so this DELIBERATELY ignores
+  // `candidate.ankleMeasurable` and takes every emitted strike. Timing comes from the fitted hip
+  // bounce; hip-mid is read from the frame, not from the ankles; and `side` is a single clip-level
+  // parity bit carried by each instant's bounce-cycle index, decided once by a magnitude-weighted
+  // vote over ALL instants (`attributeSides`) rather than read from this instant's ankles — which
+  // is precisely why a collapsed pair, contributing ~0 to that vote, cannot corrupt it.
   // Not an oversight, and measured rather than assumed: Demo 1's four strikes are
   // `right@4.20, left@4.84, right@5.52, left@6.16` and the gate marks exactly the outer two
   // unmeasurable. Skipping those leaves `left@4.84` + `right@5.52` — zero same-side pairs — and

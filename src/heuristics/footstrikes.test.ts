@@ -1090,10 +1090,15 @@ describe('detectFootstrikes — a strike whose two ankles have collapsed onto on
   })
 
   it('the ankle-difference path is exempt, because it already gates the same quantity', () => {
-    // Two antiphase triangle waves 6px apart at their crossings, on a static torso — no bounce, so
-    // the fallback wins — and `findLocalExtrema` confirms maxima at a prominence of 2px. Every
-    // emitted strike sits FAR below the separation floor (6px against 20px) and every one is
-    // reported measurable anyway.
+    // Two antiphase triangle waves peaking 6px apart, on a static torso — no bounce, so the
+    // fallback wins. Run at the DEFAULT config, not a lowered prominence, so this is evidence about
+    // shipped behaviour: a 6px peak over 0px troughs has prominence 6, clearing
+    // `footstrikeMinProminenceRatio` (0.05 x 100px torso = 5px). Every emitted strike sits FAR below
+    // the separation floor (6px against 20px) and every one is reported measurable anyway.
+    //
+    // That gap is the finding, not a rounding error: prominence bounds a peak's RISE above its
+    // neighbouring trough, never its absolute value, and the two constants differ 4x. The fallback
+    // path does not enforce a separation floor.
     //
     // That is not leniency. `buildContactSeries` IS `ankle_S.y − ankle_opposite.y`, and this
     // detector selects that series' prominence-confirmed maxima at
@@ -1110,8 +1115,10 @@ describe('detectFootstrikes — a strike whose two ankles have collapsed onto on
       ),
     )
 
-    const detected = detectFootstrikes(frames, configWithRatio(0.02))
-    // The fallback really is the path that produced these.
+    const detected = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)
+    // The fallback really is the path that produced these — and `ankleOnlyFrames` reads the same
+    // default config, so the two sides of this comparison are the same configuration.
+    expect(DEFAULT_HEURISTICS_CONFIG.footstrikeMinProminenceRatio * TORSO_PX).toBeLessThanOrEqual(6)
     expect(detected.map((c) => [c.side, c.frameIndex])).toEqual(ankleOnlyFrames(frames))
 
     expect(detected.length).toBeGreaterThan(0)
@@ -1153,9 +1160,10 @@ describe('detectFootstrikes — a strike whose two ankles have collapsed onto on
 
   it('leaves every synthetic fixture in this suite clear of the floor', () => {
     // The invariant that stops a fixture edit silently deleting strikes across eight test files.
-    // Both generators put the ankles far closer together at contact than real footage does — the
-    // measured genuine minimum on this repo's three clips is 4.65x this floor — so their margins
-    // are the thin ones and they are the ones worth pinning. See
+    // Both generators put the ankles closer together at contact than the tightest real strike
+    // measured on this repo's three clips (0.4649 T, 2.32x this floor) — 1.33x and 1.67x here. That
+    // is the same order, not a gulf, which is exactly why it is worth pinning: these are the
+    // thinnest margins in the suite and a modest move in either direction crosses the floor. See
     // `HeuristicsConfig.footstrikeMinAnkleSeparationRatio` for why the fixtures are NOT to be
     // widened to fix a failure here.
     const gaitFloor = DEFAULT_HEURISTICS_CONFIG.footstrikeMinAnkleSeparationRatio

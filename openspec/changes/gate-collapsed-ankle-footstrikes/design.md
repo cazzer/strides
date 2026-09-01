@@ -41,17 +41,57 @@ phase path only, sorted dy / torsoLengthPx:
 Feasible window **[0.1952, 0.2325]**. `f = 0.20` sits inside it: **2.05x** clearance below,
 **2.32x** above. The rule is satisfied, not waived.
 
-## D3. Why the ankle-difference path is exempt — it already gates this exact quantity
+**How fragile that is, stated rather than implied.** The window is only **1.19x wide**, and each
+bound is a **single observation** — 0.0976 below, 0.4649 above. One more degenerate strike at 0.11,
+or one more genuine one at 0.40, and no `f` satisfies the rule at all. The margins are "clears on
+the corpus measured", not a property of running, and they rest on `n = 1` at both ends.
 
-`buildContactSeries` returns `v = ownAnkle.y - oppositeAnkle.y`, and
-`detectFootstrikesBetweenAnkles` runs `findLocalExtrema(series, footstrikeMinProminenceRatio *
-torsoLengthPx)` over it. That detector's SELECTION CRITERION is ankle separation, in the same units
-this floor measures. A second floor there would gate one quantity through two configurable constants
-that could disagree with each other. The phase path vets nothing about the pose — its own doc now
-says so in a sentence — and that is the whole of the gap.
+What makes it shippable anyway is that **the blast radius of being wrong is bounded and visible**. A
+mis-gate drops one strike from a median and surfaces as a smaller `sampleSize`, a lower
+`frameCoverage` and a caveat naming the cause. It cannot re-partition a track, change which detector
+timed the clip, or delete a clip's sample — the failure modes that make a threshold like `#57`'s
+area floor dangerous. That asymmetry, not the margins, is the reason a 1.19x window was accepted.
 
-The exemption is pinned by a test, not left to the reader: a fallback-path clip emitting strikes at
-6 px of separation against a 20 px floor reports every one of them measurable.
+**And every margin here is stated in T, against a normalizer that is known to be wrong.**
+`estimateBodyScale` is a single clip-wide median, while the separation is per-frame; on an approach
+clip the torso grows ~4x across the clip, so the effective floor runs ~1.5x stricter at clip-open
+and looser at clip-end — biased toward over-gating exactly where the subject is smallest and
+detections worst. Deliberately NOT fixed here: it is the same normalizer CLAUDE.md's
+vertical-oscillation investigation already documents, and it changes no verdict on this corpus
+(MoveNet reported 1.99 px at the Demo 2 strike, which fires under any normalizer).
+
+## D3. Why the ankle-difference path is exempt — ALTERNATION, not an absolute floor
+
+**An earlier draft of this section said that detector "already vets ankle separation, in the same
+units, as its selection criterion". That is wrong and is corrected here.** `buildContactSeries`
+returns `v = ownAnkle.y - oppositeAnkle.y` and `detectFootstrikesBetweenAnkles` runs
+`findLocalExtrema(series, footstrikeMinProminenceRatio * torsoLengthPx)` over it — but PROMINENCE
+bounds a peak's rise above its neighbouring trough, **not its absolute value**, and the two
+constants differ 4x (0.05 T against this floor's 0.20 T). The fallback path enforces no separation
+floor at all, and demonstrably emits strikes below this one: the exemption test emits fallback
+strikes at 6 px against a 20 px floor, and the corpus survivor that killed the pooled threshold
+(0.2084 T) is on that path.
+
+The exemption is still right, on narrower ground. The fallback selects on **alternation contrast** —
+a prominence-confirmed rise above a neighbouring trough of the SIGNED between-legs difference — and
+a label collapse destroys alternation, because both labels then trace one foot and the difference
+goes flat. The failure this floor catches is suppressed there by the selection itself, without any
+absolute bound. Adding one would put a second, differently-shaped constant on the same quantity,
+free to disagree with the first. The phase path has no such structure: it predicts an instant from
+the hip's fitted rhythm and snaps it to a frame, and vets nothing about the pose.
+
+Pinned by a test at the DEFAULT config rather than a lowered prominence, so it is evidence about
+shipped behaviour: a 6 px peak over 0 px troughs has prominence 6 against a 5 px bar, is emitted,
+and is reported measurable at 6 px against a 20 px floor.
+
+### D3.1. The coverage gap this leaves — `stepWidthCm` is unprotected on its own clips
+
+The background MediaPipe scale pass was measured running the **fallback** path on both Demo 2 and
+the multi-person clip (`path=ankle-difference` in the probe output). Every strike it feeds the
+grafted centimetre metrics is therefore exempt from this gate. `stepWidthCm` — the metric Demo 2 is
+the primary view for — gets **no protection from this change at all**; the alternation argument
+above is the whole of what stands behind it. Stated here because the alternative is a reader
+assuming the gate covers a metric it never touches.
 
 ## D4. Annotate, do not drop — measured, not argued
 
@@ -97,10 +137,21 @@ still the ones reported.
 
 ## D8. `MIN_OVERSTRIDE_SAMPLE_SIZE` stays 4
 
-`stepWidth`'s derived `n >= 2k + 3` took `k = 2` from the two contamination mechanisms this repo has
-measured. Both are now removed at source — boundary strikes by `strides-aah`, collapsed-ankle
-strikes by this change — so post-gate `k = 0`, `n >= 3`, and 4 already clears it. Raising it to 7
-would charge the same thinning twice: `2/7 = 0.143` where the honest reading is `2/4 = 0.5`. Its
+**The arithmetic does not endorse 4, and an earlier draft of this section claimed it did.**
+`stepWidth`'s derived `n >= 2k + 3` took `k = 2` from two measured mechanisms, and only ONE has been
+removed: boundary strikes (`strides-aah`, excluded in `detectFootstrikes`). The other is
+`strides-boc`'s detector-dropout windows, which `stepWidth.ts` calls "NOT fixed and not fixable at
+this layer" and which **this change explicitly cannot touch either** (D11). The collapsed-ankle
+strikes gated here are a THIRD mechanism, not `stepWidth`'s second one. So `k = 1`, `n >= 5`, and
+**4 does not clear it**.
+
+It holds at 4 on the gait-cycle argument alone, which needs no `k`: two strikes per leg is the
+smallest sample that has seen both feet do the whole thing once. Moving it is a separate decision
+with its own blast radius — precisely the one `stepWidth.ts` reserved when it declined to sweep its
+four siblings — and this change is not that decision. Two things bound the cost: the minimum
+DISCOUNTS rather than withholds, and raising it would compound with the discount this gate already
+applies to the same thinning (`2/4 = 0.5` against a doubly-charged `2/7 = 0.143`). Filed as
+`strides-dbh`, to be revisited when `strides-boc` is addressed and `k` really does reach 0. Its
 docstring's claim that "fewer strikes than this is too easily dominated by a single noisy detection"
 is DELETED rather than repaired — `stepWidth.ts:18-83` demolished it for the identical estimator —
 and replaced by the gait-cycle basis, with the trigger for revisiting stated.

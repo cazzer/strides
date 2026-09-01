@@ -632,8 +632,11 @@ export interface HeuristicsConfig {
    * foot is planted and the other is mid-swing, so the two ankles are near maximal separation;
    * two ankles at the same height at a predicted touchdown is a collapsed pose, not a contact.
    * Below this the strike keeps its timing and its side but contributes no ankle measurement —
-   * see `footstrikes.ts`'s `ankleMeasurable`. It does NOT apply to the ankle-difference detector,
-   * which already gates the identical quantity through `footstrikeMinProminenceRatio`.
+   * see `footstrikes.ts`'s `ankleMeasurable`. It does NOT apply to the ankle-difference detector —
+   * not because that detector enforces an absolute floor (prominence bounds a peak's RISE above its
+   * neighbouring trough, not its value, and `footstrikeMinProminenceRatio` is 4x smaller) but
+   * because that detector selects on ALTERNATION CONTRAST, which a label collapse destroys. Full
+   * argument, and the `stepWidthCm` coverage gap it leaves, in `footstrikes.ts`' "Two gates".
    *
    * ## Derivation — measured, on the phase path, corpus-wide
    *
@@ -652,17 +655,35 @@ export interface HeuristicsConfig {
    * at or above `2f`, which needs a x4 gap to partition at. The feasible window is
    * **[0.1952, 0.2325]**; 0.20 sits inside it at **2.05x** clearance below and **2.32x** above.
    *
-   * ⚠️ **The synthetic fixtures sit far lower than the measured genuine population, and that is an
-   * artifact rather than a measurement.** `generateSyntheticGait` separates the ankles by
-   * `ANKLE_LIFT_PX / TORSO_LENGTH_PX` = 50/150 = 0.333 T at contact, and
-   * `buildStrikeFrames({ alternateFeet: true })` by 40/150 = 0.267 T — 1.67x and 1.33x above this
-   * floor, against 4.65x for the lowest genuine strike on real footage. `ANKLE_LIFT_PX`'s own
-   * docstring says it was sized to clear the PROMINENCE threshold and feeds no hand-computed
-   * expectation, so it is arbitrary rather than a claim about running. Do NOT raise it to widen
-   * that margin: `syntheticGait` derives knee-y from the hip/ankle midpoint, so moving it would
-   * move `kneeFlexion`'s hand-computed expectations across the suite. `footstrikes.test.ts` pins
-   * the fixtures' margins against this key directly, so a fixture edit that would silently delete
-   * strikes across eight files fails loudly instead.
+   * ⚠️ **Both bounds are single observations, and the window is only 1.19x wide.** 0.0976 is one
+   * strike and so is 0.4649. One more degenerate at 0.11, or one more genuine at 0.40, and no `f`
+   * satisfies the rule at all. Read 2.05x / 2.32x as "clears on the corpus measured", not as a
+   * property of running. What makes that shippable rather than reckless is that the blast radius of
+   * being wrong is bounded and visible: a mis-gate drops one strike from a median and shows up as a
+   * `sampleSize` and a caveat. It cannot re-partition a track or delete a clip's sample.
+   *
+   * ⚠️ **The floor is scaled by a CLIP-WIDE MEDIAN torso length** (`estimateBodyScale`), while the
+   * separation it gates is per-frame. On an approach clip the subject's torso grows ~4x across the
+   * clip (`strides-boc` measures 150 px at t=0 on Demo 2 against a 232.65 px median), so the
+   * effective floor is roughly 1.5x STRICTER at clip-open and looser at clip-end — biased toward
+   * over-gating exactly where the subject is smallest and detections are worst. This is the same
+   * known-wrong normalizer CLAUDE.md's vertical-oscillation investigation documents, and it is NOT
+   * fixed here: it changes no verdict on this corpus (MoveNet reported 1.99 px at the Demo 2 strike,
+   * which fires under any normalizer). It is recorded because every margin above is stated in T.
+   *
+   * ⚠️ **The synthetic fixtures are tighter than the tightest real strike, though not by an order.**
+   * `generateSyntheticGait` separates the ankles by `ANKLE_LIFT_PX / TORSO_LENGTH_PX` = 50/150 =
+   * 0.333 T at contact, and `buildStrikeFrames({ alternateFeet: true })` by 40/150 = 0.267 T —
+   * 1.67x and 1.33x above this floor, against **2.32x** for the lowest genuine strike on real
+   * footage. Those are the same order, not a gulf: the fixtures are not absurd, they are simply the
+   * thinnest margins in the suite, and a modest move in either the fixtures or this key would gate
+   * them. What is an artifact rather than a measurement is the fixtures' PROVENANCE, independently
+   * of that contrast: `ANKLE_LIFT_PX`'s own docstring says it was sized to clear the PROMINENCE
+   * threshold and feeds no hand-computed expectation, so it is arbitrary rather than a claim about
+   * running. Do NOT raise it to widen the margin: `syntheticGait` derives knee-y from the hip/ankle
+   * midpoint, so moving it would move `kneeFlexion`'s hand-computed expectations across the suite.
+   * `footstrikes.test.ts` pins the fixtures' margins against this key directly, so a fixture edit
+   * that would silently delete strikes across eight files fails loudly instead.
    */
   footstrikeMinAnkleSeparationRatio: number // 0.20
   /** Documented, tunable qualitative cutoff for a future "flag if ahead by more than this

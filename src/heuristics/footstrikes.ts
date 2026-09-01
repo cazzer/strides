@@ -36,7 +36,7 @@ export interface FootstrikeCandidate {
  * is applied once, at the point where the winning detector path is known, because the two paths
  * are not treated alike — see `detectFootstrikes`' "Two gates, and only one of them is new".
  */
-type TimedInstant = Omit<FootstrikeCandidate, 'ankleMeasurable'>
+export type TimedInstant = Omit<FootstrikeCandidate, 'ankleMeasurable'>
 
 const ANKLE_NAME: Record<'left' | 'right', KeypointName> = {
   left: 'left_ankle',
@@ -787,14 +787,29 @@ function detectFromBouncePhase(
  * `strideLength` deliberately does not; the asymmetry is the point, and `strideLength.ts` states it
  * at its call site so nobody "fixes" it.
  *
- * **The phase path only, and the exemption is earned rather than conceded.** The ankle-difference
- * detector runs `findLocalExtrema` over `buildContactSeries`, which IS `ankle_S.y −
- * ankle_opposite.y` — the same quantity this floor measures — at
- * `footstrikeMinProminenceRatio × torsoLengthPx`. It already vets ankle separation, in the same
- * units, as its selection criterion. Stacking a second, differently-shaped check on top would gate
- * one quantity through two constants that could disagree. The phase path vets nothing about the
- * pose: it predicts an instant from the hip's fitted rhythm and snaps it to a frame, and
- * `detectFromBouncePhase`'s own doc says so. That is the gap, and it is the whole of the gap.
+ * **The phase path only, and the exemption rests on ALTERNATION, not on an absolute floor.** The
+ * ankle-difference detector runs `findLocalExtrema` over `buildContactSeries`, which IS
+ * `ankle_S.y − ankle_opposite.y` — the same quantity this floor measures. But PROMINENCE bounds a
+ * peak's rise above its neighbouring trough, **not its absolute value**, and the two constants
+ * differ 4× (`footstrikeMinProminenceRatio` 0.05 T against this floor's 0.20 T). So that detector
+ * does NOT enforce a separation floor, and it demonstrably emits strikes below this one: the
+ * exemption test in `footstrikes.test.ts` emits fallback strikes at 6 px against a 20 px floor, and
+ * the corpus survivor that killed the pooled threshold (0.2084 T) is on this path.
+ *
+ * What the fallback path does guarantee is the narrower and sufficient thing: it selects on
+ * ALTERNATION CONTRAST — a confirmed rise above a neighbouring trough of the SIGNED between-legs
+ * difference — and a label collapse destroys alternation, because both labels then trace one foot
+ * and the difference goes flat. The failure this floor exists to catch is therefore suppressed
+ * there by the selection itself, without any absolute bound. Adding one anyway would put a second,
+ * differently-shaped constant on the same quantity, free to disagree with the first. The phase path
+ * has no such structure: it predicts an instant from the hip's fitted rhythm and snaps it to a
+ * frame, as `detectFromBouncePhase`'s own doc says. That is the gap, and it is the whole of the gap.
+ *
+ * ⚠️ **Consequence, stated rather than left to be discovered: `stepWidthCm` gets no protection from
+ * this gate on the clips it was designed for.** The background MediaPipe scale pass was measured
+ * running the FALLBACK path on both Demo 2 and the multi-person clip, so every strike it feeds to
+ * the grafted centimetre metrics is exempt. The alternation argument above is what stands behind
+ * those metrics; this floor does not.
  *
  * This scoping was not a convenience. Pooling both detectors' strikes into one distribution left
  * no threshold at all with 2× clearance either side — the honest reading of the pooled corpus was

@@ -118,6 +118,9 @@ export function computeStepWidthCm(
   }
 
   let interpolatedCount = 0
+  /** Strikes skipped for a collapsed ankle pair — folded into the zero-usable caveat below, which
+   * already names ankle position among its causes. */
+  let unmeasurableAnkleCount = 0
   const offsetsCm: number[] = []
   // Index-parallel to `offsetsCm`, not to `candidates` — the `continue` below skips strikes.
   const strikeSamples: StepWidthStrikeSample[] = []
@@ -126,7 +129,10 @@ export function computeStepWidthCm(
     // the foot landed. Same bucket as the `continue` below — an ankle that failed to resolve while
     // presenting as resolved — so it is skipped and stays in `frameCoverage`'s denominator. The
     // predicate, and why such a strike is annotated rather than dropped, are in `footstrikes.ts`.
-    if (!candidate.ankleMeasurable) continue
+    if (!candidate.ankleMeasurable) {
+      unmeasurableAnkleCount += 1
+      continue
+    }
 
     const frame = frames[candidate.frameIndex]
     const ankle = resolvePoint(frame, STEP_WIDTH_ANKLE_NAME[candidate.side])
@@ -173,14 +179,21 @@ export function computeStepWidthCm(
 
   const usableStrikeCount = offsetsCm.length
   // Event-sampled metric, same convention as overstriding's own `frameCoverage`: what fraction of
-  // ankle-detected candidate footstrikes also had a resolvable hip position AND a measured scale
-  // at that same instant.
+  // candidate footstrikes this metric could measure — a resolvable hip position, a measured scale at
+  // that instant, AND an ankle pair that still names two feet (`ankleMeasurable`).
+  // A gated strike stays in the DENOMINATOR deliberately: a collapsed ankle pair is an ankle that
+  // failed to resolve while presenting as resolved, which is the same bucket the skips below it
+  // already occupy.
   const frameCoverage = usableStrikeCount / candidates.length
 
   if (usableStrikeCount === 0) {
     return nullResult(
       viewFitEntry.fit,
-      'Footstrikes were detected, but hip position, ankle position, or real-world scale was not resolvable at any of them.',
+      // Already names ankle position, so the all-collapsed case is covered — but say which one it
+      // was when it is unambiguous, rather than offering three causes when only one applies.
+      unmeasurableAnkleCount === candidates.length
+        ? 'Footstrikes were detected, but at every one the two ankles were too close together to tell the feet apart.'
+        : 'Footstrikes were detected, but hip position, ankle position, or real-world scale was not resolvable at any of them.',
       frameCoverage,
     )
   }
@@ -208,7 +221,10 @@ export function computeStepWidthCm(
   }
   if (usableStrikeCount < MIN_STEP_WIDTH_CM_SAMPLE_SIZE) {
     caveats.push(
-      `Only ${usableStrikeCount} footstrike(s) detected (recommend at least ${MIN_STEP_WIDTH_CM_SAMPLE_SIZE}) — confidence reduced accordingly.`,
+      // "usable of detected", not "detected": since the collapsed-ankle gate the two differ, and a
+      // sentence that blames detection for a discount caused by unreadable poses describes a
+      // failure that did not happen.
+      `Only ${usableStrikeCount} of ${candidates.length} detected footstrike(s) were usable (recommend at least ${MIN_STEP_WIDTH_CM_SAMPLE_SIZE}) — confidence reduced accordingly.`,
     )
   }
   if (value < 0) {

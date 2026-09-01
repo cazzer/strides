@@ -221,7 +221,7 @@ describe('computeStepWidthCm', () => {
     expect(result.value).not.toBeNull()
     expect(result.sampleSize).toBeLessThan(4)
     expect(result.sampleSize).toBeGreaterThan(0)
-    expect(result.caveat).toMatch(/footstrike\(s\) detected/i)
+    expect(result.caveat).toMatch(/detected footstrike\(s\) were usable/i)
     expect(result.confidence).toBeLessThan(1)
   })
 

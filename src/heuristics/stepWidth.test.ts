@@ -448,7 +448,11 @@ describe('computeStepWidth — how few strikes are priced', () => {
     expect(result.frameCoverage).toBe(1)
     expect(result.interpolatedFraction).toBe(0)
     expect(result.confidence).toBeCloseTo(5 / 7, 12)
-    expect(result.caveat).toContain('Only 5 footstrike(s) detected (recommend at least 7)')
+    // "usable of detected" — the two are equal here (nothing gated), and the sentence still says
+    // which quantity the discount is about. See `computeStepWidth`'s own comment.
+    expect(result.caveat).toContain(
+      'Only 5 of 5 detected footstrike(s) were usable (recommend at least 7)',
+    )
 
     // Discounted, never withheld — the shared contract. A thin sample is reported with its price
     // attached rather than replaced by a null the reader cannot interrogate.

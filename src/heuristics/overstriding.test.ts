@@ -6,7 +6,10 @@ import { MIN_EXEMPLAR_QUALITY } from './exemplars'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildStrikeFrames } from './__fixtures__/strikeFrames'
 import { buildFrame } from './__fixtures__/testFrames'
-import { withCollapsedAnklesAt } from './__fixtures__/collapsedAnkles'
+import {
+  withAnkleSeparationScaled,
+  withCollapsedAnklesAt,
+} from './__fixtures__/collapsedAnkles'
 import { resolveMidpoint, resolvePoint } from './keypoints'
 
 const BASE_PARAMS = {
@@ -289,5 +292,32 @@ describe('computeOverstriding — strikes whose two ankles have collapsed onto o
       COLLAPSED_FRAMES,
     )
     expect(computeOverstriding(frames, 'side').caveat).toContain('at least 4')
+  })
+})
+
+describe('computeOverstriding — a clip whose every strike has collapsed ankles', () => {
+  it('names the ankles as the cause, not the hips', () => {
+    // Reachable, not hypothetical: `withAnkleSeparationScaled` squeezes every pair below the floor
+    // while leaving the hips (and therefore the fit, the timing and the hip-mid this metric reads)
+    // completely intact. The old single caveat would have blamed hip resolution for a failure the
+    // hips had no part in — in a change whose whole value is that the discount stops misdescribing
+    // the sample.
+    const frames = withAnkleSeparationScaled(
+      generateSyntheticGait({
+        ...BASE_PARAMS,
+        durationSec: 1.6,
+        strideAmplitudePx: 80,
+        view: 'side',
+      }),
+      0.2,
+    )
+
+    const result = computeOverstriding(frames, 'side')
+
+    expect(result.value).toBeNull()
+    expect(result.sampleSize).toBe(0)
+    expect(result.frameCoverage).toBe(0)
+    expect(result.caveat).toContain('the two ankles were too close together')
+    expect(result.caveat).not.toContain('hip position')
   })
 })

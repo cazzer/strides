@@ -24,13 +24,20 @@ never checks that the pose at that instant looks like a contact. That is the gap
   against a new `HeuristicsConfig.footstrikeMinAnkleSeparationRatio` (0.20 of torso length).
 - Annotated, **not dropped**. Dropping is a measured regression: it takes Demo 1 from two same-side
   stride pairs to none and nulls `verticalRatio`.
-- **Scoped to the phase path.** The ankle-difference detector already gates the identical quantity
-  through `footstrikeMinProminenceRatio`, so a second floor there would gate one quantity through
-  two constants.
+- **Scoped to the phase path.** The ankle-difference detector selects on ALTERNATION CONTRAST, and
+  a label collapse destroys alternation — so the failure is suppressed there by the selection
+  itself. (It does NOT enforce a separation floor: prominence bounds a peak's rise above its
+  neighbouring trough, not its value, and its constant is 4x smaller.)
+- **Known coverage gap, stated up front.** The background MediaPipe scale pass runs the fallback
+  path on Demo 2 and the multi-person clip, so **`stepWidthCm` — on the clip it is designed for —
+  gets no protection from this gate at all.**
 - `overstriding`, `footStrikePattern`, `stepWidth` and `stepWidthCm` skip an unmeasurable strike;
   `strideLength` deliberately does not.
-- A gated strike stays in the coverage denominator. `MIN_OVERSTRIDE_SAMPLE_SIZE` stays 4, with its
-  false "one noisy detection" claim replaced by the gait-cycle basis.
+- A gated strike stays in the coverage denominator, and the thin-sample caveat now distinguishes
+  USABLE strikes from DETECTED ones, so it stops describing a detection failure that did not occur.
+- `MIN_OVERSTRIDE_SAMPLE_SIZE` stays 4 on the gait-cycle basis, with its false "one noisy detection"
+  claim deleted. The derived `n >= 2k + 3` bound says 5 and is honestly recorded as saying so —
+  `strides-boc` survives this change, so `k = 1`, not 0. Sweep filed as `strides-dbh`.
 
 ## Impact
 
