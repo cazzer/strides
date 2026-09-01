@@ -13,11 +13,19 @@ Drawing the union at each instant states that both feet were measured at both mo
 mixed-side pair that is false of both halves, and it is stated in the same cyan the correct joints
 are drawn in, so nothing on the image distinguishes it.
 
-The fields are OPTIONAL and omitted where the two sets coincide — a same-side pair, and every
-single-instant exemplar. That is not laziness: on such an exemplar `cropKeypoints` *is* the
-per-instant set by construction, so the fallback is independently correct rather than an
-approximation the consumer tolerates. Making them required would have meant nine producers restating
-a value the tenth can already derive.
+The fields are OPTIONAL, and may be omitted wherever they would coincide with `cropKeypoints` — a
+producer whose two instants can never differ, and every single-instant exemplar. That is not
+laziness: on such an exemplar `cropKeypoints` *is* the per-instant set by construction, so the
+fallback is independently correct rather than an approximation the consumer tolerates. Making them
+required would have meant nine producers restating a value the tenth can already derive.
+
+**The obligation attaches to the CONSTRUCTION, not to how a pairing fell.** `overstriding` states
+both fields unconditionally, including on the pairing where its two strikes happen to be the same
+foot — because whether they are is a property of the run, and a producer that emitted the fields
+only when they diverged would make its own contract a function of the footage, and would leave the
+consumer unable to tell "these coincide" from "this producer forgot". On such a pairing the two sets
+are equal to each other and to `cropKeypoints`, which `overstriding.test.ts` asserts, so the
+statement and the fallback draw the same set.
 
 ## D2. Why the annotation set is not derived downstream
 
@@ -77,6 +85,27 @@ seedFor(sample)` there would strip the opposite ankle from the image's annotatio
 a regression dressed as consistency. `stepWidth.test.ts` and `stepWidthCm.test.ts` both assert the
 absence.
 
+**The DEMOTED pair takes a knowingly different path from the genuine single, and that is accepted
+here rather than solved — `strides-p11`.** `stepWidthStrike` is in `SINGLE_INSTANT_KINDS`, so a
+constructed pair whose ghost does not resolve (same frame, near-identical box, too close in time)
+collapses to one drawn instant. That image now draws only the base instant's own ankle, where before
+this change it drew the union — so two one-frame step-width images differ purely by how they got
+there, while the demoted one's caption still says "Opposite-foot plants either side of the hip
+midline".
+
+It is the right narrowing for the reason this whole change exists: an annotation states what THAT
+instant measured. The genuine single's opposite ankle is context for a measurement that has no
+partner instant; a demoted pair's partner *exists* and was dropped for display reasons, which the
+caption already tells the reader. So the drawn set is honest either way; what differs is legibility.
+
+The obvious fix is not available. A blanket "demoted ⇒ fall back to `cropKeypoints`" rule in the
+plan layer would be actively WRONG for `overstriding`, whose union is both legs — it would redraw
+the bug this change removes, on the one body left in the frame. Making it right per metric means
+teaching the planner, per `kind`, which parts of a union are context-for-one-instant and which are
+the other instant's measurement — a plan-layer redesign out of proportion to the symptom, since no
+measurement mark is lost either way (`buildStepWidthMarks` needs only the two hips and
+`ANKLE[instant.side]`, all three of which survive). Filed as `strides-p11` with the options.
+
 ## D6. The risk: a narrowed list is indistinguishable from a lost keypoint
 
 `EvidenceInstantPlan.keypoints` has exactly ONE consumer: `positionIndex(instant)` in
@@ -91,7 +120,7 @@ Walked, per instant, against both new sets:
 
 | builder | inputs | in `overstriding`'s new set | in `stepWidth`'s new set |
 |---|---|---|---|
-| `tolerantMidpoint(left_hip, right_hip)` | both hips | ✅ both seeded | ✅ both seeded |
+| `tolerantMidpoint(left_hip, right_hip)` | **degrades**, does not require — one hip is enough, and it silently stands in at `INTERPOLATED_OPACITY` | ✅ both seeded | ✅ both seeded |
 | `strictMidpoint(left_hip, right_hip)` | both hips | n/a | ✅ both seeded |
 | `point(ANKLE_NAME[instant.side])` | this instant's ankle | ✅ `seedFor` leads with it | ✅ `seedFor` leads with it |
 | `line('hipWidthSegment', left_hip, right_hip)` | both hips | n/a | ✅ both seeded |
@@ -100,8 +129,20 @@ Every measurement mark's inputs survive because `seedFor` on both metrics IS
 `[ANKLE[side], 'left_hip', 'right_hip']` — the measurement's own inputs, by definition. That is the
 structural reason the narrowing is safe, and it is asserted rather than argued: the annotation tests
 build the same plan twice from one fixture, once with the annotation fields and once with them
-stripped, and require the MEASUREMENT-layer op roles per instant to be IDENTICAL while the
-joint/bone ops differ.
+stripped, and require the MEASUREMENT-layer ops per instant to be IDENTICAL while the joint/bone ops
+differ.
+
+**The comparison is the whole op, not its `role`, and that distinction is load-bearing.** A role
+sequence would only catch a mark that DISAPPEARED, and `tolerantMidpoint` has a nearer failure than
+disappearing: given one hip instead of two it returns the single resolved side at
+`INTERPOLATED_OPACITY` rather than `null`. An over-narrowed `overstriding` set that dropped one hip
+therefore still emits `hipMidlinePlumb` and `ankleOffsetCaliper`, under the same names in the same
+order, with the plumb standing through one hip instead of the midline — a confident picture of a
+measurement nobody took, one degree removed from the drop this test exists for. Demonstrated by
+mutation: with `right_hip` removed from the base set, the two op arrays come back the same length
+with the same kinds and differ only in coordinates and opacity, so the role comparison passes and
+the deep comparison fails. (`strictMidpoint` hard-nulls, so `stepWidth` fails a role comparison too
+— this specific degradation is `overstriding`-only.)
 
 ## D7. Op ordering
 

@@ -35,9 +35,11 @@ the union is not, per instant.
 
 - **`MetricExemplar` gains `annotationKeypoints` / `pairedAnnotationKeypoints`**, per instant,
   optional. The CROP set is a property of the image and must be the union across a pair; the
-  ANNOTATION set is a property of the instant. Omitted where they coincide (a same-side pair, every
-  single-instant exemplar), where the consumer falls back to `cropKeypoints` — which on such an
-  exemplar IS the per-instant set by construction.
+  ANNOTATION set is a property of the instant. Omittable wherever they would coincide (a producer
+  whose two instants can never differ, every single-instant exemplar), where the consumer falls back
+  to `cropKeypoints` — which on such an exemplar IS the per-instant set by construction. The
+  obligation attaches to a producer's construction, not to how one pairing fell, so `overstriding`
+  states both even on the pairing where its two strikes share a foot.
 - **`overstriding.ts` emits both**, each built from that instant's own seed plus that instant's own
   knee, filtered against that instant's own frame. The knee is deliberately kept: `SKELETON_EDGES`
   supplies hip→knee and knee→ankle only when that side's knee is named, and those two bones are

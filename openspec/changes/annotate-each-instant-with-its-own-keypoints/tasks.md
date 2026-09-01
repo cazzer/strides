@@ -85,3 +85,42 @@ measured rather than as expected:
       coverage field on both clips is IDENTICAL, and that baseline's Overstriding image is
       byte-identical to the pre-fix capture taken independently on the main checkout.
 - [x] 6.6 `npx tsc -b`, `eslint src`, full `npm test`.
+
+## 7. Review round 1 (on `c022c0f`)
+
+- [x] 7.1 🔴 **The contract said the opposite of what the code does.** The delta, `design.md`,
+      `proposal.md` and `types.ts` all stated as a SHALL that a same-side pair omits the per-instant
+      fields, and carried a scenario titled "A same-side pair omits the per-instant sets" — while
+      `overstriding.ts` emits them unconditionally and this commit's own tests assert exactly that.
+      Fixed the WORDING at all four sites, not the code: the obligation is now phrased structurally
+      ("a metric whose exemplar pairs two instants that need **not** share a side"), mirroring the
+      sibling requirement at `openspec/specs/form-heuristics/spec.md:1398`, and omission is
+      permissive (MAY). The scenario is now "A same-side pairing's per-instant sets agree with each
+      other and with the crop set", which `overstriding.test.ts` satisfies. Both deltas stay
+      ADDED-only.
+- [x] 7.2 🟡 **The guard test did not guard what D6 claimed.** It compared `op.role` SEQUENCES, so it
+      could only see a mark that vanished. `tolerantMidpoint` degrades instead of vanishing — one
+      hip stands in for the pair at `INTERPOLATED_OPACITY` — so an over-narrowed `overstriding` set
+      missing a hip kept the same roles in the same order with the plumb through one hip. Now
+      compares the filtered measurement-op ARRAYS with `toEqual`. Verified by mutation (`right_hip`
+      dropped from the base set): the two arrays come back the same length with the same kinds,
+      differing only in coordinates and opacity — the role comparison passes, the deep comparison
+      fails. D6's table row corrected: `tolerantMidpoint` DEGRADES, it does not require both hips.
+- [x] 7.3 🟡 **Demoted step-width pair recorded, not branched.** A `stepWidthStrike` pair can demote
+      to one drawn instant, which now draws one ankle where a genuine single draws two. No branch
+      added — a blanket "demoted ⇒ union" rule would redraw both legs for `overstriding`, which is
+      the bug. New D5 paragraph states the decision and why the per-metric fix is a plan-layer
+      redesign; filed as **`strides-p11`** (P3) and referenced from D5.
+- [x] 7.4 🟡 **Ankle-disjointness asserted directly** in `stepWidth.test.ts` and
+      `stepWidthCm.test.ts`, rather than only through assertions template-interpolated off
+      `measuredSide`. (Note: the reviewer's premise was partly off — the ratio sibling did already
+      carry `measuredSide !== pairedMeasuredSide`, at `stepWidth.test.ts:290`, ahead of the new
+      block. The direct assertion is strictly stronger and was added to both files anyway.)
+- [x] 7.5 🟢 The hygiene scan now names what it does NOT cover: one direction only, file-scoped, and
+      nothing anywhere enforces that an emitted set still contains what that `kind`'s mark builder
+      reads — which is what `evidenceAnnotations.test.ts` asserts instead.
+- [x] 7.6 🟢 `leggedFrame` cross-referenced in both test files, so an edit to one cannot silently
+      drift the other out of `isTooFarApartPair`'s band.
+- [x] 7.7 Gates re-run: `openspec validate --strict`, `npx tsc -b`, `eslint src`, full `npm test`
+      (88 files, 1406 tests). No live-browser re-run: nothing in this round changes rendered output
+      — three documentation sites, one test comparison strengthened, two comments.

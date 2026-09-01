@@ -9,15 +9,22 @@ on a two-instant exemplar must be the UNION across both instants, because one ph
 contain both; the per-instant set is a property of the INSTANT, because it is what a consumer draws
 when it draws that moment.
 
-A metric whose exemplar pairs two instants measured on DIFFERENT sides SHALL state both per-instant
-sets. That is the case the union is wrong for, and wrong for both halves: the union names the limb
-neither instant's own measurement touched, so a consumer drawing it at each instant depicts a
-measurement that was never taken, alongside one that was, with nothing separating them.
+A metric whose exemplar pairs two instants that need **not** share a side SHALL state both
+per-instant sets. The obligation attaches to the metric's CONSTRUCTION, not to how a particular
+pairing happened to fall: whether a given pair's two instants agree is a property of the run, and a
+producer that stated the fields only when they diverged would make its own contract a function of
+the footage. That construction is the case the union is wrong for, and wrong for both halves: the
+union names the limb neither instant's own measurement touched, so a consumer drawing it at each
+instant depicts a measurement that was never taken, alongside one that was, with nothing separating
+them.
 
-Where the per-instant set and the crop set coincide — a pair whose two instants share a side, and
-every single-instant exemplar — the per-instant fields SHALL be omitted, and a consumer SHALL fall
-back to `cropKeypoints`. That fallback is correct by construction on such an exemplar rather than an
-approximation: there is only one instant's worth of measured points in the crop set to begin with.
+The per-instant fields MAY be omitted wherever they would coincide with `cropKeypoints` — on a
+producer whose two instants can never differ, and on every single-instant exemplar — and a consumer
+SHALL fall back to `cropKeypoints` there. That fallback is correct by construction on such an
+exemplar rather than an approximation: there is only one instant's worth of measured points in the
+crop set to begin with. Where a producer states them anyway, including on a pairing that happens to
+be same-side, the two sets SHALL equal each other and SHALL equal `cropKeypoints`, so that a
+consumer draws the same set whether it reads the statement or the fallback.
 
 The per-instant set SHALL be **stated by the metric that took the measurement**, and a consumer
 SHALL NOT derive it by filtering `cropKeypoints` — neither by side, by name prefix, nor by position.
@@ -37,11 +44,11 @@ Stating a per-instant set SHALL NOT change `cropKeypoints`, and SHALL NOT change
 - **THEN** each instant states its own measured keypoints, the two sets name disjoint ankles, and
   `cropKeypoints` remains the union of both instants' seeds plus whichever context points resolve
 
-#### Scenario: A same-side pair omits the per-instant sets
+#### Scenario: A same-side pairing's per-instant sets agree with each other and with the crop set
 
-- **WHEN** a metric emits a ghosted pair whose two instants happen to share a side
-- **THEN** it omits both per-instant fields, and `cropKeypoints` is by construction the set either
-  instant would have stated
+- **WHEN** a metric whose pair need not share a side emits one whose two instants happen to share it
+- **THEN** the two per-instant sets are equal to each other and to `cropKeypoints`, so a consumer
+  reading the statement and a consumer taking the fallback draw the same set
 
 #### Scenario: A single step-width strike keeps the opposite ankle and omits the per-instant sets
 

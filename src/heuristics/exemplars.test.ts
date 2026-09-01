@@ -707,6 +707,13 @@ describe('per-instant annotation sets accompany per-instant sides', () => {
     // annotating each instant with it draws the limb that instant's own measurement never touched.
     // A new producer of that shape has to state both, and this catches it by construction rather
     // than by somebody remembering.
+    //
+    // **What this deliberately does NOT cover**, so nobody reads it as more than it is. It enforces
+    // one direction (states a per-instant side ⇒ states a per-instant annotation set) and is
+    // FILE-scoped, so a module emitting the two fields on DIFFERENT exemplars passes. And nothing
+    // anywhere enforces the property that actually matters — that an emitted set still contains
+    // everything the mark builder for that `kind` reads. That is asserted per metric, against real
+    // ops, in `evidenceAnnotations.test.ts`'s "narrowing the drawn set removes no measurement mark".
     const producers = readdirSync(DIRECTORY)
       .filter((file) => file.endsWith('.ts') && !file.endsWith('.test.ts'))
       .filter((file) => codeOf(file).includes('pairedMeasuredSide:'))

@@ -142,7 +142,11 @@ function isBone(op: EvidenceAnnotationOp): op is EvidenceBoneOp {
 }
 
 /** Two frames carrying BOTH legs, far enough apart to stay a pair and close enough not to be
- * gated out by `isTooFarApartPair`. */
+ * gated out by `isTooFarApartPair`.
+ *
+ * **Duplicated verbatim in `evidenceFrames.test.ts`**, which records the crop-growth arithmetic
+ * these coordinates were sized against. Keep the two in step: an edit here that stayed inside this
+ * file's assertions could still push that copy out of the guard's band, or vice versa. */
 function leggedFrame(timestamp: number, x: number) {
   return buildFrame(
     {
@@ -1121,6 +1125,15 @@ describe('the joint layer', () => {
         // index, indistinguishably from a keypoint the robustness layer lost — so a caliper whose
         // endpoint left the set would be dropped SILENTLY. Build the same plan twice, once with
         // the per-instant sets and once without, and require the measurement layer to be identical.
+        //
+        // The WHOLE op, not its `role`. Comparing role sequences would miss the nearer miss:
+        // `tolerantMidpoint` does not return null when one endpoint is missing, it falls back to
+        // the single resolved side at `INTERPOLATED_OPACITY` — so an over-narrowed `overstriding`
+        // set that dropped one hip still emits `hipMidlinePlumb` and `ankleOffsetCaliper` under the
+        // same names in the same order, with the plumb standing through one hip instead of the
+        // midline. Same roles, wrong picture. Coordinates, opacity and polarity are what tell those
+        // apart, and the ops are plain data, so a deep compare gets all three for free.
+        // (`strictMidpoint` hard-nulls, so this specific degradation is `overstriding`-only.)
         const narrowed = planEvidenceAnnotations(
           fixture.planned(),
           MAX_OUTPUT_SIDE,
@@ -1129,10 +1142,13 @@ describe('the joint layer', () => {
           fixture.plannedWithoutAnnotationSets(),
           MAX_OUTPUT_SIDE,
         )
-        const rolesAt = (
+        const marksAt = (
           annotation: ReturnType<typeof planEvidenceAnnotations>,
           at: 'base' | 'ghost',
-        ) => roles(annotation.ops.filter((op) => op.instant === at))
+        ) =>
+          annotation.ops.filter(
+            (op) => op.layer === 'measurement' && op.instant === at,
+          )
         const structureAt = (
           annotation: ReturnType<typeof planEvidenceAnnotations>,
           at: 'base' | 'ghost',
@@ -1145,8 +1161,8 @@ describe('the joint layer', () => {
         ]
 
         for (const at of ['base', 'ghost'] as const) {
-          expect(rolesAt(narrowed, at)).toEqual(rolesAt(unioned, at))
-          expect(rolesAt(narrowed, at).length).toBeGreaterThan(0)
+          expect(marksAt(narrowed, at)).toEqual(marksAt(unioned, at))
+          expect(marksAt(narrowed, at).length).toBeGreaterThan(0)
           // ...and the joint layer really did change, so the comparison above is not vacuous.
           expect(structureAt(narrowed, at)).not.toEqual(structureAt(unioned, at))
         }

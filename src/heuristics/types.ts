@@ -212,12 +212,17 @@ export interface MetricExemplar {
    * about. Drawing the union at each instant states that both feet were measured at both moments,
    * which on a mixed-side pair is false of both halves.
    *
-   * Omitted where the two coincide — a same-side pair, and every single-instant exemplar. A
-   * consumer falls back to `cropKeypoints`, which on such an exemplar IS the per-instant set by
-   * construction, so the fallback is independently correct rather than a tolerated approximation.
+   * Omittable wherever the two would coincide — a producer whose two instants can never differ, and
+   * every single-instant exemplar. A consumer falls back to `cropKeypoints`, which on such an
+   * exemplar IS the per-instant set by construction, so the fallback is independently correct
+   * rather than a tolerated approximation.
    *
-   * REQUIRED wherever `measuredSide !== pairedMeasuredSide`: that is exactly the case where the
-   * union names a limb neither instant's own measurement touched.
+   * REQUIRED of any producer whose two instants NEED NOT share a side — the construction, not the
+   * pairing. `overstriding` states both on every pair it emits, including the ones whose two
+   * strikes happen to be the same foot, because whether they are is a property of the run: a
+   * producer that emitted these only when they diverged would leave a consumer unable to tell
+   * "these coincide" from "this producer forgot". Where a same-side pairing states them, they equal
+   * each other and equal `cropKeypoints`.
    *
    * **NOT recoverable by side-filtering `cropKeypoints` downstream.** A crop set legitimately
    * carries context belonging to neither instant's measurement — `stepWidth`'s single exemplar

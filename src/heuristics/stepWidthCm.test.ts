@@ -272,6 +272,13 @@ describe('computeStepWidthCm exemplars', () => {
       'right_hip',
     ])
     expect(evidence.measuredSide).not.toBe(evidence.pairedMeasuredSide)
+    // Ankle-disjointness asserted DIRECTLY, not only through the two interpolations above: those
+    // are both written off `measuredSide`, so a run where the pair's two feet coincided would
+    // satisfy them while stating one ankle twice.
+    expect(evidence.annotationKeypoints).toContain('left_ankle')
+    expect(evidence.pairedAnnotationKeypoints).toContain('right_ankle')
+    expect(evidence.annotationKeypoints).not.toContain('right_ankle')
+    expect(evidence.pairedAnnotationKeypoints).not.toContain('left_ankle')
   })
 
   it('demotes to a single representative strike when every plant is the same foot', () => {

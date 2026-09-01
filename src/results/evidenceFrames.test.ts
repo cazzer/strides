@@ -118,6 +118,11 @@ function separatedPair(ghostY: number): RobustPoseFrame[] {
  * 320 px floor) and the union is 250x240 (padded 400), so the growth is ~1.04 — far under
  * `EVIDENCE_MAX_PAIR_CROP_GROWTH`, with the two boxes not overlapping at all so the pair is not
  * near-identical either.
+ *
+ * **Duplicated verbatim in `evidenceAnnotations.test.ts`**, which needs the same two frames to
+ * drive the real planner. That copy does not restate the arithmetic above, so an edit to these
+ * coordinates has to be carried across by hand — otherwise the other file's fixture can drift out
+ * of the guard's band while every assertion in this one still passes.
  */
 function leggedFrame(timestamp: number, x: number): RobustPoseFrame {
   return buildFrame(
