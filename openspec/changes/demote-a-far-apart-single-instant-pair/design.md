@@ -35,13 +35,14 @@ That is false for the kinds the collapse rules already demote (`footStrike`, `st
 | `computeOverstriding` | median of per-strike `(ankle.x − hipMid.x) / torso` | ONE strike |
 | `computeTrunkLean` | median of per-frame torso angles | ONE frame |
 
-Neither number is a difference between two instants. The repo already said so in two places before
-`SINGLE_INSTANT_KINDS` caught up:
+Neither number is a difference between two instants, and `buildTrunkLeanMarks` /
+`buildOverstrideMarks` are pure per-instant builders that need nothing from the other half — which
+is what makes a demoted single of either kind draw the geometry its card's number was read off.
 
-- `measuredAtInstant` (`evidenceAnnotations.ts`) records `trunkLeanRange` and `overstrideRange` as
-  measured at **both** instants, while `bounceCycle` is measured at **neither**.
-- `buildTrunkLeanMarks` and `buildOverstrideMarks` are pure per-instant builders — they need
-  nothing from the other half.
+⚠️ **`measuredAtInstant` is NOT corroboration, and an earlier draft of this design offered it as
+such.** It reads `true` for `armSwingCycle` and `stridePair` too, both excluded, so it can only rule
+a kind OUT (`bounceCycle` is measured at NEITHER instant) and never in. Corrected in the source
+comment as well.
 
 **The kind's NAME is what misled.** `trunkLeanRange` and `overstrideRange` are *ranges* in the
 sense that the two instants are the two ends of a spread — which is how the exemplar found a
@@ -50,21 +51,31 @@ exact correction for `kneeFlexionPeak`; this is the same correction for two more
 
 ### Why `stridePair` cannot join them
 
-Mechanical, not a judgement call. `stridePair`'s only measurement mark, `strideCaliper`, is built
-in `planEvidenceAnnotations` under `plan.ghost !== null` — it spans the two hip midpoints, so it
-does not exist for one instant. A demoted stride pair would keep `hipMidMarker` + `strideTick` and
-lose the span that IS the measurement. `bounceCycle` is excluded for a related reason: it draws one
-horizontal at one hip midpoint, and its vocabulary contains no caliper at all (deliberately — the
-reported amplitude is a whole-clip spectral fit, and a span between two lines would read as that
-number).
+**The three exclusions are three different arguments**, and only two are mechanical.
 
-**⚠️ A `layer === 'measurement'` count cannot see that distinction.** Asserted and verified: a
-demoted `stridePair` DOES emit measurement-layer ops (`hipMidMarker`, `strideTick`), and so does a
-demoted `bounceCycle` (`bounceMidpoint`, `bounceHorizontal`). The count invariant in
-`evidenceAnnotations.test.ts` therefore passes for the non-members too and is NOT the thing that
-distinguishes them — the accompanying role-level assertion is. This corrects the working assumption
-this change was scoped under ("the count invariant fails today for `bounceCycle` and `stridePair`");
-it does not, and the test says so rather than implying otherwise.
+- `stridePair` — MECHANICAL. Its only measurement mark, `strideCaliper`, is built in
+  `planEvidenceAnnotations` under `plan.ghost !== null`: it spans the two hip midpoints, so it
+  cannot exist for one instant. A demoted stride pair would keep `hipMidMarker` + `strideTick` and
+  lose the span that IS the measurement.
+- `bounceCycle` — VOCABULARY. It draws one horizontal at one hip midpoint and has no caliper at all
+  (deliberately: the reported amplitude is a whole-clip spectral fit, and a span between two lines
+  would read as that number), so one instant leaves a height with nothing to read it against.
+- `armSwingCycle` — NEITHER. `buildArmSwingMarks` emits `armSwingCaliper` per instant, **ungated on
+  `plan.ghost`**, so a demoted one WOULD keep a measurement mark and every mechanical test passes
+  for it. Its exclusion is a VALUE-SHAPE argument: the card reports `min/max` of the two sides'
+  medians, "a ratio BETWEEN the two images, so it belongs to neither", and one image cannot depict
+  a ratio between two. That rested on prose alone until this change pinned it in a test — a later
+  change admitting it now has to argue with the assertion rather than discover the gap.
+
+**⚠️ A `layer === 'measurement'` count cannot see any of that.** `marker` and `guide` both push
+`layer: 'measurement'`, and all three non-members emit theirs unconditionally, so the count
+invariant passes for **all eight** kinds. This corrects the working assumption this change was
+scoped under ("the count invariant fails today for `bounceCycle` and `stridePair`"); it does not.
+
+What the count invariant actually guards is the OPPOSITE direction: a MEMBER whose builder later
+regresses to ghost-gating its marks, which would ship a demoted image with nothing measured on it.
+It does not establish membership, and the source comment beside `SINGLE_INSTANT_KINDS` no longer
+claims it does. The per-kind role assertions beside it are what pin the three exclusions.
 
 ## D3. Demotion is the fallback walk's LAST RESORT — load-bearing
 
@@ -155,6 +166,18 @@ that is the closest-landing one. The arithmetic argument is not hypothetical on 
 `selectExtremePairs` ALREADY performs — reported rather than re-derived, so two answers cannot
 disagree. **No ranking, ordering or tie-break change**; ties still resolve to the high end, pinned
 by a test.
+
+**Scope: the separately-naming label form only.** Two metrics label a pair by naming it as one
+whole rather than naming its instants — `verticalRatio`'s "One stride: consecutive {side}-foot
+strikes, ghosted together" and `armSwingSymmetry`'s "Top and bottom of one {side}-arm swing,
+ghosted together". No clause of either names an instant, so there is no first instant to be wrong
+about and no ordering obligation to state. The ADDED requirement's antecedent is narrowed to the
+"X, ghosted against Y" form accordingly, which is the scope `evidenceCaptions.ts` already applied
+in practice by enumerating exactly four metrics — an over-broad lead sentence there is corrected to
+match. Stating the rule unconditionally would have folded a contract into the authoritative spec
+that two shipped labels violate on the day it lands. Neither kind is demotable, so nothing is
+functionally at risk either way; the requirement notes that a "ghosted together" label acquires an
+obligation only if its kind ever becomes demotable, at which point the LABEL is what must change.
 
 ## D6. Live verification
 

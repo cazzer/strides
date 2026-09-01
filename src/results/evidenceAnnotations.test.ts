@@ -1466,8 +1466,10 @@ describe('against a plan built by the real planner', () => {
 })
 
 describe('every demotable kind still measures something from one frame', () => {
-  /** Hips, shoulders, knees and ankles all resolved, so no builder is starved of a keypoint and a
-   * missing measurement mark can only mean the kind has nothing to draw from one instant. */
+  /** Every keypoint any mark builder reads, resolved — so no builder is starved, and a missing
+   * measurement mark can only mean the kind has nothing to draw from one instant rather than that
+   * the fixture withheld a joint. Arms included: `buildArmSwingMarks` needs a wrist to reach its
+   * caliper, and the assertion below turns on whether it draws one. */
   const wholeBody = () =>
     instant(
       [
@@ -1475,6 +1477,10 @@ describe('every demotable kind still measures something from one frame', () => {
         pos('right_hip', 300, 322),
         pos('left_shoulder', 250, 180),
         pos('right_shoulder', 310, 182),
+        pos('left_elbow', 232, 250),
+        pos('right_elbow', 322, 252),
+        pos('left_wrist', 246, 300),
+        pos('right_wrist', 308, 214),
         pos('left_knee', 235, 440),
         pos('right_knee', 305, 442),
         pos('left_ankle', 228, 560),
@@ -1509,27 +1515,37 @@ describe('every demotable kind still measures something from one frame', () => {
     })
   }
 
-  it('is not vacuous: a demoted stride pair would lose the mark that IS its measurement', () => {
-    // `strideCaliper` spans the two hip midpoints and is built under `plan.ghost !== null`, so it
-    // cannot exist for one instant. What survives is `hipMidMarker` + `strideTick` — where the
-    // stride ENDED, with no span between them — which is why `stridePair` is not in the set even
-    // though it does emit measurement-layer ops. The count invariant above cannot see that
-    // distinction, so the roles are asserted directly.
+  it('pins why each excluded kind is excluded, which the count above cannot see', () => {
+    // The count invariant passes for ALL EIGHT kinds — `marker` and `guide` are both
+    // `layer: 'measurement'`, and the two cycles emit theirs unconditionally — so it discriminates
+    // nothing. It guards a MEMBER against regressing to ghost-gated marks. What keeps the three
+    // non-members out is asserted here, per kind, because each is out for a different reason.
+    //
+    // `stridePair`: MECHANICAL. `strideCaliper` spans the two hip midpoints and is built under
+    // `plan.ghost !== null`, so it cannot exist for one instant. What survives is `hipMidMarker` +
+    // `strideTick` — where the stride ENDED, with no span between them.
     expect(new Set(roles(measurementOps('stridePair')))).toEqual(
       new Set(['hipMidMarker', 'strideTick']),
     )
     expect(roles(measurementOps('stridePair'))).not.toContain('strideCaliper')
 
-    // `bounceCycle` is the same shape of exclusion for a different reason: demoted, it draws ONE
-    // horizontal at ONE hip midpoint — a height, with nothing to read it against. Its vocabulary
-    // contains no caliper at all (`buildBounceMarks` refuses one even for a full pair, because the
-    // reported amplitude is a whole-clip spectral fit and a span between two lines would read as
-    // that number), so there is no mark a second instant could have supplied. `measuredAtInstant`
-    // already records it as measured at NEITHER instant.
+    // `bounceCycle`: VOCABULARY. Demoted, it draws ONE horizontal at ONE hip midpoint — a height
+    // with nothing to read it against. It has no caliper at all (`buildBounceMarks` refuses one
+    // even for a full pair, because the reported amplitude is a whole-clip spectral fit and a span
+    // between two lines would read as that number), so no second instant could have supplied one.
     expect(roles(measurementOps('bounceCycle'))).toEqual([
       'bounceMidpoint',
       'bounceHorizontal',
     ])
+
+    // `armSwingCycle`: NEITHER of the above — its exclusion is a VALUE-SHAPE argument, and this
+    // assertion exists to stop that being read as an oversight. `buildArmSwingMarks` emits
+    // `armSwingCaliper` per instant, ungated on `plan.ghost`, so a demoted one WOULD keep a
+    // measurement mark and every mechanical test here passes for it. It stays out because the card
+    // reports `min/max` of the two SIDES' medians — "a ratio BETWEEN the two images, so it belongs
+    // to neither" (`evidenceAnnotations.ts`) — and one image cannot depict a ratio between two.
+    // A future change admitting it to the set has to argue with that, not discover it.
+    expect(roles(measurementOps('armSwingCycle'))).toContain('armSwingCaliper')
   })
 })
 

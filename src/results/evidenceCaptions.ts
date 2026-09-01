@@ -74,15 +74,22 @@ export function captionFor(plan: EvidenceFramePlan): string {
  * photograph is weighted toward its base instant and the base's annotation marks are drawn solid
  * against the ghost's faded ones. A sighted reader gets "this one is the subject" twice over, from
  * the weighting and from the marks. Neither reaches a reader who cannot see the image, so the shape
- * sentence says which of the two the card's measurement is about. Every paired `label` this repo
- * emits is "X, ghosted against Y" with the base first — see `bounceInstants`, `kneeFlexion`,
- * `overstriding`, `trunkLean` — so naming the first instant is general, not a per-metric claim.
+ * sentence says which of the two the card's measurement is about.
  *
- * That invariant was ASSERTED here before it was true: `overstriding` and `trunkLean` hardcoded a
- * label naming the high end while `selectExtremePairs` picks whichever end is further from the
- * median, so on a clip leaning the other way this sentence pointed at the wrong body.
- * `strides-8i4` made both metrics derive the label from `ExtremePair.baseIsHigh`, which is what
- * lets a demoted single keep its label beside one body at all. */
+ * **Scope, stated exactly rather than as a universal.** FOUR metrics label a pair by naming its two
+ * instants separately, "X, ghosted against Y" with the base first — `bounceInstants`,
+ * `kneeFlexion`, `overstriding`, `trunkLean` — and it is those this sentence points into. The other
+ * two name the PAIR as one whole and no clause of theirs names an instant: `verticalRatio`'s "One
+ * stride: consecutive {side}-foot strikes, ghosted together" and `armSwingSymmetry`'s "Top and
+ * bottom of one {side}-arm swing, ghosted together". On those, "the first instant named above" has
+ * nothing to point at — harmless today, because the rest of the sentence still says truthfully that
+ * two frames are blended, and neither kind is demotable, so neither ever appears beside one body.
+ *
+ * That ordering was ASSERTED here before it was true even of the four: `overstriding` and
+ * `trunkLean` hardcoded a label naming the high end while `selectExtremePairs` picks whichever end
+ * is further from the median, so on a clip leaning the other way this sentence pointed at the wrong
+ * body. `strides-8i4` made both metrics derive the label from `ExtremePair.baseIsHigh`, which is
+ * what lets a demoted single keep its label beside one body at all. */
 export function altFor(plan: EvidenceFramePlan): string {
   const side = plan.side === undefined ? '' : ` (${plan.side} side)`
   const shape =

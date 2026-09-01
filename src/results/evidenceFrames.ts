@@ -296,10 +296,13 @@ const METRICS_WITHOUT_EVIDENCE: ReadonlySet<MetricId> = new Set(['cadence'])
  * the sense that the two instants are the two ends of a spread — which is how the exemplar found a
  * legible extreme to show — but `computeTrunkLean` returns the median of per-frame angles and
  * `computeOverstriding` the median of per-strike ratios, each measured at ONE instant. Neither
- * card reports a difference. The repo already said so in two places before this set caught up:
- * `measuredAtInstant` (`evidenceAnnotations.ts`) records both kinds as measured at BOTH instants
- * while `bounceCycle` is measured at NEITHER, and `buildTrunkLeanMarks`/`buildOverstrideMarks` are
- * pure per-instant builders that need nothing from the other half.
+ * card reports a difference. `buildTrunkLeanMarks` and `buildOverstrideMarks` are pure per-instant
+ * builders that need nothing from the other half, which is what makes a demoted single of either
+ * kind draw the geometry its card's number was read off.
+ *
+ * ⚠️ `measuredAtInstant` (`evidenceAnnotations.ts`) is NOT corroboration for membership, though it
+ * looks like it: it reads `true` for `armSwingCycle` and `stridePair` as well, and both are
+ * excluded. It can only rule a kind OUT — `bounceCycle` is measured at NEITHER instant — never in.
  *
  * `kneeFlexionPeak` moved into this set with `strides-r41`, and on that principle rather than for
  * coverage: `kneeFlexion.value` is a peak angle at one instant, and the annotation draws that
@@ -311,19 +314,32 @@ const METRICS_WITHOUT_EVIDENCE: ReadonlySet<MetricId> = new Set(['cadence'])
  * with `strides-ddj`, for the identical reason and with the identical concrete effect: Demo 1's
  * only surviving overstride pair demands 2.881× growth, so the card rendered nothing at all.
  *
- * **`stridePair` cannot join them, and the reason is mechanical rather than a judgement call.**
- * Its only measurement mark, `strideCaliper`, is built in `planEvidenceAnnotations` under
- * `plan.ghost !== null` — it spans the two hip midpoints, so it does not exist for one instant.
- * A demoted stride pair would keep its per-instant ticks and lose the span that IS the
- * measurement.
+ * **The two cycles are excluded for two DIFFERENT reasons, and only one of them is mechanical.**
+ * `stridePair`'s only measurement mark, `strideCaliper`, is built in `planEvidenceAnnotations`
+ * under `plan.ghost !== null` — it spans the two hip midpoints, so it cannot exist for one
+ * instant; a demoted stride pair would keep its per-instant ticks and lose the span that IS the
+ * measurement. `bounceCycle` has no caliper in its vocabulary at all, deliberately, so one instant
+ * leaves a single horizontal with nothing to read it against.
+ *
+ * `armSwingCycle` is excluded on neither of those: `buildArmSwingMarks` emits `armSwingCaliper` per
+ * instant, ungated, so a demoted one WOULD keep a measurement mark. Its exclusion is a
+ * VALUE-SHAPE argument — the card reports `min/max` of the two sides' medians, "a ratio BETWEEN the
+ * two images, so it belongs to neither" (`evidenceAnnotations.ts`) — and one image cannot depict a
+ * ratio between two.
  *
  * Keyed on the exemplar's own `kind` rather than on `MetricId` deliberately: the kind is what the
  * exemplar says about itself and travels with it, so this module never has to hold an opinion
  * about what a given metric measured.
  *
  * Exported so the annotation suite can assert, for every member, that a demoted plan still emits a
- * measurement mark. That invariant is the whole justification for membership, and stated only in
- * this comment it would be prose no test can reach.
+ * measurement mark.
+ *
+ * ⚠️ **That assertion does not establish membership, and must not be read as the test for it.** It
+ * passes for all eight kinds — `marker` and `guide` are both `layer: 'measurement'`, and the two
+ * cycles emit theirs unconditionally — so it cannot discriminate. What it guards is the opposite
+ * direction: a MEMBER whose builder later regresses to ghost-gating its marks, which would ship a
+ * demoted image with nothing measured on it. Membership is decided by where the card's number
+ * lives, and the per-kind role assertions beside that test are what pin the exclusions.
  */
 export const SINGLE_INSTANT_KINDS: ReadonlySet<MetricExemplarKind> = new Set([
   'footStrike',
@@ -1273,9 +1289,13 @@ export function planExemplarFrames(
 
   const ghost = demotion === null ? resolved.ghost : null
   // A demoted plan draws ONE frame, and the crop derives from `drawnFrames` alone — so gh #71's
-  // whole-frame two-instant union is unreachable here by construction. A demoted single gets
-  // exactly the crop a single-instant exemplar of the same geometry would have got, inheriting
-  // every existing guard (padding, floor, subject-centring, frame clamp) and adding none.
+  // whole-frame two-instant union is unreachable here by construction, and every existing guard
+  // (padding, floor, subject-centring, frame clamp) applies unchanged with none added.
+  //
+  // Not quite the crop a natively-single exemplar would get, though: `cropKeypoints` is still the
+  // PAIR's union name set, resolved against the base frame alone. On `overstrideRange`'s usual
+  // opposite-foot pair that names both ankles and both knees, so the box spans both feet of the one
+  // body drawn. Measured on Demo 1: 912.197 px rather than the tighter box a single strike names.
   const drawnFrames =
     ghost === null ? [resolved.base] : [resolved.base, ghost]
   const crop = computeEvidenceCropRect(

@@ -2,12 +2,21 @@
 
 ### Requirement: A paired exemplar's label names its base instant first
 
-Where a metric emits an exemplar naming two instants, the label's LEADING clause SHALL describe the
-instant drawn at full opacity — the base — and its trailing clause the ghost. Everything downstream
-is built on that ordering: the alt text tells a reader who cannot see the image that the first
-instant named is the solid one, and a pair demoted to a single frame keeps its label beside one
-body, where a leading clause describing the OTHER instant is a flatly false statement about the
-picture.
+Where a metric emits an exemplar whose label names its two instants SEPARATELY — the
+"X, ghosted against Y" form — the LEADING clause SHALL describe the instant drawn at full opacity,
+the base, and the trailing clause the ghost. Everything downstream is built on that ordering: the
+alt text tells a reader who cannot see the image that the first instant named is the solid one, and
+a pair demoted to a single frame keeps its label beside one body, where a leading clause describing
+the OTHER instant is a flatly false statement about the picture.
+
+This SHALL NOT be read as a rule over every paired label. A metric may instead name the PAIR as one
+whole — "One stride: consecutive left-foot strikes, ghosted together", "Top and bottom of one
+left-arm swing, ghosted together" — where no clause names an instant and there is no first instant
+to be wrong about. Such a label has no ordering obligation, and acquires one only if its metric's
+exemplar kind becomes demotable to a single frame, at which point the label itself is what has to
+change: a caption naming a stride or a swing is a claim one frame cannot carry, whichever end it
+kept. The interface layer already scopes its own equivalent statement to exactly the metrics
+emitting the separately-naming form, and the two SHALL agree.
 
 A metric that selects its base by DISTANCE FROM ITS OWN MEDIAN SHALL derive its label from which end
 won, and SHALL NOT hardcode one end. Which end is further from the median is a property of the
