@@ -750,12 +750,22 @@ perfectly and a fast one a fraction of a second apart does not. At the near end 
 whether the two instants are the two distinct phases the exemplar's own label names, which is a
 property of the signal and is measured in time.
 
-Whether a collapsed pair is demoted or dropped SHALL be decided by where the REPORTED NUMBER lives,
-not by whether the exemplar arrived as a pair. A quantity read off a single instant — a footstrike
-angle, a step width, a peak joint angle — survives losing its partner, because the surviving frame
-still shows what the card reports and the annotation still draws the geometry that was measured
-there. A quantity that IS a difference between two instants — an amplitude, a stride length, a range
-— does not, because one frame of it depicts no part of the number, and such a pair SHALL be dropped.
+Whether a pair that cannot be drawn as a pair is demoted or dropped SHALL be decided by where the
+REPORTED NUMBER lives, not by whether the exemplar arrived as a pair. A quantity read off a single
+instant — a footstrike angle, a step width, a peak joint angle, a trunk-lean angle, an overstride
+offset against the hip midline — survives losing its partner, because the surviving frame still
+shows what the card reports and the annotation still draws the geometry that was measured there. A
+quantity that IS a difference between two instants — an amplitude, a stride length — does not,
+because one frame of it depicts no part of the number, and such a pair SHALL be dropped.
+
+An exemplar built from the two ends of a spread SHALL be classified by the card's NUMBER, not by how
+the exemplar was CONSTRUCTED. A metric reporting the median of per-instant measurements reports a
+single-instant quantity however its picture was assembled: the two ends are how the exemplar found a
+legible extreme to show, and one instant of it still carries a whole measurement taken at that
+instant. Reading the construction as the classification is how a range came to be grouped with the
+amplitudes it does not resemble, and the kind's own NAME is the thing that misleads — it describes
+how the exemplar was built.
+
 Demoting is the honest outcome wherever it is available: these rules exist to REPLACE a misleading
 ghost with a truthful still, so classifying a single-instant measurement as un-demotable makes them
 delete evidence instead.
@@ -838,10 +848,14 @@ reported at all, the clip's frames are unavailable, or extraction failed).
 
 #### Scenario: A single-instant measurement survives demotion where a difference measurement does not
 
-- **WHEN** a collapsed pair belongs to a metric whose reported value is read off one instant, and
-  separately when it belongs to one whose reported value is the difference between two
+- **WHEN** a pair cannot be drawn as a pair — because its two instants are indistinguishable, and
+  separately because they are too far apart to share one legible crop — and it belongs to a metric
+  whose reported value is read off one instant, and separately again when it belongs to one whose
+  reported value is the difference between two
 - **THEN** the first is demoted to a single frame that still shows the measured geometry, and the
   second is dropped, because one frame of a difference depicts no part of the reported number
+- **AND** the verdict is the same under both reasons the pair could not be drawn, because the
+  classification is a property of the metric's number rather than of the rule that rejected the pair
 
 #### Scenario: A failed seek degrades to no evidence
 
@@ -1446,8 +1460,26 @@ cannot exceed the frame's own larger dimension, so with the denominator resting 
 ratio is bounded, and on a frame small enough that bound sits below the rejection threshold for every
 pair the source can produce.
 
-A pair rejected on this criterion SHALL be dropped rather than demoted to one of its instants. Every
-paired caption this system emits is a statement about two instants, and no surviving half carries it.
+The criterion, the threshold it is compared against, and the calibration behind that threshold are
+UNCHANGED by everything that follows. A pair is rejected on exactly the reading it was rejected on
+before, and nothing below relaxes, re-derives or re-scopes what counts as too far apart.
+
+A pair rejected on this criterion SHALL be routed to the same classification rule that decides a
+collapsed pair's fate: demoted to its base where the metric's reported number is read off a single
+instant, dropped where that number is a difference between two. The rejection establishes that the
+two instants cannot share one legible image; it establishes nothing about whether either instant
+alone is worth showing, and that second question already has an answer stated elsewhere in this
+capability.
+
+A demoted single's crop SHALL be derived from the one instant it draws. The whole-frame union this
+requirement's own scenarios describe is therefore unreachable for a demoted image by construction:
+its crop is exactly what a single-instant exemplar of the same geometry would have received,
+inheriting every existing crop guard and adding none.
+
+The caption of a demoted image SHALL survive on its label's leading clause, which names the base
+instant — see the form-heuristics requirement that a paired exemplar's label names its base first.
+That is what makes demotion honest at this end of the range: the leading clause is a true statement
+about the only body on screen.
 
 The crop rectangle that is actually drawn SHALL be unchanged by this: the drawn crop remains padded,
 squared and clamped to the frame bounds. Only the judgement changes.
@@ -1461,11 +1493,20 @@ squared and clamped to the frame bounds. Only the judgement changes.
 
 #### Scenario: A runner who crossed the frame produces no evidence image at all
 
-- **WHEN** a metric's two extreme instants put the runner at opposite edges of the frame, so their
-  union crop would saturate at the frame's own dimension and centre on background with neither
-  runner inside it
+- **WHEN** a metric whose reported number is a DIFFERENCE between two instants — a stride length,
+  say — emits a pair putting the runner at opposite edges of the frame, so their union crop would
+  saturate at the frame's own dimension and centre on background with neither runner inside it
 - **THEN** the pair is dropped and that metric reports no evidence, rather than rendering a crop of
   empty background captioned as a measurement
+
+#### Scenario: A far-apart pair of a single-instant measurement is demoted rather than dropped
+
+- **WHEN** a metric whose reported number is read off ONE instant — an overstride offset against the
+  hip midline, say — offers a pair whose union crop demands more growth than the threshold allows,
+  and it has no other pair to offer
+- **THEN** the pair is demoted to its base instant, the image is cropped from that instant alone at
+  the size a single-instant exemplar of the same geometry would have received, and the metric
+  reports evidence rather than reporting that every candidate was gated out
 
 #### Scenario: An ordinary pair on a small source is still ghosted
 
@@ -1507,9 +1548,16 @@ suffer from none of them.
 
 Falling back SHALL NOT weaken any drop rule. Each candidate pair SHALL be planned by exactly the
 same rules the winner is planned by, including the emission-quality gate, so a fallback pair can
-only be rendered on terms the winner would also have had to meet. In particular, a pair too far
-apart SHALL still be dropped rather than demoted to one of its instants — the fallback replaces
-the pair, it never rescues half of one.
+only be rendered on terms the winner would also have had to meet.
+
+Demotion SHALL be the walk's LAST RESORT. Any pair that renders AS A PAIR, at any rank, SHALL be
+preferred over a demoted single derived from a higher-ranked one, and a demoted plan SHALL be
+returned only once every offered pair has failed to render as a pair. Without that ordering,
+classifying a kind as demotable silently converts a fallback into a demotion: the winner stops at
+its own base instead of the walk reaching the drawable alternate below it, and a metric that renders
+a good ghost today renders a lone frame instead. That regression would read on the evidence coverage
+output as the metric still producing an image, which is why the ordering is required here rather
+than left to how the walk happens to be written.
 
 The rendered result SHALL describe the pair that was actually drawn. The instants, the quality and
 the growth reading reported for the image SHALL be the selected pair's own, so that a reader —
@@ -1533,9 +1581,17 @@ slot its exemplar already owned and SHALL NOT let one metric render more images 
 - **THEN** it is rendered and no alternative is examined, so the image, its instants, its quality
   and its growth reading are exactly what they were before alternatives existed
 
+#### Scenario: A drawable lower-ranked pair outranks a demoted higher-ranked one
+
+- **WHEN** a metric's best-scoring pair is too far apart to share a crop and belongs to a kind that
+  may be demoted, and a lower-ranked pair of the same exemplar can be rendered as a pair
+- **THEN** the lower-ranked pair is rendered as a ghosted pair and no demoted single is produced,
+  because demotion is the walk's last resort rather than a per-candidate outcome
+
 #### Scenario: No offered pair is drawable
 
-- **WHEN** every pair a metric offers fails to render, whatever the reason
+- **WHEN** every pair a metric offers fails to render as a pair, whatever the reason, and the
+  metric's kind is one with no honest single-instant meaning
 - **THEN** the metric reports no evidence with the same reason it reported before, rather than
   rendering a pair that failed a drop rule
 
@@ -1815,4 +1871,45 @@ move, resize or re-aim the crop, and SHALL NOT change which exemplar or which pa
 - **WHEN** a plan is built from an exemplar carrying per-instant annotation sets and from the same
   exemplar with those sets removed
 - **THEN** the two plans' crop rectangles are identical
+
+### Requirement: A demoted evidence caption names which rule took the pair apart
+
+Where an evidence image was planned as a pair and rendered as a single frame, the caption SHALL say
+that it was demoted AND say WHY, distinguishing a pair whose two instants were indistinguishable
+from one whose two instants were too far apart to share a legible crop. Those are opposite
+conditions, and a caption naming the wrong one is a false statement about the picture it sits under.
+
+The reason SHALL travel with the plan as an explicit value rather than as a boolean. A boolean
+cannot carry three states, and two independent fields could disagree with each other about one
+image.
+
+The far-apart sentence SHALL state the SPATIAL criterion the guard actually applies — that the two
+instants could not share one legible crop — and SHALL NOT describe the pair in terms of elapsed
+time, which this capability explicitly rejects as the measure at that end of the range.
+
+Every demotion reason SHALL have a sentence, and the mapping from reason to sentence SHALL be
+total, so that a reason added without its sentence is rejected before it can caption an image with
+nothing.
+
+The development-only evidence coverage output SHALL report the demotion reason in place of the
+boolean it reported before, so that a demoted image can be told from an un-demoted one AND from a
+differently-demoted one without reading a caption off the interface.
+
+#### Scenario: A far-apart demotion is not captioned as a near-identical one
+
+- **WHEN** a pair is demoted because its two instants were too far apart to share a legible crop
+- **THEN** the caption says the paired instant was too far away to share a legible crop, and does
+  NOT say that the two instants were too similar to tell apart
+
+#### Scenario: A near-identical demotion keeps the sentence it already had
+
+- **WHEN** a pair is demoted because its two instants were indistinguishable
+- **THEN** the caption is exactly the sentence it carried before demotion reasons were
+  distinguished, so no image that reads correctly today changes
+
+#### Scenario: The coverage output reports which rule demoted an image
+
+- **WHEN** an evidence run completes in a development build and emits its evidence coverage output
+- **THEN** each exemplar record carries its demotion reason, or an explicit absence where the image
+  was not demoted, and the output remains parseable as JSON
 
