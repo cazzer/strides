@@ -2673,3 +2673,31 @@ It reports a decision that has already been taken.
 - **THEN** the above-median end is the base, exactly as it was before this requirement was stated,
   and the label leads with it
 
+### Requirement: Overstriding's caveat is unconditionally non-null
+
+Unlike a metric whose `caveat` is populated only for degraded or low-confidence results,
+overstriding's `caveat` SHALL be non-null on **every** returned result that has a non-null `value`,
+including its cleanest, highest-confidence one, disclosing that the value is sampled at an instant
+that tends to trail the true moment of ground contact. When the clip's direction of travel is
+known, the wording SHALL additionally name the bias's direction — the value reads as a lower bound
+on how far the foot actually lands ahead of the hip. When the direction of travel cannot be
+determined, the wording SHALL NOT claim a bias direction: the ratio is then computed from the raw
+horizontal offset with no sign correction, so the lag's effect on the reported number has no
+derivable sign. The caveat text SHALL NOT quote a specific numeric magnitude or percentage for
+this effect in either wording, since the underlying quantity is measured to vary widely across
+runners and footage and no single number transfers.
+
+#### Scenario: Clean, high-confidence result still carries the sampling-instant caveat
+
+- **WHEN** overstriding is computed against a clean, high-coverage, side-view clip with a
+  well-resolved sample of footstrikes (no view, sample-size, or travel-direction degradation)
+- **THEN** the returned `confidence` is high and `value` is non-null, AND `caveat` is still
+  non-null, disclosing the sampling-instant limitation without quoting a numeric magnitude
+
+#### Scenario: Unknown travel direction changes the wording, never the presence
+
+- **WHEN** overstriding is computed for a clip whose direction of travel cannot be determined (no
+  net horizontal displacement), and `value` is non-null
+- **THEN** `caveat` is still non-null and still discloses the sampling-instant limitation, AND it
+  does not claim the value is a lower bound
+
