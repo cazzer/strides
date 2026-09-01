@@ -1154,11 +1154,15 @@ same frame an independently-derived ground truth anchored to). It was not shippe
 pre-registered materiality gate failed — across a three-clip probed corpus (Demo 1, Demo 2,
 multiperson, primary pass + background scale pass) the search could resolve an interior extremum on
 only **9 of 26 (34.6%)** otherwise-usable strikes, because `estimateTravelDirection` returns `0` on
-Demo 2 entirely and the background scale pass's own hip-bounce fit falls below `cadenceMinFitR2` on
-both Demo 2 and multiperson — both preconditions the search structurally requires, and both absent
-on a majority of this corpus. What shipped instead: `overstriding.caveat` is now unconditionally
-non-null on any non-null-value result (mirrors `footStrikePattern`'s `PROXY_CAVEAT` pattern),
-disclosing the sampling-instant lag and its LOWER-BOUND direction, quoting no magnitude. **No
+Demo 2's primary pass and the background scale pass's own hip-bounce fit falls below
+`cadenceMinFitR2` on both Demo 2 and multiperson (Demo 2's scale pass resolves a direction, `−1` —
+it is the period rule that disables it) — both preconditions the search structurally requires, and
+both absent on a majority of this corpus. What shipped instead: `overstriding.caveat` is now
+unconditionally non-null on any non-null-value result (mirrors `footStrikePattern`'s
+`PROXY_CAVEAT` pattern), disclosing the sampling-instant lag — naming its LOWER-BOUND direction
+only where travel direction is known; a direction-agnostic wording ships for the
+unknown-direction branch, where raw `dx` gives the bias no derivable sign — quoting no magnitude
+in either wording. **No
 computed value moved anywhere** — verified via a before/after `scripts/ab-person-selection.mjs`
 A/B, bit-identical on every clip including every `evidence.*` field (the driver's own comparison
 table excludes `caveat`, so this diff being empty is the correct confirmation that nothing else

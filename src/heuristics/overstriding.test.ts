@@ -60,6 +60,30 @@ describe('computeOverstriding', () => {
     expect(result.viewFit).toBe('unsuitable')
     expect(result.confidence).toBeLessThan(0.15)
     expect(result.caveat).toContain('front view')
+    // The unconditional disclosure rides along here too, in its lower-bound wording (this
+    // fixture's travel direction resolves). A regression that seeded the disclosure only when no
+    // OTHER caveat fires would stay green on the clean case above and fail here.
+    expect(result.caveat).toMatch(/lower bound/i)
+  })
+
+  it('unknown travel direction: the disclosure stays, without the lower-bound claim', () => {
+    // Zero hip-x travel -> estimateTravelDirection returns 0. The ratio is then raw dx with no
+    // sign correction, so the sampling lag's bias has no derivable direction and the caveat must
+    // not claim one -- while still disclosing the sampling-instant limitation itself.
+    const frames = generateSyntheticGait({
+      ...BASE_PARAMS,
+      strideAmplitudePx: 80,
+      view: 'side',
+      travelSpeedPxPerSec: 0,
+    })
+
+    const result = computeOverstriding(frames, 'side')
+
+    expect(result.value).not.toBeNull()
+    expect(result.caveat).toMatch(/trail the true moment of ground contact/i)
+    expect(result.caveat).not.toMatch(/lower bound/i)
+    // The pre-existing direction caveat still appends after the disclosure.
+    expect(result.caveat).toContain('Direction of travel could not be determined')
   })
 
   it('too few footstrikes: null value, 0 confidence, no crash', () => {

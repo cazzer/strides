@@ -5,8 +5,9 @@ gates (G1/G1b/G2/G5) all passed convincingly — in one case landing on the EXAC
 independently-derived ground truth. It failed the pre-registered materiality gate (G6): across the
 three-clip probed corpus it could resolve an interior extremum on only 34.6% of the otherwise-usable
 strike population, below the 50% floor, because a majority of real footage in this corpus lacks
-either a known travel direction (`estimateTravelDirection` returns `0` on Demo 2 entirely) or a
-trustworthy fitted step period (both background-scale-pass runs fall below `cadenceMinFitR2`). What
+either a known travel direction (`estimateTravelDirection` returns `0` on Demo 2's primary pass)
+or a trustworthy fitted step period (both background-scale-pass runs fall below `cadenceMinFitR2`
+— Demo 2's scale pass among them, with its direction actually resolving at `−1`; see T1). What
 shipped instead is the disclosure-only fallback: an unconditional, magnitude-free caveat on
 `overstriding`, with no change to any computed value on any clip. Full gate table:
 `design.md` D6.

@@ -93,6 +93,14 @@ const MIN_OVERSTRIDE_SAMPLE_SIZE = 4
  * single clip and is not known to transfer, so this text names the direction and never quotes a
  * figure — asserted in tests via `/\d/`.
  *
+ * The lower-bound claim itself holds only when the metric KNOWS which way the runner travels.
+ * When `estimateTravelDirection` returns `0` the ratio is computed from raw `dx` with no sign
+ * correction, so the lag's effect on the reported number has no derivable direction — for a
+ * right-to-left runner it INFLATES `dx` rather than shrinking it. On that branch
+ * `SAMPLING_INSTANT_CAVEAT_UNKNOWN_DIRECTION` ships instead: the same disclosure, the same
+ * unconditional presence, no bias-direction claim. The WORDING is conditional; the presence
+ * never is.
+ *
  * A follow-up spike (`resolve-the-overstriding-sampling-instant`, sampling the metric's own signal
  * at its own forward-reach extremum instead of the detected instant) measured a candidate fix that
  * passed its accuracy gates convincingly but failed a pre-registered materiality gate — it could
@@ -103,6 +111,12 @@ const MIN_OVERSTRIDE_SAMPLE_SIZE = 4
  */
 const SAMPLING_INSTANT_CAVEAT =
   'Overstriding is measured at the footstrike instant this pipeline can detect, which tends to trail the true moment of ground contact — treat this value as a lower bound on how far the foot actually lands ahead of the hip, not a precise touchdown measurement.'
+
+/** The unknown-travel-direction wording of the disclosure above: same lag, same unconditional
+ * presence, but no lower-bound claim — with no resolved travel direction there is no derivable
+ * sign for the bias (see the sibling constant's doc). Digit-free on the same terms. */
+const SAMPLING_INSTANT_CAVEAT_UNKNOWN_DIRECTION =
+  'Overstriding is measured at the footstrike instant this pipeline can detect, which tends to trail the true moment of ground contact — and with the direction of travel unresolved, the direction of the resulting bias is unknown, so treat this value as approximate rather than a precise touchdown measurement.'
 
 const ANKLE_NAME: Record<'left' | 'right', KeypointName> = {
   left: 'left_ankle',
@@ -326,8 +340,12 @@ export function computeOverstriding(
   // Seeded with the mandatory sampling-instant disclaimer, unconditionally — this is what makes
   // `caveat` non-null even on an otherwise-clean, high-confidence result. Every branch below only
   // ever appends to it, never replaces it. Mirrors footStrikePattern.ts's identical pattern with
-  // PROXY_CAVEAT.
-  const caveats: string[] = [SAMPLING_INSTANT_CAVEAT]
+  // PROXY_CAVEAT. Only the WORDING follows `travelDirectionKnown`: the lower-bound claim is a
+  // claim about the bias's sign, derivable only when the runner's direction is (see the
+  // constants' shared doc).
+  const caveats: string[] = [
+    travelDirectionKnown ? SAMPLING_INSTANT_CAVEAT : SAMPLING_INSTANT_CAVEAT_UNKNOWN_DIRECTION,
+  ]
   if (!travelDirectionKnown) {
     caveats.push(
       'Direction of travel could not be determined (no net horizontal displacement) — overstride sign may not reflect forward/backward.',

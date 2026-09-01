@@ -210,6 +210,12 @@ detected frame, an existing exclusion this change does not touch); all 4 usable 
 interior extremum. Pass1 has 9 candidates, all resolvable, **zero** found an extremum — `rule 5`
 (no trustworthy period) disables the search outright, same shape as Demo 2 pass1.
 
+Pass0 per-strike ratios (current → extremum), recorded so G2's spread cells are recomputable from
+this table: left t=2.40000 `0.354786 → 0.612582`, right t=2.73333 `0.494398 → 0.576240`, left
+t=3.08333 `0.654225 → 0.803463`, right t=3.43333 `0.504914 → 0.613539` — current spread
+`0.654225 − 0.354786 = 0.299439`, extremum spread `0.803463 − 0.576240 = 0.227223`. Pass1's 9
+ratios are unchanged by construction (search disabled), spread `0.702628` both ways.
+
 ### T2 — ground truth vs current vs extremum (Demo 1, primary pass)
 
 Eligible strikes fixed in advance: detected t=4.84 (left) and t=5.52 (right).
@@ -324,13 +330,16 @@ times, detection counts matched exactly (53/228, 99/99, 103/233 on every trial, 
 **`diff before.txt after.txt` — empty. Bit-identical**, including every `metrics.overstriding.*`
 field the driver captures (`value`, `confidence`, `viewFit`, `frameCoverage`,
 `interpolatedFraction`, `sampleSize`) and every `evidence.*` field (exemplar `timestamp`/
-`pairedTimestamp`/`cropSidePx`/`cropGrowth`/`quality`/`demotedFromPair`). This is EXPECTED and
+`pairedTimestamp`/`cropSidePx`/`cropGrowth`/`quality`/`demotedFromPair` — that field was renamed
+`demotion` on `main` in `0eb95c8`, after this branch's base; measured here pre-rename). This is EXPECTED and
 correct for FALLBACK: the driver's own `extractFields` deliberately skips `caveat` from the
 comparison table (documented in the driver's own source as too long to tabulate), so a
 caveat-only change is invisible to this diff by design — it is not evidence the caveat failed to
 change, it is confirmation that NOTHING ELSE did. The caveat's actual content is verified
-separately, by unit test (`overstriding.test.ts`, the clean-clip case asserts
-`caveat` is non-null, contains no digit, and matches `/lower bound/i`).
+separately, by unit test (`overstriding.test.ts`: the clean-clip case asserts `caveat` is
+non-null, contains no digit, and matches `/lower bound/i`; the front-view case asserts the
+disclosure also rides along when other caveats fire; and a dedicated unknown-direction case pins
+the direction-agnostic wording — see the D8 note on the two wordings).
 
 ### T6 — [evidence-coverage] per-cell drift
 
@@ -338,7 +347,9 @@ Not applicable to FALLBACK: since `value`/`sampleSize`/`interpolatedFraction`/`f
 byte-identical (T5), the evidence PLANNING layer (which reads exactly those fields to decide what
 to draw) has no changed input to react to. Confirmed by T5's `evidence.*` rows being part of the
 same empty diff — every `overstriding` exemplar's `timestamp`/`pairedTimestamp`/`cropSidePx`/
-`cropGrowth`/`demotedFromPair` on all three clips is bit-identical before and after.
+`cropGrowth`/`demotedFromPair` on all three clips is bit-identical before and after (same
+field-rename note as T5: `demotedFromPair` → `demotion` on `main` in `0eb95c8`; measured
+pre-rename).
 
 ## D6. Adjudication
 
@@ -364,9 +375,10 @@ The estimator's accuracy is not in question — G1/G1b/G2/G5 all passed with wid
 margins, and the mechanism (search a bounded backward window for the true forward-reach peak) is
 demonstrably doing what it was designed to do wherever it can run. What fails is APPLICABILITY: on
 this three-clip corpus, the search structurally cannot run on over half of the otherwise-usable
-strike population, because `estimateTravelDirection` returns `0` on Demo 2 in its entirety and
+strike population, because `estimateTravelDirection` returns `0` on Demo 2's primary pass and
 `resolveTrustworthyStepPeriodSeconds` returns `null` on both background-scale-pass runs where a
-period fit fell below `cadenceMinFitR2` (the SAME "scale pass falls back to the ankle-difference
+period fit fell below `cadenceMinFitR2` (Demo 2's scale pass resolves a direction, `−1`, and is
+disabled by the period rule instead — T1; the latter is the SAME "scale pass falls back to the ankle-difference
 detector more often than the module's shape suggests" phenomenon `footstrikes.ts`'s own module doc
 already names). A correction that only ever fires on a minority of real footage is not a
 correction worth shipping as the metric's primary estimator — hence FALLBACK: disclose the
@@ -418,3 +430,13 @@ same problem should start from these rather than rediscovering them.
 - **`estimateTravelDirection`'s binary (known/unknown) signal is the other half of the gap.** Demo 2
   never resolves a direction at all on its primary pass; nothing short of a materially different
   direction-estimation approach would change that, and this change did not attempt one.
+- **The shipped fallback caveat carries TWO wordings, not one** (review round 1). The lower-bound
+  claim is a claim about the bias's SIGN, and the sign is derivable only when
+  `estimateTravelDirection` resolves: on the unknown-direction branch the metric uses raw `dx`
+  with no sign correction, so for a right-to-left runner the lag INFLATES the reported number
+  rather than shrinking it. `SAMPLING_INSTANT_CAVEAT` (lower-bound wording) ships when direction
+  is known; `SAMPLING_INSTANT_CAVEAT_UNKNOWN_DIRECTION` (same disclosure, no bias-direction
+  claim) ships when it is not. Presence stays unconditional on every non-null-value path; both
+  wordings are digit-free. No corpus clip currently renders the unknown-direction wording on a
+  card (Demo 2 is the only `travelDirection = 0` clip and overstriding is tier-3 excluded
+  there), so this is pinned by unit test rather than observed live.
