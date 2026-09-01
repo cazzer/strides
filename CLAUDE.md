@@ -1248,10 +1248,22 @@ contain both instants it was captioned for. Full measurement in the `verticalRat
 on `startsWith('[evidence-coverage]')`, and it carries **nothing image-shaped** (no canvas, `Blob`,
 object URL or data URI — verified by scanning 38 captured lines). It reports, per clip:
 `frameCount`, and per metric either `{status:'planned', exemplars:[{kind, side?, quality, timestamp,
-pairedTimestamp, demotedFromPair, cropSidePx, cropGrowth}]}` or `{status:'no-evidence', reason}`
+pairedTimestamp, demotion, cropSidePx, cropGrowth}]}` or `{status:'no-evidence', reason}`
 where reason is
 `not-emitted | all-gated-out | metric-excluded | frames-unavailable | extraction-failed`. Plus
-`sourceIndices`, the per-metric winning clip index. `[analysis-diagnostics]` is untouched — same six
+`sourceIndices`, the per-metric winning clip index.
+
+⚠️ **`demotion` REPLACED the `demotedFromPair` boolean on 2026-09-01 (`strides-ddj`)** — a contract
+break, so a `before.txt` captured before that date diffs against a later one with one deleted and
+one added row per exemplar (a `--evidence` A/B measured 20 removed, 21 added). It is
+`'collapsed-pair' | 'far-apart-pair' | null`: the caption has to say WHICH, because "the paired
+instant was too similar to tell apart" is the exact inverse of what a far-apart demotion did.
+`scripts/ab-person-selection.mjs` needed no change — `flatten` walks whatever keys exist. Note
+`cropGrowth` is still `null` on a demoted plan, so **the reading that CAUSED a far-apart demotion is
+not on this line**; re-checking `EVIDENCE_MAX_PAIR_CROP_GROWTH`'s bracket against a rejected pair
+still needs a probe.
+
+`[analysis-diagnostics]` is untouched — same six
 top-level keys, ~5.5-5.6 kB, no exemplar data — and `vite build` output contains **zero** occurrences
 of any of these prefixes. **This contract survived the move to inline annotated evidence unchanged**
 and was re-verified on four clips: still the same six top-level keys, still no canvas/blob/dataUrl/
@@ -1353,6 +1365,16 @@ real GPU (`ANGLE Metal Renderer: Apple M4 Pro`), reading the LAST `[evidence-cov
 | `stepWidthCm` | excluded | excluded | excluded |
 | **totals** | **8 images / 7 sections** | **5 / 4** | **8 images / 7 sections** |
 
+⚠️ **Demo 1's `overstriding` cell reached its ✅ 1 by a DIFFERENT route since `0817ca9`** (addendum
+2026-09-01, `strides-ddj`; the table is left exactly as measured). `strides-1mt`'s collapsed-ankle
+gate cut that metric's sample to two surviving strikes, leaving exactly one possible pair
+(`alternates: 0`) at crop growth **2.881** against the untouched 2.5 threshold — so between the two
+changes the card showed **nothing at all**. It renders again, but as a **demoted single**, not the
+ghosted pair the table above recorded: `demotion 'far-apart-pair'`, `pairedTimestamp null`,
+`cropGrowth null`, `timestamp` **4.84**, `cropSidePx` **912.197**, quality still 0.500. The image
+count is unchanged at 8 / 7. Everything else on all three clips is bit-identical across that pair of
+changes.
+
 **multiperson is a single number again, and the "record it as a RANGE" instruction above is
 retired.** Read that paragraph as a record of what the reused-browser regime produced, not as
 advice: under the fresh-process default this clip reads 8/7 on every trial. What is *not*
@@ -1400,6 +1422,16 @@ do not read a per-metric difference as a regression without checking it against 
   `trunkLean`'s 6.1–6.8 pairs on the same clip), and **do not demote the pair to its base**
   (`isTooFarApartPair` refuses demotion on purpose, and a label reading "One stride: consecutive
   left-foot strikes, ghosted together" is exactly a claim one frame cannot make).
+  ⚠️ **RE-SCOPED 2026-09-01 (`strides-ddj`) — still correct FOR `stridePair`, no longer a blanket
+  rule.** `isTooFarApartPair` does not refuse demotion any more: a far-apart pair routes through the
+  same `SINGLE_INSTANT_KINDS` classification a collapsed one does, and `overstrideRange` /
+  `trunkLeanRange` joined that set because both cards report a MEDIAN of per-instant measurements.
+  `stridePair` did not, and the reason is mechanical rather than a judgement call: its only
+  measurement mark, `strideCaliper`, spans the two hip midpoints and is drawn only when
+  `plan.ghost !== null`, so a demoted stride pair would lose exactly the mark that IS the
+  measurement — on top of the label problem above. **`EVIDENCE_MAX_PAIR_CROP_GROWTH` is untouched at
+  2.5 and the criterion is unchanged**; only what happens to a rejected pair now depends on the
+  metric. `strides-nrg` is unaffected.
   This retires the "best image on any clip is `verticalRatio`'s `stridePair`" claim recorded under
   Legibility above.
 - **Demo 2 is unchanged at 5 / 4**, cell for cell, and its `armSwingSymmetry` pair still sits on

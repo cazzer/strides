@@ -19,6 +19,7 @@ import {
   evidenceOutputSide,
   evidenceSnapToleranceSeconds,
   planExemplarFrames,
+  SINGLE_INSTANT_KINDS,
 } from './evidenceFrames'
 import type {
   EvidenceFramePlan,
@@ -91,7 +92,7 @@ function plan(
     ghost: null,
     crop: IDENTITY_CROP,
     travelDirection: 1,
-    demotedFromPair: false,
+    demotion: null,
     cropGrowth: null,
     ...overrides,
   }
@@ -1461,6 +1462,74 @@ describe('against a plan built by the real planner', () => {
     }
     // ...and the naive reading would not have: the hip alone sits at native x = 1800.
     expect(Math.max(...coordinates)).toBeLessThan(1800)
+  })
+})
+
+describe('every demotable kind still measures something from one frame', () => {
+  /** Hips, shoulders, knees and ankles all resolved, so no builder is starved of a keypoint and a
+   * missing measurement mark can only mean the kind has nothing to draw from one instant. */
+  const wholeBody = () =>
+    instant(
+      [
+        pos('left_hip', 240, 320),
+        pos('right_hip', 300, 322),
+        pos('left_shoulder', 250, 180),
+        pos('right_shoulder', 310, 182),
+        pos('left_knee', 235, 440),
+        pos('right_knee', 305, 442),
+        pos('left_ankle', 228, 560),
+        pos('right_ankle', 312, 562),
+      ],
+      { side: 'left' },
+    )
+
+  const demotedPlanFor = (kind: MetricExemplarKind): EvidenceFramePlan =>
+    plan({
+      metric: 'trunkLean',
+      kind,
+      side: 'left',
+      base: wholeBody(),
+      ghost: null,
+      demotion: 'far-apart-pair',
+    })
+
+  const measurementOps = (kind: MetricExemplarKind) =>
+    planEvidenceAnnotations(demotedPlanFor(kind), MAX_OUTPUT_SIDE).ops.filter(
+      (op) => op.layer === 'measurement',
+    )
+
+  // This is the entire justification for membership in `SINGLE_INSTANT_KINDS`, and stated only in
+  // that set's doc comment it would be prose no test can reach: a demoted single is honest exactly
+  // when the surviving frame still DRAWS the geometry the card's number was read off. A kind
+  // admitted to the set that draws nothing measurable from one instant would ship a photograph
+  // captioned as a measurement.
+  for (const kind of SINGLE_INSTANT_KINDS) {
+    it(`emits a measurement mark for a demoted ${kind}`, () => {
+      expect(measurementOps(kind).length).toBeGreaterThan(0)
+    })
+  }
+
+  it('is not vacuous: a demoted stride pair would lose the mark that IS its measurement', () => {
+    // `strideCaliper` spans the two hip midpoints and is built under `plan.ghost !== null`, so it
+    // cannot exist for one instant. What survives is `hipMidMarker` + `strideTick` — where the
+    // stride ENDED, with no span between them — which is why `stridePair` is not in the set even
+    // though it does emit measurement-layer ops. The count invariant above cannot see that
+    // distinction, so the roles are asserted directly.
+    expect(new Set(roles(measurementOps('stridePair')))).toEqual(
+      new Set(['hipMidMarker', 'strideTick']),
+    )
+    expect(roles(measurementOps('stridePair'))).not.toContain('strideCaliper')
+
+    // `bounceCycle` is the same shape of exclusion for a different reason: demoted, it draws ONE
+    // horizontal at ONE hip midpoint — a height, with nothing to read it against. Its vocabulary
+    // contains no caliper at all (`buildBounceMarks` refuses one even for a full pair, because the
+    // reported amplitude is a whole-clip spectral fit and a span between two lines would read as
+    // that number), so there is no mark a second instant could have supplied. `measuredAtInstant`
+    // already records it as measured at NEITHER instant.
+    expect(roles(measurementOps('bounceCycle'))).toEqual([
+      'bounceMidpoint',
+      'bounceHorizontal',
+    ])
   })
 })
 

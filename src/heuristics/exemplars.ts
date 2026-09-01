@@ -228,6 +228,24 @@ export interface ExtremePair<T> {
   ghost: T
   /** `pairQuality` of the two ends' own scores. */
   quality: number
+  /**
+   * Whether `base` is the end ABOVE the metric's median (`true`) or below it (`false`) — reported
+   * so a metric can write a label that names its base first without re-deriving which end won.
+   *
+   * Which end is further from the median is a property of the CLIP's distribution, not of the
+   * metric: a clip that spends most of itself leaning forward puts the upright frame further out.
+   * Both range metrics used to hardcode a label naming the high end, so on such a clip the
+   * caption, and the alt text built on "the first instant named above is shown solid", described
+   * the wrong body (`strides-8i4`). That was survivable while every paired image showed both
+   * instants; it is a flat falsehood once a pair can be demoted to one of them (`strides-ddj`).
+   *
+   * A metric must not recompute this from its own samples. At small n the choice can turn on the
+   * median itself: with two survivors the median is `fl((a + b) / 2)`, so a single unit in the
+   * last place decides the winner — deterministic, and not predictable from the inputs by
+   * inspection. Reporting the comparison that was actually made is the only way two answers cannot
+   * disagree.
+   */
+  baseIsHigh: boolean
 }
 
 interface RankedEnd<T> {
@@ -368,12 +386,17 @@ export function selectExtremePairs<T>(
   rankedHighs.forEach((high, highRank) => {
     rankedLows.forEach((low, lowRank) => {
       if (high.value === low.value) return
-      const [base, ghost] = high.deviation >= low.deviation ? [high, low] : [low, high]
+      // The ONE comparison that decides the base. `baseIsHigh` is read straight off it rather than
+      // re-derived downstream, so no consumer can reach a different answer. Ties resolve to the
+      // high end, exactly as `>=` always did.
+      const baseIsHigh = high.deviation >= low.deviation
+      const [base, ghost] = baseIsHigh ? [high, low] : [low, high]
       ranked.push({
         pair: {
           base: base.candidate,
           ghost: ghost.candidate,
           quality: pairQuality(high.quality, low.quality),
+          baseIsHigh,
         },
         rankSum: highRank + lowRank,
       })

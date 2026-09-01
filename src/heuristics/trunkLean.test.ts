@@ -156,12 +156,35 @@ describe('computeTrunkLean exemplars', () => {
     expect(evidence.pairedTimestamp).toBeCloseTo(0, 10) // the 4 deg frame
     // Both surviving ends sit one MAD from the median, i.e. 1/1.5 of the outlier bound.
     expect(evidence.quality).toBeCloseTo(1 / 1.5, 6)
+    // Equidistant ends, so the tie goes to the high one and the label leads with it. The other
+    // arm — a clip whose upright end is the further out — is the test below.
+    expect(evidence.label).toBe(
+      'Most forward trunk lean, ghosted against the most upright frame',
+    )
     expect(evidence.cropKeypoints).toEqual([
       'left_shoulder',
       'right_shoulder',
       'left_hip',
       'right_hip',
     ])
+  })
+
+  it('leads the label with the UPRIGHT end when that is the frame drawn solid', () => {
+    // `strides-8i4`. Median 5; the upright end is 1.4 deg out and the forward end only 1, so the
+    // upright frame is the base — the case this module's own comment already described ("a clip
+    // that spends most of itself leaning forward puts the upright frame further from the median")
+    // while the label denied it. `altFor` builds "the first instant named above is shown solid" on
+    // that leading clause, and a demoted single leaves it standing beside the only body on screen.
+    const leans = [3.6, 4, 4.5, 5, 5, 5.5, 6]
+    const frames = leans.map((deg, i) => leanFrame(deg, i / 30))
+
+    const [evidence] = computeTrunkLean(frames, 'side').exemplars!
+
+    expect(evidence.timestamp).toBeCloseTo(0, 10) // the 3.6 deg frame, the further out
+    expect(evidence.pairedTimestamp).toBeCloseTo(6 / 30, 10) // the 6 deg frame
+    expect(evidence.label).toBe(
+      'Most upright frame, ghosted against the most forward trunk lean',
+    )
   })
 
   it('rejects the outlier outright rather than showing it as the extreme', () => {

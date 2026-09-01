@@ -278,17 +278,28 @@ const METRICS_WITHOUT_EVIDENCE: ReadonlySet<MetricId> = new Set(['cadence'])
 
 /**
  * Exemplar kinds that still say something true from ONE frame, and may therefore be demoted to a
- * single rather than dropped when their pair collapses. A RANGE (`trunkLeanRange`,
- * `overstrideRange`) or a CYCLE (`bounceCycle`, `armSwingCycle`, `stridePair`) has nothing to say
- * from one instant, so a collapsed pair of those is dropped instead.
+ * single rather than dropped when their pair cannot be drawn as a pair — whether because it
+ * collapsed onto one instant or because its two instants are too far apart to share a legible
+ * crop. A CYCLE (`bounceCycle`, `armSwingCycle`, `stridePair`) has nothing to say from one
+ * instant, so an undrawable pair of those is dropped instead.
  *
  * **The discriminator is where the REPORTED NUMBER lives, not whether the exemplar arrived as a
- * pair.** A footstrike angle measured against the hip midline, a step width, and a peak knee
- * flexion angle are each read off a single frame; the paired instant is context that helps a
- * reader see the extreme, and losing it costs the picture its comparison but not its subject. A
- * bounce amplitude, an arm-swing amplitude, a stride length and a lean or overstride RANGE are all
- * quantities OF THE DIFFERENCE between two instants — one frame of those depicts no part of the
- * number on the card.
+ * pair.** A footstrike angle measured against the hip midline, a step width, a peak knee flexion
+ * angle, a trunk-lean angle and an overstride offset are each read off a single frame; the paired
+ * instant is context that helps a reader see the extreme, and losing it costs the picture its
+ * comparison but not its subject. A bounce amplitude, an arm-swing amplitude and a stride length
+ * are quantities OF THE DIFFERENCE between two instants — one frame of those depicts no part of
+ * the number on the card.
+ *
+ * **A kind's NAME describes how the exemplar was BUILT, not what the card REPORTS**, and that is
+ * exactly what has misled this set twice. `trunkLeanRange` and `overstrideRange` are *ranges* in
+ * the sense that the two instants are the two ends of a spread — which is how the exemplar found a
+ * legible extreme to show — but `computeTrunkLean` returns the median of per-frame angles and
+ * `computeOverstriding` the median of per-strike ratios, each measured at ONE instant. Neither
+ * card reports a difference. The repo already said so in two places before this set caught up:
+ * `measuredAtInstant` (`evidenceAnnotations.ts`) records both kinds as measured at BOTH instants
+ * while `bounceCycle` is measured at NEITHER, and `buildTrunkLeanMarks`/`buildOverstrideMarks` are
+ * pure per-instant builders that need nothing from the other half.
  *
  * `kneeFlexionPeak` moved into this set with `strides-r41`, and on that principle rather than for
  * coverage: `kneeFlexion.value` is a peak angle at one instant, and the annotation draws that
@@ -296,16 +307,30 @@ const METRICS_WITHOUT_EVIDENCE: ReadonlySet<MetricId> = new Set(['cadence'])
  * was previously grouped with the cycles on the grounds that the peak "needs its adjacent trough to
  * be legible", which conflates a helpful comparison with a necessary one — and had the concrete
  * effect that the near-identical rules, which exist to REPLACE a bad ghost with an honest still,
- * silently deleted this metric's evidence instead.
+ * silently deleted this metric's evidence instead. `trunkLeanRange` and `overstrideRange` followed
+ * with `strides-ddj`, for the identical reason and with the identical concrete effect: Demo 1's
+ * only surviving overstride pair demands 2.881× growth, so the card rendered nothing at all.
+ *
+ * **`stridePair` cannot join them, and the reason is mechanical rather than a judgement call.**
+ * Its only measurement mark, `strideCaliper`, is built in `planEvidenceAnnotations` under
+ * `plan.ghost !== null` — it spans the two hip midpoints, so it does not exist for one instant.
+ * A demoted stride pair would keep its per-instant ticks and lose the span that IS the
+ * measurement.
  *
  * Keyed on the exemplar's own `kind` rather than on `MetricId` deliberately: the kind is what the
  * exemplar says about itself and travels with it, so this module never has to hold an opinion
  * about what a given metric measured.
+ *
+ * Exported so the annotation suite can assert, for every member, that a demoted plan still emits a
+ * measurement mark. That invariant is the whole justification for membership, and stated only in
+ * this comment it would be prose no test can reach.
  */
-const SINGLE_INSTANT_KINDS: ReadonlySet<MetricExemplarKind> = new Set([
+export const SINGLE_INSTANT_KINDS: ReadonlySet<MetricExemplarKind> = new Set([
   'footStrike',
   'stepWidthStrike',
   'kneeFlexionPeak',
+  'trunkLeanRange',
+  'overstrideRange',
 ])
 
 /**
@@ -423,9 +448,9 @@ export interface EvidenceFramePlan {
    * and duplication keeps the draw layer from needing a second lookup.
    */
   travelDirection: EvidenceTravelDirection
-  /** The exemplar arrived as a pair and is planned as a single: its two instants were
-   * indistinguishable, or the ghost could not be resolved to a sampled frame. */
-  demotedFromPair: boolean
+  /** Why the exemplar arrived as a pair and is planned as a single, or `null` where it was not
+   * demoted. See `EvidenceDemotion` for why this is not a boolean. */
+  demotion: EvidenceDemotion | null
   /**
    * `evidencePairCropGrowth` for the two instants this plan actually DRAWS — the factor by which
    * ghosting shrank the subject in this image. `null` whenever no ghost is drawn (a single-instant
@@ -440,6 +465,24 @@ export interface EvidenceFramePlan {
    */
   cropGrowth: number | null
 }
+
+/**
+ * Which rule took a pair apart, for an exemplar that arrived as a pair and is planned as a single.
+ *
+ * - `'collapsed-pair'` — the two instants were indistinguishable: near-identical crop regions, both
+ *   snapping to one sampled frame, too few sampled intervals apart to express a change of gait
+ *   phase, or a ghost that did not resolve at all.
+ * - `'far-apart-pair'` — both instants are real and distinct, and they cannot share one legible
+ *   crop (`isTooFarApartPair`).
+ *
+ * **Deliberately not a boolean, and deliberately not two fields.** The caption has to say WHICH,
+ * because "the paired instant was too similar to tell apart" is the exact inverse of what a
+ * far-apart demotion did — a false sentence under the picture, not a vague one. A boolean cannot
+ * carry three states, and a boolean beside a reason could disagree with itself about one image.
+ * `captionFor` maps this through a total `Record`, so a reason added here without a sentence is a
+ * type error rather than a caption naming nothing.
+ */
+export type EvidenceDemotion = 'collapsed-pair' | 'far-apart-pair'
 
 /**
  * Why a metric has no evidence, distinguished so the UI (and the coverage line) can tell "this
@@ -1000,15 +1043,20 @@ export function evidencePairCropGrowth(
  * Whether ghosting these two instants together would shrink the subject past legibility — the
  * symmetric counterpart to `isNearIdenticalPair`, and the guard gh #71 was filed for.
  *
- * A pair that fails this is DROPPED rather than demoted to its base, unlike a near-identical one,
- * and that asymmetry is deliberate. Demotion is honest only when the surviving frame still shows
- * what the exemplar's own `label` claims — which holds for a near-identical pair, whose two
- * instants ARE the same picture, and fails here: every paired label this repo emits is a statement
- * about two instants ("Most forward trunk lean, ghosted against the most upright frame",
- * "Opposite-foot plants either side of the hip midline", "Top and bottom of one left-arm swing"),
- * and none of them survives losing half the pair. A far-apart pair has two perfectly good instants
- * that simply cannot share a frame; keeping one of them under a caption written for both would
- * caption a measurement that the picture does not show.
+ * **This predicate answers one question and no longer decides the consequence.** A pair that fails
+ * it is routed through `SINGLE_INSTANT_KINDS`, exactly as a collapsed pair is: demoted to its base
+ * where the card's number is read off one instant, dropped where that number is a difference
+ * between two. What this function establishes is that the two instants cannot share one legible
+ * image — it establishes nothing about whether either instant alone is worth showing, and that
+ * second question already has an answer one layer up.
+ *
+ * The criterion, `EVIDENCE_MAX_PAIR_CROP_GROWTH`, and its calibration are untouched by that
+ * (`strides-ddj`): a pair is rejected on exactly the reading it was rejected on before. It used to
+ * be justified with "every paired label this repo emits is a statement about two instants… and
+ * none of them survives losing half the pair", which is FALSE for a label whose leading clause
+ * names the base — `overstriding`'s and `trunkLean`'s do, and since `strides-8i4` they name
+ * whichever end actually became the base rather than a hardcoded one. It remains true for the
+ * cycles, which are not in `SINGLE_INSTANT_KINDS` and are still dropped here.
  */
 export function isTooFarApartPair(
   baseBox: BoundingBoxPx,
@@ -1142,14 +1190,18 @@ function instantPlan(
 /**
  * One exemplar → one renderable plan, or `null` when it cannot be rendered honestly.
  *
- * A pair collapses to its base — demoted for a kind that still says something true from one frame,
- * dropped otherwise — when its ghost does not resolve to a sampled frame, when both halves land on
- * the same frame, when the ghost frame has no resolvable crop keypoint (so there is no evidence
- * the measured region is even inside the crop at that instant), or when the two per-frame boxes
- * are near-identical.
+ * A pair falls back to its base — demoted for a kind that still says something true from one
+ * frame, dropped otherwise — when its ghost does not resolve to a sampled frame, when both halves
+ * land on the same frame, when the ghost frame has no resolvable crop keypoint (so there is no
+ * evidence the measured region is even inside the crop at that instant), when the two per-frame
+ * boxes are near-identical, or when the two instants are too far apart to share one legible crop.
+ * The last of those reports `'far-apart-pair'` and the rest `'collapsed-pair'`; both consult the
+ * same `SINGLE_INSTANT_KINDS` classification.
  *
- * A pair too far APART is dropped outright instead, never demoted — see `isTooFarApartPair`, which
- * holds both the criterion and the reason the two verdicts differ.
+ * **A caller wanting the FALLBACK ordering must use `planExemplarWithFallback`.** This function
+ * answers one pair in isolation, so it demotes a far-apart pair rather than looking for another —
+ * it has no other to look at. Preferring a drawable lower-ranked pair over a demoted higher-ranked
+ * one is the walk's job, and is why that ordering lives there rather than here.
  *
  * Every `null` here is a verdict about THIS PAIR, never about the metric. `planExemplarWithFallback`
  * is the caller that acts on that distinction, retrying the exemplar's lower-ranked pairs; call this
@@ -1198,22 +1250,32 @@ export function planExemplarFrames(
         toleranceSeconds,
       ))
 
-  if (pairCollapsed && !SINGLE_INSTANT_KINDS.has(exemplar.kind)) return null
-
-  // Too far apart drops outright, for every kind — it is never demoted the way a collapsed pair
-  // is, and `isTooFarApartPair` carries the reason. Reached only once the collapse rules have
-  // passed, which is not an ordering preference: a collapsed pair has no second box to measure a
-  // separation against, and a near-identical one is by definition at growth ~1 anyway.
-  if (
+  // Measured only once the collapse rules have passed, which is not an ordering preference: a
+  // collapsed pair has no second box to measure a separation against, and a near-identical one is
+  // by definition at growth ~1 anyway.
+  const pairTooFarApart =
     isPair &&
     !pairCollapsed &&
     ghostBox !== null &&
     isTooFarApartPair(baseBox, ghostBox, frameSize)
-  ) {
-    return null
-  }
 
-  const ghost = pairCollapsed ? null : resolved.ghost
+  // Both rejections route through the SAME classification (`strides-ddj`). They differ in what
+  // they establish about the pair and not in what either says about one instant: a collapsed pair
+  // has nothing left to compare against, a far-apart one has two good instants that cannot share a
+  // crop, and in both cases whether the surviving frame is worth showing is a property of the
+  // metric's own number.
+  const demotion: EvidenceDemotion | null = pairCollapsed
+    ? 'collapsed-pair'
+    : pairTooFarApart
+      ? 'far-apart-pair'
+      : null
+  if (demotion !== null && !SINGLE_INSTANT_KINDS.has(exemplar.kind)) return null
+
+  const ghost = demotion === null ? resolved.ghost : null
+  // A demoted plan draws ONE frame, and the crop derives from `drawnFrames` alone — so gh #71's
+  // whole-frame two-instant union is unreachable here by construction. A demoted single gets
+  // exactly the crop a single-instant exemplar of the same geometry would have got, inheriting
+  // every existing guard (padding, floor, subject-centring, frame clamp) and adding none.
   const drawnFrames =
     ghost === null ? [resolved.base] : [resolved.base, ghost]
   const crop = computeEvidenceCropRect(
@@ -1236,10 +1298,17 @@ export function planExemplarFrames(
         : instantPlan(ghost, exemplar, 'ghost', EVIDENCE_GHOST_BLEND_ALPHA),
     crop,
     travelDirection,
-    demotedFromPair: isPair && ghost === null,
-    // Recomputed from the boxes rather than carried down from the drop check above, which does not
-    // run for a demoted pair. `ghostBox` is non-null whenever `ghost` is: `ghost` is null exactly
-    // when `pairCollapsed`, and a null `ghostBox` is one of the conditions that sets it.
+    demotion,
+    // `null` on a demoted plan, deliberately — nothing was ghosted, so the quantity does not
+    // exist. The consequence is that the reading which CAUSED a far-apart demotion is not on the
+    // coverage line; re-checking `EVIDENCE_MAX_PAIR_CROP_GROWTH`'s bracket against a rejected pair
+    // still needs the probe it always did. Reporting it here would make the column mean two
+    // different things — "what this image cost" and "what the image we did not draw would have
+    // cost" — in one number.
+    //
+    // Recomputed from the boxes rather than carried down from the checks above, which do not run
+    // for every branch. `ghostBox` is non-null whenever `ghost` is: `ghost` is null exactly when
+    // `demotion` is set, and a null `ghostBox` is one of the conditions that sets it.
     cropGrowth:
       ghost === null || ghostBox === null
         ? null
@@ -1267,9 +1336,16 @@ export function planExemplarFrames(
  * **Nothing is weakened by retrying.** Every candidate goes through the same `planExemplarFrames`
  * under the same rules, and `MIN_EXEMPLAR_QUALITY` is re-asserted per candidate exactly as
  * `planMetricEvidence` re-asserts it for the winner — so an alternate can only render on terms the
- * winner would also have had to meet. In particular a far-apart pair is still DROPPED rather than
- * demoted to its base: the fallback replaces a whole pair, it never rescues half of one, so
- * `isTooFarApartPair`'s reason for refusing demotion is untouched.
+ * winner would also have had to meet.
+ *
+ * **Demotion is the LAST RESORT, and that ordering is load-bearing** (`strides-ddj`). Any pair
+ * that renders AS A PAIR, at any rank, beats a demoted single from a higher-ranked one; the first
+ * demoted plan is remembered and returned only once every candidate has failed to render as a
+ * pair. Without it, admitting a kind to `SINGLE_INSTANT_KINDS` silently converts a fallback into a
+ * demotion — the winner would stop at its own base and the walk would never reach the drawable
+ * alternate below it. Measured on Demo 1's `trunkLean`, whose winner demands 6.1–6.8 growth and
+ * whose alternate draws at 1.866: a good ghost would have become a lone frame, and the coverage
+ * line would still have shown an image, so the regression would have read as a fix.
  *
  * The returned plan is the SELECTED pair's own throughout — its instants, its `quality`, its
  * `cropGrowth` — so nothing downstream, the `[evidence-coverage]` line included, is ever told
@@ -1283,6 +1359,7 @@ export function planExemplarWithFallback(
   toleranceSeconds: number,
   travelDirection: EvidenceTravelDirection = evidenceTravelDirection(frames),
 ): EvidenceFramePlan | null {
+  let demoted: EvidenceFramePlan | null = null
   for (const candidate of [exemplar, ...(exemplar.alternates ?? [])]) {
     if (candidate.quality < MIN_EXEMPLAR_QUALITY) continue
     const plan = planExemplarFrames(
@@ -1293,9 +1370,16 @@ export function planExemplarWithFallback(
       toleranceSeconds,
       travelDirection,
     )
-    if (plan !== null) return plan
+    if (plan === null) continue
+    // `demotion === null` rather than `ghost !== null`, so that a genuine single-instant exemplar
+    // — which never had a pair to lose — returns immediately instead of being filed as a
+    // consolation prize and walked past.
+    if (plan.demotion === null) return plan
+    // The FIRST demotable candidate is kept, not the last: candidates arrive best-first, so the
+    // best demoted single is the one the highest-ranked demotable pair produced.
+    demoted ??= plan
   }
-  return null
+  return demoted
 }
 
 /**
@@ -1427,14 +1511,18 @@ export interface EvidenceCoverageExemplar {
   side?: 'left' | 'right'
   quality: number
   timestamp: number
-  /** `null` on a single, and after a near-identical demotion. */
+  /** `null` on a single, and after any demotion. */
   pairedTimestamp: number | null
-  demotedFromPair: boolean
+  /** Which rule took the pair apart, or `null` where the image was not demoted. Replaces the
+   * `demotedFromPair` boolean this line used to carry — a CONTRACT BREAK for anything diffing an
+   * older capture, recorded in `demote-a-far-apart-single-instant-pair`'s design. */
+  demotion: EvidenceDemotion | null
   cropSidePx: number
   /**
    * `EvidenceFramePlan.cropGrowth` — how much this image's ghost enlarged its crop over what the
    * better-framed of its two instants needed alone, read BEFORE `computeCropRect`'s frame cap.
-   * `null` on a single and on a demoted pair, where nothing was ghosted.
+   * `null` on a single and on a demoted pair, where nothing was ghosted — so the reading that
+   * caused a far-apart demotion is NOT on this line; see `EvidenceFramePlan.cropGrowth`.
    *
    * A number, like `cropSidePx` beside it, and for the same reason: it is what
    * `EVIDENCE_MAX_PAIR_CROP_GROWTH`'s calibration bracket is stated in, so re-checking that bracket
@@ -1496,7 +1584,7 @@ export function summarizeEvidenceCoverage(
                   quality: item.quality,
                   timestamp: item.base.timestamp,
                   pairedTimestamp: item.ghost?.timestamp ?? null,
-                  demotedFromPair: item.demotedFromPair,
+                  demotion: item.demotion,
                   cropSidePx: item.crop.side,
                   cropGrowth: item.cropGrowth,
                 })),

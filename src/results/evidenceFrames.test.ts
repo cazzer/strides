@@ -1379,7 +1379,7 @@ describe('planExemplarFrames', () => {
       side: 'left',
       base: { timestamp: 0.5, opacity: EVIDENCE_BASE_OPACITY },
       ghost: null,
-      demotedFromPair: false,
+      demotion: null,
       // No ghost is drawn, so there is no growth — `null`, not the 1 an unghosted image would
       // trivially score.
       cropGrowth: null,
@@ -1415,7 +1415,7 @@ describe('planExemplarFrames', () => {
       timestamp: 0.4,
       opacity: EVIDENCE_GHOST_BLEND_ALPHA,
     })
-    expect(plan?.demotedFromPair).toBe(false)
+    expect(plan?.demotion).toBeNull()
     // One rect, unioned across both drawn frames.
     expect(plan?.crop).toEqual(
       computeEvidenceCropRect(paired, [...HIP_SEED], HD),
@@ -1441,7 +1441,7 @@ describe('planExemplarFrames', () => {
       HD,
       0.05,
     )
-    expect(plan?.demotedFromPair).toBe(true)
+    expect(plan?.demotion).toBe('collapsed-pair')
     expect(plan?.cropGrowth).toBeNull()
   })
 
@@ -1759,7 +1759,7 @@ describe('planExemplarFrames', () => {
       0.05,
     )
     expect(plan?.ghost).toBeNull()
-    expect(plan?.demotedFromPair).toBe(true)
+    expect(plan?.demotion).toBe('collapsed-pair')
     // The crop now frames the base alone — the ghost is not being drawn.
     expect(plan?.crop).toEqual(
       computeEvidenceCropRect([paired[0]], [...HIP_SEED], HD),
@@ -1769,8 +1769,6 @@ describe('planExemplarFrames', () => {
   it('drops a near-identical pair for a kind with nothing to say from one instant', () => {
     const paired = [boxFrame(0, 500, 440), boxFrame(0.4, 500.5, 440)]
     for (const kind of [
-      'trunkLeanRange',
-      'overstrideRange',
       'bounceCycle',
       'armSwingCycle',
       'stridePair',
@@ -1784,6 +1782,29 @@ describe('planExemplarFrames', () => {
           0.05,
         ),
       ).toBeNull()
+    }
+  })
+
+  it('demotes a near-identical range kind, whose card reports a median of single instants', () => {
+    // `strides-ddj`, and the same correction `strides-r41` made for `kneeFlexionPeak` above.
+    // `computeTrunkLean` returns the median of per-frame angles and `computeOverstriding` the
+    // median of per-strike ratios — each measured at ONE instant — so the kind's *name* describes
+    // how the exemplar was built, not what the card reports, and the surviving frame still shows
+    // the geometry that was measured on it.
+    const paired = [boxFrame(0, 500, 440), boxFrame(0.4, 500.5, 440)]
+    for (const kind of [
+      'trunkLeanRange',
+      'overstrideRange',
+    ] satisfies MetricExemplarKind[]) {
+      const plan = planExemplarFrames(
+        'trunkLean',
+        exemplar({ kind, timestamp: 0, pairedTimestamp: 0.4 }),
+        paired,
+        HD,
+        0.05,
+      )
+      expect(plan?.ghost).toBeNull()
+      expect(plan?.demotion).toBe('collapsed-pair')
     }
   })
 
@@ -1802,34 +1823,31 @@ describe('planExemplarFrames', () => {
       0.05,
     )
     expect(plan?.ghost).toBeNull()
-    expect(plan?.demotedFromPair).toBe(true)
+    expect(plan?.demotion).toBe('collapsed-pair')
   })
 
-  it('drops a far-apart pair for EVERY kind, including the ones a collapse would demote', () => {
-    // The asymmetry with the near-identical rule above, asserted rather than described: a
-    // near-identical `stepWidthStrike` demotes to its base, a far-apart one does not. Its label
-    // ('Opposite-foot plants either side of the hip midline') is a statement about two instants,
-    // and here both instants are real and simply cannot share a frame — so keeping one under that
-    // caption would picture a measurement the image does not show.
-    const paired = [hipFrame(0, 400, 540), hipFrame(0.4, 1400, 540)]
+  /** Two hip pairs a thousand pixels apart — over `EVIDENCE_MAX_PAIR_CROP_GROWTH` and nowhere near
+   * any collapse rule, so the far-apart branch is the only one that can fire. */
+  const farApartPair = () => [hipFrame(0, 400, 540), hipFrame(0.4, 1400, 540)]
+
+  it('drops a far-apart pair for a kind whose number IS the difference between two instants', () => {
+    // A cycle or a stride pair reports an amplitude or a displacement, so one frame of it depicts
+    // no part of the number on the card. `stridePair` additionally cannot be demoted mechanically:
+    // its only measurement mark, `strideCaliper`, spans the two hip midpoints and is built under
+    // `plan.ghost !== null`, so a demoted stride pair would lose exactly the mark that IS the
+    // measurement.
+    const paired = farApartPair()
     expect(
-      frameCropBox(paired[0], [...HIP_SEED]) &&
-        frameCropBox(paired[1], [...HIP_SEED]) &&
-        isTooFarApartPair(
-          frameCropBox(paired[0], [...HIP_SEED])!,
-          frameCropBox(paired[1], [...HIP_SEED])!,
-          HD,
-        ),
+      isTooFarApartPair(
+        frameCropBox(paired[0], [...HIP_SEED])!,
+        frameCropBox(paired[1], [...HIP_SEED])!,
+        HD,
+      ),
     ).toBe(true)
     for (const kind of [
-      'stepWidthStrike',
-      'footStrike',
-      'trunkLeanRange',
-      'overstrideRange',
       'bounceCycle',
       'armSwingCycle',
       'stridePair',
-      'kneeFlexionPeak',
     ] satisfies MetricExemplarKind[]) {
       expect(
         planExemplarFrames(
@@ -1840,6 +1858,38 @@ describe('planExemplarFrames', () => {
           0.05,
         ),
       ).toBeNull()
+    }
+  })
+
+  it('demotes a far-apart pair for every single-instant kind, and says which rule did it', () => {
+    // `strides-ddj`. The far-apart rejection establishes that the two instants cannot share one
+    // legible crop; it establishes nothing about whether either instant alone is worth showing,
+    // and that second question is answered by the same classification a collapsed pair consults.
+    const paired = farApartPair()
+    for (const kind of [
+      'stepWidthStrike',
+      'footStrike',
+      'kneeFlexionPeak',
+      'trunkLeanRange',
+      'overstrideRange',
+    ] satisfies MetricExemplarKind[]) {
+      const plan = planExemplarFrames(
+        'trunkLean',
+        exemplar({ kind, timestamp: 0, pairedTimestamp: 0.4 }),
+        paired,
+        HD,
+        0.05,
+      )
+      expect(plan?.ghost).toBeNull()
+      expect(plan?.demotion).toBe('far-apart-pair')
+      // Nothing was ghosted, so there is no ghosting cost to report — `null`, never the reading
+      // that caused the rejection, which would make the column mean two different things.
+      expect(plan?.cropGrowth).toBeNull()
+      // The crop derives from the BASE alone, so the whole-frame union of two far-apart instants
+      // — the gh #71 image this guard exists to prevent — is unreachable by construction.
+      expect(plan?.crop).toEqual(
+        computeEvidenceCropRect([paired[0]], [...HIP_SEED], HD),
+      )
     }
   })
 
@@ -1854,7 +1904,7 @@ describe('planExemplarFrames', () => {
       0.05,
     )
     expect(plan?.ghost).toBeNull()
-    expect(plan?.demotedFromPair).toBe(false)
+    expect(plan?.demotion).toBeNull()
   })
 
   it('keeps a pair whose boxes overlap just below the threshold', () => {
@@ -1882,7 +1932,7 @@ describe('planExemplarFrames', () => {
       0.05,
     )
     expect(plan?.ghost).toBeNull()
-    expect(plan?.demotedFromPair).toBe(true)
+    expect(plan?.demotion).toBe('collapsed-pair')
   })
 
   it('collapses a pair whose ghost falls outside the snap tolerance', () => {
@@ -1894,7 +1944,7 @@ describe('planExemplarFrames', () => {
       0.05,
     )
     expect(demoted?.ghost).toBeNull()
-    expect(demoted?.demotedFromPair).toBe(true)
+    expect(demoted?.demotion).toBe('collapsed-pair')
 
     expect(
       planExemplarFrames(
@@ -1920,8 +1970,8 @@ describe('planExemplarFrames', () => {
     ).toBeNull()
     expect(
       planExemplarFrames(
-        'trunkLean',
-        exemplar({ timestamp: 0, pairedTimestamp: 0.4 }),
+        'verticalOscillation',
+        exemplar({ kind: 'bounceCycle', timestamp: 0, pairedTimestamp: 0.4 }),
         paired,
         HD,
         0.05,
@@ -2010,25 +2060,66 @@ describe('planExemplarWithFallback', () => {
   })
 
   it('falls back on a failure that is not the far-apart guard', () => {
-    // A ghost outside the snap tolerance collapses the pair, and a range kind is dropped rather
-    // than demoted — undrawable for a completely different reason, and just as recoverable.
+    // A ghost outside the snap tolerance collapses the pair — undrawable for a completely
+    // different reason, and just as recoverable.
     const plan = planFor(range(0, 9, 0.9, [range(0, 0.4, 0.6)]))
 
     expect(plan!.ghost!.timestamp).toBeCloseTo(0.4, 10)
-    expect(plan!.demotedFromPair).toBe(false)
+    expect(plan!.demotion).toBeNull()
   })
 
-  it('is null when no offered pair can be drawn', () => {
+  it('prefers a drawable lower-ranked pair over a demoted higher-ranked one', () => {
+    // `strides-ddj`'s load-bearing ordering, on the exact shape it protects: `trunkLeanRange` is
+    // demotable now, so without last-resort ordering the winner would stop at its own base and the
+    // walk would never reach the drawable alternate. Measured on Demo 1, where `trunkLean`'s
+    // winner demands 6.1-6.8 growth and its alternate draws at 1.866, that turns a good ghost into
+    // a lone frame — and the coverage line still reports an image, so the regression reads as a
+    // fix.
+    const plan = planFor(range(0, 0.6, 0.9, [range(0, 0.4, 0.6)]))
+
+    expect(plan!.demotion).toBeNull()
+    expect(plan!.ghost!.timestamp).toBeCloseTo(0.4, 10)
+    expect(plan!.quality).toBe(0.6)
+  })
+
+  it('demotes the winner only once no offered pair can be drawn as a pair', () => {
+    // Every candidate far apart, so there is no ghost to be had anywhere — the demoted single is
+    // the last resort rather than a competitor.
+    const plan = planFor(range(0, 0.6, 0.9, [range(0, 0.5, 0.7)]))
+
+    expect(plan!.demotion).toBe('far-apart-pair')
+    expect(plan!.ghost).toBeNull()
+    // The FIRST demotable candidate's, not the last: candidates arrive best-first.
+    expect(plan!.quality).toBe(0.9)
+    expect(plan!.base.timestamp).toBe(0)
+  })
+
+  it('is null when no offered pair can be drawn and the kind cannot be demoted', () => {
     // The honest empty result: falling back is not permission to render something that failed a
-    // drop rule.
-    expect(planFor(range(0, 0.6, 0.9, [range(0, 0.5, 0.7)]))).toBeNull()
-    expect(planFor(range(0, 0.6, 0.9))).toBeNull()
+    // drop rule, and a `bounceCycle`'s number IS the difference between its two instants.
+    const cycle = (pairedTimestamp: number, quality: number, alternates?: MetricExemplar[]) =>
+      exemplar({
+        kind: 'bounceCycle',
+        timestamp: 0,
+        pairedTimestamp,
+        quality,
+        ...(alternates === undefined ? {} : { alternates }),
+      })
+
+    expect(planFor(cycle(0.6, 0.9, [cycle(0.5, 0.7)]))).toBeNull()
+    expect(planFor(cycle(0.6, 0.9))).toBeNull()
   })
 
   it('will not fall back onto a pair below the shared minimum quality', () => {
     const belowGate = range(0, 0.4, MIN_EXEMPLAR_QUALITY - 0.001)
 
-    expect(planFor(range(0, 0.6, 0.9, [belowGate]))).toBeNull()
+    // The sub-gate alternate is drawable AS A PAIR and is still not reached, so what comes back is
+    // the winner demoted to its base — proof the gate outranks even the last-resort rule, which
+    // would otherwise have a drawable pair to prefer.
+    const plan = planFor(range(0, 0.6, 0.9, [belowGate]))
+
+    expect(plan!.demotion).toBe('far-apart-pair')
+    expect(plan!.quality).toBe(0.9)
   })
 
   it('leaves a single-instant exemplar alone', () => {
@@ -2070,14 +2161,24 @@ describe('planMetricEvidence', () => {
   })
 
   it('reports all-gated-out when no exemplar offers a drawable pair', () => {
+    // A `bounceCycle`, whose reported amplitude IS the difference between its two instants, so
+    // there is no demoted single to fall back to and the metric genuinely loses its evidence.
     const plan = planOf(
-      metricResult('trunkLean', {
+      metricResult('verticalOscillation', {
         exemplars: [
           exemplar({
+            kind: 'bounceCycle',
             timestamp: 0,
             pairedTimestamp: 0.6,
             quality: 0.9,
-            alternates: [exemplar({ timestamp: 0, pairedTimestamp: 0.5, quality: 0.7 })],
+            alternates: [
+              exemplar({
+                kind: 'bounceCycle',
+                timestamp: 0,
+                pairedTimestamp: 0.5,
+                quality: 0.7,
+              }),
+            ],
           }),
         ],
       }),
@@ -2085,6 +2186,27 @@ describe('planMetricEvidence', () => {
     )
 
     expect(reasonOf(plan)).toBe('all-gated-out')
+  })
+
+  it('renders a demoted single rather than gating a single-instant metric out entirely', () => {
+    // The user-visible half of `strides-ddj`: on Demo 1 `overstriding` had exactly one possible
+    // pair (two surviving strikes), it demanded 2.881x growth, and the card showed nothing at all.
+    const plan = planOf(
+      metricResult('overstriding', {
+        exemplars: [
+          exemplar({
+            kind: 'overstrideRange',
+            timestamp: 0,
+            pairedTimestamp: 0.6,
+            quality: 0.9,
+          }),
+        ],
+      }),
+      crossingFrames(),
+    )
+
+    expect(plan.status).toBe('planned')
+    expect(plan.status === 'planned' && plan.items[0].demotion).toBe('far-apart-pair')
   })
 
 
@@ -2504,7 +2626,7 @@ describe('summarizeEvidenceCoverage', () => {
           quality: 0.9,
           timestamp: 0.5,
           pairedTimestamp: 0.9,
-          demotedFromPair: false,
+          demotion: null,
           // Union across the two drawn frames: 700..960 px wide, padded by 1.6.
           cropSidePx: 260 * EVIDENCE_CROP_PADDING_MULTIPLIER,
           // Each instant's own 100 px-wide hip pair pads to 160 and lands on the 320 px floor, so
@@ -2518,7 +2640,7 @@ describe('summarizeEvidenceCoverage', () => {
     // A demoted pair draws no ghost, so there is no growth to report — `null`, never 1.
     expect(payload.clips[0].metrics.stepWidth?.exemplars[0]).toMatchObject({
       pairedTimestamp: null,
-      demotedFromPair: true,
+      demotion: 'collapsed-pair',
       cropGrowth: null,
     })
     expect(payload.clips[0].metrics.cadence).toEqual({

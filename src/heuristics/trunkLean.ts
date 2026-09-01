@@ -76,12 +76,18 @@ function buildExemplars(
   // a clip that spends most of itself leaning forward puts the upright frame further from the
   // median, and it is that frame the picture is really about.
   return attachPairAlternates(
-    pairs.map(({ base, ghost, quality }) => ({
+    pairs.map(({ base, ghost, quality, baseIsHigh }) => ({
       kind: 'trunkLeanRange' as const,
       timestamp: base.frame.timestamp,
       pairedTimestamp: ghost.frame.timestamp,
       quality,
-      label: 'Most forward trunk lean, ghosted against the most upright frame',
+      // The leading clause names the BASE — the frame drawn solid — so it follows `baseIsHigh`
+      // rather than assuming the forward-lean end won. The comment above already says the upright
+      // frame is sometimes the one further from the median; before `strides-8i4` the label denied
+      // it, and `altFor`'s "the first instant named above is shown solid" inherited the error.
+      label: baseIsHigh
+        ? 'Most forward trunk lean, ghosted against the most upright frame'
+        : 'Most upright frame, ghosted against the most forward trunk lean',
       cropKeypoints: cropKeypoints(EXEMPLAR_SEED_KEYPOINTS, EXEMPLAR_CONTEXT_KEYPOINTS, [
         base.frame,
         ghost.frame,

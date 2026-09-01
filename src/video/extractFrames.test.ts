@@ -96,7 +96,7 @@ const PAIR: EvidenceFramePlan = {
   },
   crop: { x: 412, y: 130, side: 900 },
   travelDirection: 1,
-  demotedFromPair: false,
+  demotion: null,
   cropGrowth: 1.4,
 }
 
@@ -120,7 +120,7 @@ const SINGLE: EvidenceFramePlan = {
   crop: { x: 0, y: 0, side: 320 },
   travelDirection: -1,
   cropGrowth: null,
-  demotedFromPair: true,
+  demotion: 'collapsed-pair',
 }
 
 /** Every metric no-evidence, then whatever the caller wants planned laid over the top — the plan

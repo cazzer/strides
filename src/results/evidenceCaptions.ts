@@ -1,4 +1,4 @@
-import type { EvidenceFramePlan } from './evidenceFrames'
+import type { EvidenceDemotion, EvidenceFramePlan } from './evidenceFrames'
 import { METRIC_LABELS } from './metricConfidence'
 
 /**
@@ -13,6 +13,27 @@ import { METRIC_LABELS } from './metricConfidence'
 
 function formatSeconds(seconds: number): string {
   return `${seconds.toFixed(2)} s`
+}
+
+/**
+ * What a demoted image says about the pair it came from — one sentence per reason, and the
+ * `Record` is TOTAL on purpose: adding an `EvidenceDemotion` member without a sentence here is a
+ * type error rather than a caption that silently says nothing about a picture whose shape changed.
+ *
+ * The two sentences are near-inverses, which is the whole reason the reason travels. Before
+ * `strides-ddj` there was one boolean and one sentence, so a far-apart demotion — two instants a
+ * step apart on a 4K side view — would have been captioned "too similar to tell apart", a flatly
+ * false statement about the picture it sits under.
+ *
+ * The far-apart sentence says the two could not share a legible CROP, which is the criterion
+ * `isTooFarApartPair` actually applies. It deliberately says nothing about elapsed time: the
+ * capability rejects time as the measure at this end of the range, where a stationary subject
+ * seconds apart ghosts perfectly and a fast one a fraction of a second apart does not.
+ */
+const DEMOTION_SENTENCES: Record<EvidenceDemotion, string> = {
+  'collapsed-pair': 'Shown as one frame: the paired instant was too similar to tell apart.',
+  'far-apart-pair':
+    'Shown as one frame: the paired instant was too far away to share a legible crop.',
 }
 
 /**
@@ -35,9 +56,9 @@ export function captionFor(plan: EvidenceFramePlan): string {
     parts.push(
       `${formatSeconds(plan.base.timestamp)} and ${formatSeconds(plan.ghost.timestamp)} into the clip.`,
     )
-  } else if (plan.demotedFromPair) {
+  } else if (plan.demotion !== null) {
     parts.push(
-      'Shown as one frame: the paired instant was too similar to tell apart.',
+      DEMOTION_SENTENCES[plan.demotion],
       `${formatSeconds(plan.base.timestamp)} into the clip.`,
     )
   } else {
@@ -55,7 +76,13 @@ export function captionFor(plan: EvidenceFramePlan): string {
  * the weighting and from the marks. Neither reaches a reader who cannot see the image, so the shape
  * sentence says which of the two the card's measurement is about. Every paired `label` this repo
  * emits is "X, ghosted against Y" with the base first — see `bounceInstants`, `kneeFlexion`,
- * `overstriding`, `trunkLean` — so naming the first instant is general, not a per-metric claim. */
+ * `overstriding`, `trunkLean` — so naming the first instant is general, not a per-metric claim.
+ *
+ * That invariant was ASSERTED here before it was true: `overstriding` and `trunkLean` hardcoded a
+ * label naming the high end while `selectExtremePairs` picks whichever end is further from the
+ * median, so on a clip leaning the other way this sentence pointed at the wrong body.
+ * `strides-8i4` made both metrics derive the label from `ExtremePair.baseIsHigh`, which is what
+ * lets a demoted single keep its label beside one body at all. */
 export function altFor(plan: EvidenceFramePlan): string {
   const side = plan.side === undefined ? '' : ` (${plan.side} side)`
   const shape =

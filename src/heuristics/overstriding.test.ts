@@ -141,6 +141,32 @@ describe('computeOverstriding exemplars', () => {
     // (`evidenceAnnotations.test.ts`) with a hand-built exemplar, for the reason above.
     expect(evidence.annotationKeypoints).toBeDefined()
     expect(evidence.pairedAnnotationKeypoints).toBeDefined()
+    // The two ends are equidistant from the median (0.1 either way), so the tie goes to the high
+    // one and the label leads with it. The other arm is the test below.
+    expect(evidence.label).toBe(
+      'Furthest-reaching footstrike, ghosted against the closest-landing one',
+    )
+  })
+
+  it('leads the label with the CLOSEST-LANDING strike when that is the frame drawn solid', () => {
+    // `strides-8i4`. Ratios 0.5, 0.5, 0.36, 0.5, 0.5, 0.6, 0.5 -> median 0.5, and the closest
+    // strike is 0.14 out against the furthest one's 0.1, so the closest is the base. Which end
+    // wins is a property of the CLIP's distribution, not of this metric, so a hardcoded label is
+    // wrong here and there is no way for it to be right for both clips.
+    //
+    // Not academic on real footage: `strides-1mt` left Demo 1 with exactly two surviving strikes,
+    // where the median is `fl((a + b) / 2)` and a single unit in the last place decides the
+    // winner. That is deterministic and unknowable from the record, which is why the label follows
+    // the selector's own answer rather than a guard or an assumption.
+    const frames = buildStrikeFrames({ ankleOffsetsPx: [75, 75, 54, 75, 75, 90, 75] })
+
+    const [evidence] = computeOverstriding(frames, 'side').exemplars!
+
+    expect(evidence.timestamp).toBeCloseTo(25 / 30, 10) // the 0.36 strike, the further out
+    expect(evidence.pairedTimestamp).toBeCloseTo(55 / 30, 10) // the 0.6 strike
+    expect(evidence.label).toBe(
+      'Closest-landing footstrike, ghosted against the furthest-reaching one',
+    )
   })
 
   it('crops around the striking foot and the hip midline, with the knee as context', () => {

@@ -119,7 +119,7 @@ function buildExemplars(
   // Base is the more extreme of the two — a range ghost is about its far end (see trunkLean's
   // identical reasoning).
   return attachPairAlternates(
-    pairs.map(({ base, ghost, quality }) => ({
+    pairs.map(({ base, ghost, quality, baseIsHigh }) => ({
       kind: 'overstrideRange' as const,
       timestamp: base.frame.timestamp,
       pairedTimestamp: ghost.frame.timestamp,
@@ -154,7 +154,16 @@ function buildExemplars(
         [ghost.frame],
       ),
       quality,
-      label: 'Furthest-reaching footstrike, ghosted against the closest-landing one',
+      // The leading clause names the BASE, the frame drawn solid — so it has to follow which end
+      // actually won, not the end this metric happens to think of first. A high ratio is a foot
+      // landing further ahead of the hip, so `baseIsHigh` means the furthest-reaching strike is
+      // the subject; below the median it is the closest-landing one. Hardcoding either way misread
+      // the picture whenever the clip's distribution leaned the other way, and misreads it
+      // unrecoverably once a far-apart pair can be demoted to this one body (`strides-8i4`,
+      // `strides-ddj`).
+      label: baseIsHigh
+        ? 'Furthest-reaching footstrike, ghosted against the closest-landing one'
+        : 'Closest-landing footstrike, ghosted against the furthest-reaching one',
       cropKeypoints: cropKeypoints(
         [...seedFor(base), ...seedFor(ghost)],
         [KNEE_NAME[base.side], KNEE_NAME[ghost.side]],

@@ -726,7 +726,7 @@ function framePlan(
     ghost: null,
     crop: { x: 0, y: 0, side: 200 },
     travelDirection: 1,
-    demotedFromPair: false,
+    demotion: null,
     cropGrowth: null,
     ...overrides,
   }

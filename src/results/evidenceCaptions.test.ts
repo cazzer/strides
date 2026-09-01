@@ -29,7 +29,7 @@ function framePlan(
     ghost: null,
     crop: { x: 0, y: 0, side: 200 },
     travelDirection: 1,
-    demotedFromPair: false,
+    demotion: null,
     cropGrowth: null,
     ...overrides,
   }
@@ -63,7 +63,7 @@ describe('altFor', () => {
   it('describes a pair demoted to its base as a single frame, not as a blend', () => {
     // A demoted pair carries ghost: null, so nothing is blended and there is no second instant to
     // point at. Claiming one would describe an image that is not on screen.
-    const alt = altFor(framePlan('kneeFlexion', { ghost: null, demotedFromPair: true }))
+    const alt = altFor(framePlan('kneeFlexion', { ghost: null, demotion: 'collapsed-pair' }))
 
     expect(alt).toContain('A single frame from the clip.')
     expect(alt).not.toContain('faded behind it')
@@ -94,9 +94,33 @@ describe('captionFor', () => {
   })
 
   it('says why a demoted pair shows one frame, rather than silently showing one', () => {
-    const caption = captionFor(framePlan('kneeFlexion', { ghost: null, demotedFromPair: true }))
+    const caption = captionFor(framePlan('kneeFlexion', { ghost: null, demotion: 'collapsed-pair' }))
 
     expect(caption).toContain('the paired instant was too similar to tell apart')
+  })
+
+  it('does not caption a far-apart demotion as a near-identical one', () => {
+    // The exact inversion `strides-ddj` is about: a pair a full step apart on a 4K side view is
+    // the OPPOSITE of "too similar", and one boolean could only ever say one of the two. The
+    // negative assertion is the load-bearing half — a reason that fell through to the collapsed
+    // sentence would still contain a plausible-sounding explanation.
+    const caption = captionFor(
+      framePlan('overstriding', { ghost: null, demotion: 'far-apart-pair' }),
+    )
+
+    expect(caption).toContain('the paired instant was too far away to share a legible crop')
+    expect(caption).not.toContain('too similar')
+  })
+
+  it('states the far-apart guard in spatial terms, never in elapsed time', () => {
+    // `EVIDENCE_MAX_PAIR_CROP_GROWTH` explicitly rejects elapsed time as the measure at this end
+    // of the range — a stationary subject seconds apart ghosts perfectly. A caption that blamed
+    // the clock would describe a criterion the code does not apply.
+    const caption = captionFor(
+      framePlan('trunkLean', { ghost: null, demotion: 'far-apart-pair' }),
+    )
+
+    expect(caption).not.toMatch(/too (long|far apart in time)|seconds apart|later in the clip/i)
   })
 })
 

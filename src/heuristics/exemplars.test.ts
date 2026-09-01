@@ -524,6 +524,58 @@ describe('selectExtremePairs', () => {
     expect(selectExtremePairs([], toInstant, DISTRIBUTION)).toEqual([])
   })
 
+  describe('baseIsHigh', () => {
+    // `strides-8i4`. Two metrics write a label naming the base first, so they need the comparison
+    // that chose the base rather than a second one of their own — and asserting it here is what
+    // stops the two answers drifting apart.
+    it('agrees with which end became the base, on every pair', () => {
+      const pairs = selectExtremePairs(CANDIDATES, toInstant, DISTRIBUTION)
+
+      expect(pairs.length).toBeGreaterThan(1)
+      for (const pair of pairs) {
+        expect(pair.baseIsHigh).toBe(pair.base.value >= DISTRIBUTION.median)
+      }
+    })
+
+    it('is true when the ABOVE-median end is the further out', () => {
+      // 6.4 is 1.4 above the median of 5; 4 is 1 below. The high end wins.
+      const pairs = selectExtremePairs(CANDIDATES, toInstant, DISTRIBUTION)
+
+      expect(pairs[0].base.value).toBe(6.4)
+      expect(pairs[0].baseIsHigh).toBe(true)
+    })
+
+    it('is false when the BELOW-median end is the further out', () => {
+      // The mirrored distribution: median 5, low end 3.6 (1.4 out), high end 6 (1 out). Nothing
+      // about the metric changed — only the clip's own spread — which is exactly why a hardcoded
+      // label cannot be right for both.
+      const values = [3.6, 4, 4.5, 5, 5, 5.5, 6]
+      const pairs = selectExtremePairs(
+        candidatesOf(values),
+        toInstant,
+        describeDistribution(values),
+      )
+
+      expect(pairs[0].base.value).toBe(3.6)
+      expect(pairs[0].baseIsHigh).toBe(false)
+    })
+
+    it('resolves an exact tie to the high end, exactly as the `>=` always did', () => {
+      // Equidistant ends, so `high.deviation >= low.deviation` decides it. Pinned because the
+      // labels now depend on this branch and a silent flip to `>` would rewrite both of them.
+      const values = [4, 4.5, 5, 5, 5.5, 6]
+      const pairs = selectExtremePairs(
+        candidatesOf(values),
+        toInstant,
+        describeDistribution(values),
+      )
+
+      expect(pairs[0].base.value).toBe(6)
+      expect(pairs[0].ghost.value).toBe(4)
+      expect(pairs[0].baseIsHigh).toBe(true)
+    })
+  })
+
   it('still refuses instants beyond the outlier bound, at every rank', () => {
     const withGlitch = [...CANDIDATES, { frame: torsoFrame(7 / 30), value: 20 }]
 
