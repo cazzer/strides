@@ -65,6 +65,45 @@ import { median } from './mathUtils'
  */
 const MIN_OVERSTRIDE_SAMPLE_SIZE = 4
 
+/**
+ * Unconditional disclosure of the sampling-instant limitation — present on EVERY result that has a
+ * non-null `value`, including the cleanest, highest-confidence one, modelled on
+ * `footStrikePattern.ts`'s `PROXY_CAVEAT`. Prepended first in the `caveats` array wherever `value`
+ * is non-null, exactly as that sibling metric's proxy disclaimer is.
+ *
+ * ## Why this exists: `strides-pr1`, successor to the closed `strides-24s`
+ *
+ * `detectFootstrikes`' phase-based instant is `T/4` before the fitted hip-bounce low point
+ * (midstance), not the moment of ground contact — a real, reproducible offset, measured on Demo 1
+ * against keyframe-confirmed onsets at roughly +0.10 to +0.12s. Because the hip advances while the
+ * planted foot stays put, that lag SHRINKS the measured ankle-to-hip offset: the reported ratio
+ * reads systematically LOWER than the ratio at true touchdown. `strides-24s` spiked and rejected
+ * three correction strategies (a duty-factor closed form, ankle-x stationarity, a constant offset
+ * fitted to one clip's contacts — the last explicitly prohibited by name, since the underlying
+ * quantity was measured to vary 37x across the one corpus available). This metric's `value` is
+ * therefore left uncorrected, and this caveat exists so the card stops implying a precision (an
+ * exact touchdown geometry) that the sampled instant does not have.
+ *
+ * ## Why "lower bound" and why no number
+ *
+ * The lag consistently REMOVES reach rather than adding it (the foot has already begun retracting
+ * relative to the advancing hip by the time the metric samples it), so `value` should be read as a
+ * lower bound on how far the foot actually lands ahead of the hip — not a two-sided error band.
+ * The MECHANISM is general (any clip with this lag direction), but the MAGNITUDE was measured on a
+ * single clip and is not known to transfer, so this text names the direction and never quotes a
+ * figure — asserted in tests via `/\d/`.
+ *
+ * A follow-up spike (`resolve-the-overstriding-sampling-instant`, sampling the metric's own signal
+ * at its own forward-reach extremum instead of the detected instant) measured a candidate fix that
+ * passed its accuracy gates convincingly but failed a pre-registered materiality gate — it could
+ * only resolve an interior extremum on a minority of the corpus's otherwise-usable strikes, because
+ * a majority of real footage lacks either a known travel direction or a trustworthy fitted step
+ * period, both of which the search structurally requires. See that change's design.md for the full
+ * gate table. This constant is this change's entire shipped surface.
+ */
+const SAMPLING_INSTANT_CAVEAT =
+  'Overstriding is measured at the footstrike instant this pipeline can detect, which tends to trail the true moment of ground contact — treat this value as a lower bound on how far the foot actually lands ahead of the hip, not a precise touchdown measurement.'
+
 const ANKLE_NAME: Record<'left' | 'right', KeypointName> = {
   left: 'left_ankle',
   right: 'right_ankle',
@@ -284,7 +323,11 @@ export function computeOverstriding(
     interpolationConfidencePenalty: config.interpolationConfidencePenalty,
   })
 
-  const caveats: string[] = []
+  // Seeded with the mandatory sampling-instant disclaimer, unconditionally — this is what makes
+  // `caveat` non-null even on an otherwise-clean, high-confidence result. Every branch below only
+  // ever appends to it, never replaces it. Mirrors footStrikePattern.ts's identical pattern with
+  // PROXY_CAVEAT.
+  const caveats: string[] = [SAMPLING_INSTANT_CAVEAT]
   if (!travelDirectionKnown) {
     caveats.push(
       'Direction of travel could not be determined (no net horizontal displacement) — overstride sign may not reflect forward/backward.',

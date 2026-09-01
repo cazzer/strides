@@ -1144,6 +1144,29 @@ on every clip. Demo 1, before → after: `overstriding` 0.29735 @ 1.000 → **0.
 residual remains, shipped uncorrected on principle — fitting an offset is the thing this change
 exists to stop — and is filed as `strides-24s`.
 
+⚠️ **`strides-24s` is now CLOSED on its own criterion (spike, all three correction strategies
+measured and rejected), and its successor `strides-pr1` shipped FALLBACK, not a fix** (2026-09-01,
+`resolve-the-overstriding-sampling-instant`). A fourth strategy — re-sample `overstriding`'s own
+signal at its interior forward-reach extremum within a bounded backward window, rather than
+correcting the detected instant's timing — was built, measured, and its accuracy/direction/
+stability gates all PASSED convincingly (one eligible Demo 1 strike's extremum landed on the EXACT
+same frame an independently-derived ground truth anchored to). It was not shipped anyway: a
+pre-registered materiality gate failed — across a three-clip probed corpus (Demo 1, Demo 2,
+multiperson, primary pass + background scale pass) the search could resolve an interior extremum on
+only **9 of 26 (34.6%)** otherwise-usable strikes, because `estimateTravelDirection` returns `0` on
+Demo 2 entirely and the background scale pass's own hip-bounce fit falls below `cadenceMinFitR2` on
+both Demo 2 and multiperson — both preconditions the search structurally requires, and both absent
+on a majority of this corpus. What shipped instead: `overstriding.caveat` is now unconditionally
+non-null on any non-null-value result (mirrors `footStrikePattern`'s `PROXY_CAVEAT` pattern),
+disclosing the sampling-instant lag and its LOWER-BOUND direction, quoting no magnitude. **No
+computed value moved anywhere** — verified via a before/after `scripts/ab-person-selection.mjs`
+A/B, bit-identical on every clip including every `evidence.*` field (the driver's own comparison
+table excludes `caveat`, so this diff being empty is the correct confirmation that nothing else
+changed, not evidence the caveat failed to land — that was checked separately, by unit test). Full
+gate table and measurement:
+`openspec/changes/resolve-the-overstriding-sampling-instant/design.md` (not yet archived as of
+this writing — pending review).
+
 ⚠️ **Demo 1's footstrike ground truth was itself wrong, and the corrected set is the one to use**
 (addendum 2026-08-31, `strides-dly`). `strides-da8` recorded the contact onsets as ffmpeg
 `3.90 / 4.60 / 5.16 / 5.84` (app `3.98 / 4.68 / 5.24 / 5.92`) and both its own design and

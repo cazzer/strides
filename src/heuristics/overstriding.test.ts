@@ -40,6 +40,15 @@ describe('computeOverstriding', () => {
     // viewFitMultiplier 1, frameCoverage 1, interpolatedFraction 0, sampleSize well over the
     // minimum (capped at 1), travelDirectionKnown true -> confidence at or very near 1.
     expect(result.confidence).toBeGreaterThan(0.9)
+    // `strides-pr1`: the sampling-instant caveat is unconditional -- present even on this clip's
+    // cleanest, highest-confidence result. This is also the ONE case where no other caveat
+    // condition fires (view suitable, sample size well over the minimum, direction known), so the
+    // joined caveat here IS the disclosure constant alone -- the right place to assert it never
+    // quotes a number, since the mechanism is general but the measured magnitude is not known to
+    // transfer (see the constant's own doc in overstriding.ts).
+    expect(result.caveat).not.toBeNull()
+    expect(result.caveat).not.toMatch(/\d/)
+    expect(result.caveat).toMatch(/lower bound/i)
   })
 
   it('a front-view clip: viewFit unsuitable, confidence discounted to the 0.1 multiplier', () => {

@@ -65,7 +65,7 @@ const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
   trunkLean:
     'How far your torso leans forward or backward relative to your direction of travel.',
   overstriding:
-    "How far your foot lands ahead of your hips at footstrike, relative to your torso length — a proxy for braking-force risk.",
+    'How far your foot lands ahead of your hips at footstrike, relative to your torso length — a proxy for braking-force risk. Measured at the footstrike instant this pipeline can detect, which tends to trail true ground contact, so treat this as a lower bound rather than a precise touchdown measurement.',
   cadence: 'How many steps per minute you take, both feet combined.',
   kneeFlexion:
     'How much your knee bends during the swing phase of your stride, both legs combined.',
