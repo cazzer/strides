@@ -323,6 +323,7 @@ function heuristicsResult(
     stepWidth: of('stepWidth'),
     stepWidthCm: of('stepWidthCm'),
     kneeDrive: of('kneeDrive'),
+    armSwingAmplitude: of('armSwingAmplitude'),
   }
 }
 
@@ -2334,7 +2335,7 @@ describe('planClipEvidence', () => {
 
   it('returns one entry per metric, so an absent key never means "not computed yet"', () => {
     const plan = planClipEvidence(heuristicsResult(), frames, HD)
-    expect(Object.keys(plan)).toHaveLength(12)
+    expect(Object.keys(plan)).toHaveLength(13)
     expect(plan.cadence).toEqual({ status: 'no-evidence', reason: 'not-emitted' })
     expect(plan.trunkLean).toEqual({
       status: 'no-evidence',

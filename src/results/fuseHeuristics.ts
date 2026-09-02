@@ -78,6 +78,7 @@ export function fuseFormHeuristicsResults(
     stepWidth: pickMetric('stepWidth'),
     stepWidthCm: pickMetric('stepWidthCm'),
     kneeDrive: pickMetric('kneeDrive'),
+    armSwingAmplitude: pickMetric('armSwingAmplitude'),
   }
 }
 
@@ -125,5 +126,6 @@ export function fusionSourceIndices(
     stepWidth: sourceIndex('stepWidth'),
     stepWidthCm: sourceIndex('stepWidthCm'),
     kneeDrive: sourceIndex('kneeDrive'),
+    armSwingAmplitude: sourceIndex('armSwingAmplitude'),
   }
 }

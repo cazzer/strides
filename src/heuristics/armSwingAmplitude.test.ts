@@ -1,0 +1,374 @@
+import { describe, expect, it } from 'vitest'
+import { computeArmSwingAmplitude } from './armSwingAmplitude'
+import { buildFrame } from './__fixtures__/testFrames'
+import { DEFAULT_HEURISTICS_CONFIG } from './types'
+import type { RobustPoseFrame } from '../pose/robustness/types'
+
+/**
+ * Fixed torso length matching syntheticGait.ts's own convention (shoulder-mid to hip-mid = 150px).
+ * Unlike the scale-free symmetry sibling, this metric DIVIDES by it, so the expected values below
+ * carry it explicitly: value = (leftAmplitudePx + rightAmplitudePx) / (2 × TORSO_LENGTH_PX).
+ */
+const TORSO_LENGTH_PX = 150
+const SHOULDER_Y = 250
+const HIP_Y = SHOULDER_Y + TORSO_LENGTH_PX
+const LEFT_SHOULDER_X = 170
+const RIGHT_SHOULDER_X = 230
+const LEFT_HIP_X = 175
+const RIGHT_HIP_X = 225
+/** Resting wrist-below-shoulder offset — an arbitrary but plausible carried-arm position; only
+ * the OSCILLATION around it (see below) is what the metric measures. */
+const BASE_WRIST_OFFSET_Y = 80
+
+/**
+ * Deterministic, seedable jitter, so a noise fixture is reproducible run to run — a randomly-seeded
+ * one would make a threshold test flaky in exactly the regime it exists to pin down. Mulberry32.
+ */
+function makeJitter(seed: number): () => number {
+  let state = seed >>> 0
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0
+    let x = Math.imul(state ^ (state >>> 15), 1 | state)
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x
+    // Symmetric about 0, in [-1, 1).
+    return (((x ^ (x >>> 14)) >>> 0) / 4294967296) * 2 - 1
+  }
+}
+
+/**
+ * Builds a `RobustPoseFrame[]` with a resolvable torso (shoulders+hips) and each wrist oscillating
+ * in y relative to its own shoulder — the exact signal the shared `computeSideSwing` reads. Same
+ * generator as `armSwingSymmetry.test.ts`'s: left and right swing in opposite phase, each with its
+ * own configurable amplitude, so with the jitter/harmonic knobs at their `0` defaults each side is
+ * an exact sinusoid whose peak-to-trough excursion is exactly that side's `amplitudePx` — and the
+ * expected VALUE here is hand-computable as `(left + right) / (2 × TORSO_LENGTH_PX)`.
+ */
+function buildArmSwingFrames(params: {
+  durationSec: number
+  fps: number
+  swingFreqHz: number
+  leftAmplitudePx: number
+  rightAmplitudePx: number
+  /** Peak per-frame tracking jitter added to each wrist's y, px. Models what a real detector does
+   * to this series; `0` (the default) keeps every pre-existing case an exact sinusoid. */
+  leftJitterPx?: number
+  rightJitterPx?: number
+  /** Amplitude of a second harmonic at 2x `swingFreqHz`, as a fraction of that side's own
+   * amplitude — the STEP rhythm riding on the stride rhythm (see the symmetry suite's note on why
+   * this is real rather than decorative). */
+  harmonicRatio?: number
+  seed?: number
+}): RobustPoseFrame[] {
+  const {
+    durationSec,
+    fps,
+    swingFreqHz,
+    leftAmplitudePx,
+    rightAmplitudePx,
+    leftJitterPx = 0,
+    rightJitterPx = 0,
+    harmonicRatio = 0,
+    seed = 1,
+  } = params
+  const frameCount = Math.round(durationSec * fps)
+  const jitter = makeJitter(seed)
+
+  const frames: RobustPoseFrame[] = []
+  for (let i = 0; i < frameCount; i += 1) {
+    const t = i / fps
+    const phase = 2 * Math.PI * swingFreqHz * t
+    const harmonic = 2 * Math.PI * 2 * swingFreqHz * t
+    const leftWristY =
+      SHOULDER_Y +
+      BASE_WRIST_OFFSET_Y -
+      (leftAmplitudePx / 2) * Math.sin(phase) +
+      ((leftAmplitudePx * harmonicRatio) / 2) * Math.sin(harmonic) +
+      jitter() * leftJitterPx
+    const rightWristY =
+      SHOULDER_Y +
+      BASE_WRIST_OFFSET_Y -
+      (rightAmplitudePx / 2) * Math.sin(phase + Math.PI) +
+      ((rightAmplitudePx * harmonicRatio) / 2) * Math.sin(harmonic) +
+      jitter() * rightJitterPx
+
+    frames.push(
+      buildFrame(
+        {
+          left_shoulder: { x: LEFT_SHOULDER_X, y: SHOULDER_Y },
+          right_shoulder: { x: RIGHT_SHOULDER_X, y: SHOULDER_Y },
+          left_hip: { x: LEFT_HIP_X, y: HIP_Y },
+          right_hip: { x: RIGHT_HIP_X, y: HIP_Y },
+          left_wrist: { x: LEFT_SHOULDER_X, y: leftWristY },
+          right_wrist: { x: RIGHT_SHOULDER_X, y: rightWristY },
+        },
+        t,
+      ),
+    )
+  }
+  return frames
+}
+
+const BASE_PARAMS = {
+  durationSec: 4,
+  fps: 30,
+  swingFreqHz: 1.5,
+}
+
+/** The realistic fixture the symmetry suite uses for its gate/caveat cases — stride-rate swing,
+ * step-rate harmonic, modest jitter — reused so the two metrics' shared gates are exercised
+ * against the same shape of trace. */
+const REALISTIC = {
+  ...BASE_PARAMS,
+  leftAmplitudePx: 40,
+  rightAmplitudePx: 20,
+  leftJitterPx: 4,
+  rightJitterPx: 4,
+  harmonicRatio: 0.4,
+  seed: 20260829,
+}
+
+describe('computeArmSwingAmplitude', () => {
+  it('a clean front-view clip reports the MEAN of the two sides over torso length, exactly', () => {
+    // Asymmetric on purpose: a mean of unequal sides is what distinguishes this metric's
+    // aggregation from min/max, and both inputs are exact by construction —
+    // (40 + 20) / (2 × 150) = 0.2.
+    const frames = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 20,
+    })
+
+    const result = computeArmSwingAmplitude(frames, 'front')
+
+    expect(result.value).not.toBeNull()
+    expect(result.value).toBeCloseTo((40 + 20) / (2 * TORSO_LENGTH_PX), 2)
+    expect(result.unit).toBe('ratio')
+    expect(result.viewFit).toBe('primary')
+    expect(result.sampleSize).toBeGreaterThanOrEqual(4)
+    expect(result.frameCoverage).toBe(1)
+    // viewFitMultiplier 1, frameCoverage 1, interpolatedFraction 0, exact fits well past the
+    // saturation R² and the cycle floor -> confidence at or very near 1.
+    expect(result.confidence).toBeGreaterThan(0.9)
+    expect(result.caveat).toBeNull()
+  })
+
+  it('a side-view clip: still computed (never withheld), viewFit unsuitable, confidence capped near the 0.1 multiplier', () => {
+    const frames = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 40,
+    })
+
+    const result = computeArmSwingAmplitude(frames, 'side')
+
+    expect(result.value).not.toBeNull() // still computed, per "never a silent wrong number"
+    expect(result.viewFit).toBe('unsuitable')
+    expect(result.confidence).toBeLessThan(0.15)
+    expect(result.caveat).toContain('side view')
+  })
+
+  it('below the SHARED fit-quality gate the metric publishes nothing, on either arm', () => {
+    const frames = buildArmSwingFrames(REALISTIC)
+
+    // The realistic fixture's own fits sit around 0.79-0.84, so a 0.9 gate rejects it — the same
+    // config key, and therefore the same verdict, the symmetry metric reaches on this trace.
+    const strict = computeArmSwingAmplitude(frames, 'front', {
+      ...DEFAULT_HEURISTICS_CONFIG,
+      armSwingMinFitR2: 0.9,
+    })
+
+    expect(computeArmSwingAmplitude(frames, 'front').value).not.toBeNull()
+    expect(strict.value).toBeNull()
+    expect(strict.confidence).toBe(0)
+    expect(strict.caveat).toContain('too irregular to measure')
+  })
+
+  it('a rhythm mismatch between the two arms is not averaged into an amplitude', () => {
+    // The right arm oscillates at a different rate from the left — physically impossible for one
+    // body, so at least one fit found something that is not the arm swing (live: the multiperson
+    // clip's right arm latching onto the step rhythm at R² 0.324, CLEARING the 0.3 gate). A mean
+    // of an arm-swing amplitude and a step-bounce amplitude is not an arm-swing amplitude.
+    const left = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      swingFreqHz: 1.5,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 0,
+    })
+    const right = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      swingFreqHz: 3.0,
+      leftAmplitudePx: 0,
+      rightAmplitudePx: 40,
+    })
+    const merged = left.map((frame, i) => ({
+      ...frame,
+      keypoints: frame.keypoints.map((kp) =>
+        kp.name === 'right_wrist'
+          ? right[i].keypoints.find((other) => other.name === 'right_wrist')!
+          : kp,
+      ),
+    }))
+
+    const result = computeArmSwingAmplitude(merged, 'front')
+
+    expect(result.value).toBeNull()
+    expect(result.confidence).toBe(0)
+    // Its own wording, not the symmetry metric's "not comparable": what failed is the existence
+    // of one swing rhythm to size.
+    expect(result.caveat).toContain('a single arm-swing size cannot be measured')
+  })
+
+  it('no resolvable body scale: null with the missing-normalizer caveat, never a claim about the arms', () => {
+    // Shoulders and wrists resolve and fit cleanly; HIPS never do, so `estimateBodyScale` has
+    // nothing to measure. The scale-free symmetry sibling measures this clip; a torso-normalized
+    // amplitude cannot, and the caveat must name the true cause.
+    const frames = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 20,
+    }).map((frame) => ({
+      ...frame,
+      keypoints: frame.keypoints.map((kp) =>
+        kp.name === 'left_hip' || kp.name === 'right_hip'
+          ? { ...kp, x: null, y: null, score: 0, status: 'unrecoverable' as const }
+          : kp,
+      ),
+    }))
+
+    const result = computeArmSwingAmplitude(frames, 'front')
+
+    expect(result.value).toBeNull()
+    expect(result.confidence).toBe(0)
+    expect(result.caveat).toContain('No resolvable body-scale reference')
+  })
+
+  it('a degenerate zero-length torso is guarded, not divided by', () => {
+    // Hips resolve ON the shoulders, so `estimateBodyScale` returns a measured torso of exactly
+    // 0 px — the one resolvable-but-unusable normalizer. Never NaN/Infinity.
+    const frames = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 20,
+    }).map((frame) => ({
+      ...frame,
+      keypoints: frame.keypoints.map((kp) =>
+        kp.name === 'left_hip'
+          ? { ...kp, x: LEFT_SHOULDER_X, y: SHOULDER_Y }
+          : kp.name === 'right_hip'
+            ? { ...kp, x: RIGHT_SHOULDER_X, y: SHOULDER_Y }
+            : kp,
+      ),
+    }))
+
+    const result = computeArmSwingAmplitude(frames, 'front')
+
+    expect(result.value).toBeNull()
+    expect(result.confidence).toBe(0)
+    expect(result.caveat).toContain('No resolvable body-scale reference')
+  })
+
+  it('no resolvable wrist position: null value, 0 confidence, no crash', () => {
+    const frame = buildFrame({
+      left_shoulder: { x: LEFT_SHOULDER_X, y: SHOULDER_Y },
+      right_shoulder: { x: RIGHT_SHOULDER_X, y: SHOULDER_Y },
+      left_hip: { x: LEFT_HIP_X, y: HIP_Y },
+      right_hip: { x: RIGHT_HIP_X, y: HIP_Y },
+    })
+    const frames = Array.from({ length: 10 }, () => frame)
+
+    expect(() => computeArmSwingAmplitude(frames, 'front')).not.toThrow()
+    const result = computeArmSwingAmplitude(frames, 'front')
+
+    expect(result.value).toBeNull()
+    expect(result.confidence).toBe(0)
+    expect(result.sampleSize).toBe(0)
+    expect(result.caveat).toContain('No resolvable shoulder/wrist position')
+  })
+
+  it('an empty frame list produces a well-formed null result, without throwing', () => {
+    const result = computeArmSwingAmplitude([], 'front')
+
+    expect(result.value).toBeNull()
+    expect(result.confidence).toBe(0)
+    expect(result.frameCoverage).toBe(0)
+    expect(result.caveat).not.toBeNull()
+  })
+
+  it('the side-quality disparity caveat fires, in amplitude terms, and costs confidence', () => {
+    const bothEqual = computeArmSwingAmplitude(buildArmSwingFrames(REALISTIC), 'front')
+    // Identical swing on both arms; only the RIGHT arm's tracking is degraded — a magnitude does
+    // not self-cancel per-side tracking asymmetry the way the symmetry ratio partially does, so
+    // this caveat matters MORE here, not less.
+    const rightArmWorse = computeArmSwingAmplitude(
+      buildArmSwingFrames({ ...REALISTIC, rightJitterPx: 9, seed: 42 }),
+      'front',
+    )
+
+    expect(rightArmWorse.value).not.toBeNull()
+    expect(rightArmWorse.confidence).toBeLessThan(bothEqual.confidence * 0.9)
+    expect(rightArmWorse.caveat).toContain('tracked noticeably better')
+    expect(rightArmWorse.caveat).toContain('overall swing size')
+    expect(bothEqual.caveat ?? '').not.toContain('tracked noticeably better')
+  })
+
+  it('never NaN: every degenerate input yields a finite number or null', () => {
+    const empty = buildFrame({})
+    const cases = [
+      computeArmSwingAmplitude([], 'front'),
+      computeArmSwingAmplitude([empty, empty], 'front'),
+      computeArmSwingAmplitude(
+        buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 0, rightAmplitudePx: 0 }),
+        'front',
+      ),
+      computeArmSwingAmplitude(
+        buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 40 }),
+        'ambiguous',
+      ),
+    ]
+
+    for (const result of cases) {
+      if (result.value !== null) expect(Number.isFinite(result.value)).toBe(true)
+      expect(Number.isNaN(result.confidence)).toBe(false)
+      if (result.value === null) expect(result.confidence).toBe(0)
+    }
+  })
+})
+
+describe('computeArmSwingAmplitude — exemplars', () => {
+  const frames = buildArmSwingFrames({
+    ...BASE_PARAMS,
+    leftAmplitudePx: 40,
+    rightAmplitudePx: 24,
+  })
+
+  it('emits one armSwingCycle pair per side — the shared kind, from the shared builder', () => {
+    const exemplars = computeArmSwingAmplitude(frames, 'front').exemplars!
+
+    expect(exemplars).toHaveLength(2)
+    expect(exemplars.map((exemplar) => exemplar.kind)).toEqual([
+      'armSwingCycle',
+      'armSwingCycle',
+    ])
+    // One per arm, never two of the same one.
+    expect([...exemplars.map((exemplar) => exemplar.side)].sort()).toEqual(['left', 'right'])
+    for (const exemplar of exemplars) {
+      expect(exemplar.label).toContain('arm swing, ghosted together')
+      expect(exemplar.quality).toBeGreaterThanOrEqual(0.5)
+      expect(frames.map((frame) => frame.timestamp)).toContain(exemplar.timestamp)
+      expect(frames.map((frame) => frame.timestamp)).toContain(exemplar.pairedTimestamp)
+    }
+  })
+
+  it('emits nothing when the metric reports no value', () => {
+    const flat = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 0,
+      rightAmplitudePx: 0,
+    })
+
+    const result = computeArmSwingAmplitude(flat, 'front')
+
+    expect(result.value).toBeNull()
+    expect(result.exemplars).toBeUndefined()
+  })
+})

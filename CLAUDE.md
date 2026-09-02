@@ -618,7 +618,7 @@ control only, never a target.
 **Update (#36, same day): no longer diagnostics-only.** `verticalOscillationCm` is now the
 vertical-oscillation family's third real `MetricId` (`FormHeuristicsResult.verticalOscillationCm`,
 after `verticalOscillation`/`verticalRatio` — this took the panel from eight metrics to **nine**;
-⚠️ the `MetricId` union has since grown to **twelve**, which is the count to check against today —
+⚠️ the `MetricId` union has since grown to **thirteen**, which is the count to check against today —
 `src/heuristics/types.ts`, and `strides-x8w` swept three stale "ten" counts out of `src/` and the
 results-view spec on 2026-08-29)
 — `computeVerticalOscillationCmMetric` (`verticalOscillationCm.ts`) wraps the calculation described

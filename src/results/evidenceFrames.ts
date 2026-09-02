@@ -1499,8 +1499,8 @@ export function planClipEvidence(
     (entry): entry is [MetricId, FormHeuristicsResult[MetricId]] =>
       entry[0] !== 'view',
   )
-  // Once per clip, not once per metric: it costs three passes over every frame and twelve metrics
-  // asking the same question of the same array would get the same answer twelve times. The grafted
+  // Once per clip, not once per metric: it costs three passes over every frame and thirteen metrics
+  // asking the same question of the same array would get the same answer thirteen times. The grafted
   // direction is derived the same way from the other array, and only when there is one — it is a
   // property of the clip AS THAT PASS SAMPLED IT, and two passes can read it differently for the
   // same reason they read anything else differently.

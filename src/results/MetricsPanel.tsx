@@ -79,6 +79,8 @@ const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
     "How far to the side of your hip midline your foot lands at each footstrike, in real centimetres. Positive means it lands on its own side; negative means it crosses toward or past the midline — sometimes called a crossover gait, a pattern some runners work on for stability, not a diagnosis. It needs a real-world scale measurement from the clip, so it isn't always available.",
   kneeDrive:
     'How high you lift your thigh at the peak of each stride — the angle between your thigh and vertical, both legs combined. A movement-amplitude measurement from the video only: it says how far the knee comes up, not how much force is behind it. Distinct from knee flexion, which measures how much the knee bends.',
+  armSwingAmplitude:
+    'How far your wrists travel up and down through one arm swing, as a percentage of your torso length, averaged across both arms. A movement-amplitude measurement from the video only — it says how big the swing is, not what it contributes to your stride. Distinct from arm swing symmetry, which compares one arm to the other.',
 }
 
 const FOOT_STRIKE_CLASS_LABELS: Record<FootStrikeClass, string> = {
@@ -346,7 +348,7 @@ function ExcludedEntry({ metric, hint }: ExcludedEntryProps) {
 }
 
 /**
- * Numeric readouts for all twelve form heuristics, partitioned into tiers (#37; exclusion rule
+ * Numeric readouts for all thirteen form heuristics, partitioned into tiers (#37; exclusion rule
  * reversed by exclude-only-unmeasurable-metrics) rather than one uniform grid: tier 1
  * ('normal', measured, view-workable, confidence >= 0.7) and tier 2 ('caveated', measured,
  * view-workable, confidence < 0.7 with no lower bound) render as cards in the grid above,
@@ -382,6 +384,7 @@ export function MetricsPanel({
     heuristics.stepWidth,
     heuristics.stepWidthCm,
     heuristics.kneeDrive,
+    heuristics.armSwingAmplitude,
   ]
   const excluded = metrics.filter((metric) => metricTier(metric) === 'excluded')
   const caveatedCount = metrics.filter((metric) => metricTier(metric) === 'caveated').length

@@ -15,11 +15,12 @@ import { computeFootStrikePattern } from './footStrikePattern'
 import { computeStepWidth } from './stepWidth'
 import { computeStepWidthCm } from './stepWidthCm'
 import { computeKneeDrive } from './kneeDrive'
+import { computeArmSwingAmplitude } from './armSwingAmplitude'
 
 /**
- * View detection must run before all twelve metrics — each one's view-fit gating and confidence
+ * View detection must run before all thirteen metrics — each one's view-fit gating and confidence
  * depend on the detected `View`. Encoding that ordering dependency here, rather than leaving it
- * to every caller, means the results view makes one call instead of twelve that have to be
+ * to every caller, means the results view makes one call instead of thirteen that have to be
  * invoked in the right order.
  *
  * `verticalOscillationCm` is appended AFTER `verticalRatio` rather than inserted between
@@ -31,12 +32,13 @@ import { computeKneeDrive } from './kneeDrive'
  * `stepWidth` and `stepWidthCm` are both appended after `footStrikePattern`, per this file's
  * established append-only convention (#46, #45) — same order as their `MetricId` declaration
  * (ratio before cm, matching the `verticalOscillation`/`verticalOscillationCm` pairing above).
- * `kneeDrive` is appended after `stepWidthCm` on the same convention (add-knee-drive-metric).
+ * `kneeDrive` is appended after `stepWidthCm` on the same convention (add-knee-drive-metric),
+ * and `armSwingAmplitude` after `kneeDrive` (add-arm-swing-amplitude-metric).
  *
  * What the metrics are gated by is the view PLAUSIBILITY, not the view label
  * (`propagate-view-confidence-to-metric-gating`). This function resolves the config's view-fit
  * table against `view.plausibility` once and hands every metric the resolved table plus the
- * most-plausible view, so all twelve share one view decision — as they always have — and that
+ * most-plausible view, so all thirteen share one view decision — as they always have — and that
  * decision now carries the classification's own certainty instead of discarding it. Two
  * consequences worth stating explicitly:
  *
@@ -82,5 +84,6 @@ export function computeFormHeuristics(
     stepWidth: computeStepWidth(frames, gatedView, gatedConfig),
     stepWidthCm: computeStepWidthCm(frames, gatedView, gatedConfig),
     kneeDrive: computeKneeDrive(frames, gatedView, gatedConfig),
+    armSwingAmplitude: computeArmSwingAmplitude(frames, gatedView, gatedConfig),
   }
 }

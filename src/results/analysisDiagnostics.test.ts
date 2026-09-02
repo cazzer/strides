@@ -103,6 +103,7 @@ function makeHeuristics(overrides: Partial<FormHeuristicsResult> = {}): FormHeur
       caveat: "No real-world scale could be measured for this clip, so step width can't be reported in centimetres.",
     },
     kneeDrive: makeMetric({ metric: 'kneeDrive' }),
+    armSwingAmplitude: makeMetric({ metric: 'armSwingAmplitude', unit: 'ratio' }),
     ...overrides,
   }
 }
@@ -319,6 +320,7 @@ describe('computeAnalysisDiagnostics', () => {
     expect(diagnostics.metrics.cadence.value).toBe(170)
     expect(Object.keys(diagnostics.metrics).sort()).toEqual(
       [
+        'armSwingAmplitude',
         'armSwingSymmetry',
         'cadence',
         'footStrikePattern',

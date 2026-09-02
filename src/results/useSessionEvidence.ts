@@ -189,8 +189,8 @@ function sameClipSet(a: ClipEvidenceInputs[] | null, b: ClipEvidenceInputs[]): b
  * are upstream of the plan, not inputs to the extractor: `frameSize` reaches it only through the
  * crop rectangles it produced, and the other three only through the instants they selected — all
  * of which are already in the plan being compared. Comparing them instead was this hook's bug
- * (`strides-3ui`): the scale-pass graft rebuilds the `heuristics` OBJECT while carrying nine of
- * twelve metric results through by reference, so a reference check on the container reported
+ * (`strides-3ui`): the scale-pass graft rebuilds the `heuristics` OBJECT while carrying eleven of
+ * thirteen metric results through by reference, so a reference check on the container reported
  * "everything changed" and threw away a whole clip's images to re-decode them identically.
  *
  * Structural comparison via `JSON.stringify` is sound here because a plan is pure data and both

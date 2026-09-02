@@ -226,6 +226,17 @@ const FAKE_HEURISTICS: FormHeuristicsResult = {
     sampleSize: 6,
     caveat: null,
   },
+  armSwingAmplitude: {
+    metric: 'armSwingAmplitude',
+    value: 0.25,
+    unit: 'ratio',
+    confidence: 1,
+    viewFit: 'primary',
+    interpolatedFraction: 0,
+    frameCoverage: 1,
+    sampleSize: 2,
+    caveat: null,
+  },
 }
 
 beforeEach(() => {

@@ -143,6 +143,12 @@ function makeHighConfidenceResult(): FormHeuristicsResult {
     // test below covers the unavailable-on-this-backend case.
     stepWidthCm: makeStepWidthCm(),
     kneeDrive: makeMetric({ metric: 'kneeDrive', value: 45, confidence: 0.85 }),
+    armSwingAmplitude: makeMetric({
+      metric: 'armSwingAmplitude',
+      value: 0.25,
+      unit: 'ratio',
+      confidence: 0.8,
+    }),
   }
 }
 
@@ -231,11 +237,18 @@ function makeMixedTierResult(): FormHeuristicsResult {
       viewFit: 'unsuitable',
       caveat: 'Knee drive is a sagittal-plane measurement and is not reliable from a front view.',
     }),
+    // Front-primary, like stepWidth above -- tier 1 on this fixture's 'front' view.
+    armSwingAmplitude: makeMetric({
+      metric: 'armSwingAmplitude',
+      value: 0.25,
+      unit: 'ratio',
+      confidence: 0.72,
+    }),
   }
 }
 
 describe('MetricsPanel', () => {
-  it('renders all twelve metrics with their plain-language labels', () => {
+  it('renders all thirteen metrics with their plain-language labels', () => {
     render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
     expect(screen.getByText('Vertical oscillation')).toBeInTheDocument()
     expect(screen.getByText('Vertical ratio')).toBeInTheDocument()
@@ -249,6 +262,7 @@ describe('MetricsPanel', () => {
     expect(screen.getByText('Step width')).toBeInTheDocument()
     expect(screen.getByText('Step width (cm)')).toBeInTheDocument()
     expect(screen.getByText('Knee drive')).toBeInTheDocument()
+    expect(screen.getByText('Arm swing amplitude')).toBeInTheDocument()
   })
 
   it('renders formatted values and high-confidence labels for a clean (all tier-1) result', () => {
@@ -259,7 +273,7 @@ describe('MetricsPanel', () => {
     // on the panel.
     expect(screen.getByText('4.8 cm')).toBeInTheDocument()
     expect(screen.getByText('8.2 cm')).toBeInTheDocument()
-    expect(screen.getAllByText(/high confidence/i).length).toBe(12)
+    expect(screen.getAllByText(/high confidence/i).length).toBe(13)
     // No metric is excluded, so the excluded section doesn't render at all.
     expect(screen.queryByText(/not measurable for this clip/i)).not.toBeInTheDocument()
     // footStrikePattern is the one deliberate exception: its caveat is always present, even in a
@@ -276,7 +290,7 @@ describe('MetricsPanel', () => {
   it('renders a tier-1 card with the plain border and no data-tier="caveated"/"excluded"', () => {
     const { container } = render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
     const cards = container.querySelectorAll('.metrics-panel__card')
-    expect(cards.length).toBe(12)
+    expect(cards.length).toBe(13)
     for (const card of Array.from(cards)) {
       expect(card.getAttribute('data-tier')).toBe('normal')
     }
@@ -338,14 +352,14 @@ describe('MetricsPanel', () => {
 
   it('renders a tier-count summary line when any metric is caveated or excluded', () => {
     const { container } = render(<MetricsPanel heuristics={makeMixedTierResult()} />)
-    // The counts NEST: 8 tier-1 + 1 tier-2 = 9 metrics that got a card and show a number, with
+    // The counts NEST: 9 tier-1 + 1 tier-2 = 10 metrics that got a card and show a number, with
     // the caveated share parenthesised inside that total rather than subtracted from it. The
     // assertion below deliberately reads the card count off the same render, because the whole
     // point of the line is that it must not disagree with what is on screen.
-    expect(container.querySelectorAll('.metrics-panel__card').length).toBe(9)
+    expect(container.querySelectorAll('.metrics-panel__card').length).toBe(10)
     expect(
       screen.getByText(
-        '9 metrics measured (1 with caveat) · 3 not measurable for this clip (listed below)',
+        '10 metrics measured (1 with caveat) · 3 not measurable for this clip (listed below)',
       ),
     ).toBeInTheDocument()
   })
@@ -355,12 +369,12 @@ describe('MetricsPanel', () => {
     expect(container.querySelector('.metrics-panel__tier-summary')).not.toBeInTheDocument()
   })
 
-  it('9 cards render in the grid and 3 metrics are excluded for the mixed-tier fixture', () => {
+  it('10 cards render in the grid and 3 metrics are excluded for the mixed-tier fixture', () => {
     const { container } = render(<MetricsPanel heuristics={makeMixedTierResult()} />)
     const cards = container.querySelectorAll('.metrics-panel__card')
-    // trunkLean, overstriding and kneeDrive are excluded; the other 9 (1 caveated, 8 normal)
+    // trunkLean, overstriding and kneeDrive are excluded; the other 10 (1 caveated, 9 normal)
     // render as cards.
-    expect(cards.length).toBe(9)
+    expect(cards.length).toBe(10)
     const caveatedCount = Array.from(cards).filter(
       (card) => card.getAttribute('data-tier') === 'caveated',
     ).length
@@ -376,8 +390,8 @@ describe('MetricsPanel', () => {
     )
     // Declaration order is verticalOscillation, verticalRatio, verticalOscillationCm, trunkLean,
     // overstriding, cadence, kneeFlexion, armSwingSymmetry, footStrikePattern, stepWidth,
-    // stepWidthCm, kneeDrive -- trunkLean, overstriding and kneeDrive (excluded) are omitted,
-    // but every other label keeps its relative position.
+    // stepWidthCm, kneeDrive, armSwingAmplitude -- trunkLean, overstriding and kneeDrive
+    // (excluded) are omitted, but every other label keeps its relative position.
     expect(cardLabels).toEqual([
       'Vertical oscillation',
       'Vertical ratio',
@@ -388,6 +402,7 @@ describe('MetricsPanel', () => {
       'Foot strike pattern',
       'Step width',
       'Step width (cm)',
+      'Arm swing amplitude',
     ])
   })
 
@@ -698,7 +713,7 @@ describe('MetricsPanel', () => {
 
     // Nothing is excluded here, so the total is every metric on the panel and the caveated one
     // is counted inside it, not against it.
-    expect(screen.getByText('12 metrics measured (1 with caveat)')).toBeInTheDocument()
+    expect(screen.getByText('13 metrics measured (1 with caveat)')).toBeInTheDocument()
   })
 
   it('falls back to a generic reason for an excluded metric with no caveat text', () => {

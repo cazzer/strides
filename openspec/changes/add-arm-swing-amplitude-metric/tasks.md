@@ -25,7 +25,7 @@
 
 ## 3. Phase B — the metric
 
-- [ ] 3.1 New `src/heuristics/armSwingAmplitude.ts` — `computeArmSwingAmplitude(frames, view,
+- [x] 3.1 New `src/heuristics/armSwingAmplitude.ts` — `computeArmSwingAmplitude(frames, view,
       config)` on `computeArmSwingSymmetry`'s skeleton, same check order: unresolvable arms →
       per-side fit failure (shared `caveatForFailure`) → weaker-side R² < `armSwingMinFitR2`
       (GATE REUSE — no new constant) → cross-side frequency disagreement (shared bound, amplitude
@@ -36,9 +36,9 @@
       the shared `SIDE_FIT_QUALITY_DISPARITY_R2`, amplitude wording. Exemplars:
       `selectExemplars([...buildSideExemplar('left'…), ...buildSideExemplar('right'…)])`, kind
       `'armSwingCycle'` reused (D4).
-- [ ] 3.2 Doc edits (Phase B only): widen `types.ts` `'armSwingCycle'` member doc to name both
+- [x] 3.2 Doc edits (Phase B only): widen `types.ts` `'armSwingCycle'` member doc to name both
       consumers; widen `armSwingMinFitR2`'s doc to name its second consumer.
-- [ ] 3.3 `src/heuristics/armSwingAmplitude.test.ts` (synthetic-sinusoid fixtures per
+- [x] 3.3 `src/heuristics/armSwingAmplitude.test.ts` (synthetic-sinusoid fixtures per
       `armSwingSymmetry.test.ts`): exact clean value (mean of asymmetric sides, known
       amplitude/torso by construction), weaker-side R² gate → null, frequency mismatch → null,
       shoulders+wrists resolve but hips never → body-scale caveat, zero-torso guard, side view
@@ -47,18 +47,18 @@
 
 ## 4. Fan-out + count sweep (twelve → thirteen)
 
-- [ ] 4.1 `src/heuristics/types.ts`: `MetricId` += `'armSwingAmplitude'` appended last (after
+- [x] 4.1 `src/heuristics/types.ts`: `MetricId` += `'armSwingAmplitude'` appended last (after
       `'kneeDrive'`); `FormHeuristicsResult.armSwingAmplitude` appended last;
       `viewFitTable.armSwingAmplitude` row appended, COPYING `armSwingSymmetry`'s row exactly
       with a comment saying so. No new config key.
-- [ ] 4.2 `src/heuristics/index.ts`: wire `armSwingAmplitude` appended last; doc counts twelve →
+- [x] 4.2 `src/heuristics/index.ts`: wire `armSwingAmplitude` appended last; doc counts twelve →
       thirteen.
-- [ ] 4.3 `npx tsc -b`; fix every surfaced site: `fuseHeuristics.ts` both lists + test fixtures;
+- [x] 4.3 `npx tsc -b`; fix every surfaced site: `fuseHeuristics.ts` both lists + test fixtures;
       `metricConfidence.ts` `METRIC_LABELS` += `'Arm swing amplitude'`; `MetricsPanel.tsx`
       `METRIC_DESCRIPTIONS` (amplitude-proxy copy, distinct-from-symmetry sentence) + metrics
       array + doc count; `MetricsPanel.test.tsx` + counts 12 → 13; `index.test.ts` 'gates all
       thirteen'; remaining fixture builders as surfaced.
-- [ ] 4.4 Count sweep via `grep -rn "twelve" src/ CLAUDE.md AGENTS.md` — TRUE sites:
+- [x] 4.4 Count sweep via `grep -rn "twelve" src/ CLAUDE.md AGENTS.md` — TRUE sites:
       `viewPlausibility.ts:127-128`, `exemplars.ts:468`, `index.ts:20/22/39`,
       `extractFrames.ts:66`, `analysisDiagnostics.ts:61`, `evidenceFrames.ts:1502-1503`,
       `useSessionEvidence.ts:193`, `MetricsPanel.tsx:349`, `index.test.ts:234`,

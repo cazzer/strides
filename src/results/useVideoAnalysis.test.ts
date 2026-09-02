@@ -273,6 +273,17 @@ const FAKE_HEURISTICS: FormHeuristicsResult = {
     sampleSize: 6,
     caveat: null,
   },
+  armSwingAmplitude: {
+    metric: 'armSwingAmplitude',
+    value: 0.25,
+    unit: 'ratio',
+    confidence: 1,
+    viewFit: 'primary',
+    interpolatedFraction: 0,
+    frameCoverage: 1,
+    sampleSize: 2,
+    caveat: null,
+  },
 }
 
 function makeFakeHandle(): SampleClipHandle {
@@ -362,6 +373,17 @@ const FAKE_SCALE_HEURISTICS: FormHeuristicsResult = {
     interpolatedFraction: 0,
     frameCoverage: 1,
     sampleSize: 6,
+    caveat: null,
+  },
+  armSwingAmplitude: {
+    metric: 'armSwingAmplitude',
+    value: 0.27,
+    unit: 'ratio',
+    confidence: 0.9,
+    viewFit: 'primary',
+    interpolatedFraction: 0,
+    frameCoverage: 1,
+    sampleSize: 2,
     caveat: null,
   },
 }

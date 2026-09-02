@@ -37,6 +37,7 @@ describe('computeFormHeuristics', () => {
     expect(result.stepWidth.metric).toBe('stepWidth')
     expect(result.stepWidthCm.metric).toBe('stepWidthCm')
     expect(result.kneeDrive.metric).toBe('kneeDrive')
+    expect(result.armSwingAmplitude.metric).toBe('armSwingAmplitude')
 
     expect(result.verticalOscillation.value).not.toBeNull()
     expect(result.verticalRatio.value).not.toBeNull()
@@ -67,6 +68,10 @@ describe('computeFormHeuristics', () => {
     // for dedicated coverage of a clip that actually swings, including its own view-gating case.
     expect(result.armSwingSymmetry.value).toBeNull()
     expect(result.armSwingSymmetry.confidence).toBe(0)
+    // armSwingAmplitude reads the identical per-side fits through the shared armSwing.ts module,
+    // so it nulls here for the same reason, on the same clip.
+    expect(result.armSwingAmplitude.value).toBeNull()
+    expect(result.armSwingAmplitude.confidence).toBe(0)
     // PARAMS carries no pixelsPerMeter -- an "unscaled" clip, like every non-MediaPipe backend --
     // so verticalOscillationCm reports its availability caveat rather than a value. See the
     // dedicated scaled-vs-unscaled suite below for the resolved case.
@@ -90,6 +95,8 @@ describe('computeFormHeuristics', () => {
     expect(result.stepWidth.viewFit).toBe('unsuitable')
     // kneeDrive copies kneeFlexion's row: side-primary.
     expect(result.kneeDrive.viewFit).toBe('primary')
+    // armSwingAmplitude copies armSwingSymmetry's row: front-primary, so side is unsuitable.
+    expect(result.armSwingAmplitude.viewFit).toBe('unsuitable')
 
     // footStrikePattern's caveat is non-null even here, in the fully-populated clean case — the
     // one metric where that's true by design (it's always a proxy, never a direct measurement).
@@ -231,7 +238,7 @@ describe('computeFormHeuristics', () => {
     expect(orchestrated.view).toEqual(standaloneView)
   })
 
-  it('gates all twelve metrics consistently off an ambiguous view', () => {
+  it('gates all thirteen metrics consistently off an ambiguous view', () => {
     const frames = generateSyntheticGait({
       ...PARAMS,
       strideAmplitudePx: 20, // engineered BSR/SER disagreement, see viewDetection.test.ts
@@ -263,6 +270,8 @@ describe('computeFormHeuristics', () => {
     expect(result.stepWidthCm.viewFit).toBe('unsuitable')
     // kneeDrive copies kneeFlexion's row -- hard-gated away from ambiguous views too.
     expect(result.kneeDrive.viewFit).toBe('unsuitable')
+    // armSwingAmplitude copies armSwingSymmetry's row -- same hard gate on ambiguous views.
+    expect(result.armSwingAmplitude.viewFit).toBe('unsuitable')
   })
 
   it('never throws on an empty frame list and returns a well-formed, non-null-crashing result', () => {
@@ -281,6 +290,7 @@ describe('computeFormHeuristics', () => {
     expect(result.stepWidth.value).toBeNull()
     expect(result.stepWidthCm.value).toBeNull()
     expect(result.kneeDrive.value).toBeNull()
+    expect(result.armSwingAmplitude.value).toBeNull()
     expect(result.verticalOscillation.confidence).toBe(0)
     expect(result.verticalRatio.confidence).toBe(0)
     expect(result.verticalOscillationCm.confidence).toBe(0)
@@ -292,6 +302,8 @@ describe('computeFormHeuristics', () => {
     expect(result.stepWidth.confidence).toBe(0)
     expect(result.stepWidthCm.confidence).toBe(0)
     expect(result.kneeDrive.confidence).toBe(0)
+    expect(result.armSwingAmplitude.confidence).toBe(0)
+    expect(result.armSwingAmplitude.caveat).not.toBeNull()
     expect(result.kneeDrive.caveat).not.toBeNull()
     expect(result.footStrikePattern.caveat).not.toBeNull()
     expect(result.verticalOscillationCm.calibration).toBeNull()

@@ -142,6 +142,7 @@ function makeResult(
     stepWidth: makeMetric({ metric: 'stepWidth', value: 0.15, unit: 'percent' }),
     stepWidthCm,
     kneeDrive: makeMetric({ metric: 'kneeDrive', value: 45 }),
+    armSwingAmplitude: makeMetric({ metric: 'armSwingAmplitude', value: 0.25, unit: 'ratio' }),
   }
 }
 

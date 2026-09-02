@@ -74,6 +74,7 @@ export type MetricId =
   | 'stepWidth'
   | 'stepWidthCm'
   | 'kneeDrive'
+  | 'armSwingAmplitude'
 
 export interface ViewDetectionResult {
   view: View
@@ -133,8 +134,11 @@ export type MetricExemplarKind =
    * (all three read the same shape of fit). `cadence` reads that fit too and deliberately emits
    * nothing: a rate is a property of a sequence, and these two stills depict an amplitude. */
   | 'bounceCycle'
-  /** One arm-swing half-cycle — the wrist at its highest and its lowest, on ONE side. Two of these
-   * (one per arm) is what makes `armSwingSymmetry` legible: the comparison IS the evidence. */
+  /** One arm-swing half-cycle — the wrist at its highest and its lowest, on ONE side, shared by
+   * `armSwingSymmetry` and `armSwingAmplitude` (both read the same shape of per-side fit, via the
+   * shared `armSwing.ts` builder). Two of these (one per arm) is what makes either metric legible:
+   * for symmetry the comparison IS the evidence, and for amplitude the pair spans the very
+   * excursion the mean is taken over. */
   | 'armSwingCycle'
   /** One stride — two consecutive same-side footstrikes, the interval whose hip-mid horizontal
    * displacement is `verticalRatio`'s DENOMINATOR. Distinct from `'bounceCycle'`, which is that
@@ -495,6 +499,7 @@ export interface FormHeuristicsResult {
   stepWidth: MetricResult
   stepWidthCm: MetricResult
   kneeDrive: MetricResult
+  armSwingAmplitude: MetricResult
 }
 
 export interface HeuristicsConfig {
@@ -717,7 +722,10 @@ export interface HeuristicsConfig {
    * against the weaker side specifically, because a noise-fitted amplitude on one arm becomes a
    * fabricated asymmetry rather than merely a fuzzy number. It replaced
    * `armSwingMinProminenceRatio`, whose extrema-prominence estimator was measured latching onto
-   * sub-cycle wiggles (see `armSwingSymmetry.ts`). */
+   * sub-cycle wiggles (see `armSwingSymmetry.ts`). THE gate for both arm metrics —
+   * `armSwingSymmetry` and `armSwingAmplitude` gate the identical per-side fits
+   * (`armSwing.ts`) on this one key, deliberately never a second constant, so the family cannot
+   * disagree with itself about whether the fits are trustworthy. */
   armSwingMinFitR2: number // 0.3
 
   /** Half-width, as a fraction of torsoLengthPx, of the "midfoot" band in `footStrikePattern`'s
@@ -864,6 +872,14 @@ export const DEFAULT_VIEW_FIT_TABLE: HeuristicsConfig['viewFitTable'] = {
   kneeDrive: {
     side: { fit: 'primary', multiplier: 1.0 },
     front: { fit: 'unsuitable', multiplier: 0.1 },
+    ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
+  },
+  // Copies armSwingSymmetry's row exactly, not merely similarly: the two arm metrics read the
+  // identical per-side fits, and a side view occludes/superimposes the far arm — an amplitude
+  // averaged over a visible arm and an occluded one is contaminated just as a comparison is.
+  armSwingAmplitude: {
+    front: { fit: 'primary', multiplier: 1.0 },
+    side: { fit: 'unsuitable', multiplier: 0.1 },
     ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
   },
 }
