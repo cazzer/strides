@@ -69,13 +69,13 @@
 
 ## 5. Phase B verification
 
-- [ ] 5.1 `npm test`, `npx tsc -b`, `npm run lint` — all clean.
-- [ ] 5.2 Rerun the Step-0 command → `wave2/afterB.txt`; expected diff vs baseline: ONLY the
+- [x] 5.1 `npm test`, `npx tsc -b`, `npm run lint` — all clean.
+- [x] 5.2 Rerun the Step-0 command → `wave2/afterB.txt`; expected diff vs baseline: ONLY the
       header commit line, `elapsedMs` rows, and ADDED `armSwingAmplitude` rows (metric values +
       `evidence.armSwingAmplitude.*` status on all three clips; exemplars Demo 2 only).
       `armSwingSymmetry` explicitly bit-identical. Adjudicate every D3 rule and record in
       design.md D3.
-- [ ] 5.3 Anchor driver re-check: `verticalOscillationCm 4.421467928439415`,
+- [x] 5.3 Anchor driver re-check: `verticalOscillationCm 4.421467928439415`,
       `fit.frequencyHz × 60 = 91.2 == cadence`.
 
 ## 6. Ship + archive (NOT this pass — after code review)

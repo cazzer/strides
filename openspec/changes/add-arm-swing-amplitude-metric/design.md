@@ -77,11 +77,37 @@ Fresh-process regime, 3 trials per clip, all three clips, `scripts/ab-person-sel
    formula), and the amplitude metric's exemplar timestamps bit-equal to the symmetry metric's
    (same `buildSideExemplar` on the same fits).
 
-### D3 — Adjudication (recorded after the Phase-B run; measurements pending as of registration)
+### D3 — Adjudication (recorded 2026-09-02, after the Phase-B run)
 
-_To be filled in from `wave2/afterB.txt` vs `wave2/baseline.txt` and the anchor driver, per rule,
-after Phase B lands. Registered empty on purpose — the rules above are committed before any live
-Phase-B run so the expectations cannot be tuned toward a result._
+Measured on the Phase-B tree (fresh-process, 3 trials/clip, `--evidence`, identity-verified
+server, real GPU `ANGLE Metal Renderer: Apple M4 Pro`); `wave2/afterB.txt` vs
+`wave2/baseline.txt`, plus the separate scale-pass anchor driver:
+
+1. **PASS — zero cross-trial spread.** Every `armSwingAmplitude` row (value, confidence,
+   coverage, interpolation, sampleSize, viewFit, and all `evidence.armSwingAmplitude.*` fields)
+   prints a single number with no `[a..b]` range, on all three clips.
+2. **PASS — Demo 2 value 0.251351**, inside 0.2513 ± 0.005 (expected
+   (72.80 + 44.16) / (2 × 232.7) = 0.25131; miss 0.00004). Confidence 0.384572, `viewFit`
+   primary, sampleSize 2, frameCoverage 0.989899.
+3. **PASS — Demo 1 value 0.279112 ∈ (0, 1)**, `viewFit` unsuitable (side view) → tier-3, and
+   `evidence.armSwingAmplitude.status = no-evidence` / `reason = metric-excluded` — no exemplar
+   rows, as a tier-3 metric must have.
+4. **PASS — multiperson null.** `value: null`, confidence 0, `frameCoverage 0.934579` (arms
+   resolved — the null is a gate, not missing input), `status no-evidence / metric-excluded`.
+   Consistent with the D6 rhythm mismatch: the same clip nulls `armSwingSymmetry` on the shared
+   cross-side bound (left 1.48 Hz / right 2.80 Hz, disagreement 0.892), and the amplitude metric
+   reads the identical fits through the identical shared check.
+5. **PASS — diff allowance exact.** `diff baseline.txt afterB.txt` contains ONLY the header
+   commit line, the three `elapsedMs` rows, and ADDED `armSwingAmplitude` rows (metric block on
+   all three clips; evidence status on all three; exemplar rows on Demo 2 only — 2
+   `armSwingCycle` pairs). `armSwingSymmetry` is bit-identical everywhere, as is every other
+   pre-existing metric. Anchor re-check: `verticalOscillationCm 4.421467928439415`,
+   `fit.frequencyHz 1.52 × 60 = 91.2 == cadence 91.2`, `subjectAgreement` 52/53 — unchanged from
+   the Step-0 baseline reading.
+6. **Soft expectations: BOTH HOLD, bit-exactly.** Demo 2 confidence prints `0.384572` on both
+   arm metrics, and the amplitude metric's exemplars are bit-equal to the symmetry metric's:
+   left `timestamp 0.934267 / pairedTimestamp 0.583917`, right `timestamp 0.6006 /
+   pairedTimestamp 0.934267`, both at `cropSidePx 320`, `quality 1`, `demotion null`.
 
 ## D4 — Exemplar: `'armSwingCycle'` REUSED, not a new kind
 
