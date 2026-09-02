@@ -151,13 +151,94 @@ fresh-process regime), one trial each on Demo 1 and multiperson as corroboration
    CLAUDE.md), and this metric MUST emit there — any implementation path that needs a travel
    direction is a design error, not a tuning problem.
 
-## D4 — Probe measurements and verdicts (**pending probe** — to be recorded after it runs)
+## D4 — Probe measurements and verdicts (recorded 2026-09-02) — **STOP: rule 3 fired**
 
-To be filled with: the per-clip percentile ladders, per-side counts and interpolated fractions,
-strict-pair frame counts, fraction-past-midline, both candidate denominators
-(`shoulderWidthPx` vs `torsoLengthPx`), the Demo 2 tail composition, and a rule-by-rule
-adjudication of D3's five pre-registered rules — including the pinned rung and the live anchor
-value for D8 rule 2. Nothing in this section is written before the probe runs.
+Fresh Chromium process per trial, real GPU (`ANGLE Metal Renderer: Apple M4 Pro`), dev server
+started on the derived port and identity-verified by the driver, `[arm-crossing-probe]` captured
+after `[analysis-diagnostics]`, computed over `trimToPresenceWindow(robustFrames)` — the exact
+frames the metric would see. Demo 2 ran twice: **bit-identical** (`cmp` on the two JSON reports,
+full series included), on both probe invocations. Demo 1 and multiperson once each. One probe
+deviation, corrected before adjudication: the first probe build omitted the full signed series
+D3's registered report list requires; it was added to match the registration and the probe was
+re-run — Demo 2's summary numbers were identical across the two builds to every digit.
+
+| | Demo 2 (front, primary) | Demo 1 (side) | multiperson (side) |
+|---|---|---|---|
+| frames / strict-pair frames | 99 / 99 | 59 / 59 | 107 / 107 |
+| pooled n | 197 | 108 | 203 |
+| pooled p50 | −0.58482 | −0.92152 | −0.49725 |
+| pooled p90 | −0.37776 | **+1.11950** | +0.50603 |
+| pooled p95 | **−0.34213** | **+1.30819** | +0.83823 |
+| pooled p99 | −0.28084 | +1.45570 | +1.65486 |
+| pooled max | −0.27628 | +1.66499 | +2.15044 |
+| pooled interp fraction | 0.0254 | 0.4907 | 0.2365 |
+| left n / interp | 98 / 0.0306 | 53 / 0.5849 | 100 / 0.1400 |
+| right n / interp | 99 / 0.0202 | 55 / 0.4000 | 103 / 0.3301 |
+| fraction past midline L / R | **0.000 / 0.000** | 0.340 / 0.182 | 0.260 / 0.369 |
+| shoulderWidthPx | 164.99 | 97.09 | 23.27 |
+| torsoLengthPx | 232.65 | 418.13 | 96.47 |
+
+**Demo 2 tail composition — the decisive measurement.** Top ⌈0.05 n⌉ = 10 pooled frames:
+0 of 10 interpolated; instants `0.100 s (right)` and `0.300–0.434 s (left, 9 contiguous
+frames)`. Top ⌈0.10 n⌉ = 20 frames (the p90 re-test): 0 of 20 interpolated; instants
+`0.083–0.434 s`, **19 of 20 the left arm**, with no internal gap exceeding 0.067 s — one
+time-cluster under the registered > 0.25 s separation criterion. **The entire upper tail of the
+pooled distribution, at both rungs, lives in the clip's opening ~0.35 s** — a single left-arm
+window (plus one stray right-arm frame at the same clip-opening moment), not a per-cycle typical
+reach. The clip's fitted stride rhythm (~1.5 Hz) holds ~2.5 medial approaches per arm across its
+1.65 s, so a tail representing "typical deepest reach" would span several of them; it spans one.
+
+**Adjudication, rule by rule:**
+
+1. **Plausibility — FIRED on Demo 1 as registered.** The rule was registered as "the pooled p95
+   on every clip lies in [−1.0, +1.0]". Demo 2: −0.342, comfortably in-band. Demo 1: **+1.308**
+   (p90 +1.120 — out of band at either rung); multiperson: +0.838 (in-band, but its p99/max run
+   to +2.15). The out-of-band side-view readings are the documented mediolateral axis-collapse
+   this metric is `unsuitable`-gated for — a fore-aft wrist swing read over a collapsed shoulder
+   width (97 px against a 418 px torso on Demo 1; 23 px on multiperson), with half of Demo 1's
+   samples interpolated. The plan's own text for this rule carried no per-clip scope, and rules
+   2 and 4 are explicitly Demo-2-scoped; the "every clip" scope was this design's registration
+   choice. Recorded as FIRED under the rule as registered; whether the scope should have been
+   Demo 2 only is for the reviewer, not for a post-hoc edit here. It is moot for the outcome,
+   because:
+2. **Sample gate — PASS.** Demo 2 pooled n = 197 ≥ 61.
+3. **Noise-tail — FIRED, at both rungs. This is the STOP.** At p95: the tail is not two medial
+   approaches separated by > 0.25 s — its two side-labeled clusters sit 0.200 s apart (merged
+   under the registered criterion), and substantively it is ONE left-arm approach plus a single
+   right-arm frame. Fall back to p90 per the rule; at p90 the top-20 tail is unambiguously a
+   SINGLE time-cluster (0.083–0.434 s, 19/20 one arm) — fails the same condition with no reading
+   in its favor. "p90 also fails → STOP." The interpolation half of the rule passes at both rungs
+   (0%); it is the dwell half that fails, which is exactly the failure mode D1's docstring
+   pre-registered this check as the empirical guard for ("contamination arrives in windows, so
+   k = 2 frames is optimistic").
+4. **Live anchor — NOT PINNED.** No rung survived rule 3, so no D8 anchor exists.
+5. **Direction independence — held by construction.** The probe imports no
+   `estimateTravelDirection`; Demo 2 (indeterminate travel direction) produced every field.
+
+**What the measurement says, beyond the verdicts.** Two findings a successor design must answer:
+
+- **The reference front clip contains no crossing at all**: fraction past midline is 0.000 on
+  both sides; the pooled maximum is −0.276 (the closest any wrist comes to the midline is ~0.28
+  shoulder widths short of it). Every Demo 2 value the card would ever have shown is negative,
+  the exemplar label would always be the "closest approach" branch, and the interpretive crossing
+  caveat would never fire on the reference corpus — so the corpus cannot distinguish a working
+  crossing detector from a broken one on the positive side.
+- **The upper tail is an episode, not a rhythm**: the deepest medial reaches all sit in the
+  clip's opening, where the runner is most distant (smallest on screen — the same clip-opening
+  window `strides-boc` documents as MediaPipe's degraded zone, though these frames are
+  MoveNet-detected, 0% interpolated). Whether that is genuine arm carriage at distance or
+  scale-dependent measurement noise, a pooled upper-tail percentile reads it as the headline
+  number. Any successor statistic needs either per-approach aggregation (a per-cycle extremum
+  median, the shape `kneeDrive` uses) or an explicit guard against single-window tails.
+
+**Denominator cross-check (D2), for the record:** Demo 2 shoulderWidthPx = 165.0 px vs
+torsoLengthPx = 232.7 px. No verdict is drawn — the metric did not survive to need one — but the
+measured side-view collapse (97 px and 23 px against torsos of 418 px and 96 px) confirms D2's
+degeneracy-self-consistency claim as stated.
+
+**Consequence: the change STOPS here.** Per D3's registered consequences, the implementation
+(tasks 3–5) is not built. The probe instrumentation is reverted per the add–measure–revert
+cycle; this record and the skeleton remain as the pre-registered, adjudicated record.
 
 ## D5 — Exemplar: one single-instant `'armCrossingInstant'`; a ghosted pair REJECTED
 
@@ -278,8 +359,7 @@ baseline at `dc48f56`; plus the scale-pass anchor driver.
 6. **Anchor unchanged:** `verticalOscillationCm 4.421467928439415`,
    `fit.frequencyHz × 60 = 91.2 == cadence.value 91.2`.
 
-### D8 — Adjudication (**pending live run** — to be recorded after it runs)
+### D8 — Adjudication: **MOOT — the change stopped at D4**
 
-To be filled with the measured per-rule verdicts (values, confidences, tier landings, evidence
-rows, the full diff summary, and the anchor readout) once the implementation exists and the live
-run has executed. Nothing in this section is written before that run.
+D3 rule 3 fired at both rungs (see D4), so the implementation was never built and no live run
+exists to adjudicate. The rules above are left as registered, unedited, as part of the record.

@@ -10,7 +10,7 @@
 
 ## 2. The measurement probe (add–measure–revert)
 
-- [ ] 2.1 Temporary `src/heuristics/armMidlineCrossing.experimental.ts` computing D3's report
+- [x] 2.1 Temporary `src/heuristics/armMidlineCrossing.experimental.ts` computing D3's report
       (per-side + pooled signed series per D1, percentile ladder, per-side counts/interpolated
       fractions, strict-pair frame count, fraction past midline, `shoulderWidthPx` AND
       `torsoLengthPx`, top-⌈0.05n⌉ tail timestamps + interpolated flags); one dev-only
@@ -18,12 +18,16 @@
       `[analysis-diagnostics]` line; throwaway scratchpad Playwright driver, fresh process per
       trial, real GPU. TWO fresh trials Demo 2 (expect bit-identical), one each Demo 1 /
       multiperson.
-- [ ] 2.2 Adjudicate D3's five pre-registered rules; record measurements + verdicts in design.md
+- [x] 2.2 Adjudicate D3's five pre-registered rules; record measurements + verdicts in design.md
       D4, pinning the rung and the D8 live anchor. Any STOP rule fires → stop and report, do not
-      implement.
-- [ ] 2.3 Revert the instrumentation (`git checkout -- src/results/useVideoAnalysis.ts && rm
+      implement. **STOP FIRED: rule 3 (noise-tail) failed at BOTH rungs — the pooled upper tail
+      is a single clip-opening window, not a typical per-cycle reach; rule 1 also fired on
+      Demo 1 under its as-registered every-clip scope. See D4. Tasks 3–5 are NOT executed.**
+- [x] 2.3 Revert the instrumentation (`git checkout -- src/results/useVideoAnalysis.ts && rm
       src/heuristics/armMidlineCrossing.experimental.ts`); commit the design.md record. If the
-      rung moved to p90, retitle the spec requirement accordingly and re-validate.
+      rung moved to p90, retitle the spec requirement accordingly and re-validate. (No rung
+      survived; the spec deltas are left as drafted for the reviewer's disposition of the
+      stopped change.)
 
 ## 3. Implementation
 
