@@ -26,8 +26,10 @@
 - [x] 2.3 Revert the instrumentation (`git checkout -- src/results/useVideoAnalysis.ts && rm
       src/heuristics/armMidlineCrossing.experimental.ts`); commit the design.md record. If the
       rung moved to p90, retitle the spec requirement accordingly and re-validate. (No rung
-      survived; the spec deltas are left as drafted for the reviewer's disposition of the
-      stopped change.)
+      survived. Reviewer ruling 2026-09-02: the ticket is WITHDRAWN — the delta files are
+      removed and the change archived with `skip_specs: true` per the
+      `derive-area-floor-from-4k-measurement` precedent; the drafted delta text survives at the
+      skeleton commit `039e8cb`.)
 
 ## 3. Implementation
 
@@ -90,5 +92,7 @@
 
 ## 6. Ship + archive (NOT this pass — after code review)
 
-- [ ] 6.1 `openspec archive add-arm-midline-crossing-metric --yes` after ship + verify; close the
-      bead per the epic's flow.
+- [x] 6.1 `openspec archive add-arm-midline-crossing-metric --yes` after ship + verify; close the
+      bead per the epic's flow. (Done as a WITHDRAWAL on the reviewer's 2026-09-02 ruling:
+      archived with `--skip-specs` — nothing shipped, no spec fold, main specs untouched. Bead
+      disposition left to the coordinator.)

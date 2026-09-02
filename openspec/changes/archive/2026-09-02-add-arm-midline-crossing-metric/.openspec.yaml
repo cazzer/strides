@@ -1,0 +1,11 @@
+schema: spec-driven
+created: 2026-09-02
+# No spec delta. This change was pre-registered (ADDED x3 on `form-heuristics`, MODIFIED x1 on
+# `results-view`'s metric count), the probe was run, and pre-registered rule D3.3 (noise-tail)
+# fired at BOTH rungs — the pooled upper tail on the primary clip is a single clip-opening
+# window, and the corpus contains no positive crossing anywhere to validate the metric's
+# defining branch against — so the metric was never implemented and the drafted requirements are
+# WITHDRAWN rather than weakened to fit (unsatisfiable-as-validated on this repo's own footage;
+# see design.md D4). The delta text survives at the skeleton commit 039e8cb. What remains is a
+# measurement record; no src/ change exists (the probe was added, measured, reverted).
+skip_specs: true

@@ -1,5 +1,18 @@
 # Design — add-arm-midline-crossing-metric
 
+**WITHDRAWN (2026-09-02).** D3 rule 3 fired at both rungs and the change stopped at D4 — the
+metric was never implemented. The spec deltas drafted for this change are **withdrawn, not
+weakened** (`skip_specs: true`, the `derive-area-floor-from-4k-measurement` precedent): the
+95th-percentile requirement as drafted is unsatisfiable-as-validated on this repo's own footage
+— D4 shows (a) the pooled upper tail on the primary clip is a single clip-opening window at both
+the p95 and p90 rungs, and (b) the corpus contains no positive crossing anywhere (Demo 2 pooled
+max −0.276, fraction past midline 0.000 both arms), so no statistic computable from it can
+validate the metric's defining branch — and weakening the requirement to fit would be editing a
+criterion to match a result. The drafted delta text survives in git history at the skeleton
+commit (`039e8cb`). Successor direction, contingent on a front-view clip where the arms actually
+cross: per-approach aggregation (`kneeDrive`'s per-cycle-extremum shape) or a single-window-tail
+guard — see D4's "What the measurement says".
+
 D1–D8 were REGISTERED before the measurement probe ran. Sections marked **pending probe** /
 **pending live run** are filled in only after the corresponding measurement, and the
 pre-registered rules are not edited afterwards — a rule that fails STOPs the change, it does not

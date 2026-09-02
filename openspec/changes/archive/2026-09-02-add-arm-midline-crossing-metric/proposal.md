@@ -1,5 +1,39 @@
 # Proposal — add-arm-midline-crossing-metric
 
+## OUTCOME (2026-09-02) — measured, NOT shipped; the drafted spec deltas are WITHDRAWN
+
+**The probe was run and pre-registered rule D3.3 (noise-tail) fired at both rungs. Nothing below
+this section was built.** Read `design.md` D4 first; the sections below are the proposal as
+written *before* measuring, kept intact as the pre-registration record.
+
+Three findings decide it (all in D4):
+
+- **The noise-tail STOP, at both rungs.** On Demo 2 — the one clip this front-view-gated metric
+  is designed for — the pooled distribution's entire upper tail (top ⌈0.05n⌉ AND top ⌈0.10n⌉
+  frames) sits in one clip-opening window, 0.083–0.434 s, 19/20 frames one arm. The p95 (and the
+  p90 fallback) reads a single episode of the clip, not a typical per-cycle reach; the
+  pre-registered dwell check exists for exactly this and "p90 also fails → STOP".
+- **The corpus cannot validate the metric's defining branch.** The reference front clip contains
+  no crossing at all: fraction of samples past the midline is 0.000 on both arms and the pooled
+  maximum is −0.276 shoulder widths — every value the card would ever have shown on available
+  footage is negative, so no statistic computable from this corpus can distinguish a working
+  crossing detector from a broken one on the positive side.
+- **A post-hoc statistic swap is not available.** Any replacement statistic adjudicated against
+  the same probe data would be a criterion edited to match a result — the move the
+  pre-registration discipline exists to forbid.
+
+**The spec deltas are withdrawn, not weakened** (`skip_specs: true`, the
+`derive-area-floor-from-4k-measurement` precedent): the drafted 95th-percentile requirement is
+unsatisfiable-as-validated on this repo's own footage, and no rung survived to retitle it to.
+The drafted delta text remains in git history at the skeleton commit (`039e8cb`) as part of the
+pre-registration record. **What ships: this measurement record.** No `src/` change exists —
+the probe was added, measured and reverted per the add–measure–revert cycle.
+
+**Successor direction, contingent on footage that does not exist yet**: per-approach aggregation
+(a per-cycle extremum median, the shape `kneeDrive` uses) or an explicit single-window-tail
+guard — validated on a front-view clip where the arms actually cross the midline. Without such a
+clip, re-attempting this metric re-derives D4's negative result.
+
 ## Why
 
 Bead `strides-7a6.3` (epic `strides-7a6`, appendage-drive metrics — Wave 3, after
