@@ -80,5 +80,5 @@
 
 ## 6. Ship + archive (NOT this pass — after code review)
 
-- [ ] 6.1 `openspec archive add-arm-swing-amplitude-metric --yes` after ship + verify; close the
+- [x] 6.1 `openspec archive add-arm-swing-amplitude-metric --yes` after ship + verify; close the
       bead per the epic's flow.
