@@ -72,12 +72,19 @@ export type EvidenceAnnotationLayer = 'joint' | 'measurement'
 export type EvidenceMarkRole =
   /** hip-mid → shoulder-mid. `trunkLean.ts:164-165` measures exactly this vector. */
   | 'torsoVector'
-  /** Straight up from the torso vector's own origin — the `-dy` in `atan2(dx, -dy)`. */
+  /** Straight up or straight down from the measured vector's own origin — the `-dy` in
+   * trunkLean's `atan2(dx, -dy)` (up, a torso points up) or the `+dy` in kneeDrive's
+   * `atan2(dx, dy)` (down, a thigh points down). */
   | 'verticalReference'
   /** The angle `atan2(dx, -dy)` spans, at hip-mid. SCREEN-relative: `trunkLean.ts:171-173`
    * multiplies it by `travelDirection`, so on a right-to-left runner this arc opens the opposite
    * way from the sign the card reports. */
   | 'trunkLeanArc'
+  /** The angle kneeDrive's `atan2(dx, dy)` spans between the down-vertical and hip→knee, at the
+   * hip. SCREEN-relative, like `trunkLeanArc`: `kneeDrive.ts` multiplies the angle by
+   * `travelDirection`, so on a right-to-left runner this arc opens the opposite way from the
+   * sign convention the card's value was formed under. */
+  | 'kneeDriveArc'
   | 'thigh'
   | 'shank'
   /** hip→knee continued past the knee — where the thigh's own line goes if the leg straightens.
@@ -705,6 +712,33 @@ function buildKneeFlexionMarks(ctx: InstantContext): void {
   builder.arc('kneeInteriorArc', knee, hip, ankle, true)
 }
 
+function buildKneeDriveMarks(ctx: InstantContext): void {
+  const { builder, index, plan, role } = ctx
+  const side = plan.side
+  if (side === undefined) return
+  const hip = builder.point(index, HIP_NAME[side])
+  const knee = builder.point(index, KNEE_NAME[side])
+  if (hip === null || knee === null) return
+
+  builder.line('thigh', hip, knee, [HIP_NAME[side], KNEE_NAME[side]])
+
+  // The ghost is the trailing-swing trough: `kneeDrive.ts` says outright that it "is not itself
+  // a measurement — it is what makes the lift angle legible". It gets the thigh line, so the
+  // reader can see the swept-back thigh to read the driven one against, and NOT the arc — an
+  // angle arc is the strongest "this was measured here" mark in the vocabulary, and no angle
+  // was taken at it.
+  if (role === 'ghost') return
+
+  const thighLength = Math.hypot(knee.x - hip.x, knee.y - hip.y)
+  if (!(thighLength > 0)) return
+  // Canvas y grows downward, so "down" is +y — the same `dy` `kneeDrive.ts` feeds atan2 (the
+  // DOWN-vertical zero; a thigh points down, unlike trunkLean's up-vertical). The reference ray
+  // is given the thigh's own length so the arc has two rays of equal reach.
+  const down = derived(hip, hip.x, hip.y + thighLength)
+  builder.line('verticalReference', hip, down)
+  builder.arc('kneeDriveArc', hip, down, knee, false)
+}
+
 function buildOverstrideMarks(ctx: InstantContext): void {
   const { builder, index, instant } = ctx
   const hipMid = builder.tolerantMidpoint(index, 'left_hip', 'right_hip')
@@ -861,6 +895,7 @@ const INSTANT_MARK_BUILDERS: Record<
   armSwingCycle: buildArmSwingMarks,
   bounceCycle: buildBounceMarks,
   stridePair: buildStrideInstantMarks,
+  kneeDrivePeak: buildKneeDriveMarks,
 }
 
 /**
@@ -871,6 +906,8 @@ const INSTANT_MARK_BUILDERS: Record<
  *   "precisely because a fitted amplitude has no per-instance values" (`bounceInstants.ts:193-200`).
  * - `kneeFlexionPeak`'s ghost is the extension trough, scored with `value` absent
  *   (`kneeFlexion.ts:104-108`) and documented as not a measurement (`:74-77`).
+ * - `kneeDrivePeak`'s ghost is the trailing-swing trough, on the identical peak/trough contract
+ *   (`kneeDrive.ts`'s `buildExemplars` scores it with `value` absent).
  * - Every other kind measures at both instants: the two trunk-lean extremes, the two footstrikes
  *   of an overstride range, the two opposite-foot plants, the two wrist extrema, the two strikes
  *   bounding a stride.
@@ -881,6 +918,7 @@ function measuredAtInstant(
 ): boolean {
   if (kind === 'bounceCycle') return false
   if (kind === 'kneeFlexionPeak' && role === 'ghost') return false
+  if (kind === 'kneeDrivePeak' && role === 'ghost') return false
   return true
 }
 

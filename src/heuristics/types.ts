@@ -73,6 +73,7 @@ export type MetricId =
   | 'footStrikePattern'
   | 'stepWidth'
   | 'stepWidthCm'
+  | 'kneeDrive'
 
 export interface ViewDetectionResult {
   view: View
@@ -140,6 +141,11 @@ export type MetricExemplarKind =
    * same metric's numerator: `verticalRatio` is the one metric whose two exemplars answer
    * different questions, and this pair is the discriminator a caption reads. */
   | 'stridePair'
+  /** One thigh-lift peak — the representative (median-nearest) forward-lift maximum, ghosted
+   * against the same leg's adjacent trough (the thigh at its rearmost swing, since the signed
+   * series' minima are the trailing extremes). The trough is legibility, not a measurement,
+   * mirroring `kneeFlexionPeak`'s peak/trough contract clause for clause. */
+  | 'kneeDrivePeak'
 
 /**
  * One renderable piece of evidence for a metric: either a single instant, or a ghosted PAIR of
@@ -488,6 +494,7 @@ export interface FormHeuristicsResult {
   footStrikePattern: MetricResult
   stepWidth: MetricResult
   stepWidthCm: MetricResult
+  kneeDrive: MetricResult
 }
 
 export interface HeuristicsConfig {
@@ -696,6 +703,14 @@ export interface HeuristicsConfig {
    * loading-response noise. */
   kneeFlexionMinProminenceDegrees: number // 20
 
+  /** Minimum prominence, in degrees of signed thigh-lift angle (scale-free, like the flexion
+   * floor above), for a per-leg forward-lift extremum to count as a real knee-drive peak rather
+   * than tracking jitter. NOT kneeFlexion's 20: measured on Demo 1, the weakest genuine forward
+   * peak's prominence is ~20° (a 16.4° lift against the trail excursion folded negative), so 20
+   * would silently drop a real peak — the floor is half that minimum, per the pre-registered
+   * derivation in `openspec/changes/add-knee-drive-metric/design.md` D1/D4. */
+  kneeDriveMinProminenceDegrees: number // 10
+
   /** Minimum sinusoid partial R², on the WEAKER of the two arms, for a fitted arm-swing amplitude
    * pair to be published at all. Same shape and same default as `verticalOscillationMinFitR2` /
    * `cadenceMinFitR2` — each caller owns its own "is this fit trustworthy" policy — but read
@@ -844,6 +859,13 @@ export const DEFAULT_VIEW_FIT_TABLE: HeuristicsConfig['viewFitTable'] = {
     side: { fit: 'unsuitable', multiplier: 0.1 },
     ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
   },
+  // Same reasoning as kneeFlexion, whose row this copies exactly: the hip→knee thigh-lift angle
+  // is a sagittal-plane quantity foreshortened toward a degenerate reading face-on.
+  kneeDrive: {
+    side: { fit: 'primary', multiplier: 1.0 },
+    front: { fit: 'unsuitable', multiplier: 0.1 },
+    ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
+  },
 }
 
 export const DEFAULT_HEURISTICS_CONFIG: HeuristicsConfig = {
@@ -866,6 +888,7 @@ export const DEFAULT_HEURISTICS_CONFIG: HeuristicsConfig = {
   footstrikeMinAnkleSeparationRatio: 0.2,
   overstrideFlagRatio: 0.15,
   kneeFlexionMinProminenceDegrees: 20,
+  kneeDriveMinProminenceDegrees: 10,
   armSwingMinFitR2: 0.3,
   footStrikeMidfootBandRatio: 0.05,
   presenceMinConsecutiveFrames: 3,

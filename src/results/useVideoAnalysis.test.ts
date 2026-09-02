@@ -262,6 +262,17 @@ const FAKE_HEURISTICS: FormHeuristicsResult = {
     caveat:
       "No real-world scale could be measured for this clip, so step width can't be reported in centimetres.",
   },
+  kneeDrive: {
+    metric: 'kneeDrive',
+    value: 45,
+    unit: 'degrees',
+    confidence: 1,
+    viewFit: 'primary',
+    interpolatedFraction: 0,
+    frameCoverage: 1,
+    sampleSize: 6,
+    caveat: null,
+  },
 }
 
 function makeFakeHandle(): SampleClipHandle {
@@ -341,6 +352,17 @@ const FAKE_SCALE_HEURISTICS: FormHeuristicsResult = {
         cropKeypoints: ['left_ankle', 'right_ankle'],
       },
     ],
+  },
+  kneeDrive: {
+    metric: 'kneeDrive',
+    value: 47,
+    unit: 'degrees',
+    confidence: 0.9,
+    viewFit: 'primary',
+    interpolatedFraction: 0,
+    frameCoverage: 1,
+    sampleSize: 6,
+    caveat: null,
   },
 }
 

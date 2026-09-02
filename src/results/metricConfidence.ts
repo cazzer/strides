@@ -12,6 +12,7 @@ export const METRIC_LABELS: Record<MetricId, string> = {
   footStrikePattern: 'Foot strike pattern',
   stepWidth: 'Step width',
   stepWidthCm: 'Step width (cm)',
+  kneeDrive: 'Knee drive',
 }
 
 /**

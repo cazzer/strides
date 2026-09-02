@@ -48,6 +48,7 @@ function makeHeuristics(confidence = 1): FormHeuristicsResult {
     footStrikePattern: makeMetric('footStrikePattern', confidence),
     stepWidth: makeMetric('stepWidth', confidence),
     stepWidthCm: makeMetric('stepWidthCm', confidence),
+    kneeDrive: makeMetric('kneeDrive', confidence),
   }
 }
 

@@ -322,6 +322,7 @@ function heuristicsResult(
     footStrikePattern: of('footStrikePattern'),
     stepWidth: of('stepWidth'),
     stepWidthCm: of('stepWidthCm'),
+    kneeDrive: of('kneeDrive'),
   }
 }
 
@@ -1808,22 +1809,28 @@ describe('planExemplarFrames', () => {
     }
   })
 
-  it('demotes a near-identical kneeFlexionPeak, whose value is a single-instant angle', () => {
-    // `strides-r41`. The peak angle the card reports is read off ONE frame and the annotation
+  it('demotes a near-identical peak kind, whose value is a single-instant angle', () => {
+    // `strides-r41` for `kneeFlexionPeak`; `kneeDrivePeak` joined the set at birth on the same
+    // principle. The peak angle the card reports is read off ONE frame and the annotation
     // draws that frame's own arc, so the surviving still shows exactly what the number is about —
     // unlike a cycle or a range, whose number IS the difference between two instants. Grouping it
     // with those had the effect that the rules meant to REPLACE a bad ghost with an honest still
     // deleted this metric's evidence instead.
     const paired = [boxFrame(0, 500, 440), boxFrame(0.4, 500.5, 440)]
-    const plan = planExemplarFrames(
-      'kneeFlexion',
-      exemplar({ kind: 'kneeFlexionPeak', timestamp: 0, pairedTimestamp: 0.4 }),
-      paired,
-      HD,
-      0.05,
-    )
-    expect(plan?.ghost).toBeNull()
-    expect(plan?.demotion).toBe('collapsed-pair')
+    for (const [metric, kind] of [
+      ['kneeFlexion', 'kneeFlexionPeak'],
+      ['kneeDrive', 'kneeDrivePeak'],
+    ] satisfies Array<[MetricId, MetricExemplarKind]>) {
+      const plan = planExemplarFrames(
+        metric,
+        exemplar({ kind, timestamp: 0, pairedTimestamp: 0.4 }),
+        paired,
+        HD,
+        0.05,
+      )
+      expect(plan?.ghost).toBeNull()
+      expect(plan?.demotion).toBe('collapsed-pair')
+    }
   })
 
   /** Two hip pairs a thousand pixels apart — over `EVIDENCE_MAX_PAIR_CROP_GROWTH` and nowhere near
@@ -1870,6 +1877,7 @@ describe('planExemplarFrames', () => {
       'stepWidthStrike',
       'footStrike',
       'kneeFlexionPeak',
+      'kneeDrivePeak',
       'trunkLeanRange',
       'overstrideRange',
     ] satisfies MetricExemplarKind[]) {
@@ -2326,7 +2334,7 @@ describe('planClipEvidence', () => {
 
   it('returns one entry per metric, so an absent key never means "not computed yet"', () => {
     const plan = planClipEvidence(heuristicsResult(), frames, HD)
-    expect(Object.keys(plan)).toHaveLength(11)
+    expect(Object.keys(plan)).toHaveLength(12)
     expect(plan.cadence).toEqual({ status: 'no-evidence', reason: 'not-emitted' })
     expect(plan.trunkLean).toEqual({
       status: 'no-evidence',

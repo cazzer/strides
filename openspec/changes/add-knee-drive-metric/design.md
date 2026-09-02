@@ -155,9 +155,10 @@ two floors cannot share a number.
 
 Same rationale as `kneeFlexionPeak`, clause for clause: the reported value is a median of peaks,
 so the picture must be a REPRESENTATIVE peak (median-nearest), not the clip's largest; the
-adjacent same-leg trough (via `adjacentMinimum`, either direction) is what makes a lifted thigh
-legible against a hanging one, is scored for resolvability only, and is never captioned as
-measured. A peak with no adjacent trough is dropped, not demoted at build time. One pair max —
+adjacent same-leg trough (via `adjacentMinimum`, either direction — on the signed series the
+minima are the TRAILING extremes, so the ghost is the thigh at its rearmost swing) is what makes
+a lifted thigh legible against the same thigh swept back, is scored for resolvability only, and
+is never captioned as measured. A peak with no adjacent trough is dropped, not demoted at build time. One pair max —
 a second near-median peak is the same picture of the same runner.
 
 `'kneeDrivePeak'` joins `SINGLE_INSTANT_KINDS`, on the principle `strides-r41` established for

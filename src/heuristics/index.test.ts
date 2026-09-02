@@ -36,6 +36,7 @@ describe('computeFormHeuristics', () => {
     expect(result.footStrikePattern.metric).toBe('footStrikePattern')
     expect(result.stepWidth.metric).toBe('stepWidth')
     expect(result.stepWidthCm.metric).toBe('stepWidthCm')
+    expect(result.kneeDrive.metric).toBe('kneeDrive')
 
     expect(result.verticalOscillation.value).not.toBeNull()
     expect(result.verticalRatio.value).not.toBeNull()
@@ -46,6 +47,10 @@ describe('computeFormHeuristics', () => {
     // stepWidth is front-primary/side-unsuitable (the mirror of armSwingSymmetry) -- still
     // computed on this side-view clip, per "never a silent wrong number", just view-discounted.
     expect(result.stepWidth.value).not.toBeNull()
+    // kneeDrive resolves on this fixture: the knee sits at the hip-ankle midpoint, so the thigh
+    // angle inherits half the ankle's sagittal sway, and hip-x travels so direction resolves.
+    expect(result.kneeDrive.value).not.toBeNull()
+    expect(result.kneeDrive.unit).toBe('degrees')
     // stepWidthCm shares stepWidth's view-fit row (front primary), so side is unsuitable here too;
     // it's still computed (never a silent wrong number) but excluded for the same reason
     // armSwingSymmetry is below.
@@ -83,6 +88,8 @@ describe('computeFormHeuristics', () => {
     expect(result.armSwingSymmetry.viewFit).toBe('unsuitable')
     // stepWidth mirrors armSwingSymmetry's row exactly: front-primary, side-unsuitable.
     expect(result.stepWidth.viewFit).toBe('unsuitable')
+    // kneeDrive copies kneeFlexion's row: side-primary.
+    expect(result.kneeDrive.viewFit).toBe('primary')
 
     // footStrikePattern's caveat is non-null even here, in the fully-populated clean case — the
     // one metric where that's true by design (it's always a proxy, never a direct measurement).
@@ -224,7 +231,7 @@ describe('computeFormHeuristics', () => {
     expect(orchestrated.view).toEqual(standaloneView)
   })
 
-  it('gates all eleven metrics consistently off an ambiguous view', () => {
+  it('gates all twelve metrics consistently off an ambiguous view', () => {
     const frames = generateSyntheticGait({
       ...PARAMS,
       strideAmplitudePx: 20, // engineered BSR/SER disagreement, see viewDetection.test.ts
@@ -254,6 +261,8 @@ describe('computeFormHeuristics', () => {
     expect(result.stepWidth.viewFit).toBe('unsuitable')
     // stepWidthCm shares stepWidth's row -- hard-gated the same way, not view-tolerant.
     expect(result.stepWidthCm.viewFit).toBe('unsuitable')
+    // kneeDrive copies kneeFlexion's row -- hard-gated away from ambiguous views too.
+    expect(result.kneeDrive.viewFit).toBe('unsuitable')
   })
 
   it('never throws on an empty frame list and returns a well-formed, non-null-crashing result', () => {
@@ -271,6 +280,7 @@ describe('computeFormHeuristics', () => {
     expect(result.footStrikePattern.value).toBeNull()
     expect(result.stepWidth.value).toBeNull()
     expect(result.stepWidthCm.value).toBeNull()
+    expect(result.kneeDrive.value).toBeNull()
     expect(result.verticalOscillation.confidence).toBe(0)
     expect(result.verticalRatio.confidence).toBe(0)
     expect(result.verticalOscillationCm.confidence).toBe(0)
@@ -281,6 +291,8 @@ describe('computeFormHeuristics', () => {
     expect(result.footStrikePattern.confidence).toBe(0)
     expect(result.stepWidth.confidence).toBe(0)
     expect(result.stepWidthCm.confidence).toBe(0)
+    expect(result.kneeDrive.confidence).toBe(0)
+    expect(result.kneeDrive.caveat).not.toBeNull()
     expect(result.footStrikePattern.caveat).not.toBeNull()
     expect(result.verticalOscillationCm.calibration).toBeNull()
     expect(result.verticalOscillationCm.caveat).not.toBeNull()
@@ -371,12 +383,13 @@ describe('computeFormHeuristics', () => {
     expect(result.armSwingSymmetry).toEqual(
       computeArmSwingSymmetry(frames, 'front', DEFAULT_HEURISTICS_CONFIG),
     )
-    // The six sagittal metrics stay excluded, exactly as a front label excludes them today.
+    // The seven sagittal metrics stay excluded, exactly as a front label excludes them today.
     expect(result.verticalRatio.viewFit).toBe('unsuitable')
     expect(result.trunkLean.viewFit).toBe('unsuitable')
     expect(result.overstriding.viewFit).toBe('unsuitable')
     expect(result.kneeFlexion.viewFit).toBe('unsuitable')
     expect(result.footStrikePattern.viewFit).toBe('unsuitable')
+    expect(result.kneeDrive.viewFit).toBe('unsuitable')
     // `stepWidthCm` is front-PRIMARY like `stepWidth` — on a real front clip it is excluded for a
     // different reason entirely (a null value on any backend that measures no real-world scale),
     // never by view fit.

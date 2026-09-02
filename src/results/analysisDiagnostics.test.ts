@@ -102,6 +102,7 @@ function makeHeuristics(overrides: Partial<FormHeuristicsResult> = {}): FormHeur
       sampleSize: 0,
       caveat: "No real-world scale could be measured for this clip, so step width can't be reported in centimetres.",
     },
+    kneeDrive: makeMetric({ metric: 'kneeDrive' }),
     ...overrides,
   }
 }
@@ -321,6 +322,7 @@ describe('computeAnalysisDiagnostics', () => {
         'armSwingSymmetry',
         'cadence',
         'footStrikePattern',
+        'kneeDrive',
         'kneeFlexion',
         'overstriding',
         'stepWidth',

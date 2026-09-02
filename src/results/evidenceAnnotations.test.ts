@@ -444,6 +444,65 @@ describe('per-metric mark sets', () => {
     expect(annotation.ghost?.valueMeasuredAtInstant).toBe(false)
   })
 
+  it('kneeDrive draws the thigh, the DOWN-vertical reference and the arc at the hip', () => {
+    const annotation = planEvidenceAnnotations(
+      plan({
+        metric: 'kneeDrive',
+        kind: 'kneeDrivePeak',
+        side: 'left',
+        base: instant([pos('left_hip', 300, 300), pos('left_knee', 380, 450)]),
+      }),
+      MAX_OUTPUT_SIDE,
+    )
+
+    expect(new Set(roles(annotation.ops))).toEqual(
+      new Set(['thigh', 'verticalReference', 'kneeDriveArc']),
+    )
+
+    const thighLength = Math.hypot(80, 150)
+    const reference = byRole(annotation.ops, 'verticalReference')[0] as EvidenceLineOp
+    // Straight DOWN from the hip, the thigh's own length — the `+dy` zero `kneeDrive.ts` feeds
+    // atan2, not trunkLean's up-vertical.
+    expect(reference.x2).toBeCloseTo(300, 10)
+    expect(reference.y2).toBeCloseTo(300 + thighLength, 10)
+
+    const arc = byRole(annotation.ops, 'kneeDriveArc')[0] as EvidenceArcOp
+    expect(arc.x).toBe(300)
+    expect(arc.y).toBe(300)
+    // The sweep is exactly `atan2(dx, dy)` — the screen-relative quantity `kneeDrive.ts` measures.
+    expect(Math.abs(arc.endAngleRadians - arc.startAngleRadians)).toBeCloseTo(
+      Math.atan2(80, 150),
+      10,
+    )
+    expect(arc.reportedValueIsSupplement).toBe(false)
+    expect(arc.radius).toBeCloseTo(0.3 * thighLength, 10)
+  })
+
+  it("kneeDrive's trailing trough gets the thigh but no arc, and is flagged unmeasured", () => {
+    const thigh = (kneeX: number): EvidenceKeypointPosition[] => [
+      pos('left_hip', 300, 300),
+      pos('left_knee', kneeX, 450),
+    ]
+    const annotation = planEvidenceAnnotations(
+      plan({
+        metric: 'kneeDrive',
+        kind: 'kneeDrivePeak',
+        side: 'left',
+        base: instant(thigh(380)),
+        ghost: instant(thigh(240), { opacity: EVIDENCE_GHOST_BLEND_ALPHA }),
+      }),
+      MAX_OUTPUT_SIDE,
+    )
+
+    expect(new Set(roles(annotation.ops.filter((op) => op.instant === 'ghost')))).toEqual(
+      new Set(['thigh']),
+    )
+    expect(byRole(annotation.ops, 'kneeDriveArc', 'ghost')).toHaveLength(0)
+    expect(byRole(annotation.ops, 'verticalReference', 'ghost')).toHaveLength(0)
+    expect(annotation.base.valueMeasuredAtInstant).toBe(true)
+    expect(annotation.ghost?.valueMeasuredAtInstant).toBe(false)
+  })
+
   it('overstriding draws a hip-midline plumb and a horizontal caliper, and no arc', () => {
     const annotation = planEvidenceAnnotations(
       plan({
@@ -1290,6 +1349,15 @@ describe('the honesty rule', () => {
         ),
       }),
     },
+    {
+      kind: 'kneeDrivePeak',
+      plan: plan({
+        metric: 'kneeDrive',
+        kind: 'kneeDrivePeak',
+        side: 'left',
+        base: instant([pos('left_hip', 300, 300), pos('left_knee', 380, 450)]),
+      }),
+    },
   ]
 
   it('covers every exemplar kind, so a new kind cannot slip past this block', () => {
@@ -1302,6 +1370,7 @@ describe('the honesty rule', () => {
       'bounceCycle',
       'armSwingCycle',
       'stridePair',
+      'kneeDrivePeak',
     ]
     expect(FIXTURES.map((fixture) => fixture.kind).sort()).toEqual(
       [...kinds].sort(),
@@ -1396,6 +1465,7 @@ describe('the honesty rule', () => {
       // A fitted amplitude has no per-instance values, so neither instant was measured.
       ['bounceCycle', false, false],
       ['stridePair', true, true],
+      ['kneeDrivePeak', true, null],
     ])
   })
 
@@ -1516,7 +1586,7 @@ describe('every demotable kind still measures something from one frame', () => {
   }
 
   it('pins why each excluded kind is excluded, which the count above cannot see', () => {
-    // The count invariant passes for ALL EIGHT kinds — `marker` and `guide` are both
+    // The count invariant passes for ALL NINE kinds — `marker` and `guide` are both
     // `layer: 'measurement'`, and the two cycles emit theirs unconditionally — so it discriminates
     // nothing. It guards a MEMBER against regressing to ghost-gated marks. What keeps the three
     // non-members out is asserted here, per kind, because each is out for a different reason.

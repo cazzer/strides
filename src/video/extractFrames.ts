@@ -63,7 +63,7 @@ import {
 /**
  * Cap on the side of the canvas a crop is drawn into, in device pixels. The crop rect itself is in
  * NATIVE video pixels and can be 2160 px on the demo clips — a full-resolution canvas per exemplar
- * is ~18 MB, and one session's evidence cache may hold two per metric across eleven metrics.
+ * is ~18 MB, and one session's evidence cache may hold two per metric across twelve metrics.
  * Derived from the same viewer-side reasoning that fixed `EVIDENCE_CROP_MIN_SIDE_PX` at 320: an
  * evidence image renders at a couple of hundred CSS px at most — the inline card thumbnail is
  * `w-36`, i.e. 144 CSS px nominal and 142 measured — so 640 device px covers it at 2x DPR with

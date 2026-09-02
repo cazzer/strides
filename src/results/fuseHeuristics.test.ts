@@ -90,6 +90,7 @@ function makeResult(
     footStrikePattern: makeMetric('footStrikePattern', confidence),
     stepWidth: makeMetric('stepWidth', confidence, { unit: 'percent' }),
     stepWidthCm: makeMetric('stepWidthCm', confidence, { unit: 'centimeters' }),
+    kneeDrive: makeMetric('kneeDrive', confidence, { unit: 'degrees' }),
     ...overrides,
   }
 }
@@ -293,6 +294,7 @@ const WINNER_BY_METRIC: Record<MetricId, number> = {
   footStrikePattern: 3,
   stepWidth: 2,
   stepWidthCm: 1,
+  kneeDrive: 3,
 }
 
 const METRIC_KEYS = Object.keys(WINNER_BY_METRIC) as MetricId[]
@@ -329,6 +331,7 @@ function makeIndexedClip(clipIndex: number): FormHeuristicsResult {
       value,
       unit: 'centimeters',
     }),
+    kneeDrive: makeMetric('kneeDrive', confidence('kneeDrive'), { value, unit: 'degrees' }),
   })
 }
 

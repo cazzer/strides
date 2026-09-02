@@ -310,7 +310,10 @@ const METRICS_WITHOUT_EVIDENCE: ReadonlySet<MetricId> = new Set(['cadence'])
  * was previously grouped with the cycles on the grounds that the peak "needs its adjacent trough to
  * be legible", which conflates a helpful comparison with a necessary one — and had the concrete
  * effect that the near-identical rules, which exist to REPLACE a bad ghost with an honest still,
- * silently deleted this metric's evidence instead. `trunkLeanRange` and `overstrideRange` followed
+ * silently deleted this metric's evidence instead. `kneeDrivePeak` joins on the identical
+ * principle at birth: `kneeDrive.value` is a peak thigh-lift angle at one instant and
+ * `buildKneeDriveMarks` draws that angle's arc at that instant, so a demoted single still shows
+ * exactly what the card reports. `trunkLeanRange` and `overstrideRange` followed
  * with `strides-ddj`, for the identical reason and with the identical concrete effect: Demo 1's
  * only surviving overstride pair demands 2.881× growth, so the card rendered nothing at all.
  *
@@ -347,6 +350,7 @@ export const SINGLE_INSTANT_KINDS: ReadonlySet<MetricExemplarKind> = new Set([
   'kneeFlexionPeak',
   'trunkLeanRange',
   'overstrideRange',
+  'kneeDrivePeak',
 ])
 
 /**
@@ -1495,8 +1499,8 @@ export function planClipEvidence(
     (entry): entry is [MetricId, FormHeuristicsResult[MetricId]] =>
       entry[0] !== 'view',
   )
-  // Once per clip, not once per metric: it costs three passes over every frame and eleven metrics
-  // asking the same question of the same array would get the same answer eleven times. The grafted
+  // Once per clip, not once per metric: it costs three passes over every frame and twelve metrics
+  // asking the same question of the same array would get the same answer twelve times. The grafted
   // direction is derived the same way from the other array, and only when there is one — it is a
   // property of the clip AS THAT PASS SAMPLED IT, and two passes can read it differently for the
   // same reason they read anything else differently.

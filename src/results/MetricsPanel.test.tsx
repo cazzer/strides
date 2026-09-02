@@ -142,13 +142,15 @@ function makeHighConfidenceResult(): FormHeuristicsResult {
     // Deliberately clean here too, same reasoning as verticalOscillationCm above -- a dedicated
     // test below covers the unavailable-on-this-backend case.
     stepWidthCm: makeStepWidthCm(),
+    kneeDrive: makeMetric({ metric: 'kneeDrive', value: 45, confidence: 0.85 }),
   }
 }
 
 /**
  * Mixed-tier fixture: verticalOscillation lands in tier 2 (caveated, confidence 0.5, no caveat
- * text -- exercises the documented "tier-2 card with a null caveat" case); trunkLean/overstriding
- * land in tier 3 (excluded, unsuitable view, null value, non-null caveat); every other metric is
+ * text -- exercises the documented "tier-2 card with a null caveat" case);
+ * trunkLean/overstriding/kneeDrive land in tier 3 (excluded, unsuitable view, null value,
+ * non-null caveat); every other metric is
  * tier 1 (normal), including footStrikePattern, whose caveat is always present regardless of tier,
  * and stepWidth, which is front-primary -- this fixture's 'front' view -- so it lands in tier 1
  * here, the mirror image of trunkLean/overstriding's side-primary exclusion.
@@ -220,11 +222,20 @@ function makeMixedTierResult(): FormHeuristicsResult {
       confidence: 0.72,
     }),
     stepWidthCm: makeStepWidthCm({ confidence: 0.7 }),
+    // Excluded on this fixture's front view for the same reason as trunkLean/overstriding:
+    // sagittal-plane, view-unsuitable.
+    kneeDrive: makeMetric({
+      metric: 'kneeDrive',
+      value: null,
+      confidence: 0,
+      viewFit: 'unsuitable',
+      caveat: 'Knee drive is a sagittal-plane measurement and is not reliable from a front view.',
+    }),
   }
 }
 
 describe('MetricsPanel', () => {
-  it('renders all eleven metrics with their plain-language labels', () => {
+  it('renders all twelve metrics with their plain-language labels', () => {
     render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
     expect(screen.getByText('Vertical oscillation')).toBeInTheDocument()
     expect(screen.getByText('Vertical ratio')).toBeInTheDocument()
@@ -237,6 +248,7 @@ describe('MetricsPanel', () => {
     expect(screen.getByText('Foot strike pattern')).toBeInTheDocument()
     expect(screen.getByText('Step width')).toBeInTheDocument()
     expect(screen.getByText('Step width (cm)')).toBeInTheDocument()
+    expect(screen.getByText('Knee drive')).toBeInTheDocument()
   })
 
   it('renders formatted values and high-confidence labels for a clean (all tier-1) result', () => {
@@ -247,7 +259,7 @@ describe('MetricsPanel', () => {
     // on the panel.
     expect(screen.getByText('4.8 cm')).toBeInTheDocument()
     expect(screen.getByText('8.2 cm')).toBeInTheDocument()
-    expect(screen.getAllByText(/high confidence/i).length).toBe(11)
+    expect(screen.getAllByText(/high confidence/i).length).toBe(12)
     // No metric is excluded, so the excluded section doesn't render at all.
     expect(screen.queryByText(/not measurable for this clip/i)).not.toBeInTheDocument()
     // footStrikePattern is the one deliberate exception: its caveat is always present, even in a
@@ -264,7 +276,7 @@ describe('MetricsPanel', () => {
   it('renders a tier-1 card with the plain border and no data-tier="caveated"/"excluded"', () => {
     const { container } = render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
     const cards = container.querySelectorAll('.metrics-panel__card')
-    expect(cards.length).toBe(11)
+    expect(cards.length).toBe(12)
     for (const card of Array.from(cards)) {
       expect(card.getAttribute('data-tier')).toBe('normal')
     }
@@ -297,10 +309,11 @@ describe('MetricsPanel', () => {
 
   it('excludes tier-3 metrics from the card grid entirely -- no value, no confidence label', () => {
     render(<MetricsPanel heuristics={makeMixedTierResult()} />)
-    // trunkLean and overstriding are excluded (tier 3) -- neither renders as a card at all.
+    // trunkLean, overstriding and kneeDrive are excluded (tier 3) -- none renders as a card.
     expect(screen.queryByLabelText('Trunk lean')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Overstriding')).not.toBeInTheDocument()
-    // Nothing in this fixture has a null value or 0 confidence except the two excluded metrics,
+    expect(screen.queryByLabelText('Knee drive')).not.toBeInTheDocument()
+    // Nothing in this fixture has a null value or 0 confidence except the excluded metrics,
     // so these pseudo-values existing anywhere would mean one of them leaked into a card.
     expect(screen.queryByText('Not available')).not.toBeInTheDocument()
     expect(screen.queryByText('Not measurable')).not.toBeInTheDocument()
@@ -314,7 +327,9 @@ describe('MetricsPanel', () => {
     render(<MetricsPanel heuristics={makeMixedTierResult()} />)
     const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
     expect(within(excludedSection).getByText('Trunk lean')).toBeInTheDocument()
-    expect(within(excludedSection).getByText(/sagittal-plane measurement/i)).toBeInTheDocument()
+    // Two entries carry a sagittal-plane caveat now: trunkLean's and kneeDrive's.
+    expect(within(excludedSection).getAllByText(/sagittal-plane measurement/i)).toHaveLength(2)
+    expect(within(excludedSection).getByText('Knee drive')).toBeInTheDocument()
     expect(within(excludedSection).getByText('Overstriding')).toBeInTheDocument()
     expect(
       within(excludedSection).getByText(/no resolvable body-scale reference/i),
@@ -330,7 +345,7 @@ describe('MetricsPanel', () => {
     expect(container.querySelectorAll('.metrics-panel__card').length).toBe(9)
     expect(
       screen.getByText(
-        '9 metrics measured (1 with caveat) · 2 not measurable for this clip (listed below)',
+        '9 metrics measured (1 with caveat) · 3 not measurable for this clip (listed below)',
       ),
     ).toBeInTheDocument()
   })
@@ -340,17 +355,18 @@ describe('MetricsPanel', () => {
     expect(container.querySelector('.metrics-panel__tier-summary')).not.toBeInTheDocument()
   })
 
-  it('9 cards render in the grid and 2 metrics are excluded for the mixed-tier fixture', () => {
+  it('9 cards render in the grid and 3 metrics are excluded for the mixed-tier fixture', () => {
     const { container } = render(<MetricsPanel heuristics={makeMixedTierResult()} />)
     const cards = container.querySelectorAll('.metrics-panel__card')
-    // trunkLean and overstriding are excluded; the other 9 (1 caveated, 8 normal) render as cards.
+    // trunkLean, overstriding and kneeDrive are excluded; the other 9 (1 caveated, 8 normal)
+    // render as cards.
     expect(cards.length).toBe(9)
     const caveatedCount = Array.from(cards).filter(
       (card) => card.getAttribute('data-tier') === 'caveated',
     ).length
     expect(caveatedCount).toBe(1)
     const excludedEntries = container.querySelectorAll('.metrics-panel__excluded-entry')
-    expect(excludedEntries.length).toBe(2)
+    expect(excludedEntries.length).toBe(3)
   })
 
   it('preserves MetricId declaration order within the grid, skipping excluded metrics in place', () => {
@@ -360,8 +376,8 @@ describe('MetricsPanel', () => {
     )
     // Declaration order is verticalOscillation, verticalRatio, verticalOscillationCm, trunkLean,
     // overstriding, cadence, kneeFlexion, armSwingSymmetry, footStrikePattern, stepWidth,
-    // stepWidthCm -- trunkLean and overstriding (excluded) are omitted, but every other label
-    // keeps its relative position.
+    // stepWidthCm, kneeDrive -- trunkLean, overstriding and kneeDrive (excluded) are omitted,
+    // but every other label keeps its relative position.
     expect(cardLabels).toEqual([
       'Vertical oscillation',
       'Vertical ratio',
@@ -381,8 +397,9 @@ describe('MetricsPanel', () => {
     const names = within(excludedSection)
       .getAllByRole('listitem')
       .map((item) => item.querySelector('p')?.textContent)
-    // trunkLean precedes overstriding in MetricId, and that order is preserved here.
-    expect(names).toEqual(['Trunk lean', 'Overstriding'])
+    // trunkLean precedes overstriding, and kneeDrive sits last in MetricId -- that order is
+    // preserved here.
+    expect(names).toEqual(['Trunk lean', 'Overstriding', 'Knee drive'])
   })
 
   it('renders stepWidthCm in the excluded section (not a low-confidence card) when unavailable on this backend', () => {
@@ -681,7 +698,7 @@ describe('MetricsPanel', () => {
 
     // Nothing is excluded here, so the total is every metric on the panel and the caveated one
     // is counted inside it, not against it.
-    expect(screen.getByText('11 metrics measured (1 with caveat)')).toBeInTheDocument()
+    expect(screen.getByText('12 metrics measured (1 with caveat)')).toBeInTheDocument()
   })
 
   it('falls back to a generic reason for an excluded metric with no caveat text', () => {
