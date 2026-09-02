@@ -1402,6 +1402,11 @@ ghosted pair the table above recorded: `demotion 'far-apart-pair'`, `pairedTimes
 count is unchanged at 8 / 7. Everything else on all three clips is bit-identical across that pair of
 changes.
 
+⚠️ **Demo 2 reads 7 images / 5 sections since `add-arm-swing-amplitude-metric`** (addendum
+2026-09-02; the table is left exactly as measured) — the two added rows are `armSwingAmplitude`'s
+deliberately reused `armSwingCycle` exemplars, instants bit-equal to `armSwingSymmetry`'s pair, so
+7/5 against the table's 5 / 4 is expected drift, not a regression.
+
 **multiperson is a single number again, and the "record it as a RANGE" instruction above is
 retired.** Read that paragraph as a record of what the reused-browser regime produced, not as
 advice: under the fresh-process default this clip reads 8/7 on every trial. What is *not*

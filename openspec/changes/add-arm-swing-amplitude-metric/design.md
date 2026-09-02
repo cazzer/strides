@@ -179,3 +179,22 @@ onto the step rhythm): which side found the true rhythm is not decidable from tw
 disagree — the "wrong" side cleared the same gate the "right" side did — and a one-armed
 amplitude presented as the clip's arm swing is a silent half-measurement. Null with a named cause
 is the honest result, and it is also what keeps the two arm cards nulling together (D2).
+
+## Review round 1 (2026-09-02) — UX adjudication
+
+Code review APPROVE; UX review APPROVE-WITH-NITS. Adjudicated:
+
+**The Demo 2 disparity-caveat near-duplication across the two arm cards is ACCEPTED as
+deliberate.** Both cards open with the same lead clause ("One arm was tracked noticeably better
+than the other in this clip…") because they report the same underlying data-quality fact through
+the same shared gate (`SIDE_FIT_QUALITY_DISPARITY_R2`, `armSwing.ts`) — two different lead-ins
+would imply two different findings where there is one. Their consequence clauses differ where the
+metrics differ ("part of this overall swing size" vs "part of the difference between them"), and
+each card must remain readable standalone: the tier rules can render either card without the
+other, so neither caveat may lean on its sibling for meaning.
+
+The reviewers' other observations are pre-existing sibling behavior, deliberately untouched by
+this change: the per-side failure caveats say "one arm"/"one side" even when both arms fail
+(the first failing side returns before the second is inspected), and `caveatForFailure` reports
+the LEFT side first when both fail — both inherited verbatim from `armSwingSymmetry`, where any
+rewording belongs to a change scoped to both consumers of the shared module at once.

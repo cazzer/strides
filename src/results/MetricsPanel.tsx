@@ -80,7 +80,7 @@ const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
   kneeDrive:
     'How high you lift your thigh at the peak of each stride — the angle between your thigh and vertical, both legs combined. A movement-amplitude measurement from the video only: it says how far the knee comes up, not how much force is behind it. Distinct from knee flexion, which measures how much the knee bends.',
   armSwingAmplitude:
-    'How far your wrists travel up and down through one arm swing, as a percentage of your torso length, averaged across both arms. A movement-amplitude measurement from the video only — it says how big the swing is, not what it contributes to your stride. Distinct from arm swing symmetry, which compares one arm to the other.',
+    'How far your wrists travel up and down through one arm swing, as a percentage of your torso length, averaged across both arms. A movement-amplitude measurement from the video only: it says how big the swing is, not what it contributes to your stride. Distinct from arm swing symmetry, which compares one arm to the other.',
 }
 
 const FOOT_STRIKE_CLASS_LABELS: Record<FootStrikeClass, string> = {
