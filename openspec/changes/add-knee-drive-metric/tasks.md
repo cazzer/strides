@@ -67,10 +67,10 @@
 
 ## 6. Verification
 
-- [ ] 6.1 `npm test`, `npx tsc -b`, `npm run lint` — all clean.
-- [ ] 6.2 Rerun the exact Phase-0 baseline driver command → after.txt; `diff baseline.txt
+- [x] 6.1 `npm test`, `npx tsc -b`, `npm run lint` — all clean.
+- [x] 6.2 Rerun the exact Phase-0 baseline driver command → after.txt; `diff baseline.txt
       after.txt` shows ONLY the provenance commit line + ADDED kneeDrive rows (value on demo1 +
       multiperson, exemplar on at least Demo 1, tier-3 excluded on demo2); every pre-existing
       metric value/confidence bit-identical.
-- [ ] 6.3 Rerun the scale-pass anchor driver: VO_cm 4.421467928439415, fit 1.52 × 60 = 91.2 ==
+- [x] 6.3 Rerun the scale-pass anchor driver: VO_cm 4.421467928439415, fit 1.52 × 60 = 91.2 ==
       cadence, unchanged.
