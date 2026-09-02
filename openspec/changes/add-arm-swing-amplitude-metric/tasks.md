@@ -1,16 +1,16 @@
 ## 1. OpenSpec skeleton with pre-registered decisions
 
-- [ ] 1.1 `openspec/changes/add-arm-swing-amplitude-metric/`: `proposal.md`, `design.md` (D1–D6
+- [x] 1.1 `openspec/changes/add-arm-swing-amplitude-metric/`: `proposal.md`, `design.md` (D1–D6
       registered BEFORE any live Phase-B run; D3 adjudication and D5 proof sections pending),
       `tasks.md`, spec deltas (`form-heuristics` ADDED ×3, `results-view` MODIFIED ×1: twelve →
       thirteen).
-- [ ] 1.2 `openspec validate add-arm-swing-amplitude-metric --strict` passes. Commit the skeleton
+- [x] 1.2 `openspec validate add-arm-swing-amplitude-metric --strict` passes. Commit the skeleton
       BEFORE Phase A/B land, so pre-registration is verifiable. (Step-0 baseline —
       `wave2/baseline.txt` + the anchor driver — captured at worktree HEAD before any edit.)
 
 ## 2. Phase A — extraction refactor (no behavior change)
 
-- [ ] 2.1 New `src/heuristics/armSwing.ts`: MOVE verbatim (docs included) from
+- [x] 2.1 New `src/heuristics/armSwing.ts`: MOVE verbatim (docs included) from
       `armSwingSymmetry.ts` — `SideSwing`, `computeSideSwing` + module doc, `buildSideExemplar` +
       doc, `caveatForFailure`, `MIN_ARM_SWING_CYCLES`, `FIT_QUALITY_SATURATION_R2`,
       `MAX_SIDE_FREQUENCY_DISAGREEMENT`, `SIDE_FIT_QUALITY_DISPARITY_R2`,
@@ -18,7 +18,7 @@
       `nullResult` + `computeArmSwingSymmetry`, importing from `./armSwing`. Module doc records
       the one deliberate difference from the `hipBounce.ts` precedent (shared gate policy — D5).
       No new test file.
-- [ ] 2.2 Phase A proof (hard gate): `npm test`, `tsc -b`, lint clean; rerun the Step-0 command →
+- [x] 2.2 Phase A proof (hard gate): `npm test`, `tsc -b`, lint clean; rerun the Step-0 command →
       `wave2/afterA.txt`; `diff baseline.txt afterA.txt` EMPTY except the header commit line and
       `elapsedMs` rows. Anything else → revert and investigate; do not proceed. Record in
       design.md D5. Commit refactor + proof record.

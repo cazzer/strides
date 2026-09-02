@@ -118,12 +118,21 @@ on two different questions). The two ARM metrics are MANDATED to share gate poli
 fitted signal, so the gate constants live in the shared module rather than per-caller — recorded
 in `armSwing.ts`'s module doc.
 
-### D5 — Phase A proof (recorded after the Phase A run; pending as of registration)
+### D5 — Phase A proof (recorded after the Phase A run)
 
-_To be filled in after the extraction lands: `npm test` / `tsc -b` / lint results, and the
-`diff wave2/baseline.txt wave2/afterA.txt` summary, which must be EMPTY except the header commit
-line and `elapsedMs` rows. Anything else → revert and investigate; Phase B does not start until
-this section records a clean proof._
+Measured 2026-09-02 on the extracted tree: `npm test` green (89 files, 1453 tests), `npx tsc -b`
+clean, `npm run lint` clean. `diff wave2/baseline.txt wave2/afterA.txt` (each a 3-trial
+fresh-process `--evidence` run over demo1/demo2/multiperson, identity-verified server, real GPU
+`ANGLE Metal Renderer: Apple M4 Pro`): the ONLY differing lines are the header's commit line
+(`d415d0e` → the extraction tree) and the three per-clip `elapsedMs` rows. Every metric value,
+confidence, caveat-bearing field, sampling/personSelection field and `evidence.*` row on all
+three clips is byte-identical. Phase A is a proven no-op.
+
+Two departures from a strictly verbatim move, both doc-text only: `buildSideExemplar`'s doc now
+points its sign-trap assertion at `armSwingSymmetry.test.ts` by name (the moved module has no
+test file, so "this module's own tests" would have become false), and `computeArmSwingSymmetry`'s
+"Both sides, one rhythm" section names `armSwing.ts` as where `MAX_SIDE_FREQUENCY_DISAGREEMENT`
+now lives. No executable line changed in either function.
 
 ## D6 — The cross-side rhythm check is REUSED, and why an amplitude metric needs it at all
 
