@@ -1,23 +1,23 @@
 ## 1. OpenSpec skeleton with pre-registered probe rules
 
-- [ ] 1.1 `openspec/changes/add-knee-drive-metric/`: `proposal.md`, `design.md` (D1–D6, decision
+- [x] 1.1 `openspec/changes/add-knee-drive-metric/`: `proposal.md`, `design.md` (D1–D6, decision
       rules pre-registered, measurements pending), `tasks.md`, spec deltas (`form-heuristics`
       ADDED ×3, `results-view` MODIFIED ×1: eleven → twelve).
-- [ ] 1.2 `openspec validate add-knee-drive-metric --strict` passes. Commit the skeleton BEFORE
+- [x] 1.2 `openspec validate add-knee-drive-metric --strict` passes. Commit the skeleton BEFORE
       the probe runs, so pre-registration is verifiable.
 
 ## 2. Empirical probe (add–measure–revert)
 
-- [ ] 2.1 `src/heuristics/kneeDrive.experimental.ts`: `probeKneeDrive(frames, config)` — per-leg
+- [x] 2.1 `src/heuristics/kneeDrive.experimental.ts`: `probeKneeDrive(frames, config)` — per-leg
       signed/unsigned thigh-angle series, prominence ladder on both, kneeFlexion replica maxima,
       raw θs series. One dev-only `console.log('[knee-drive-probe]', ...)` in
       `useVideoAnalysis.ts`'s diagnostics effect.
-- [ ] 2.2 Throwaway scratchpad driver: TWO fresh-process Demo 1 trials (+ optional multiperson
+- [x] 2.2 Throwaway scratchpad driver: TWO fresh-process Demo 1 trials (+ optional multiperson
       corroboration), capture `[knee-drive-probe]`.
-- [ ] 2.3 Adjudicate D1's pre-registered rule (a/b), plausibility gate, STOP/escalate rule vs
+- [x] 2.3 Adjudicate D1's pre-registered rule (a/b), plausibility gate, STOP/escalate rule vs
       kneeFlexion instants, sample-count gate. Record measurements + verdict in design.md
       D1/D4/D6.
-- [ ] 2.4 Revert instrumentation: `git checkout -- src/results/useVideoAnalysis.ts && rm
+- [x] 2.4 Revert instrumentation: `git checkout -- src/results/useVideoAnalysis.ts && rm
       src/heuristics/kneeDrive.experimental.ts`. Re-validate. Commit "design: record knee-drive
       probe measurements".
 

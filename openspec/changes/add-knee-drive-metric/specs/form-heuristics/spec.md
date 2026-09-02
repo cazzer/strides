@@ -5,17 +5,22 @@
 The system SHALL expose knee drive as a `MetricId` (`kneeDrive`), positioned last in `MetricId`
 and every enumeration of it (after `stepWidthCm`). Its `value` SHALL be the median, in degrees,
 of per-stride peak thigh-lift angles — the hip→knee vector's angle off the image's down-vertical
-ray at that leg's swing-phase lift peak — detected per leg by the shared gap-aware
-prominence-thresholded extrema finder (`findLocalExtrema`, gated by
-`kneeDriveMinProminenceDegrees`), one peak per leg per stride, pooled across both legs. `unit`
-SHALL be `'degrees'`. The metric measures thigh-lift AMPLITUDE as a 2D angle proxy: it is
-distinct from knee flexion (which measures the hip-knee-ankle interior bend and reads the ankle;
-knee drive never does), and neither its caveats nor its presentation SHALL claim to measure
-propulsive force or drive effectiveness. When no frame resolves a hip and knee for either leg,
-the system SHALL report `value: null`, `confidence: 0`, and a caveat naming the unresolvable
-input. When positions resolve but no lift peak clears the prominence floor, the system SHALL
-report `value: null`, `confidence: 0`, and a distinct caveat stating that no thigh-lift peaks
-could be detected — never conflating the two null-value causes into one message.
+ray, SIGNED by the runner's direction of travel so forward lift reads positive — detected per leg
+by the shared gap-aware prominence-thresholded extrema finder (`findLocalExtrema`, gated by
+`kneeDriveMinProminenceDegrees`), keeping only maxima whose signed angle is positive (a maximum
+at or below zero is a thigh that never crossed the vertical, not a lift peak), one peak per leg
+per stride, pooled across both legs. `unit` SHALL be `'degrees'`. The metric measures thigh-lift
+AMPLITUDE as a 2D angle proxy: it is distinct from knee flexion (which measures the
+hip-knee-ankle interior bend and reads the ankle; knee drive never does), and neither its caveats
+nor its presentation SHALL claim to measure propulsive force or drive effectiveness. When no
+frame resolves a hip and knee for either leg, the system SHALL report `value: null`,
+`confidence: 0`, and a caveat naming the unresolvable input. When the direction of travel cannot
+be determined (no net horizontal displacement), the system SHALL report `value: null`,
+`confidence: 0`, and a distinct caveat naming the indeterminate direction of travel — forward
+cannot be told from trail without it. When positions resolve and direction is known but no lift
+peak clears the prominence floor, the system SHALL report `value: null`, `confidence: 0`, and a
+third, distinct caveat stating that no thigh-lift peaks could be detected — never conflating the
+null-value causes into one message.
 
 #### Scenario: A clean side-view clip reports the median peak lift with sane sample size
 
@@ -32,6 +37,14 @@ could be detected — never conflating the two null-value causes into one messag
   lift)
 - **THEN** `value` is `null`, `confidence` is `0`, and `caveat` states that no thigh-lift peaks
   could be detected — distinct in wording from the unresolvable-input caveat
+
+#### Scenario: Indeterminate travel direction reports a distinct caveat instead of a guessed sign
+
+- **WHEN** knee drive is computed against a clip whose hip and knee positions resolve but whose
+  net horizontal hip displacement is below the travel-direction threshold (treadmill-like or
+  front-approach footage)
+- **THEN** `value` is `null`, `confidence` is `0`, and `caveat` names the indeterminate direction
+  of travel — distinct in wording from both other null-value caveats
 
 #### Scenario: Unresolvable hip/knee input reports the unresolvable-input caveat
 
