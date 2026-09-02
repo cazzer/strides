@@ -158,6 +158,61 @@ describe('computeKneeDrive', () => {
     expect(result.caveat).toContain('No forward thigh-lift peaks')
   })
 
+  it('excludes a non-positive trailing maximum: a thigh that never crossed the vertical is not a lift peak', () => {
+    // One genuine 50° lift, then a descent into trail (−20°) that recovers only to −5° before the
+    // clip ends. `findLocalExtrema`'s trailing-pivot emission reports that −5° as a confirmed
+    // 'max' (it rose ≥ the 10° floor off the −20° minimum) — the boundary artifact the design
+    // probe measured on Demo 1 — and the positive-maxima filter must drop it: without the filter
+    // each leg would pool 2 peaks and the median would read (50 + −5) / 2.
+    const angles = [0, 25, 50, 25, 0, -10, -20, -20, -15, -5]
+    const frames: RobustPoseFrame[] = angles.map((angleDeg, i) => {
+      const angleRad = (angleDeg * Math.PI) / 180
+      const baseX = 400 + i * FRAME_STEP_X * 4 // fewer frames, so travel faster to clear the bar
+      return buildFrame(
+        {
+          left_shoulder: { x: baseX - 10, y: SHOULDER_Y },
+          right_shoulder: { x: baseX + 10, y: SHOULDER_Y },
+          left_hip: { x: baseX - 10, y: HIP_Y },
+          right_hip: { x: baseX + 10, y: HIP_Y },
+          left_knee: { x: baseX - 10 + THIGH_LENGTH_PX * Math.sin(angleRad), y: HIP_Y + THIGH_LENGTH_PX * Math.cos(angleRad) },
+          right_knee: { x: baseX + 10 + THIGH_LENGTH_PX * Math.sin(angleRad), y: HIP_Y + THIGH_LENGTH_PX * Math.cos(angleRad) },
+        },
+        i / 30,
+      )
+    })
+
+    const result = computeKneeDrive(frames, 'side')
+
+    // Only the one genuine lift peak per leg survives — the −5° trailing maximum is excluded
+    // from the pool entirely, not merely outvoted by the median.
+    expect(result.sampleSize).toBe(2)
+    expect(result.value).toBeCloseTo(50, 5)
+  })
+
+  it('a resolvable clip with no body-scale reference names the missing reference, not displacement', () => {
+    // Hips and knees resolve every frame; shoulders never do, so `estimateBodyScale` returns null
+    // and the direction of travel is never estimated at all — blaming "no net horizontal
+    // displacement" here would name a measurement that never happened.
+    const frames: RobustPoseFrame[] = Array.from({ length: 20 }, (_, i) =>
+      buildFrame(
+        {
+          left_hip: { x: 390 + i * FRAME_STEP_X, y: HIP_Y },
+          right_hip: { x: 410 + i * FRAME_STEP_X, y: HIP_Y },
+          left_knee: { x: 390 + i * FRAME_STEP_X, y: HIP_Y + THIGH_LENGTH_PX },
+          right_knee: { x: 410 + i * FRAME_STEP_X, y: HIP_Y + THIGH_LENGTH_PX },
+        },
+        i / 30,
+      ),
+    )
+
+    const result = computeKneeDrive(frames, 'side')
+
+    expect(result.value).toBeNull()
+    expect(result.confidence).toBe(0)
+    expect(result.caveat).toContain('No resolvable body-scale reference')
+    expect(result.caveat).not.toContain('horizontal displacement')
+  })
+
   it('returns a null value and 0 confidence when no leg position is resolvable at all', () => {
     const frame = buildFrame({})
     const result = computeKneeDrive([frame, frame], 'side')

@@ -114,6 +114,16 @@ keeps 14 positive forward maxima across both legs, pooled median 33.3° — insi
 band. The right leg carries a few small (5–9°) high-prominence peaks from that clip's noisier
 tracking (96.5 px torso); they move the median, not the mechanism.
 
+**Review-round refinement (no measurement change):** branch (b)'s "direction 0 → null + distinct
+caveat" splits into TWO distinct null causes in the implementation. `estimateBodyScale` returning
+null means the direction was never estimated at all, and folding that into the
+"no net horizontal displacement" wording would name a false cause — so it gets its own early
+return with overstriding's exact body-scale caveat, and the indeterminate-direction caveat is
+reserved for a clip whose scale resolved and whose displacement genuinely measured below the
+threshold. Both reach the metric's null contract identically; only the stated cause differs.
+Unreachable on all three harness clips (each resolves a body scale), so no live re-measurement
+accompanies it.
+
 ## D2 — Angle reference: the DOWN-vertical ray, not trunkLean's up-vertical
 
 The thigh hangs DOWN from the hip at rest, so zero must be the down-vertical ray — a runner

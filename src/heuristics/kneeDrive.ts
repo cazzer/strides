@@ -228,8 +228,18 @@ export function computeKneeDrive(
   const frameCoverage = resolvableLegFrames / (frames.length * 2)
 
   const bodyScale = estimateBodyScale(frames)
-  const travelDirection =
-    bodyScale === null ? 0 : estimateTravelDirection(frames, bodyScale)
+  if (bodyScale === null) {
+    // Distinct from the indeterminate-direction case below: with no body-scale reference the
+    // direction was never estimated at all, and "no net horizontal displacement" would name a
+    // false cause (overstriding's precedent, same wording).
+    return nullResult(
+      viewFitEntry.fit,
+      'No resolvable body-scale reference (shoulders/hips) in this clip.',
+      frameCoverage,
+    )
+  }
+
+  const travelDirection = estimateTravelDirection(frames, bodyScale)
   if (travelDirection === 0) {
     return nullResult(
       viewFitEntry.fit,

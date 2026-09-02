@@ -14,13 +14,17 @@ AMPLITUDE as a 2D angle proxy: it is distinct from knee flexion (which measures 
 hip-knee-ankle interior bend and reads the ankle; knee drive never does), and neither its caveats
 nor its presentation SHALL claim to measure propulsive force or drive effectiveness. When no
 frame resolves a hip and knee for either leg, the system SHALL report `value: null`,
-`confidence: 0`, and a caveat naming the unresolvable input. When the direction of travel cannot
-be determined (no net horizontal displacement), the system SHALL report `value: null`,
-`confidence: 0`, and a distinct caveat naming the indeterminate direction of travel — forward
-cannot be told from trail without it. When positions resolve and direction is known but no lift
-peak clears the prominence floor, the system SHALL report `value: null`, `confidence: 0`, and a
-third, distinct caveat stating that no thigh-lift peaks could be detected — never conflating the
-null-value causes into one message.
+`confidence: 0`, and a caveat naming the unresolvable input. When a hip and knee resolve but no
+body-scale reference (shoulders/hips) resolves anywhere in the clip — so the direction of travel
+was never estimated at all — the system SHALL report `value: null`, `confidence: 0`, and a
+distinct caveat naming the missing body-scale reference, never a false claim about horizontal
+displacement. When a body scale resolves but the direction of travel cannot be determined (no net
+horizontal displacement), the system SHALL report `value: null`, `confidence: 0`, and a distinct
+caveat naming the indeterminate direction of travel — forward cannot be told from trail without
+it. When positions resolve and direction is known but no lift peak clears the prominence floor,
+the system SHALL report `value: null`, `confidence: 0`, and a fourth, distinct caveat stating
+that no thigh-lift peaks could be detected — never conflating the null-value causes into one
+message.
 
 #### Scenario: A clean side-view clip reports the median peak lift with sane sample size
 
@@ -37,6 +41,15 @@ null-value causes into one message.
   lift)
 - **THEN** `value` is `null`, `confidence` is `0`, and `caveat` states that no thigh-lift peaks
   could be detected — distinct in wording from the unresolvable-input caveat
+
+#### Scenario: A missing body-scale reference is not blamed on horizontal displacement
+
+- **WHEN** knee drive is computed against a clip whose hips and knees resolve but whose
+  shoulders never do, so no body-scale reference resolves and the direction of travel is never
+  estimated
+- **THEN** `value` is `null`, `confidence` is `0`, and `caveat` names the missing body-scale
+  reference — distinct in wording from the indeterminate-direction caveat, which would assert a
+  displacement measurement that never happened
 
 #### Scenario: Indeterminate travel direction reports a distinct caveat instead of a guessed sign
 
