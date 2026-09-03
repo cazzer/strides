@@ -49,6 +49,13 @@ export interface ClipSlotProps {
    * which grows its frame into the dialog's stage.
    */
   isPresented?: boolean
+  /**
+   * Whether the strip currently leads with a non-clip entry (the model-download entry,
+   * `strides-utn.5`). Passed straight through to `ClipStripEntry`, which re-scrolls the working
+   * clip into view when it changes — see the prop's doc there for why a boolean about somebody
+   * else's entry is a clip's business.
+   */
+  leadingEntryPresent?: boolean
   onPresent?: (clipId: string) => void
   onDismiss?: () => void
   /** Called after every render with this clip's current `{ videoSource, analysis }` — the
@@ -88,6 +95,7 @@ export function ClipSlot({
   total = 1,
   isActiveClip = false,
   isPresented = false,
+  leadingEntryPresent = false,
   onPresent,
   onDismiss,
   onReport,
@@ -162,6 +170,7 @@ export function ClipSlot({
       hostsLiveElement={hostsLiveElement}
       isActiveClip={isActiveClip}
       isPresented={isPresented}
+      leadingEntryPresent={leadingEntryPresent}
       onPresent={() => onPresent?.(clipId)}
       onDismiss={() => onDismiss?.()}
       onRemove={() => onRemove(clipId)}

@@ -100,38 +100,45 @@ measurement recorded, and skip the rest of this section (design.md D7).
 
 ## 4. `strides-utn.5` — Render a model-download entry at the head of the header bar
 
-- [ ] 4.1 New component + test for the model entry, borrowing `ClipStripEntry`'s frame/caption/
+- [x] 4.1 New component + test for the model entry, borrowing `ClipStripEntry`'s frame/caption/
       `ConditionBar` markup rather than adding a kind discriminator to it —
       `ClipStripEntry.test.tsx:96-165` asserts on `.clip-strip__frame` / `.clip-strip__poster` class
       names and the `w-24` utility, so shared-markup refactors ripple.
-- [ ] 4.2 Render it in `src/results/MultiClipVideoSession.tsx` as a **preceding sibling** of the
+- [x] 4.2 Render it in `src/results/MultiClipVideoSession.tsx` as a **preceding sibling** of the
       clip `<ul>`, not a member of it, and outside the `clipIds.length > 0` gate at `:282` so it
       renders at zero clips. Read the `modelLoad` prop section 1 threaded in.
-- [ ] 4.3 Do not widen `ClipStripCondition`'s closed 8-member union to carry model states, and do
+- [x] 4.3 Do not widen `ClipStripCondition`'s closed 8-member union to carry model states, and do
       not renumber clips.
-- [ ] 4.4 Determinate width only where a byte total exists; indeterminate treatment otherwise. Never
-      a fabricated percentage.
-- [ ] 4.5 Failure caption on error, instead of sitting at a loading caption forever. **Decide retry
+- [x] 4.4 Never a fabricated percentage, and never a reading that can decrease. **Amended in place
+      by implementation** (this list's own rule; the original read "determinate width only where a
+      byte total exists"): the primary owner's total is *known* and *not yet the total*
+      simultaneously, so every fraction derived from it falls when the shards begin. What ships is
+      the measured transferred-byte figure — monotonic by construction — with the indeterminate bar
+      treatment throughout and no width anywhere. Reasoning and the two rejected alternatives:
+      design.md **D11.1**. The spec requirement was refined to match; `strides-utn.6` is closed by
+      it.
+- [x] 4.5 Failure caption on error, instead of sitting at a loading caption forever. **Decide retry
       explicitly** — implemented, or declined in writing in design.md D7 — noting
-      `movenet.ts:313-316`'s argument that there is no natural retry moment.
-- [ ] 4.6 Keep the single-live-region budget: the entry must not become a second announcer against
+      `movenet.ts:313-316`'s argument that there is no natural retry moment. **DECLINED**, with the
+      copy naming the recovery instead; design.md **D11.2**, revisitable as `strides-2rp`.
+- [x] 4.6 Keep the single-live-region budget: the entry must not become a second announcer against
       the active clip's `role="status"` caption (`ClipStripEntry.tsx:169`). State the ownership rule.
-- [ ] 4.7 House style: `animate-pulse bg-brand-600` for indeterminate work, an inline width
-      percentage for determinate, a hatched `repeating-linear-gradient` for error
-      (`ClipStripEntry.tsx:223-249`); neutral placeholder rather than a spinner (`:143-151`);
-      sentence case with a trailing ellipsis.
-- [ ] 4.8 **Verify LIVE in headless Chromium at narrow viewports** that the leading entry does not
+- [x] 4.7 House style: `animate-pulse bg-brand-600` for indeterminate work and a hatched
+      `repeating-linear-gradient` for error (`ClipStripEntry.tsx:223-249`); neutral placeholder
+      rather than a spinner (`:143-151`); sentence case with a trailing ellipsis. The determinate
+      inline-width treatment is deliberately unused here — see 4.4.
+- [x] 4.8 **Verify LIVE in headless Chromium at narrow viewports** that the leading entry does not
       push the analysing clip's `<video>` out of the horizontally-scrolling strip. A concealed
       element measures healthy through layout APIs and dead at the sampler, so a unit test cannot
       catch this; concealment costs ~20–24% of sampled frames on the playback path.
-- [ ] 4.9 `npx tsc -b`, `npm run lint`, `npm test` all green.
+- [x] 4.9 `npx tsc -b`, `npm run lint`, `npm test` all green.
 
 ## 5. Epic close-out
 
-- [ ] 5.1 Reconcile this change's deltas against `openspec/specs/` one last time, including deleting
+- [x] 5.1 Reconcile this change's deltas against `openspec/specs/` one last time, including deleting
       the MoveNet requirement if section 3 was withdrawn.
-- [ ] 5.2 `openspec validate model-load-visibility-and-cache --strict` clean.
-- [ ] 5.3 Update CLAUDE.md with what was measured — the model-fetch seam per asset, the cache key
+- [x] 5.2 `openspec validate model-load-visibility-and-cache --strict` clean.
+- [x] 5.3 Update CLAUDE.md with what was measured — the model-fetch seam per asset, the cache key
       scheme, and any determinism or throughput effect the live checks turned up.
 - [ ] 5.4 `openspec archive model-load-visibility-and-cache --yes`, once the whole epic has shipped
       and is verified. Not before.

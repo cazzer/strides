@@ -14,8 +14,14 @@ reader can match `"Combined from clip N of TOTAL"` to a strip entry by counting;
 inside that list would break the count and would also put a non-clip in a list labelled *Clips*.
 Clip numbering SHALL be unchanged.
 
-The entry SHALL show determinate progress only where a byte total is actually known, and an
-indeterminate indication otherwise. It SHALL NOT display a percentage it did not measure.
+The entry SHALL report only quantities it has measured, and SHALL NOT display any reading that can
+decrease while a download proceeds. **A byte total that is still being discovered is not a total**:
+each file's size is known only once its own response headers arrive, and the primary detector's
+aggregate therefore climbs from roughly 417 kB to roughly 14.5 MB as further files begin, so a
+fraction computed against it falls as the download progresses. The entry SHALL NOT display a
+progress fraction or percentage derived from such a total. Where a measurement exists it SHALL be
+presented as the measured quantity; where none exists yet, the entry SHALL indicate that work is in
+progress without stating a percentage or a byte count.
 
 The entry SHALL disappear once the downloads it reports are complete. On failure it SHALL show a
 caption that says the download failed, rather than remaining at a loading caption indefinitely;
@@ -44,10 +50,17 @@ a unit test.
 - **THEN** the clip list still holds exactly two entries, and a metric whose provenance reads
   `"Combined from clip 2 of 2"` still matches the second entry of that list by counting
 
-#### Scenario: Unknown totals show an indeterminate indication
+#### Scenario: Nothing measured yet shows an indeterminate indication
 
-- **WHEN** a download in flight has no known byte total
+- **WHEN** a download is in flight and no byte reading has been reported for it yet
 - **THEN** the entry indicates that work is in progress without stating a percentage or a byte count
+
+#### Scenario: A growing total never becomes a shrinking percentage
+
+- **WHEN** the aggregate byte total of a download in flight grows as further files begin, so that
+  `loaded ÷ total` is lower than it was a moment earlier
+- **THEN** the reading the entry displays does not decrease, and no percentage is displayed against
+  the partial total
 
 #### Scenario: The entry leaves on success and stays to report a failure
 

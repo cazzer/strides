@@ -7,6 +7,8 @@ import { ClipPicker } from '../video/ClipPicker'
 import { releaseClipPoster } from '../video/posterFrame'
 import { ClipSlot } from './ClipSlot'
 import type { ClipPendingLoad } from './ClipSlot'
+import { ModelLoadStripEntry } from './ModelLoadStripEntry'
+import { describeModelLoadStripStatus } from './modelLoadStripStatus'
 import { ResultsView } from './ResultsView'
 import { useSessionEvidence } from './useSessionEvidence'
 import type { EvidenceSection } from './useSessionEvidence'
@@ -29,11 +31,9 @@ export interface MultiClipVideoSessionProps {
    * Both detector owners' model-download state, read in `App` and threaded here because this
    * component owns the application header (`strides-utn.1`).
    *
-   * **Deliberately not rendered yet.** `strides-utn.1` is the wire only; `strides-utn.5` owns the
-   * header entry that presents this, and the two run in parallel — a placeholder here would collide
-   * with the component that ticket is writing. Declared and received rather than deferred so the
-   * UI ticket has a seam that already exists and is already type-checked, instead of a second hop
-   * to invent.
+   * Rendered as the strip's leading entry since `strides-utn.5` — see `ModelLoadStripEntry` and
+   * `describeModelLoadStripStatus`, which decide between "a download is in flight", "one failed"
+   * and by far the commonest answer, "render nothing".
    */
   modelLoad: ModelLoadStates
 }
@@ -97,11 +97,7 @@ function sameClipSession(previous: ClipSession | undefined, next: ClipSession): 
  * every class name looks right. So the header moved down here, and `App.tsx` keeps only the pose
  * detector.
  */
-// Props are taken whole and destructured one field at a time on purpose: `modelLoad` arrives here
-// and is not read until `strides-utn.5` renders it, and a destructured-but-unused binding would
-// have to be silenced with an eslint suppression, which reads as an accident rather than a seam.
-export function MultiClipVideoSession(props: MultiClipVideoSessionProps) {
-  const { detector } = props
+export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSessionProps) {
   // "Choose a different video" (a whole-session reset) unmounts the results and returns the page
   // to the picker, so the button's focus needs to land on something that survives the transition —
   // the page heading, the one thing on the page that is always there. Same fix already applied
@@ -210,6 +206,12 @@ export function MultiClipVideoSession(props: MultiClipVideoSessionProps) {
   const aggregate = computeAggregateAnalysisState(clips)
   const anyClipVideoReady = clips.some((c) => c.videoSource.status === 'ready')
 
+  // `null` on every settled render, which is nearly all of them. Non-null exactly while a model
+  // download is in flight or has failed — twice per session at most, and at two very different
+  // moments: MoveNet's 14.5 MB at mount, and MediaPipe's 9.4 MB `.task` only once a first clip has
+  // reached `'ready'`. The second of those is why this cannot be a page-load-only affordance.
+  const modelLoadStatus = describeModelLoadStripStatus(modelLoad)
+
   // Which clip each FUSED metric was selected from, or null until every clip is ready — the same
   // gate `aggregate.heuristics !== null` passes, so a card can never attribute a picture to a
   // result that has not been fused yet.
@@ -294,29 +296,47 @@ export function MultiClipVideoSession(props: MultiClipVideoSessionProps) {
             actually shrink inside the flex row rather than pushing the wordmark off screen. An
             entry scrolled out of view would be a concealed entry, so `ClipStripEntry` scrolls the
             working clip back into view when it starts.
+
+            The SCROLLER is this wrapper, not the `<ul>` — moved out one level by `strides-utn.5`.
+            The model-download entry has to be first in the bar and must NOT be a member of a list
+            labelled *Clips* (it would break the one-entry-per-clip count that lets a reader match
+            `"Combined from clip N of TOTAL"` by counting), so it is a preceding sibling — and a
+            sibling OUTSIDE the scroller would permanently consume 96 px of the strip's visible
+            width. That is not cosmetic: the strip's own box measures 158 px at a 390 px viewport,
+            so a fixed leading entry plus the 12 px gap leaves 50 px of a 96 px clip frame — the
+            working `<video>` more than half clipped out of the strip, which costs ~20-24% of its
+            sampled frames. Inside the scroller, the working clip's own `scrollIntoView` pushes this
+            entry off the left edge instead (measured: it scrolls 46 px and the frame stays whole).
           */}
-          {clipIds.length > 0 && (
-            <ul
-              aria-label="Clips"
-              className="clip-strip flex min-w-0 flex-1 items-start gap-3 overflow-x-auto py-1"
-            >
-              {clipIds.map((id, index) => (
-                <ClipSlot
-                  key={id}
-                  clipId={id}
-                  pendingLoad={pendingLoads[id] ?? null}
-                  detector={id === activeClipId ? detector : null}
-                  index={index}
-                  total={clipIds.length}
-                  isActiveClip={id === activeClipId}
-                  isPresented={id === presentedClipId}
-                  onPresent={setPresentedClipId}
-                  onDismiss={dismissPreview}
-                  onReport={handleReport}
-                  onRemove={removeClip}
-                />
-              ))}
-            </ul>
+          {(modelLoadStatus !== null || clipIds.length > 0) && (
+            <div className="clip-strip flex min-w-0 flex-1 items-start gap-3 overflow-x-auto py-1">
+              {modelLoadStatus !== null && <ModelLoadStripEntry status={modelLoadStatus} />}
+              {clipIds.length > 0 && (
+                <ul aria-label="Clips" className="flex shrink-0 items-start gap-3">
+                  {clipIds.map((id, index) => (
+                    <ClipSlot
+                      key={id}
+                      clipId={id}
+                      pendingLoad={pendingLoads[id] ?? null}
+                      detector={id === activeClipId ? detector : null}
+                      index={index}
+                      total={clipIds.length}
+                      isActiveClip={id === activeClipId}
+                      isPresented={id === presentedClipId}
+                      // Every clip shifts horizontally when the leading entry appears or leaves, so
+                      // the working clip has to be scrolled back into view at that moment too — its
+                      // own `hostsLiveElement` has not changed, and the scale pass's download starts
+                      // precisely while a clip is already hosting its live element.
+                      leadingEntryPresent={modelLoadStatus !== null}
+                      onPresent={setPresentedClipId}
+                      onDismiss={dismissPreview}
+                      onReport={handleReport}
+                      onRemove={removeClip}
+                    />
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
 
           {/*

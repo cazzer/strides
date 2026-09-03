@@ -466,3 +466,158 @@ ANSWER**, which is this repo's characteristic failure mode:
    on what it resolves to. The byte-identity probe passed its gate against an empty cache and
    reported a serene `0/0 cached MoveNet files are byte-identical`, which reads as a pass. Poll from
    Node instead. Filed as `strides-h4r`.
+
+## D11. `strides-utn.5` — the entry, and the three decisions it had to make
+
+### D11.1 Progress honesty: bytes, never a fraction (`strides-utn.6`)
+
+D10.4 recorded that the primary owner's aggregate `totalBytes` GROWS — ~417 kB once the two
+`model.json` files have declared themselves, ~14.5 MB once the shards begin — and left the
+presentation to this ticket. Three presentations were weighed:
+
+| | never regresses? | shipped? |
+|---|---|---|
+| raw `loaded / total` | **no** — ~100% then ~3% | no |
+| high-water mark on the fraction | yes, and it is WORSE | no |
+| transferred bytes, no fraction anywhere | yes | **yes** |
+
+The high-water mark is worse rather than safer, and the measured shape is why: both `model.json`
+files complete before any shard's headers arrive, so the mark pins at 100% and stays there for the
+remaining ~14.1 MB — a bar reading "done" through 97% of the work. Swinging determinate →
+indeterminate the moment a fraction would fall is honest, but it is the same confusing presentation
+D10.4 already rejected for the seeding alternative, in the one place a reader is watching.
+
+**`loadedBytes` is the one monotonic quantity this pipeline has**, by construction: each asset's own
+count only rises, `aggregateModelAssetProgress`'s map only gains entries, and a cache hit reports
+its full size in one go. So the caption carries `417 kB` / `4.2 MB` — the counterpart of a clip
+entry's `42%` — and the condition bar carries the indeterminate pulse and no width at all. There is
+no honest fraction to encode, so encoding none is the accurate treatment rather than a fallback.
+
+This REFINES the requirement's own wording, which said "determinate progress only where a byte total
+is actually known". Implementation showed the phrase splits a case the requirement had not
+separated: the total is *known* and simultaneously *not yet the total*. The requirement now says
+what it meant — report a measured quantity, never a reading that can decrease — and gained a
+scenario for the growing total. `strides-utn.6` is closed by this.
+
+Live, cold, real GPU, 60 Hz rAF sampling of the rendered entry: **43 distinct readings, 0 kB →
+14.5 MB, strictly non-decreasing, over 1,302 ms**, and the string `%` never appeared in the entry in
+any of the four scenarios exercised.
+
+### D11.2 Retry: DECLINED, and the caption names the recovery instead
+
+`movenet.ts:313-316` argues there is no natural "try again" moment, and D7 required this ticket to
+decide rather than omit. **Declined**, for three reasons that compound:
+
+1. **A page reload is the natural retry, and here it is free.** The primary detector is created once
+   on mount and cached for the app's lifetime, so its failure window is *before any clip exists* —
+   there is no session state a reload would cost the reader. A bespoke Retry control would buy back
+   exactly a reload.
+2. **The scale pass already retries.** `getScalePassDetector` clears its pending promise on failure,
+   so the next analysis run re-attempts. Offering Retry for it would duplicate a retry that happens
+   anyway, on a failure that is not fatal (the primary result never depends on it).
+3. **Cost.** Retry means reopening `usePoseDetector` — a `strides-utn.1` file — in the epic's last
+   ticket, adding an attempt counter and a `detector` transition (`null → non-null` after an error)
+   that every consumer currently assumes happens at most once.
+
+So the failure copy names the action rather than offering a control: *"The pose model could not be
+downloaded. Reload the page to try again."* for the primary, and for the scale pass the consequence
+instead — *"…Centimetre measurements are unavailable for this session."* — because there is nothing
+for the reader to do about a background pass that will retry itself. Revisitable rather than closed:
+filed as `strides-2rp`.
+
+### D11.3 Live-region ownership: the entry never announces
+
+`results-view`'s "Session status stays a single announced line while per-clip progress moves to the
+clips" allows at most one live region announcing progress for the session, and the active clip's
+`role="status"` caption holds it (`ClipStripEntry.tsx:169`).
+
+**The rule: this entry exposes its condition as plain text and announces nothing** — precisely the
+rule every NON-active clip entry already follows ("every entry exposes its condition as text, but
+only the clip that is actually working announces"). It is not `aria-hidden`: unlike
+`strides-8zv`'s pending-evidence placeholder, which conveys nothing a reader could act on, this
+entry carries the one fact the epic exists to surface, so hiding it would re-create the silence by a
+different route. A byte figure that updates on every chunk would also be the chattiest announcer on
+the page — 43 announcements in 1.3 s, over the top of the session line.
+
+Verified live rather than only in jsdom: with the entry on screen in the failure state, the document
+contained **0** elements matching `[role="status"], [role="alert"], [aria-live]`, and in the
+analysed-clip case the banner contained exactly **1** — the active clip's caption, unchanged.
+
+### D11.4 Where the entry sits, and the scroll consequence nobody would have predicted
+
+The spec requires a preceding SIBLING of `<ul aria-label="Clips">` rather than a member of it, so
+that `"Combined from clip N of TOTAL"` still matches a strip entry by counting. A sibling **outside**
+the scroller satisfies that and is wrong for a different reason, measured at a 390 px viewport: the
+strip's own box is **158 px** wide there, so a fixed 96 px leading entry plus the 12 px gap leaves
+50 px of a 96 px clip frame — the clip's `<video>` more than half clipped out of the strip, which is
+the ~20-24% sampled-frame loss `strides-kyu.13` measured.
+
+So the scroller moved out one level: `.clip-strip` is now the wrapper `<div>`, the model entry and
+the `<ul>` are its two children, and the `<ul>` is a plain `shrink-0` flex row. The working clip's
+own `scrollIntoView` then scrolls the model entry off the left edge instead of being pushed out
+behind it.
+
+That exposed a real hole, and it is not hypothetical: `ClipStripEntry`'s scroll effect keys on
+`hostsLiveElement`, and the scale pass's download begins while a clip is ALREADY hosting its live
+element — so nothing about the clip changes and the effect never re-runs. A new
+`leadingEntryPresent` prop is in the effect's dependencies for exactly that transition. Measured
+live at 390 px, one run, the whole sequence:
+
+| t | model entry | clip condition | clip frame | strip box | visible | `scrollLeft` |
+|---|---|---|---|---|---|---|
+| 253 ms | up | `loading` | [209,305] | [101,374] | 96 px | 0 |
+| 261 ms | up | `idle` | [209,305] | [101,259] | **50 px** | 0 |
+| 1,682 ms | gone | **`sampling`** | [101,197] | [101,259] | **96 px** | 0 |
+| 3,398 ms | **up** | `ready` + scale pass | [163,259] | [101,259] | **96 px** | **46** |
+| 3,729 ms | gone | `ready` | [101,197] | [101,259] | 96 px | 0 |
+
+The 50 px row is the failure the structure avoids — and it is harmless where it occurs, because the
+clip is `idle` and nothing is reading it. The row that matters is 3,398 ms: the entry reappears for
+the scale pass while the clip hosts its element, the strip scrolls 46 px, and the frame stays fully
+visible. Without the re-scroll the frame would have sat at [259,355] against a strip ending at 259 —
+**0 px visible**.
+
+That the invariant is *implicit* — safe only because `clipHostsLiveElement` is false at `idle` — is
+recorded as a latent hazard rather than left in a table: `strides-kkl`. Anything that makes a clip
+host its element earlier, or that adds a second leading entry, reopens the 50 px row into a window
+where it costs frames.
+
+### D11.5 What the live checks measured
+
+Headless Chromium, `--headless=new --enable-gpu --ignore-gpu-blocklist`, renderer
+`ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)` — never SwiftShader. Derived port 5371,
+identity-verified by nonce on every run. Node-side polling throughout, never an async
+`waitForFunction` predicate (`strides-h4r`).
+
+| check | measured |
+|---|---|
+| (a) cold, zero clips | entry present from ~80 ms; `ul[aria-label="Clips"]` **absent** the whole time — the state the old `clipIds.length > 0` gate rendered nothing in |
+| (b) never regresses | 43 readings, `Loading` → 417 kB → … → 14.5 MB → gone at 1,302 ms, strictly non-decreasing; no `%` anywhere |
+| (c) warm | entry visible **67 ms**, and **0** off-origin model requests (the 3 that fire are Google Fonts) |
+| (d) mid-session | entry returns at 2,157 ms reading *Downloading the scale model…* 5.2 → 9.4 MB, gone at 2,771 ms |
+| (e) narrow viewport | below |
+| (f) failure | `loading` → `error`, caption **Failed**, *"The pose model could not be downloaded. Reload the page to try again."*, still there 3 s later |
+
+**(e) is the acceptance criterion and it is a before/after of `detectedFrames`, not a look at
+geometry.** 390x844, Demo 2, PLAYBACK sampler (`{"sequentialSampling":{"enabled":false}}` — the only
+combination that observes concealment; the default WebCodecs path is blind to it), fresh Chromium
+process AND a fresh profile per trial so every trial pays a cold model download and the entry is
+genuinely on screen, 3 trials per arm, `sampling.path` asserted `'playback'` on all 6:
+
+| | before (`bd169e1`) | after |
+|---|---|---|
+| primary `detectedFrames` | 58 / 56 / 57 | **58 / 58 / 58** |
+| primary `totalSamples` | 58 / 56 / 57 | 58 / 58 / 58 |
+| scale pass `detectedFrames` | 85 / 85 / 85 | 84 / 85 / 85 |
+| strip box width | 158 px | **158 px** |
+
+No regression on either pass — the primary reads equal-or-higher in every trial, and the scale
+pass's single one-frame difference is inside the ±1 sampling jitter this repo documents. The strip's
+own width is identical, which is the check on the scroller restructure itself.
+
+**Epic A/B, the whole matrix**: `scripts/ab-person-selection.mjs --arm 'base={}' --clips
+demo1,demo2,multiperson --trials 3`, fresh-process default, run before and after on the same
+checkout and port, diffed with `rtk proxy diff` (`strides-ef5`: the shell's filtered `diff` reports
+"Files are identical" for files whose MD5s differ). The two 332-line reports differ on **`elapsedMs`
+alone** — three summary lines and the nine per-trial log lines that restate them. Detected counts
+are identical trial for trial: demo1 53/228, demo2 99/99, multiperson 103/233.

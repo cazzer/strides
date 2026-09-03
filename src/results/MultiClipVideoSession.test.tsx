@@ -718,4 +718,139 @@ describe('MultiClipVideoSession', () => {
       callOrder.indexOf('other-sample-start'),
     )
   })
+
+  describe('the model-download entry (strides-utn.5)', () => {
+    const PRIMARY_LOADING: ModelLoadStates = {
+      primary: { phase: 'loading', progress: { loadedBytes: 4_200_000, totalBytes: 14_522_593 } },
+      scalePass: IDLE_MODEL_LOAD_STATE,
+    }
+
+    /**
+     * The state a first-time visitor is in for the whole of MoveNet's 14.5 MB download — and the
+     * exact state in which the clip strip did not render at all, because it was gated on
+     * `clipIds.length > 0`.
+     */
+    it('renders at zero clips, where the clip strip does not render at all', () => {
+      render(<MultiClipVideoSession detector={null} modelLoad={PRIMARY_LOADING} />)
+
+      expect(canonicalVideos()).toHaveLength(0)
+      expect(screen.queryByRole('list', { name: /clips/i })).not.toBeInTheDocument()
+
+      const entry = screen.getByText('4.2 MB')
+      expect(screen.getByRole('banner')).toContainElement(entry)
+      expect(screen.getByText(/downloading the pose model… 4\.2 mb so far\./i)).toBeInTheDocument()
+    })
+
+    it('is absent while both owners are settled', () => {
+      render(<MultiClipVideoSession detector={null} modelLoad={IDLE_MODEL_LOADS} />)
+
+      expect(document.querySelector('.model-load-entry')).toBeNull()
+    })
+
+    it('leaves as soon as the download it reports completes', () => {
+      const { rerender } = render(
+        <MultiClipVideoSession detector={null} modelLoad={PRIMARY_LOADING} />,
+      )
+      expect(document.querySelector('.model-load-entry')).not.toBeNull()
+
+      rerender(
+        <MultiClipVideoSession
+          detector={null}
+          modelLoad={{ primary: { phase: 'ready', progress: null }, scalePass: IDLE_MODEL_LOAD_STATE }}
+        />,
+      )
+      expect(document.querySelector('.model-load-entry')).toBeNull()
+    })
+
+    it('reappears mid-session when the scale pass starts its own, much later download', async () => {
+      const { rerender } = render(
+        <MultiClipVideoSession
+          detector={null}
+          modelLoad={{ primary: { phase: 'ready', progress: null }, scalePass: IDLE_MODEL_LOAD_STATE }}
+        />,
+      )
+      fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+      await chooseFile(new File(['x'], 'run.mp4', { type: 'video/mp4' }))
+      markVideoReady(canonicalVideos()[0])
+      expect(document.querySelector('.model-load-entry')).toBeNull()
+
+      rerender(
+        <MultiClipVideoSession
+          detector={null}
+          modelLoad={{
+            primary: { phase: 'ready', progress: null },
+            scalePass: { phase: 'loading', progress: { loadedBytes: 9_398_198, totalBytes: 9_398_198 } },
+          }}
+        />,
+      )
+
+      expect(screen.getByText('9.4 MB')).toBeInTheDocument()
+      expect(screen.getByText(/downloading the scale model…/i)).toBeInTheDocument()
+    })
+
+    /**
+     * `multi-clip-analysis` requires exactly one strip entry per clip, in clip-session order, so a
+     * reader can match `"Combined from clip N of TOTAL"` by counting. A non-clip entry inside
+     * `<ul aria-label="Clips">` would break that count — hence a preceding SIBLING.
+     */
+    it('is not a member of the clip list and does not renumber clips', async () => {
+      render(<MultiClipVideoSession detector={null} modelLoad={PRIMARY_LOADING} />)
+
+      fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+      await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
+      markVideoReady(canonicalVideos()[0])
+      await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+      await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
+
+      const list = screen.getByRole('list', { name: /clips/i })
+      expect(list.querySelectorAll('li')).toHaveLength(2)
+      expect(list.querySelector('.model-load-entry')).toBeNull()
+
+      const entry = document.querySelector('.model-load-entry')!
+      // Preceding sibling of the list, in the same scrolling strip.
+      expect(entry.nextElementSibling).toBe(list)
+      expect(entry.parentElement).toBe(list.parentElement)
+
+      // Counting still works: entry 2 of the list is still "Clip 2 of 2".
+      expect(screen.getByText(/clip 2 of 2:/i)).toBeInTheDocument()
+    })
+
+    /**
+     * `results-view`: at most one live region announces progress for the session. The entry has to
+     * be readable without becoming a second announcer against the active clip's `role="status"`.
+     */
+    it('adds no live region while a clip is being analysed', async () => {
+      render(<MultiClipVideoSession detector={makeFakeDetector()} modelLoad={PRIMARY_LOADING} />)
+
+      fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+      await chooseFile(new File(['x'], 'run.mp4', { type: 'video/mp4' }))
+      markVideoReady(canonicalVideos()[0])
+      await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
+
+      const entry = document.querySelector('.model-load-entry')!
+      expect(entry.querySelector('[role="status"], [role="alert"], [aria-live]')).toBeNull()
+
+      // The session's own budget is unchanged by this entry: the announcers are the session status
+      // line and the one active clip's caption, exactly as before.
+      const banner = screen.getByRole('banner')
+      expect(banner.querySelectorAll('[role="status"], [role="alert"], [aria-live]')).toHaveLength(1)
+    })
+
+    it('reports a failed download as a failure rather than as work still in progress', () => {
+      render(
+        <MultiClipVideoSession
+          detector={null}
+          modelLoad={{
+            primary: { phase: 'error', progress: null },
+            scalePass: IDLE_MODEL_LOAD_STATE,
+          }}
+        />,
+      )
+
+      expect(screen.getByText('Failed')).toBeInTheDocument()
+      expect(
+        screen.getByText(/the pose model could not be downloaded\. reload the page to try again\./i),
+      ).toBeInTheDocument()
+    })
+  })
 })
