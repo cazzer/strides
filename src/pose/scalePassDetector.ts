@@ -1,5 +1,6 @@
 import { createDetector } from './detector'
 import type { PoseDetector } from './detector'
+import { aggregateModelAssetProgress } from './modelAssetCache'
 import { IDLE_MODEL_LOAD_STATE } from './modelLoadState'
 import type { ModelLoadState } from './modelLoadState'
 
@@ -88,9 +89,26 @@ export function subscribeToScalePassDetectorLoad(listener: ScalePassLoadListener
 export async function getScalePassDetector(): Promise<PoseDetector | null> {
   if (detectorInstance) return detectorInstance
   if (!detectorPromise) {
-    detectorPromise = createDetector({ backend: 'mediapipePoseLandmarker' })
+    // `strides-utn.3`: the `.task`'s bytes as they arrive. The WASM runtime beside it reports
+    // nothing (no hook exists), so this reading covers the model asset only — which is the larger
+    // of the two and the only one not already year-cached by the browser.
+    let attempt: Promise<PoseDetector> | null = null
+    const onAssetProgress = aggregateModelAssetProgress((progress) => {
+      // Two guards, same discipline as the failure path below. A straggling report from a
+      // superseded attempt must not repaint a fresh attempt's reading with abandoned byte counts,
+      // and a report arriving after the creation settled must not drag a 'ready' back to
+      // 'loading'.
+      if (detectorPromise !== attempt) return
+      if (loadState.phase !== 'loading') return
+      publishLoadState({ phase: 'loading', progress })
+    })
+    attempt = createDetector({ backend: 'mediapipePoseLandmarker' }, { onAssetProgress })
+    detectorPromise = attempt
     // Announced only where an attempt is actually installed, so a second caller joining an
-    // in-flight creation does not re-announce a transition that already happened.
+    // in-flight creation does not re-announce a transition that already happened — and announced
+    // AFTER the assignment, so a synchronously-throwing creation cannot leave the channel stuck at
+    // 'loading' with no attempt behind it. No progress report can beat this line: the backend
+    // reaches its first asset fetch only past several awaits.
     publishLoadState({ phase: 'loading', progress: null })
   }
   const attempted = detectorPromise

@@ -5,6 +5,7 @@ import type { PersonOfInterestConfig } from './backends/personOfInterestConfig'
 import { createBlazePoseDetector } from './backends/blazepose'
 import { createPoseNetDetector } from './backends/posenet'
 import { createMediaPipePoseLandmarkerDetector } from './backends/mediapipePoseLandmarker'
+import type { ModelAssetProgressListener } from './modelAssetCache'
 import type { PoseFrame } from './types'
 
 export type PoseBackendId =
@@ -18,6 +19,27 @@ export interface PoseDetectorConfig {
   trackingCrop?: TrackingCropConfig
   /** Only meaningful when backend: 'movenet'. Defaults to DEFAULT_PERSON_OF_INTEREST_CONFIG. */
   personOfInterest?: PersonOfInterestConfig
+}
+
+/**
+ * Per-creation wiring that is NOT part of the configuration a reader selects.
+ *
+ * Deliberately a second parameter rather than a field on `PoseDetectorConfig`: that type is the
+ * dev-only `__STRIDES_POSE_BACKEND_OVERRIDE__` shape, read from a `window` global and merged
+ * shallowly, and a callback has no business being expressible there.
+ */
+export interface DetectorCreationOptions {
+  /**
+   * Byte progress for each model asset this backend routes through `fetchModelAsset`, tagged with
+   * that asset's stable id. Fold several assets into one reading with
+   * `aggregateModelAssetProgress`.
+   *
+   * Not every backend reports: `blazepose` and `posenet` fetch their own weights and are not
+   * routed, and MediaPipe's WASM runtime is structurally uninstrumentable (`FilesetResolver`
+   * exposes no hook). Silence therefore means "this download is not measurable", which the load
+   * state expresses as an absent `progress` rather than as a zero.
+   */
+  onAssetProgress?: ModelAssetProgressListener
 }
 
 /**
@@ -63,7 +85,10 @@ export function videoFrameSource(
 
 const backends: Record<
   PoseBackendId,
-  (config: PoseDetectorConfig) => Promise<PoseDetector>
+  (
+    config: PoseDetectorConfig,
+    options: DetectorCreationOptions,
+  ) => Promise<PoseDetector>
 > = {
   movenet: (config) =>
     createMoveNetDetector(
@@ -73,7 +98,8 @@ const backends: Record<
     ),
   blazepose: () => createBlazePoseDetector(),
   posenet: () => createPoseNetDetector(),
-  mediapipePoseLandmarker: () => createMediaPipePoseLandmarkerDetector(),
+  mediapipePoseLandmarker: (_config, options) =>
+    createMediaPipePoseLandmarkerDetector(options),
 }
 
 // Intentionally not `async`: an async function can never throw synchronously to its
@@ -81,10 +107,11 @@ const backends: Record<
 // should fail fast, synchronously, before any async work begins.
 export function createDetector(
   config: PoseDetectorConfig = { backend: 'movenet' },
+  options: DetectorCreationOptions = {},
 ): Promise<PoseDetector> {
   const createBackendDetector = backends[config.backend]
   if (!createBackendDetector) {
     throw new Error(`Unknown pose detector backend: ${config.backend}`)
   }
-  return createBackendDetector(config)
+  return createBackendDetector(config, options)
 }

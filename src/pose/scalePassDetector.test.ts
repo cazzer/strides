@@ -61,7 +61,12 @@ describe('getScalePassDetector', () => {
 
     await getScalePassDetector()
 
-    expect(createDetectorMock).toHaveBeenCalledWith({ backend: 'mediapipePoseLandmarker' })
+    // Asserted on the CONFIG argument specifically, not the whole call: `createDetector` also
+    // takes per-creation wiring (the model-asset progress sink, `strides-utn.3`), and what this
+    // test is about is that no part of the override reaches the backend selection.
+    expect(createDetectorMock.mock.calls[0][0]).toEqual({
+      backend: 'mediapipePoseLandmarker',
+    })
   })
 
   it('resolves to null on creation failure, then retries on the next request', async () => {
@@ -141,6 +146,50 @@ describe('the scale-pass detector load channel', () => {
     unsubscribe()
   })
 
+  it('delivers the model asset s byte progress while loading, and drops it on ready', async () => {
+    // The `.task` is 9.4 MB and GitHub Pages caps its max-age at 600s, so this is the download the
+    // reader was previously left waiting on with nothing on screen (`strides-utn.3`).
+    let resolveDetector: (detector: PoseDetector) => void = () => {}
+    createDetectorMock.mockImplementation(
+      () => new Promise<PoseDetector>((resolve) => (resolveDetector = resolve)),
+    )
+    const states: ModelLoadState[] = []
+    const unsubscribe = subscribeToScalePassDetectorLoad((state) => states.push(state))
+
+    const pending = getScalePassDetector()
+    const { onAssetProgress } = createDetectorMock.mock.calls[0][1]
+    onAssetProgress({ assetId: 'task', loadedBytes: 2_000_000, totalBytes: 9_398_198 })
+
+    expect(getScalePassDetectorLoadState()).toEqual({
+      phase: 'loading',
+      progress: { loadedBytes: 2_000_000, totalBytes: 9_398_198 },
+    })
+
+    resolveDetector(makeFakeDetector())
+    await pending
+
+    expect(getScalePassDetectorLoadState()).toEqual({ phase: 'ready', progress: null })
+    expect(states.map((state) => state.phase)).toEqual(['loading', 'loading', 'ready'])
+    unsubscribe()
+  })
+
+  it('ignores a straggling progress report from a superseded attempt', async () => {
+    createDetectorMock
+      .mockRejectedValueOnce(new Error('wasm fetch failed'))
+      .mockResolvedValueOnce(makeFakeDetector())
+
+    await getScalePassDetector()
+    const { onAssetProgress: staleSink } = createDetectorMock.mock.calls[0][1]
+
+    const retry = getScalePassDetector()
+    // The abandoned attempt's in-flight fetch can still deliver. Repainting the fresh attempt's
+    // reading with the old one's byte counts would be a bar that jumps backwards for no reason.
+    staleSink({ assetId: 'task', loadedBytes: 8_000_000, totalBytes: 9_398_198 })
+
+    expect(getScalePassDetectorLoadState()).toEqual({ phase: 'loading', progress: null })
+    await retry
+  })
+
   it('stops delivering once unsubscribed', async () => {
     createDetectorMock.mockResolvedValue(makeFakeDetector())
     const { phases, unsubscribe } = recordPhases()
@@ -163,7 +212,9 @@ describe('the scale-pass detector load channel', () => {
     expect(first).toBe(fakeDetector)
     expect(second).toBe(fakeDetector)
     expect(createDetectorMock).toHaveBeenCalledTimes(1)
-    expect(createDetectorMock).toHaveBeenCalledWith({ backend: 'mediapipePoseLandmarker' })
+    expect(createDetectorMock.mock.calls[0][0]).toEqual({
+      backend: 'mediapipePoseLandmarker',
+    })
     unsubscribe()
   })
 })

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createDetector } from './detector'
 import type { PoseDetector } from './detector'
-import type { ModelLoadPhase, ModelLoadState } from './modelLoadState'
+import { aggregateModelAssetProgress } from './modelAssetCache'
+import type { ModelLoadPhase, ModelLoadProgress, ModelLoadState } from './modelLoadState'
 import { resolvePoseDetectorConfig } from './poseBackendConfig'
 
 /**
@@ -19,9 +20,13 @@ export interface SharedPoseDetector {
   detector: PoseDetector | null
   /**
    * The same `status`, plus an optional determinate byte reading, in the shape the application
-   * header consumes for both detector owners (`strides-utn.1`). `progress` is `null` today and
-   * `strides-utn.3` is what populates it — this hook builds the channel, not the fill. Identity is
-   * stable between phase changes so a consumer can compare it by reference.
+   * header consumes for both detector owners (`strides-utn.1`). Identity is stable between
+   * transitions so a consumer can compare it by reference.
+   *
+   * `progress` is populated for whichever model assets this hook's backend routes through
+   * `fetchModelAsset` (`strides-utn.3`). On the default MoveNet backend that is none of them yet —
+   * `strides-utn.4` routes its weights — so the reading stays `null`, which is the honest value
+   * for a download nobody is measuring rather than a placeholder.
    */
   load: ModelLoadState
 }
@@ -35,6 +40,7 @@ export interface SharedPoseDetector {
  */
 export function usePoseDetector(): SharedPoseDetector {
   const [status, setStatus] = useState<PoseDetectorStatus>('loading')
+  const [progress, setProgress] = useState<ModelLoadProgress | null>(null)
   const [detector, setDetector] = useState<PoseDetector | null>(null)
 
   const detectorRef = useRef<PoseDetector | null>(null)
@@ -43,7 +49,9 @@ export function usePoseDetector(): SharedPoseDetector {
   const getDetector = useCallback(async (): Promise<PoseDetector | null> => {
     if (detectorRef.current) return detectorRef.current
     if (!detectorPromiseRef.current) {
-      detectorPromiseRef.current = createDetector(resolvePoseDetectorConfig())
+      detectorPromiseRef.current = createDetector(resolvePoseDetectorConfig(), {
+        onAssetProgress: aggregateModelAssetProgress(setProgress),
+      })
     }
     try {
       const created = await detectorPromiseRef.current
@@ -64,6 +72,10 @@ export function usePoseDetector(): SharedPoseDetector {
     void (async () => {
       const result = await getDetector()
       if (cancelled) return
+      // Nothing is in flight any more, so there is no determinate reading to hold: `progress`
+      // describes a download that is happening, and keeping the last one would leave a settled
+      // state carrying a stale percentage for the header to render.
+      setProgress(null)
       if (result) {
         setDetector(result)
         setStatus('ready')
@@ -84,11 +96,9 @@ export function usePoseDetector(): SharedPoseDetector {
     }
   }, [])
 
-  // `progress` is deliberately a literal `null` rather than a piece of state nothing writes:
-  // `strides-utn.1` builds the channel and `strides-utn.3` populates it, and a setter with no
-  // caller would read as an oversight rather than as a seam. Memoised so the header sees a stable
-  // identity between phase changes.
-  const load = useMemo<ModelLoadState>(() => ({ phase: status, progress: null }), [status])
+  // Memoised so the header sees a stable identity between transitions, not a fresh object per
+  // render — `App` re-renders on every phase change of either owner.
+  const load = useMemo<ModelLoadState>(() => ({ phase: status, progress }), [status, progress])
 
   return { status, detector, load }
 }

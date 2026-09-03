@@ -69,9 +69,14 @@ reports byte progress against the response's `Content-Length` where that header 
 CORS-readable, reports no progress figure at all where it is not, consults a client-side response
 cache before fetching, and populates that cache on a miss.
 
-Cache entries SHALL be keyed by the asset's URL **together with an explicit model version token**,
-so that changing the token supersedes the stored bytes rather than serving a stale model forever.
-Superseded entries SHALL be removed rather than accumulating.
+Cache entries SHALL be keyed by a **stable asset identity supplied by the caller** — its canonical
+URL — **together with an explicit model version token**, so that changing the token supersedes the
+stored bytes rather than serving a stale model forever. Superseded entries SHALL be removed rather
+than accumulating, and removal SHALL be scoped to the asset whose token changed.
+
+The key SHALL NOT be derived from the URL a request actually resolves to. MoveNet's weights reach a
+per-request signed URL through two redirects, so a key taken from the fetched or redirected URL
+would differ on every request, miss every time, and disable the cache while appearing to work.
 
 The utility SHALL degrade gracefully rather than fail: the cache API is absent in some browsing
 contexts and throws in others (private browsing, blocked site data), so every cache read and every
@@ -94,6 +99,12 @@ uncached download.
   was stored under
 - **THEN** the old entry is removed, the asset is re-fetched, and the new bytes are stored under the
   new key
+
+#### Scenario: A redirecting, per-request-signed URL still hits
+
+- **WHEN** a model asset is requested twice under the same identity and version token, and the URL
+  it resolves to differs between the two requests
+- **THEN** the second request is served from the cache and issues no network request
 
 #### Scenario: An unavailable cache still yields the asset
 

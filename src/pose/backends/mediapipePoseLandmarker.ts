@@ -1,5 +1,6 @@
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision'
-import type { PoseDetector, PoseFrameSource } from '../detector'
+import type { DetectorCreationOptions, PoseDetector, PoseFrameSource } from '../detector'
+import { fetchModelAsset } from '../modelAssetCache'
 import type { PoseFrame } from '../types'
 import type { RawKeypoint } from './common'
 import { toPoseFrame } from './common'
@@ -7,6 +8,12 @@ import { toPoseFrame } from './common'
 /**
  * Pinned to the installed package version — floating on a CDN "latest" tag would let the WASM
  * runtime drift out from under a pinned npm dependency.
+ *
+ * Deliberately NOT routed through `fetchModelAsset`, on measurement (`strides-utn.2`): jsdelivr
+ * already serves it `public, max-age=31536000, immutable` and it transfers 0 bytes on a warm
+ * visit, while Cache Storage stores the DECODED body — so caching a 3.12 MB wire payload would
+ * occupy 11.76 MB of quota to save nothing. `FilesetResolver` also exposes no progress hook, so
+ * this fetch is indeterminate whatever we do with it.
  */
 const WASM_BASE_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm'
 
@@ -14,15 +21,32 @@ const WASM_BASE_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0
  * 'full' to match the (currently broken) tfjs BlazePose backend's variant — see GitHub #25.
  *
  * Self-hosted (public/models/) rather than fetched from
- * `storage.googleapis.com/mediapipe-models/.../latest/` for two reasons: the bucket's `latest`
- * tag floats (its bytes already differ from the only published numbered version, `/1/`), so a
- * remote fetch could silently change the model — and with it every VO-cm number — under a
- * pinned npm dependency; and the bucket serves `cache-control: max-age=3600`, while same-origin
- * hosting rides our own deploy's caching. The checked-in file is byte-identical (MD5
- * 5a9ad88919b2231d02b1fdf4a54090ec) to the `latest` bytes every 2026-08-13 verification ran
- * against. `BASE_URL` prefix because the app deploys under a subpath (vite.config.ts `base`).
+ * `storage.googleapis.com/mediapipe-models/.../latest/` because the bucket's `latest` tag floats
+ * (its bytes already differ from the only published numbered version, `/1/`), so a remote fetch
+ * could silently change the model — and with it every VO-cm number — under a pinned npm
+ * dependency. The checked-in file is byte-identical (MD5 5a9ad88919b2231d02b1fdf4a54090ec) to the
+ * `latest` bytes every 2026-08-13 verification ran against. `BASE_URL` prefix because the app
+ * deploys under a subpath (vite.config.ts `base`).
+ *
+ * That byte-pinning is the whole of the rationale. This comment used to add a caching one — "the
+ * bucket serves `cache-control: max-age=3600`, while same-origin hosting rides our own deploy's
+ * caching" — and it was wrong twice over, which is why `strides-utn.3` exists. The deploy is
+ * GitHub Pages: its response headers are not ours to set, so there is no "our own deploy's
+ * caching" to ride. And measured live, the file comes back `cache-control: max-age=600` — six
+ * times WORSE than the bucket it replaced, not better. Ten minutes is not caching, and no header
+ * change can fix it, so the bytes are kept client-side instead: see `modelAssetCache.ts`.
  */
 const MODEL_ASSET_PATH = `${import.meta.env.BASE_URL}models/pose_landmarker_full.task`
+
+/**
+ * The cache-key version token for the asset above — the checked-in file's own MD5, which is the
+ * identity this repo already records for it.
+ *
+ * ⚠️ Replacing `public/models/pose_landmarker_full.task` MUST update this constant. A cached
+ * client keys on it, so leaving it stale serves the OLD model's bytes from Cache Storage forever,
+ * on a page that ships the new file — a failure that looks like nothing at all.
+ */
+const POSE_LANDMARKER_MODEL_VERSION = 'md5-5a9ad88919b2231d02b1fdf4a54090ec'
 
 /**
  * `PoseLandmarkerResult#landmarks` is a plain `NormalizedLandmark[]` with no `.name` field —
@@ -137,10 +161,24 @@ function computePixelsPerMeter(
  */
 const TIMESTAMP_RESTART_GAP_MS = 33
 
-export async function createMediaPipePoseLandmarkerDetector(): Promise<PoseDetector> {
+export async function createMediaPipePoseLandmarkerDetector(
+  options: DetectorCreationOptions = {},
+): Promise<PoseDetector> {
   const wasmFileset = await FilesetResolver.forVisionTasks(WASM_BASE_PATH)
+  // `modelAssetBuffer` rather than `modelAssetPath` so the 9.4 MB `.task` is fetched by us: that
+  // is what makes it observable (byte progress) and cacheable across page loads. MediaPipe accepts
+  // the bytes directly (`BaseOptions.modelAssetBuffer`), so this needs no loader shim — it is
+  // simply which of two documented inputs we hand it.
+  const modelAssetBuffer = await fetchModelAsset(
+    {
+      id: MODEL_ASSET_PATH,
+      url: MODEL_ASSET_PATH,
+      version: POSE_LANDMARKER_MODEL_VERSION,
+    },
+    options.onAssetProgress,
+  )
   const landmarker = await PoseLandmarker.createFromOptions(wasmFileset, {
-    baseOptions: { modelAssetPath: MODEL_ASSET_PATH, delegate: 'GPU' },
+    baseOptions: { modelAssetBuffer, delegate: 'GPU' },
     runningMode: 'VIDEO',
     numPoses: 1,
   })

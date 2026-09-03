@@ -49,26 +49,30 @@ findings belong on the bead and in design.md, not in this list.
 
 ## 2. `strides-utn.3` — Shared model fetch/cache/progress utility, proven on the MediaPipe `.task`
 
-- [ ] 2.1 Add the shared utility (`src/pose/modelAssetCache.ts` or similar): fetch an asset,
+- [x] 2.1 Add the shared utility (`src/pose/modelAssetCache.ts` or similar): fetch an asset,
       streaming byte progress against `Content-Length` where present and reporting progress as
       absent where it is not.
-- [ ] 2.2 Back it with Cache Storage, keyed by asset URL **plus an explicit model version token**.
+- [x] 2.2 Back it with Cache Storage, keyed by asset URL **plus an explicit model version token**.
       Populate on miss; remove the superseded entry when the token changes.
-- [ ] 2.3 Guard every cache read and write: `caches` is absent in some contexts and throws in others
+- [x] 2.3 Guard every cache read and write: `caches` is absent in some contexts and throws in others
       (private browsing, blocked site data). An unavailable cache must still yield a completed,
       uncached download — never a download failure.
-- [ ] 2.4 Route `pose_landmarker_full.task` through it: swap `modelAssetPath` for
+- [x] 2.4 Route `pose_landmarker_full.task` through it: swap `modelAssetPath` for
       `BaseOptions.modelAssetBuffer` at `src/pose/backends/mediapipePoseLandmarker.ts:142-146`.
-- [ ] 2.5 Correct the stale caching claim in that file's comment (`:17-23`): the deploy is GitHub
+- [x] 2.5 Correct the stale caching claim in that file's comment (`:17-23`): the deploy is GitHub
       Pages, response headers are not controllable, and the `.task` is measured serving
       `cache-control: max-age=600` — six times worse than the bucket it replaced, which is why
       client-side storage is required. Keep the byte-pinning rationale, which is still correct.
-- [ ] 2.6 Populate `ModelLoadState.progress` through the channel section 1 added, for both owners.
-- [ ] 2.7 Unit tests: cache hit, miss-populates, version-token eviction, unavailable/throwing
+- [x] 2.6 Populate `ModelLoadState.progress` through the channel section 1 added, for both owners.
+      Both owners fold their assets' readings with `aggregateModelAssetProgress`. The scale pass
+      genuinely reports bytes today; the primary's stays `null` until section 3 routes MoveNet,
+      which is the honest reading for a download nobody is measuring (design.md D8).
+- [x] 2.7 Unit tests: cache hit, miss-populates, version-token eviction, unavailable/throwing
       `caches`, and a missing `Content-Length` reporting absent progress.
-- [ ] 2.8 Verify LIVE, network-observed rather than inferred, that a second page load does not
-      re-download the `.task`.
-- [ ] 2.9 `npx tsc -b`, `npm run lint`, `npm test` all green.
+- [x] 2.8 Verify LIVE, network-observed rather than inferred, that a second page load does not
+      re-download the `.task`. Measured: cold 1 request / 9,398,460 transferred bytes, warm **no
+      request at all** (design.md D9).
+- [x] 2.9 `npx tsc -b`, `npm run lint`, `npm test` all green.
 
 ## 3. `strides-utn.4` — Route MoveNet through the shared cache via a custom tfjs IOHandler
 

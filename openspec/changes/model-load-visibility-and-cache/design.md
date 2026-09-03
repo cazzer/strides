@@ -56,7 +56,8 @@ fields; `strides-utn.1` builds the channel and leaves them `null`.
 `createDetector`; the scale-pass module publishes through the same `setLoadState` the phase already
 goes through. `.1` deliberately does not pick between that and a progress bus inside the shared
 cache utility, because the choice belongs with the utility. What `.1` pins is the **shape** — which
-is the part `.5` renders against.
+is the part `.5` renders against. `.3` has since chosen the callback, for reasons that only became
+visible once the utility existed: **D8**.
 
 ## D3. The scale-pass singleton gains an observation channel, and stays a singleton
 
@@ -202,3 +203,106 @@ playback path, at any size, by any mechanism.
 - **Eager prefetch of the MediaPipe model is out of scope for the whole epic**, by an explicit
   decision on `strides-utn`: 9.4 MB unconditional for a visitor who may never analyse a clip is a
   cost this repo is not paying today. Downloads are instrumented where they already happen.
+
+## D8. `strides-utn.3` chose a callback over a progress bus, and why
+
+D2 left this open on purpose. The choice is a **callback**: `createDetector` takes a second
+argument, `DetectorCreationOptions`, carrying an optional `onAssetProgress`, and each owner folds
+its assets' readings with `aggregateModelAssetProgress` from the cache utility.
+
+The bus alternative was not rejected for being heavier. It was rejected because **it does not buy
+less threading**. `createMediaPipePoseLandmarkerDetector` serves BOTH owners — the scale pass
+always, and the primary whenever `__STRIDES_POSE_BACKEND_OVERRIDE__` selects mediapipe — so a bus
+would still need an owner tag threaded down through exactly the same call chain. It would replace a
+function argument with a string argument and add module-global mutable state that tests must reset,
+for the same reach.
+
+Two things decided it beyond that:
+
+- **A bus would introduce a second writer to the scale-pass channel**, which contradicts D3. That
+  section's whole claim is that ownership is unchanged: `getScalePassDetector` is still the only
+  thing that publishes, and observers only read. A bus that published progress from inside the
+  fetch utility would make the utility a publisher on a channel it does not own.
+- **`strides-utn.4` needs per-shard progress from inside a tfjs `io.IOHandler` that WE
+  construct.** A closure is the natural carrier there; there is nothing to key a bus on that is
+  more convenient than the callback already in hand.
+
+The utility therefore knows nothing about owners, phases, or React — it reports bytes for an asset
+id, and the owner decides what that means. `aggregateModelAssetProgress` is the piece that keeps
+`.5` from needing the asset inventory: it sums per-file readings into one `ModelLoadProgress`, and
+**one unknown total makes the whole reading indeterminate**, because summing only the totals that
+happen to be known would report a total that is not the total.
+
+**The primary's `progress` stays `null` on today's default backend.** MoveNet routes nothing through
+the utility until section 3. That is the seam working, not a gap: `null` means indeterminate, and a
+download nobody is measuring is exactly that.
+
+### D8.1 Two guards on `Content-Length`, because one is not enough
+
+`strides-utn.2` measured that trust has to be decided per response. The header check
+(`content-encoding` absent or `identity`) is the first guard. It is **not sufficient on its own**: a
+cross-origin response only exposes `content-encoding` when the server lists it in
+`access-control-expose-headers`, so a compressed cross-origin body can present a compressed
+`Content-Length` with nothing to flag it.
+
+The second guard is in the read loop — a declared total the decoded body has already **overrun** was
+measuring something else, whatever the headers said, and the reading drops to indeterminate from
+that point. Together they catch the measured ~376% case from either direction.
+
+The download closes with `{ loadedBytes, totalBytes: loadedBytes }`. That is a measurement, not an
+invention — the asset is complete and it was exactly that many bytes — and it stops an asset whose
+total was never readable from holding a multi-file aggregate at indeterminate after it has finished.
+
+### D8.2 The cache key is a caller-supplied identity, never the fetched URL
+
+The single most load-bearing line in the utility. `strides-utn.2`'s headline finding: MoveNet's
+files resolve through two 302s to a `storage.googleapis.com` URL whose `X-Goog-Date` and
+`X-Goog-Signature` **differ on every request**. A cache keyed on `response.url` would miss 100% of
+the time and silently do nothing at all — no error, no warning, just a feature that does not work.
+
+So `ModelAssetSpec` separates `id` (stable, the key) from `url` (what is fetched, may be signed and
+may redirect), and nothing in the module reads `response.url`. For the `.task` the two are the same
+string; for MoveNet they will not be. There is a unit test that fetches twice under one `id` with
+two different signed URLs and asserts the second issues no request.
+
+Keys live under a synthetic `https://model-asset.strides.invalid/asset/<id>?v=<version>` origin:
+`Cache.put` requires an http(s) scheme but never fetches the key, so a URL that cannot resolve is
+both legal and unambiguous about being a key rather than a resource. Eviction scans `cache.keys()`
+for the same `id` prefix at a different `v` — **scoped to the asset whose token moved**, so bumping
+one model does not discard every other cached asset.
+
+## D9. What the live run measured (`strides-utn.3`)
+
+Headless Chromium, `--headless=new --enable-gpu --ignore-gpu-blocklist`, renderer
+`ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)` — never SwiftShader. Derived dev-server port
+5371, identity-verified by nonce. Two runs against **one persistent Chromium profile**, so Cache
+Storage survives between them; Demo 2 driven to "Analysis complete" and then to the
+`[analysis-diagnostics:scale-pass]` line, which is what creates the MediaPipe detector and therefore
+what pulls the `.task`. Network read via CDP `Network.*` (`encodedDataLength` and `fromDiskCache`
+are available nowhere else).
+
+| `pose_landmarker_full.task` | requests | transferred |
+|---|---|---|
+| cold (fresh profile) | 1 | **9,398,460 bytes** |
+| warm (same profile) | **0** | **0 bytes** |
+
+**The warm run issues no request at all** — not a 304, which is what `strides-utn.2` measured on the
+old path (127 bytes), and not a disk-cache hit either. Cache Storage held exactly one entry, of
+9,398,198 bytes, under
+`https://model-asset.strides.invalid/asset/%2Fstrides%2Fmodels%2Fpose_landmarker_full.task?v=md5-5a9ad88919b2231d02b1fdf4a54090ec`.
+
+**Analysis output did not move.** Both runs report `verticalOscillationCm`
+**`10.486597716761532`**, `fit.frequencyHz` 3.12, `sampleCount` 98, `torsoMeters`
+`0.464629504405643`, `medianPixelsPerMeter` `520.898452525673`, `subjectAgreement` 99/99 — every
+digit matching CLAUDE.md's standing fresh-process Demo 2 anchor. Since that whole figure is derived
+from the landmarker's own output, it is the check that the model bytes reaching MediaPipe are
+identical whether they came from the cache or the network.
+
+**The WASM confirms the decision to leave it alone** (constraint 1): cold 2 requests /
+3,207,489 bytes, warm 2 requests / **0 bytes**, served from the browser's own disk cache. Caching it
+ourselves would have cost 11.76 MB of quota to save nothing.
+
+⚠️ **One harness limitation, recorded so it is not misread**: this driver classifies assets by their
+FINAL URL, and MoveNet's final URL is the signed GCS one, which matches no `movenet/...` pattern. Its
+rows therefore read "NO REQUEST" in both runs — that is the classifier, not the network.
+`strides-utn.2`'s driver tracked the redirect chain and is the one to reuse for section 3.

@@ -1,16 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { forVisionTasksMock, createFromOptionsMock, detectForVideo, close } = vi.hoisted(() => ({
-  forVisionTasksMock: vi.fn(),
-  createFromOptionsMock: vi.fn(),
-  detectForVideo: vi.fn(),
-  close: vi.fn(),
-}))
+const { forVisionTasksMock, createFromOptionsMock, detectForVideo, close, fetchModelAssetMock } =
+  vi.hoisted(() => ({
+    forVisionTasksMock: vi.fn(),
+    createFromOptionsMock: vi.fn(),
+    detectForVideo: vi.fn(),
+    close: vi.fn(),
+    fetchModelAssetMock: vi.fn(),
+  }))
 
 vi.mock('@mediapipe/tasks-vision', () => ({
   FilesetResolver: { forVisionTasks: forVisionTasksMock },
   PoseLandmarker: { createFromOptions: createFromOptionsMock },
 }))
+
+// The `.task` is now fetched by us rather than by MediaPipe, so this backend has a network call
+// of its own to stub. Without it every test here reaches undici through jsdom's relative BASE_URL.
+vi.mock('../modelAssetCache', () => ({ fetchModelAsset: fetchModelAssetMock }))
 
 import { createMediaPipePoseLandmarkerDetector } from './mediapipePoseLandmarker'
 import { COMMON_KEYPOINT_NAMES } from '../types'
@@ -59,8 +65,10 @@ beforeEach(() => {
   createFromOptionsMock.mockReset()
   detectForVideo.mockReset()
   close.mockReset()
+  fetchModelAssetMock.mockReset()
   forVisionTasksMock.mockResolvedValue({ wasm: 'fileset' })
   createFromOptionsMock.mockResolvedValue({ detectForVideo, close })
+  fetchModelAssetMock.mockResolvedValue(new Uint8Array([1, 2, 3]))
 })
 
 describe('createMediaPipePoseLandmarkerDetector', () => {
@@ -78,6 +86,36 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
         baseOptions: expect.objectContaining({ delegate: 'GPU' }),
       }),
     )
+  })
+
+  it('hands the landmarker model BYTES, from the shared cache, not a path to fetch itself', async () => {
+    // The whole point of `strides-utn.3`: GitHub Pages serves this 9.4 MB asset with
+    // `cache-control: max-age=600` and we cannot change that header, so the bytes have to come
+    // through our own cache. Passing `modelAssetPath` would hand the fetch back to MediaPipe and
+    // lose both the cache and the progress reading.
+    const bytes = new Uint8Array([7, 7, 7])
+    fetchModelAssetMock.mockResolvedValue(bytes)
+
+    await createMediaPipePoseLandmarkerDetector()
+
+    const [spec] = fetchModelAssetMock.mock.calls[0]
+    expect(spec.url).toContain('models/pose_landmarker_full.task')
+    // The cache identity is stable and the version token is non-empty — a blank token would key
+    // every model revision to the same entry.
+    expect(spec.id).toBe(spec.url)
+    expect(spec.version).toBeTruthy()
+
+    const [, landmarkerOptions] = createFromOptionsMock.mock.calls[0]
+    expect(landmarkerOptions.baseOptions.modelAssetBuffer).toBe(bytes)
+    expect(landmarkerOptions.baseOptions.modelAssetPath).toBeUndefined()
+  })
+
+  it('forwards its progress sink to the asset fetch', async () => {
+    const onAssetProgress = vi.fn()
+
+    await createMediaPipePoseLandmarkerDetector({ onAssetProgress })
+
+    expect(fetchModelAssetMock.mock.calls[0][1]).toBe(onAssetProgress)
   })
 
   it('maps a single-frame estimate to a PoseFrame, denormalizing by video dimensions', async () => {
