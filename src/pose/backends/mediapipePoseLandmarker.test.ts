@@ -1,3 +1,7 @@
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { forVisionTasksMock, createFromOptionsMock, detectForVideo, close, fetchModelAssetMock } =
@@ -18,7 +22,11 @@ vi.mock('@mediapipe/tasks-vision', () => ({
 // of its own to stub. Without it every test here reaches undici through jsdom's relative BASE_URL.
 vi.mock('../modelAssetCache', () => ({ fetchModelAsset: fetchModelAssetMock }))
 
-import { createMediaPipePoseLandmarkerDetector } from './mediapipePoseLandmarker'
+import {
+  MODEL_ASSET_PATH,
+  POSE_LANDMARKER_MODEL_VERSION,
+  createMediaPipePoseLandmarkerDetector,
+} from './mediapipePoseLandmarker'
 import { COMMON_KEYPOINT_NAMES } from '../types'
 import { videoFrameSource } from '../detector'
 
@@ -281,5 +289,56 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
     detector.dispose()
 
     expect(close).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * `strides-8w2`. The `.task`'s Cache Storage entry is keyed on `POSE_LANDMARKER_MODEL_VERSION`, a
+ * value nothing else in the app derives — so replacing `public/models/pose_landmarker_full.task`
+ * without editing that line serves every returning visitor the OLD model's 9.4 MB forever, from a
+ * page that ships the new file. The failure looks like nothing at all: analysis completes and the
+ * numbers are self-consistent, they are simply the previous model's.
+ *
+ * This is the same discipline `movenetModelAssets.test.ts` applies to `MOVENET_MODEL_URLS` — a
+ * mirrored value asserted against its source of truth — except that a checked-in binary has no
+ * upstream constant to compare against, so its own bytes are the source of truth.
+ */
+describe('POSE_LANDMARKER_MODEL_VERSION', () => {
+  /**
+   * Resolved THROUGH `MODEL_ASSET_PATH` rather than re-typed, so a moved or renamed asset makes
+   * this read throw (naming the path it looked for) instead of quietly hashing a file the app
+   * stopped loading and passing forever.
+   */
+  function readCheckedInModelBytes(): Buffer {
+    const base = import.meta.env.BASE_URL
+    expect(
+      MODEL_ASSET_PATH.startsWith(base),
+      `MODEL_ASSET_PATH ${MODEL_ASSET_PATH} is not under BASE_URL ${base}; this test can no longer locate the file it is meant to hash`,
+    ).toBe(true)
+    // Leading separators stripped because `resolve` treats an absolute segment as a new root, and
+    // BASE_URL is '/' here but '/strides/' in the app — the slice leaves no leading slash either
+    // way today, and this keeps that from being load-bearing.
+    const publicRelativePath = MODEL_ASSET_PATH.slice(base.length).replace(/^\/+/, '')
+    // `path.resolve` rather than `new URL(..., import.meta.url)`: vite rewrites the latter into an
+    // asset-glob lookup when its first argument is not a literal, and a template with a runtime
+    // value resolves to the STRING "undefined" instead of a path (hit for real writing this test).
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+    return readFileSync(resolve(repoRoot, 'public', publicRelativePath))
+  }
+
+  it("equals the checked-in .task file's own MD5", () => {
+    const digest = createHash('md5').update(readCheckedInModelBytes()).digest('hex')
+
+    expect(
+      POSE_LANDMARKER_MODEL_VERSION,
+      'public/models/pose_landmarker_full.task and POSE_LANDMARKER_MODEL_VERSION disagree. If you replaced the model, set the constant in mediapipePoseLandmarker.ts to the expected value below; a stale token serves the OLD model from Cache Storage to every returning visitor.',
+    ).toBe(`md5-${digest}`)
+  })
+
+  it('is a non-empty token, so every model revision cannot collide onto one cache entry', () => {
+    // `fetchModelAsset` keys on `encodeURIComponent(version)`; an empty or whitespace token is a
+    // legal string that keys two different models to the same entry, which is the same defect
+    // this file guards against arriving by a different route.
+    expect(POSE_LANDMARKER_MODEL_VERSION.trim()).not.toBe('')
   })
 })

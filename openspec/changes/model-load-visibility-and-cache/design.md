@@ -373,6 +373,12 @@ a test instead of silently keying the cache on a name the library no longer fetc
 can carry it. It does not close `strides-8w2` for the `.task`, whose bytes are checked in and carry
 no library constant to compare against.
 
+⚠️ Two corrections, from `strides-8w2` itself (**D12**). "An assertion at CI" is wrong: this repo
+runs no tests in CI, only `npm ci` + `npm run build` — both assertions fail on `npm test` instead,
+which is the standing pre-ship gate, not a push-triggered one (D12.4). And the `.task` IS now
+covered, by the only half of this shape that transfers to a checked-in binary: its own bytes are
+the source of truth the mirrored constant is asserted against (D12.2).
+
 ### D10.4 Progress: the total GROWS, and that is the honest reading
 
 Each file's total is reported the moment its own response headers arrive, so the primary owner's
@@ -621,3 +627,107 @@ checkout and port, diffed with `rtk proxy diff` (`strides-ef5`: the shell's filt
 "Files are identical" for files whose MD5s differ). The two 332-line reports differ on **`elapsedMs`
 alone** — three summary lines and the nine per-trial log lines that restate them. Detected counts
 are identical trial for trial: demo1 53/228, demo2 99/99, multiperson 103/233.
+
+## D12. `strides-8w2` — the `.task`'s version token, measured against option (a)
+
+A defect in what `strides-utn.3` shipped, not new behaviour. `POSE_LANDMARKER_MODEL_VERSION` is a
+hand-maintained constant holding the checked-in `.task`'s MD5, and it is the whole of that asset's
+Cache Storage key. Replacing `public/models/pose_landmarker_full.task` without editing it serves
+every returning visitor the OLD model's 9.4 MB forever, from a page that ships the new file — and
+the failure looks like nothing at all: analysis completes, the numbers are self-consistent, they
+are simply the previous model's.
+
+Three options were on the ticket. **Option (b) — a test-time assertion against the file's own
+bytes — ships**, and the reason (a) was rejected is a measurement, not a preference.
+
+### D12.1 Option (a) does not hold by construction where the mistake is made
+
+(a) was to move the asset under `src/` and import it as `foo.task?url`, so vite emits a
+content-hashed filename and the URL IS the version. Measured directly, on this repo's own
+`node_modules` and a `base: '/strides/'` config, with a 20 kB stand-in (above
+`assetsInlineLimit`, so it is emitted rather than inlined):
+
+| | emitted URL | changes when the bytes change? |
+|---|---|---|
+| `vite build`, content A | `/strides/assets/fake-BQrdse6Q.task` | — |
+| `vite build`, content B | `/strides/assets/fake-Dn_piqi6.task` | **yes** |
+| `vite dev`, content C | `/strides/src/models/fake.task` | — |
+| `vite dev`, content D | `/strides/src/models/fake.task` | **no** |
+
+In development the `?url` module exports the bare source path and re-exports it **unchanged** after
+the file's bytes are replaced. So (a) would make the invariant hold in a production build and leave
+it broken in dev — which is precisely where a model is swapped, and where this repo's mandated
+live-browser verification runs (the harness drives `npm run dev` on a derived port). It would also
+delete the constant, so there would be nothing left for a test to check in the environment where
+the guarantee is absent. On top of that it changes how the asset is served, which invalidates what
+`strides-utn.2`/D9 measured at a stable self-hosted path.
+
+That is the "construction costs more than it's worth" branch: (a) buys a guarantee in the half of
+the world that was never going to make the mistake, and pays for it by removing the only thing that
+could catch it in the other half.
+
+### D12.2 What ships, and why it is the `strides-utn.4` shape
+
+`mediapipePoseLandmarker.test.ts` reads the checked-in file, hashes it, and asserts
+`POSE_LANDMARKER_MODEL_VERSION === 'md5-<digest>'`. Both constants are exported for it.
+
+This is D10.3's discipline applied to an asset that cannot carry the derivation half. MoveNet's
+token is DERIVED from the URL because TFHub publishes a version there; the `.task`'s bytes are
+checked in and no library constant describes them, so **the bytes are the source of truth** and the
+mirrored value is asserted against them — the same relationship `MOVENET_MODEL_URLS` has with the
+package's `dist/movenet/constants` deep import.
+
+Two details worth keeping:
+
+- **The file is located THROUGH `MODEL_ASSET_PATH`**, not by a re-typed path. Moving or renaming the
+  asset makes the read throw naming the path it wanted, rather than quietly hashing a file the app
+  no longer loads and passing forever.
+- **MD5, not a stronger digest.** This file's identity is already recorded as an MD5 in the source
+  comment, in CLAUDE.md, and in the 2026-08-13 verification that established the checked-in bytes
+  match the bucket's. It is a change-detector, not a security boundary; re-basing it would orphan
+  that record for nothing.
+
+Demonstrated red on all three failure modes, then restored (asset MD5 re-verified
+`5a9ad88919b2231d02b1fdf4a54090ec` and `git status` clean on `public/`):
+
+| perturbation | result |
+|---|---|
+| constant edited by one hex char, file untouched | FAIL, naming both values |
+| file's last byte flipped, constant untouched — **the real footgun** | FAIL, `expected 'md5-5a9…ec' to be 'md5-379407682622289ef765710171f0224d'` |
+| asset renamed, constant and test untouched | FAIL, `ENOENT … /public/models/pose_landmarker_full.task` |
+
+### D12.3 The live re-verification: D9 reproduces to the byte
+
+Serving is unchanged — the asset stays in `public/` at the same path — so D9's cold/warm
+measurement should carry over untouched. It was re-run rather than assumed, on the same
+methodology (persistent Chromium profile across two launches, CDP `Network.*`, Demo 2 driven to
+`[analysis-diagnostics:scale-pass] status=done`), derived port 5323, identity-verified by nonce,
+renderer `ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)`:
+
+| `pose_landmarker_full.task` | requests | transferred | `fromDiskCache` |
+|---|---|---|---|
+| cold (fresh profile) | 1 | **9,398,460 bytes** | 0 |
+| warm (same profile) | **0** | **0 bytes** | — |
+
+Every figure matches D9 exactly, including the Cache Storage entry: one 9,398,198-byte body under
+`https://model-asset.strides.invalid/asset/%2Fstrides%2Fmodels%2Fpose_landmarker_full.task?v=md5-5a9ad88919b2231d02b1fdf4a54090ec`,
+alongside `strides-utn.4`'s 7 MoveNet entries. The WASM is likewise unchanged — cold 2 requests /
+3,207,437 bytes, warm 2 requests / 0 bytes from the browser's own disk cache.
+
+**Output did not move either.** Both runs report `verticalOscillationCm`
+**`10.486597716761532`**, `fit.frequencyHz` 3.12, `sampleCount` 98, `torsoMeters`
+`0.464629504405643`, `medianPixelsPerMeter` `520.898452525673`, `subjectAgreement` 99/99,
+`sampling.detectedFrames` 99 — CLAUDE.md's standing fresh-process Demo 2 anchor, to every digit.
+Two independent invocations of the driver (4 page loads) agreed on all of it.
+
+### D12.4 A correction to D10.3, and the honest limit of this guard
+
+D10.3 calls the MoveNet assertion "an assertion at CI rather than a convention". **This repo has no
+test job in CI.** `.github/workflows/deploy.yml` is the only workflow and it runs `npm ci` and
+`npm run build` — nothing else. Both that assertion and this one fail on `npm test`, which is this
+repo's standing pre-ship gate (every section of this very task list ends with it), not on a push.
+
+A build-time check would be strictly stronger, since `npm run build` *is* what CI runs. There is no
+route to one here that does not add a vite plugin or a package script, both of which were out of
+scope for `strides-8w2`; and (a), the one build-native mechanism vite already offers, is ruled out
+by D12.1. Left as the accepted limit rather than papered over.

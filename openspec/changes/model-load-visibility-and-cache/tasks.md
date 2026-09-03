@@ -73,6 +73,18 @@ findings belong on the bead and in design.md, not in this list.
       re-download the `.task`. Measured: cold 1 request / 9,398,460 transferred bytes, warm **no
       request at all** (design.md D9).
 - [x] 2.9 `npx tsc -b`, `npm run lint`, `npm test` all green.
+- [x] 2.10 `strides-8w2` — make the hand-maintained `POSE_LANDMARKER_MODEL_VERSION` impossible to
+      leave stale. 2.2's version token is the whole of the `.task`'s cache key and nothing checked
+      it, so replacing the model without editing the constant serves the OLD 9.4 MB to every
+      returning visitor from a page that ships the new file. **Evaluate the ticket's option (a)
+      (vite `?url`, content-hashed filename) before choosing** — measured and REJECTED: vite's dev
+      server exports the bare source path and does not change it when the bytes change, so (a) holds
+      only in a production build and is absent in dev, where the swap is made and where this repo's
+      live verification runs (design.md **D12.1**). Shipped instead: `mediapipePoseLandmarker.test.ts`
+      hashes the checked-in file — located THROUGH `MODEL_ASSET_PATH`, not a re-typed path — and
+      asserts the constant equals `md5-<digest>`. Demonstrated red on all three failure modes
+      (constant edited, file's bytes changed, asset renamed) and restored (D12.2). Serving is
+      unchanged, so D9's cold/warm measurement still stands — and was re-verified live anyway.
 
 ## 3. `strides-utn.4` — Route MoveNet through the shared cache via a custom tfjs IOHandler
 

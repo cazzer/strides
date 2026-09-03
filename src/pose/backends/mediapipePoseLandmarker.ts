@@ -35,8 +35,12 @@ const WASM_BASE_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0
  * caching" to ride. And measured live, the file comes back `cache-control: max-age=600` — six
  * times WORSE than the bucket it replaced, not better. Ten minutes is not caching, and no header
  * change can fix it, so the bytes are kept client-side instead: see `modelAssetCache.ts`.
+ *
+ * Exported for `mediapipePoseLandmarker.test.ts`, which resolves the checked-in file THROUGH this
+ * constant rather than re-typing the path — so moving or renaming the asset can never leave the
+ * version guard below hashing a file the app no longer loads.
  */
-const MODEL_ASSET_PATH = `${import.meta.env.BASE_URL}models/pose_landmarker_full.task`
+export const MODEL_ASSET_PATH = `${import.meta.env.BASE_URL}models/pose_landmarker_full.task`
 
 /**
  * The cache-key version token for the asset above — the checked-in file's own MD5, which is the
@@ -45,8 +49,21 @@ const MODEL_ASSET_PATH = `${import.meta.env.BASE_URL}models/pose_landmarker_full
  * ⚠️ Replacing `public/models/pose_landmarker_full.task` MUST update this constant. A cached
  * client keys on it, so leaving it stale serves the OLD model's bytes from Cache Storage forever,
  * on a page that ships the new file — a failure that looks like nothing at all.
+ *
+ * That warning is no longer the only thing standing between a model swap and a silently stale
+ * cache: `mediapipePoseLandmarker.test.ts` hashes the checked-in file and asserts this string
+ * equals `md5-<digest>`, so replacing the bytes without editing this line fails `npm test`
+ * (`strides-8w2`). It is the same shape as `MOVENET_MODEL_URLS`' deep-import assertion in
+ * `movenetModelAssets.test.ts` — a mirrored value checked against its source of truth — with the
+ * bytes themselves as the source of truth, because unlike MoveNet's TFHub URL there is no
+ * upstream version string here to derive a token from.
+ *
+ * MD5 specifically, not a stronger digest: this file's identity is already recorded as an MD5 in
+ * the comment above, in CLAUDE.md and in the 2026-08-13 verification that established the
+ * checked-in bytes match the bucket's. It is a change-detector, not a security boundary, and
+ * re-basing it on another algorithm would orphan that record for nothing.
  */
-const POSE_LANDMARKER_MODEL_VERSION = 'md5-5a9ad88919b2231d02b1fdf4a54090ec'
+export const POSE_LANDMARKER_MODEL_VERSION = 'md5-5a9ad88919b2231d02b1fdf4a54090ec'
 
 /**
  * `PoseLandmarkerResult#landmarks` is a plain `NormalizedLandmark[]` with no `.name` field —
