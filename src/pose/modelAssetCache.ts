@@ -281,10 +281,17 @@ export async function fetchModelAsset(
  * **One unknown total makes the whole reading indeterminate.** Summing the totals that happen to be
  * known would report a total that is not the total, which is the same dishonesty as inventing one.
  *
- * A caller that knows a file's size before fetching it — MoveNet's `model.json` declares every
- * shard's size in its weight manifest — can seed it by emitting
+ * A caller that knows a file's size before fetching it can seed it by emitting
  * `{ assetId, loadedBytes: 0, totalBytes: <declared> }` before the fetch starts, so the aggregate
  * total is right from the first byte instead of growing as each file begins.
+ *
+ * ⚠️ **MoveNet is not such a caller, and this doc used to claim it was.** Its `model.json` weights
+ * manifest declares every WEIGHT's dtype and shape — so a per-GROUP byte total is derivable — but
+ * a group's split across its `paths` is nowhere in the file, and reconstructing it means assuming
+ * the converter's 4 MiB shard size. `strides-utn.4` therefore seeds nothing and lets its aggregate
+ * total grow as each of its 7 files begins: a total that is knowably partial is still a
+ * measurement, while one inferred from a shard size nobody declared is the guess this whole shape
+ * exists to keep out.
  */
 export function aggregateModelAssetProgress(
   emit: (progress: ModelLoadProgress | null) => void,

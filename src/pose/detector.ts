@@ -90,11 +90,12 @@ const backends: Record<
     options: DetectorCreationOptions,
   ) => Promise<PoseDetector>
 > = {
-  movenet: (config) =>
+  movenet: (config, options) =>
     createMoveNetDetector(
       config.movenetModelType,
       config.trackingCrop,
       config.personOfInterest,
+      options,
     ),
   blazepose: () => createBlazePoseDetector(),
   posenet: () => createPoseNetDetector(),

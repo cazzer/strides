@@ -290,7 +290,10 @@ describe('createMoveNetDetector', () => {
 
     expect(createDetectorMock).toHaveBeenCalledWith(
       poseDetection.SupportedModels.MoveNet,
-      { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING },
+      {
+        modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
+        modelUrl: expect.objectContaining({ load: expect.any(Function) }),
+      },
     )
   })
 
@@ -306,6 +309,7 @@ describe('createMoveNetDetector', () => {
       {
         modelType: poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING,
         multiPoseMaxDimension: 448,
+        modelUrl: expect.objectContaining({ load: expect.any(Function) }),
       },
     )
   })
@@ -315,8 +319,28 @@ describe('createMoveNetDetector', () => {
 
     expect(createDetectorMock).toHaveBeenCalledWith(
       poseDetection.SupportedModels.MoveNet,
-      { modelType: poseDetection.movenet.modelType.SINGLEPOSE_THUNDER },
+      {
+        modelType: poseDetection.movenet.modelType.SINGLEPOSE_THUNDER,
+        modelUrl: expect.objectContaining({ load: expect.any(Function) }),
+      },
     )
+  })
+
+  it('loads both models weights through the shared cache, not from a URL string', async () => {
+    // `strides-utn.4`. A string here would send the library back to TFHub, whose responses are
+    // `cache-control: private, max-age=0` behind a per-request signed URL -- 14.5 MB re-downloaded
+    // on every page load, with nothing in the app able to observe or prevent it. The two loaders
+    // must also be distinct: one handler shared between the models would load one model's weights
+    // into both graphs.
+    await createMoveNetDetector()
+
+    const configs = createDetectorMock.mock.calls.map((call) => call[1])
+    expect(configs).toHaveLength(2)
+    for (const config of configs) {
+      expect(typeof config.modelUrl).toBe('object')
+      expect(typeof config.modelUrl.load).toBe('function')
+    }
+    expect(configs[0].modelUrl).not.toBe(configs[1].modelUrl)
   })
 
   it('maps a single-frame estimate to a PoseFrame using the shared fixture', async () => {

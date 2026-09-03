@@ -306,3 +306,163 @@ ourselves would have cost 11.76 MB of quota to save nothing.
 FINAL URL, and MoveNet's final URL is the signed GCS one, which matches no `movenet/...` pattern. Its
 rows therefore read "NO REQUEST" in both runs — that is the classifier, not the network.
 `strides-utn.2`'s driver tracked the redirect chain and is the one to reuse for section 3.
+
+## D10. `strides-utn.4` — how MoveNet's weights reach the cache, and what it measured
+
+### D10.1 The premise the spike overturned
+
+The epic opened by calling the 9.4 MB `.task` "by far the biggest download" and treating MoveNet as
+the risky optional half. `strides-utn.2` measured the opposite: MoveNet is **14,522,593 body bytes
+at app MOUNT**, before a reader touches a clip — SinglePose Lightning 4,818,229 across 3 files and
+MultiPose Lightning 9,697,908 across 4 — and **MultiPose alone (9,697,908) exceeds the `.task`
+(9,398,198)**. This section is the larger half of the epic's win, not its tail.
+
+### D10.2 An `io.IOHandler`, and why it is a supported input rather than a hack
+
+`@tensorflow-models/pose-detection@2.1.3`'s `movenet/detector.js:495-520` sets `fromTFHub = false`
+whenever `config.modelUrl` is not a string and hands the value straight to `tfc.loadGraphModel`;
+`GraphModel.findIOHandler` then treats anything with a `load` method as the handler, and
+`MoveNetModelConfig.modelUrl` is declared `string | io.IOHandler` in the package's own types. So
+`movenetModelAssets.ts` supplies a handler whose `load()` fetches `model.json` through
+`fetchModelAsset`, parses its weights manifest, fetches every shard the manifest names through
+`fetchModelAsset` in parallel, and returns `ModelArtifacts`.
+
+**The assembly is deliberately the library's own.** Same `?tfjs-format=file` URL derivation
+(`getTFHubUrl` + `parseUrl`), same `io.getWeightSpecs` flattening, same `io.getModelArtifactsForJSONSync`,
+and the same "one `ArrayBuffer` per shard, in manifest order" shape `loadWeightsAsArrayBuffer`
+returns and `decodeWeights` reads. The acceptance gate here is that **no analysis output moves**,
+and the cheapest way to guarantee that is to hand `GraphModel.loadSync` a byte-for-byte equivalent
+of what it would otherwise have received rather than a reimplementation that merely ought to match.
+
+tfjs's own `LoadOptions.onProgress` is not used and must not be: it reports a fraction of FILES, not
+bytes (`tfjs-core/dist/io/weights_loader.js:74`) — a 7-step staircase, not a measurement.
+
+### D10.3 The cache identity: version SPLIT OUT of the id, and `strides-8w2`
+
+D8.2 established that the key can never come from the fetched URL. This section adds where the
+**version token** comes from, which is `strides-8w2`'s open question for the `.task` (a hand-copied
+MD5 constant nothing checks).
+
+MoveNet needs no hand-copied token, because the TFHub URL already carries one — and the useful move
+is to take it OUT of the identity rather than leave it in:
+
+| | value |
+|---|---|
+| `ModelAssetSpec.id` | `https://tfhub.dev/google/tfjs-model/movenet/singlepose/lightning/model.json` |
+| `ModelAssetSpec.version` | `4` |
+| resulting key | `.../asset/<encoded id>?v=4` |
+
+Leaving the `/4` inside the id would work as a *key* — a different model is a different id — but a
+model bump would then **orphan** the old entries instead of evicting them, since `fetchModelAsset`
+prunes other versions of the same id and can only do that for keys that share one. Splitting makes
+a bump an eviction. Measured live: the 7 keys carry `?v=4` (singlepose) and `?v=1` (multipose),
+matching the two models' published TFHub versions, and a unit test loads `.../lightning/5` and
+asserts all three `?v=4` entries are gone.
+
+`resolveMoveNetModelSource` splits on the URL's **path segments**, not on the last `/` in the
+string. `lastIndexOf('/')` on `https://example.test` lands inside the `//`, reading the host as a
+version and `https:/` as the identity — which would collide every bare-origin URL onto one key. The
+first version of this function had exactly that bug; the unit test caught it.
+
+**What replaces the hand-copied constant, and the answer to `strides-8w2` for these assets**: the
+URLs are mirrored in `MOVENET_MODEL_URLS` because the package does not export them publicly, and
+`movenetModelAssets.test.ts` asserts each one against the installed package's own
+`dist/movenet/constants` by deep import. A dependency upgrade that repoints a model therefore fails
+a test instead of silently keying the cache on a name the library no longer fetches. That is
+`strides-8w2` option (b) — an assertion at CI rather than a convention — applied to the assets that
+can carry it. It does not close `strides-8w2` for the `.task`, whose bytes are checked in and carry
+no library constant to compare against.
+
+### D10.4 Progress: the total GROWS, and that is the honest reading
+
+Each file's total is reported the moment its own response headers arrive, so the primary owner's
+aggregate total climbs from `model.json`'s ~417 kB to the full ~14.5 MB as the shards begin. Two
+alternatives were considered and rejected:
+
+- **Seed each shard's total from the manifest.** The manifest declares every weight's dtype and
+  shape, so a per-GROUP total is derivable — but a group's split across its `paths` is not in the
+  file. Reconstructing it means assuming the converter's 4 MiB shard size, which is an inference
+  about a tool's default, not a fact in the asset. `ModelLoadState.progress` exists to keep exactly
+  that distinction, so the guess is not made. (`aggregateModelAssetProgress`'s doc claimed MoveNet
+  could seed this way; that claim is corrected in place.)
+- **Announce each shard as `{ loadedBytes: 0, totalBytes: null }` once the manifest names it**,
+  which would hold the aggregate at indeterminate until every header lands rather than letting the
+  total climb. Honest too, but it makes the reading swing determinate → indeterminate → determinate
+  in the one place a reader is watching it. Growth was preferred as the less confusing of two
+  truthful presentations.
+
+**`strides-utn.5` must not render this as a percentage that can go backwards.** A determinate bar
+driven straight off `loadedBytes / totalBytes` will jump down when the shards start. Filed as
+`strides-utn.6`.
+
+### D10.5 What the live run measured
+
+Headless Chromium, `--headless=new --enable-gpu --ignore-gpu-blocklist`, renderer
+`ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)` — never SwiftShader. Derived dev-server port
+5371, identity-verified by nonce. Two runs against **one persistent Chromium profile**, each driving
+Demo 2 to "Analysis complete" so the weights are proven to work, not merely to arrive.
+
+**The classifier tracks the whole redirect chain**, unlike D9's driver: MoveNet's final URL is the
+signed GCS one and matches no `movenet/...` pattern, so a final-URL classifier reports "NO REQUEST"
+for a request that plainly happened.
+
+| file | cold req | cold bytes | warm req | warm bytes |
+|---|---|---|---|---|
+| `singlepose-lightning/model.json` | 1 | 168,699 | **0** | **0** |
+| `singlepose-lightning/group1-shard1of2.bin` | 1 | 4,196,888 | **0** | **0** |
+| `singlepose-lightning/group1-shard2of2.bin` | 1 | 456,381 | **0** | **0** |
+| `multipose-lightning/model.json` | 1 | 249,457 | **0** | **0** |
+| `multipose-lightning/group1-shard1of3.bin` | 1 | 4,196,894 | **0** | **0** |
+| `multipose-lightning/group1-shard2of3.bin` | 1 | 4,196,878 | **0** | **0** |
+| `multipose-lightning/group1-shard3of3.bin` | 1 | 1,061,179 | **0** | **0** |
+| **total** | **7** | **14,526,376** | **0** | **0** |
+
+Every cold row is 2 redirect hops, status 200, `cache-control: private, max-age=0`,
+`fromDiskCache: false` — the measured shape `strides-utn.2` recorded, confirming the browser's own
+cache still declines these bytes and that the 0/0 warm row is ours, not Chromium's. Cache Storage
+after the warm run holds the 7 entries at exactly their declared `Content-Length`s (168,013 +
+4,194,304 + 455,912 + 249,070 + 4,194,304 + 4,194,304 + 1,060,230 = **14,522,593**), plus the
+`.task`.
+
+**The bytes are the right bytes, checked directly rather than inferred.** A second probe SHA-256'd
+every stored entry in the page and compared it against a fresh `cache: 'no-store'` fetch of the same
+file, reconstructing the source URL from the cache key alone (so the id/version split is exercised
+too): **7/7 byte-identical**, sizes and digests both.
+
+⚠️ **The cold and warm runs' metric values differ slightly** (Demo 2 `kneeFlexion` 106.103 cold vs
+103.191 warm) and that is **not** the cache. It is the cold-vs-warm Chromium process split CLAUDE.md
+already documents, reproduced here because the warm run is by construction a second page load in a
+warmed profile. The cold run reproduces the fresh-process A/B baseline exactly (`kneeFlexion`
+106.103, `cadence` 181.2, 99/99). The gate for "did the weights change" is D10.6, which pins every
+trial to the cold operating point.
+
+### D10.6 The acceptance gate
+
+`scripts/ab-person-selection.mjs --arm 'base={}' --clips demo1,demo2,multiperson --trials 3`,
+fresh-process default, run before the change and after it on the same checkout and the same derived
+port. The two 322-line reports differ on **exactly three lines**, one per clip, all `elapsedMs`:
+
+```
+112c112
+< elapsedMs   5850 [5822..5982]      > elapsedMs   5850 [5724..5893]     (demo1)
+217c217
+< elapsedMs   3089 [2809..3190]      > elapsedMs   3065 [2884..3284]     (demo2)
+322c322
+< elapsedMs   4094 [3970..4177]      > elapsedMs   3434 [3413..3584]     (multiperson)
+```
+
+Every metric value, confidence, view reading, person-selection counter and sampling count is
+identical on all three clips. Demo 1 holds this repo's standing anchors — `cadence` 91.2,
+`kneeFlexion` 120.69, 53 detected frames.
+
+⚠️ **Two harness hazards hit while producing that diff, both of which produce a CLEAN-LOOKING WRONG
+ANSWER**, which is this repo's characteristic failure mode:
+
+1. The shell's filtered `diff` reported **"Files are identical"** for two files whose MD5s differ.
+   The real diff needs `rtk proxy diff`. CLAUDE.md's memory already warns not to branch on that
+   wrapper's exit status; this is the same wrapper asserting equality outright. Filed as
+   `strides-ef5`.
+2. `page.waitForFunction` with an **async** predicate can settle on the truthy Promise rather than
+   on what it resolves to. The byte-identity probe passed its gate against an empty cache and
+   reported a serene `0/0 cached MoveNet files are byte-identical`, which reads as a pass. Poll from
+   Node instead. Filed as `strides-h4r`.

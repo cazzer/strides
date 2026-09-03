@@ -24,9 +24,14 @@ export interface SharedPoseDetector {
    * transitions so a consumer can compare it by reference.
    *
    * `progress` is populated for whichever model assets this hook's backend routes through
-   * `fetchModelAsset` (`strides-utn.3`). On the default MoveNet backend that is none of them yet —
-   * `strides-utn.4` routes its weights — so the reading stays `null`, which is the honest value
-   * for a download nobody is measuring rather than a placeholder.
+   * `fetchModelAsset` (`strides-utn.3`). On the default MoveNet backend that is now every one of
+   * them — `strides-utn.4` routed both models' `model.json` plus their weight shards, 7 files and
+   * 14.5 MB — so this reads real bytes rather than the `null` it held while nothing was measured.
+   *
+   * The total still GROWS during the load, because each file's size is only known once its own
+   * response headers arrive and the shards are not named until `model.json` is parsed. That is a
+   * measurement in progress, not a placeholder: `null` remains reserved for "no total is known at
+   * all", which is what a backend routing nothing through the utility still reports.
    */
   load: ModelLoadState
 }

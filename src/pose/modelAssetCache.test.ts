@@ -391,8 +391,9 @@ describe('aggregateModelAssetProgress', () => {
   })
 
   it('accepts a total declared before the fetch starts', () => {
-    // MoveNet's `model.json` declares every shard's size, so `strides-utn.4` can seed the totals
-    // and have the aggregate be right from the first byte rather than growing per file.
+    // Seeding is supported for any caller that genuinely knows a size up front. MoveNet turned out
+    // NOT to be one — its manifest declares per-weight shapes, not the per-shard split — so this
+    // asserts the aggregate's contract, not a path `strides-utn.4` took.
     const { readings, emit } = collect()
     const listener = aggregateModelAssetProgress(emit)
 

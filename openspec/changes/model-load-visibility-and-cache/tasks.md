@@ -81,22 +81,22 @@ requirement: delete "MoveNet model weights load from the shared model cache" fro
 `specs/pose-detection/spec.md` in this change, close `strides-utn.4` as not-feasible with the
 measurement recorded, and skip the rest of this section (design.md D7).
 
-- [ ] 3.1 Read `strides-utn.2`'s recorded per-asset go/no-go before writing any code here.
-- [ ] 3.2 Implement an `io.IOHandler` that assembles `ModelArtifacts` from the shared utility —
+- [x] 3.1 Read `strides-utn.2`'s recorded per-asset go/no-go before writing any code here.
+- [x] 3.2 Implement an `io.IOHandler` that assembles `ModelArtifacts` from the shared utility —
       `model.json` plus weight shards, each cached separately. `detector.js:495-520` sets
       `fromTFHub=false` when `modelUrl` is not a string and passes it to `loadGraphModel`, so this
       is a supported input.
-- [ ] 3.3 Pass it as `modelUrl` for both single-pose and multi-pose creation
+- [x] 3.3 Pass it as `modelUrl` for both single-pose and multi-pose creation
       (`src/pose/backends/movenet.ts:317-330`).
-- [ ] 3.4 Report byte progress where `Content-Length` is readable; degrade to indeterminate where it
+- [x] 3.4 Report byte progress where `Content-Length` is readable; degrade to indeterminate where it
       is not. Do not fabricate a total.
-- [ ] 3.5 Unit tests for the handler's artifact assembly and its per-shard cache behaviour.
-- [ ] 3.6 Verify LIVE that a second page load does not re-download the weights.
-- [ ] 3.7 **Acceptance gate, not a nicety**: before/after `scripts/ab-person-selection.mjs` across
+- [x] 3.5 Unit tests for the handler's artifact assembly and its per-shard cache behaviour.
+- [x] 3.6 Verify LIVE that a second page load does not re-download the weights.
+- [x] 3.7 **Acceptance gate, not a nicety**: before/after `scripts/ab-person-selection.mjs` across
       `demo1,demo2,multiperson`, fresh-process default, showing no field moving except `elapsedMs`.
       This changes how WEIGHTS load; this repo has a documented history of clean, plausible, wrong
       numbers.
-- [ ] 3.8 `npx tsc -b`, `npm run lint`, `npm test` all green.
+- [x] 3.8 `npx tsc -b`, `npm run lint`, `npm test` all green.
 
 ## 4. `strides-utn.5` — Render a model-download entry at the head of the header bar
 

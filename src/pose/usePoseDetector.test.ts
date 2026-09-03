@@ -124,8 +124,9 @@ describe('usePoseDetector', () => {
 
     const { result } = renderHook(() => usePoseDetector())
 
-    // The default MoveNet backend routes no asset through the shared fetch yet (`strides-utn.4`),
-    // and MediaPipe's WASM runtime never will — silence must read as indeterminate, not as 0%.
+    // `createDetector` is mocked here, so nothing reports: this is the general contract, not a
+    // statement about MoveNet, whose 7 files DO report bytes since `strides-utn.4`. MediaPipe's
+    // WASM runtime never will. Silence must read as indeterminate, not as 0%.
     expect(result.current.load.progress).toBeNull()
     await waitFor(() => expect(result.current.load.phase).toBe('ready'))
     expect(result.current.load.progress).toBeNull()
