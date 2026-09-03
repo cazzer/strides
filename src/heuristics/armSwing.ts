@@ -196,7 +196,8 @@ function solveTrendSystem(
  *   at every timestamp), so no swing sample is ever dropped for it.
  * - **The trend is a whole-window least-squares quadratic in LOG space**,
  *   `log(spanPx) ≈ c + d·t + e·t²` with time centered at the proxy samples' mean before the basis
- *   is built (the same conditioning trick `fitSpectralSinusoid` documents). Log space because
+ *   is built — the centering `spectralFit.ts`'s module doc describes as free conditioning
+ *   insurance for normal equations. Log space because
  *   scale is multiplicative — a 2× approach costs the same trend budget at any distance — and
  *   because the exponentiated trend is positive by construction, so the divisor can never cross
  *   zero. Three degrees of freedom because a 3-dof polynomial cannot represent ANY frequency in
@@ -207,9 +208,13 @@ function solveTrendSystem(
  * - **`f(t) = exp(trend(t)) / referencePx`**, where `referencePx` is the median of the measured
  *   per-frame proxies — so the divided series stays in PIXELS, at the clip's reference scale,
  *   rather than becoming a dimensionless shoulder-span multiple with different downstream units.
- * - **No clamp on `f(t)`**: inside the observed window the exponentiated fit stays within the
- *   data's own range, and the fallback ladder below guards the degenerate cases a clamp would
- *   otherwise paper over.
+ * - **Evaluation time is clamped into the fitted proxy window; the factor's VALUE is not.**
+ *   Inside the window the exponentiated fit stays within the data's own range — but a frame whose
+ *   own proxy is missing can sit OUTSIDE the window (a far shoulder unresolvable at the clip's
+ *   edge), where an exponentiated quadratic extrapolates super-exponentially. Clamping the
+ *   evaluation time hands such a frame the nearest measured-window scale, keeping the trend an
+ *   interpolation of measured data. There is still no clamp on `f(t)` itself: the fallback
+ *   ladder below guards the degenerate cases a value clamp would otherwise paper over.
  *
  * Fallback ladder — every rung returns the CONSTANT 1 (an exact no-op, not an approximate one):
  * fewer than `MIN_SCALE_TREND_SAMPLES` frames with a usable bilateral proxy; a trend system too
@@ -295,7 +300,12 @@ function resolveScaleStabilizer(frames: RobustPoseFrame[]): (timestampSeconds: n
 
   const referencePx = median(spans)
   return (timestampSeconds) => {
-    const t = timestampSeconds - tMean
+    // Evaluation TIME is clamped into the fitted proxy window [tLow, tHigh]: a frame whose own
+    // proxy is missing can sit OUTSIDE that window (e.g. the far shoulder unresolvable for the
+    // clip's opening), and an exponentiated quadratic grows super-exponentially under
+    // extrapolation — such a frame gets the nearest measured-window scale instead. The factor
+    // VALUE stays unclamped (design D3).
+    const t = Math.min(tHigh, Math.max(tLow, timestampSeconds - tMean))
     const factor = Math.exp(c + d * t + e * t * t) / referencePx
     return Number.isFinite(factor) && factor > 0 ? factor : 1
   }

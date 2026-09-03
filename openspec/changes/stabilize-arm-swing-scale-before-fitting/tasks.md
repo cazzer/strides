@@ -54,9 +54,20 @@
 - [x] 5.2 Offline replay of the strides-101 Demo 2 probe through the shipped `computeSideSwing`
       (scratch vitest file, added-measured-deleted): ratio 0.51834, both sides 1.50 Hz, weakest
       R² 0.51175 — every design-D2 prediction lands. Recorded in design D5.
-- [ ] 5.3 Live-browser A/B (`scripts/ab-person-selection.mjs`, fresh-process, all three clips)
+- [x] 5.3 Live-browser A/B (`scripts/ab-person-selection.mjs`, fresh-process, all three clips)
       against the pre-change baseline: Demo 2 armSwingSymmetry ~0.52 / armSwingAmplitude −~7%,
       arm exemplar instants may move a frame or two; Demo 1/multiperson arm metrics stay tier-3
       EXCLUDED; every non-arm metric bit-identical; anchors hold (VO_cm 4.421467928439415,
-      cadence 91.2). **Run by the orchestrator post-implementation — not part of this worktree's
-      commit.**
+      cadence 91.2). **Run by the orchestrator post-implementation** — passed: Demo 2
+      armSwingSymmetry 0.518197 exactly as predicted, zero non-arm drift, all anchors
+      bit-identical.
+
+## 6. Review round 1 (zero must-fix, three should-fixes — design.md "Review round 1")
+
+- [x] 6.1 The two constant-scale no-op assertions made BIT-EXACT (`toBe(rawPixelRatio(frames))`)
+      so a deleted flat-trend snap cannot pass on a 1±1e-15 factor.
+- [x] 6.2 Evaluation-time clamp into the fitted proxy window `[tLow, tHigh]` (factor value still
+      unclamped — D3 amended); probe replay re-verified BIT-IDENTICAL post-clamp (99/99 probe
+      frames carry a bilateral pair, so the clamp cannot bind on Demo 2).
+- [x] 6.3 New symmetry test exercising the missing-proxy invariant on the ACTIVE rung, with
+      dropped frames at the window edges so the clamp path is covered too.

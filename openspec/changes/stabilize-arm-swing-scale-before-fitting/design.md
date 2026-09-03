@@ -60,8 +60,15 @@ weakest R² **0.497 → ~0.512**. The user approved this direction — Demo 2 mo
   so the divided series stays in px at the clip's reference scale, and downstream semantics are
   untouched: the symmetry ratio still cancels units, and `armSwingAmplitude`'s clip-median torso
   denominator pairs with a numerator standardized at the same median instant.
-- **No clamp on `f(t)`** (decided): inside the observed window the exponentiated fit stays within
-  the data's own range; the fallback ladder guards the degenerate cases.
+- **No clamp on `f(t)`'s VALUE** (decided) — but the evaluation TIME is clamped into the fitted
+  proxy window `[tLow, tHigh]` (review round 1, fix 2): the factor is evaluated at every frame
+  timestamp, and a frame whose own proxy is missing can sit OUTSIDE the window (e.g. the far
+  shoulder unresolvable for the clip's opening), where an exponentiated quadratic extrapolates
+  super-exponentially. Clamping the evaluation time hands such a frame the nearest
+  measured-window scale — the trend stays an interpolation of measured data — while preserving
+  the no-value-clamp decision; the fallback ladder still guards the degenerate cases a value
+  clamp would paper over. Inside the window the exponentiated fit stays within the data's own
+  range, which is all the original "no clamp" bullet was ever entitled to claim.
 - **Fallback ladder — every rung the CONSTANT 1**, an exact no-op equal to the pre-change
   raw-pixel computation: fewer than `MIN_SCALE_TREND_SAMPLES = 12` usable proxy frames (the same
   bar as `MIN_SPECTRAL_FIT_SAMPLES`, same reasoning); an unsolvable trend system; **a fitted
@@ -138,3 +145,35 @@ noticeably better" therefore asserts something the trigger never measured. New w
 
 Shared head naming what fired (the fit disparity); each metric keeps its own tail (the
 comparison vs the magnitude). The unsteady-rhythm and every other caveat are untouched.
+
+## Review round 1 (2026-09-03) — zero must-fix, three should-fixes applied
+
+Live verification had already passed before this round (Demo 2 symmetry **0.518197**, matching
+D5's prediction; zero non-arm drift; all anchors bit-identical).
+
+1. **The two constant-scale no-op assertions are now BIT-EXACT** (`toBe(rawPixelRatio(frames))`,
+   was `toBeCloseTo(…, 10..12)`): a deleted `FLAT_TREND_LOG_RANGE` snap would leave a factor of
+   1±1e-15 that still passes any `toBeCloseTo`, so only exact equality actually pins the rungs'
+   literal-constant-1 contract. Verified holding today on both the fallback and the flat-trend
+   rung.
+2. **Evaluation-time clamp** — see the amended "No clamp" bullet in D3. The factor is evaluated
+   at every frame timestamp, and a frame whose proxy is missing can sit outside the fitted
+   window, where the exponentiated quadratic extrapolates super-exponentially; the evaluation
+   time is now clamped into `[tLow, tHigh]` (the factor's value stays unclamped). **Re-verified
+   against the strides-101 probe replay: bit-identical to the pre-clamp implementation on every
+   field** (ratio 0.5183399127228413, both 1.50 Hz, R² 0.77596/0.51175) — expected, since all
+   **99/99** probe frames carry a bilateral shoulder pair, so the window spans every timestamp
+   and the clamp cannot bind on that clip. In the growth-fixture tests, only the new
+   missing-proxy case's edge frames (0–2, 118–119) reach the clamp; the mechanism/no-op fixtures
+   have full proxy coverage and the fallback fixture never reaches the factor path.
+3. **The missing-proxy invariant is now exercised on the ACTIVE rung** (new symmetry test): 114
+   both-shoulder frames under 3× growth with six frames made proxy-less — right wrist dropped on
+   those frames in BOTH fixtures so the per-side sample sets are identical and the runs differ
+   ONLY in proxy resolvability. Asserts frameCoverage/sampleSize/resolvedCount/null-pattern
+   bit-equal to the undropped twin and the value still tracking the body-unit 0.5; the dropped
+   frames at indices 0–2/118–119 sit outside the fitted window, so the case also exercises fix
+   2's clamp.
+
+Noted, no action: `solveTrendSystem` duplicates `spectralFit.ts`'s private solver (documented,
+accepted — that module keeps its solver private on purpose); the "same conditioning trick" doc
+phrasing was tightened in passing while amending the adjacent bullet.

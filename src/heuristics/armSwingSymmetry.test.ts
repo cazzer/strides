@@ -560,7 +560,56 @@ describe('computeArmSwingSymmetry — scale stabilization (strides-egw)', () => 
     const result = computeArmSwingSymmetry(frames, 'front')
 
     expect(result.value).not.toBeNull()
-    expect(result.value).toBeCloseTo(rawPixelRatio(frames), 12)
+    // Bit-exact, not toBeCloseTo: the fallback rung returns the literal constant 1, and division
+    // by exactly 1 is the identity — so the stabilized path IS the raw computation, and a
+    // regression that swapped the exact no-op for a numerically-almost-1 factor must fail here.
+    expect(result.value).toBe(rawPixelRatio(frames))
+  })
+
+  it('a frame whose proxy is missing still yields a stabilized sample, on the ACTIVE rung', () => {
+    // The delta spec's "a frame whose proxy is missing SHALL still receive a factor from the
+    // trend, so no swing sample is ever dropped for it" — exercised where it is NOT trivially
+    // true: 114 both-shoulder frames (well past MIN_SCALE_TREND_SAMPLES) under real 3× growth,
+    // with six frames made proxy-less. The right WRIST is dropped on those same six frames in
+    // BOTH fixtures, so the two runs see identical per-side sample sets and differ ONLY in
+    // whether the proxy resolves there. Frames 0–2 and 118–119 sit OUTSIDE the fitted proxy
+    // window [t=0.1, t=3.9], so the left samples there also exercise the evaluation-time clamp —
+    // an extrapolated exponentiated quadratic is exactly what those frames must not be divided
+    // by.
+    const DROP = new Set([0, 1, 2, 60, 118, 119])
+    const dropAt = (frames: RobustPoseFrame[], names: string[]) =>
+      frames.map((frame, i) =>
+        DROP.has(i)
+          ? {
+              ...frame,
+              keypoints: frame.keypoints.map((kp) =>
+                names.includes(kp.name)
+                  ? { ...kp, x: null, y: null, score: 0, status: 'unrecoverable' as const }
+                  : kp,
+              ),
+            }
+          : frame,
+      )
+    const base = dropAt(buildArmSwingFrames(GROWN), ['right_wrist'])
+    const proxyless = dropAt(buildArmSwingFrames(GROWN), ['right_wrist', 'right_shoulder'])
+
+    const baseResult = computeArmSwingSymmetry(base, 'front')
+    const proxylessResult = computeArmSwingSymmetry(proxyless, 'front')
+
+    // Identical per-side accounting: losing the proxy on six frames dropped nothing.
+    expect(proxylessResult.frameCoverage).toBe(baseResult.frameCoverage)
+    expect(proxylessResult.sampleSize).toBe(baseResult.sampleSize)
+    const leftProxyless = computeSideSwing(proxyless, 'left', DEFAULT_HEURISTICS_CONFIG)
+    const leftBase = computeSideSwing(base, 'left', DEFAULT_HEURISTICS_CONFIG)
+    expect(leftProxyless.resolvedCount).toBe(leftBase.resolvedCount)
+    expect(leftProxyless.seriesY.map((v) => v === null)).toEqual(
+      leftBase.seriesY.map((v) => v === null),
+    )
+
+    // And the value still tracks the body-unit expectation — the clamped edge frames are divided
+    // by the nearest in-window scale (within ~3% of their true one), not an extrapolation.
+    expect(proxylessResult.value).not.toBeNull()
+    expect(proxylessResult.value).toBeCloseTo(20 / 40, 2)
   })
 
   it('a constant-scale clip reads numerically as the raw-pixel computation — the no-op property', () => {
@@ -572,7 +621,11 @@ describe('computeArmSwingSymmetry — scale stabilization (strides-egw)', () => 
 
     const result = computeArmSwingSymmetry(frames, 'front')
 
-    expect(result.value).toBeCloseTo(rawPixelRatio(frames), 10)
+    // Bit-exact: the flat-trend rung snaps a numerically-flat fitted trend to the literal
+    // constant 1, so a constant-scale clip must be IDENTICAL to the raw-pixel computation, not
+    // merely within an epsilon of it — deleting that rung would leave a 1±1e-15 factor that
+    // still passes any toBeCloseTo.
+    expect(result.value).toBe(rawPixelRatio(frames))
   })
 })
 
