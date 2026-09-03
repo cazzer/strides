@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { computeArmSwingSymmetry } from './armSwingSymmetry'
+import { computeSideSwing } from './armSwing'
 import { buildFrame } from './__fixtures__/testFrames'
 import { findLocalExtrema } from './extrema'
+import { fitSpectralSinusoid } from './spectralFit'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 
@@ -67,6 +69,17 @@ function buildArmSwingFrames(params: {
    * rate), and Demo 2's right arm reports `secondPeakRatio` 0.31.
    */
   harmonicRatio?: number
+  /**
+   * Whole-body on-screen scale growth across the clip: every body dimension — shoulder spread,
+   * hip spread, torso length, wrist offset AND wrist amplitude — is multiplied by
+   * `g(t) = scaleGrowthFactor^(t / durationSec)`, so the subject ends the clip this many times
+   * larger while every BODY-UNIT quantity stays constant. This is Demo 2's shape (inter-shoulder
+   * span 120 → 358 px inside the fit window). Exponential rather than linear so `log g(t)` is
+   * exactly linear in time — inside the stabilizer's log-quadratic trend space by construction,
+   * which makes the stabilized series an exact sinusoid again and the expected values
+   * hand-computable. `1` (the default) is bit-identical to the ungrown fixture.
+   */
+  scaleGrowthFactor?: number
   seed?: number
 }): RobustPoseFrame[] {
   const {
@@ -78,38 +91,43 @@ function buildArmSwingFrames(params: {
     leftJitterPx = 0,
     rightJitterPx = 0,
     harmonicRatio = 0,
+    scaleGrowthFactor = 1,
     seed = 1,
   } = params
   const frameCount = Math.round(durationSec * fps)
   const jitter = makeJitter(seed)
+  const bodyCenterX = (LEFT_SHOULDER_X + RIGHT_SHOULDER_X) / 2
 
   const frames: RobustPoseFrame[] = []
   for (let i = 0; i < frameCount; i += 1) {
     const t = i / fps
+    const g = Math.pow(scaleGrowthFactor, t / durationSec)
     const phase = 2 * Math.PI * swingFreqHz * t
     const harmonic = 2 * Math.PI * 2 * swingFreqHz * t
+    const leftShoulderX = bodyCenterX - (bodyCenterX - LEFT_SHOULDER_X) * g
+    const rightShoulderX = bodyCenterX + (RIGHT_SHOULDER_X - bodyCenterX) * g
     const leftWristY =
       SHOULDER_Y +
-      BASE_WRIST_OFFSET_Y -
-      (leftAmplitudePx / 2) * Math.sin(phase) +
-      ((leftAmplitudePx * harmonicRatio) / 2) * Math.sin(harmonic) +
+      BASE_WRIST_OFFSET_Y * g -
+      ((leftAmplitudePx * g) / 2) * Math.sin(phase) +
+      ((leftAmplitudePx * g * harmonicRatio) / 2) * Math.sin(harmonic) +
       jitter() * leftJitterPx
     const rightWristY =
       SHOULDER_Y +
-      BASE_WRIST_OFFSET_Y -
-      (rightAmplitudePx / 2) * Math.sin(phase + Math.PI) +
-      ((rightAmplitudePx * harmonicRatio) / 2) * Math.sin(harmonic) +
+      BASE_WRIST_OFFSET_Y * g -
+      ((rightAmplitudePx * g) / 2) * Math.sin(phase + Math.PI) +
+      ((rightAmplitudePx * g * harmonicRatio) / 2) * Math.sin(harmonic) +
       jitter() * rightJitterPx
 
     frames.push(
       buildFrame(
         {
-          left_shoulder: { x: LEFT_SHOULDER_X, y: SHOULDER_Y },
-          right_shoulder: { x: RIGHT_SHOULDER_X, y: SHOULDER_Y },
-          left_hip: { x: LEFT_HIP_X, y: HIP_Y },
-          right_hip: { x: RIGHT_HIP_X, y: HIP_Y },
-          left_wrist: { x: LEFT_SHOULDER_X, y: leftWristY },
-          right_wrist: { x: RIGHT_SHOULDER_X, y: rightWristY },
+          left_shoulder: { x: leftShoulderX, y: SHOULDER_Y },
+          right_shoulder: { x: rightShoulderX, y: SHOULDER_Y },
+          left_hip: { x: bodyCenterX - (bodyCenterX - LEFT_HIP_X) * g, y: SHOULDER_Y + TORSO_LENGTH_PX * g },
+          right_hip: { x: bodyCenterX + (RIGHT_HIP_X - bodyCenterX) * g, y: SHOULDER_Y + TORSO_LENGTH_PX * g },
+          left_wrist: { x: leftShoulderX, y: leftWristY },
+          right_wrist: { x: rightShoulderX, y: rightWristY },
         },
         t,
       ),
@@ -413,10 +431,10 @@ describe('computeArmSwingSymmetry — sub-cycle wiggle (strides-gzl)', () => {
 
     expect(rightArmWorse.value).not.toBeNull()
     expect(rightArmWorse.confidence).toBeLessThan(bothEqual.confidence * 0.9)
-    expect(rightArmWorse.caveat).toContain('tracked noticeably better')
+    expect(rightArmWorse.caveat).toContain('fit its trace much less cleanly')
     // Averaging would have hidden this: the LEFT arm's own fit is untouched between the two cases,
     // so a mean of the two sides still reads comfortable.
-    expect(bothEqual.caveat ?? '').not.toContain('tracked noticeably better')
+    expect(bothEqual.caveat ?? '').not.toContain('fit its trace much less cleanly')
   })
 
   it('below the fit-quality gate the metric publishes nothing, on either arm', () => {
@@ -436,9 +454,133 @@ describe('computeArmSwingSymmetry — sub-cycle wiggle (strides-gzl)', () => {
 })
 
 /**
- * Reads the exact series `computeSideSwing` reads — `wrist.y − shoulder.y` in image-y — at the
- * frame carrying `timestamp`. Image-y grows downward, so a SMALLER value is the wrist higher on
- * screen. The direction assertions below depend on this and on nothing else.
+ * The exact RAW-PIXEL computation `computeSideSwing` performed before scale stabilization
+ * (strides-egw): each side's own wrist-relative-to-shoulder series wherever both resolve, fitted
+ * on the shared grid, min over max. The no-op cases below must land on THIS number — factor
+ * identically (or numerically) 1 means the stabilized path and the raw path are the same
+ * computation, not merely similar ones.
+ */
+function rawPixelRatio(frames: RobustPoseFrame[]): number {
+  const amplitude = (side: 'left' | 'right') => {
+    const samples = frames.flatMap((frame) => {
+      const at = (name: string) => frame.keypoints.find((kp) => kp.name === name)!
+      const shoulder = at(`${side}_shoulder`)
+      const wrist = at(`${side}_wrist`)
+      if (shoulder.y === null || wrist.y === null) return []
+      return [{ t: frame.timestamp, v: wrist.y - shoulder.y }]
+    })
+    const fit = fitSpectralSinusoid(samples, {
+      minFrequencyHz: DEFAULT_HEURISTICS_CONFIG.spectralFitMinFrequencyHz,
+      maxFrequencyHz: DEFAULT_HEURISTICS_CONFIG.spectralFitMaxFrequencyHz,
+      frequencyStepHz: DEFAULT_HEURISTICS_CONFIG.spectralFitFrequencyStepHz,
+    })
+    if (!fit.ok) throw new Error(`fixture must fit on the ${side} side`)
+    return fit.peakToPeakAmplitude
+  }
+  const left = amplitude('left')
+  const right = amplitude('right')
+  return Math.min(left, right) / Math.max(left, right)
+}
+
+/**
+ * The scale stabilization strides-egw added: `computeSideSwing` divides each sample by a smoothed
+ * inter-shoulder trend before the fit, so a subject whose on-screen size changes inside the fit
+ * window is measured in body proportion instead of letting the large-scale frames dominate the
+ * least squares (Demo 2: inter-shoulder 120 → 358 px, an ~9:1 RSS weighting toward the late
+ * frames). The growth fixture is exponential on purpose — see the builder's `scaleGrowthFactor`
+ * doc — so every expected value here is exact by construction rather than approximate.
+ */
+describe('computeArmSwingSymmetry — scale stabilization (strides-egw)', () => {
+  const GROWN = {
+    ...BASE_PARAMS,
+    leftAmplitudePx: 40,
+    rightAmplitudePx: 20,
+    scaleGrowthFactor: 3,
+  }
+
+  it('a subject growing 3× on screen with constant body-unit amplitudes matches the static twin', () => {
+    const growing = computeArmSwingSymmetry(buildArmSwingFrames(GROWN), 'front')
+    const staticTwin = computeArmSwingSymmetry(
+      buildArmSwingFrames({ ...GROWN, scaleGrowthFactor: 1 }),
+      'front',
+    )
+
+    expect(growing.value).not.toBeNull()
+    expect(growing.value).toBeCloseTo(staticTwin.value as number, 3)
+    // The stabilized series is an exact constant-amplitude sinusoid again, so the fit is clean:
+    // full confidence, and neither the unsteady-rhythm nor the fit-disparity caveat fires.
+    expect(growing.confidence).toBeGreaterThan(0.9)
+    expect(growing.caveat).toBeNull()
+  })
+
+  it('the raw pixel trace under the same growth violates the constant-amplitude premise the fit assumes', () => {
+    // The mechanism, shown on the input rather than inferred: the raw series' amplitude is
+    // modulated 1× → 3× across the window, so a constant-amplitude sinusoid necessarily leaves
+    // amplitude-mismatch residuals — while the stabilized series `computeSideSwing` actually fits
+    // is an exact sinusoid again and fits essentially perfectly.
+    const frames = buildArmSwingFrames(GROWN)
+    const samples = frames.map((frame) => {
+      const at = (name: string) => frame.keypoints.find((kp) => kp.name === name)!.y!
+      return { t: frame.timestamp, v: at('left_wrist') - at('left_shoulder') }
+    })
+    const rawFit = fitSpectralSinusoid(samples, {
+      minFrequencyHz: DEFAULT_HEURISTICS_CONFIG.spectralFitMinFrequencyHz,
+      maxFrequencyHz: DEFAULT_HEURISTICS_CONFIG.spectralFitMaxFrequencyHz,
+      frequencyStepHz: DEFAULT_HEURISTICS_CONFIG.spectralFitFrequencyStepHz,
+    })
+    const stabilizedFit = computeSideSwing(frames, 'left', DEFAULT_HEURISTICS_CONFIG).fit
+
+    expect(rawFit.ok).toBe(true)
+    expect(stabilizedFit.ok).toBe(true)
+    if (rawFit.ok && stabilizedFit.ok) {
+      expect(rawFit.sinusoidR2).toBeLessThan(0.95)
+      expect(stabilizedFit.sinusoidR2).toBeGreaterThan(0.999)
+    }
+  })
+
+  it('with too few both-shoulder frames the stabilization is an exact no-op, not an extrapolation', () => {
+    // Both shoulders resolve TOGETHER in only 8 frames — below MIN_SCALE_TREND_SAMPLES — while
+    // each side's own shoulder+wrist pair still resolves in over half the frames, plenty for both
+    // fits. A scale trend fitted to 8 points would be exactly the poorly-founded guess the
+    // fallback ladder exists to refuse: the factor must be IDENTICALLY 1, i.e. the raw-pixel
+    // computation, even though this clip genuinely grows.
+    const frames = buildArmSwingFrames(GROWN).map((frame, i) => {
+      if (i % 15 === 0) return frame
+      const dropName = i % 2 === 0 ? 'right_shoulder' : 'left_shoulder'
+      return {
+        ...frame,
+        keypoints: frame.keypoints.map((kp) =>
+          kp.name === dropName
+            ? { ...kp, x: null, y: null, score: 0, status: 'unrecoverable' as const }
+            : kp,
+        ),
+      }
+    })
+
+    const result = computeArmSwingSymmetry(frames, 'front')
+
+    expect(result.value).not.toBeNull()
+    expect(result.value).toBeCloseTo(rawPixelRatio(frames), 12)
+  })
+
+  it('a constant-scale clip reads numerically as the raw-pixel computation — the no-op property', () => {
+    // Load-bearing for every pre-existing case in this file: when the proxy is flat the fitted
+    // trend is that constant, the reference is that constant, and the factor is 1 to floating-
+    // point precision — so the stabilization cannot move a number on footage it has nothing to
+    // stabilize.
+    const frames = buildArmSwingFrames({ ...GROWN, scaleGrowthFactor: 1 })
+
+    const result = computeArmSwingSymmetry(frames, 'front')
+
+    expect(result.value).toBeCloseTo(rawPixelRatio(frames), 10)
+  })
+})
+
+/**
+ * Reads the raw series underlying `computeSideSwing`'s stabilized one — `wrist.y − shoulder.y` in
+ * image-y — at the frame carrying `timestamp`. Image-y grows downward, so a SMALLER value is the
+ * wrist higher on screen; the stabilizer's divisor is positive by construction, so it preserves
+ * that ordering and the direction assertions below depend on it and on nothing else.
  */
 function wristBelowShoulderPx(
   frames: RobustPoseFrame[],

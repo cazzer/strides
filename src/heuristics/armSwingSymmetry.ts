@@ -37,15 +37,21 @@ function nullResult(
  * Arm swing symmetry: `min(left, right) / max(left, right)` of each arm's fitted
  * wrist-relative-to-shoulder swing amplitude — a 0-1 ratio, 1 = perfectly symmetric swing.
  *
- * ## Scale-free by construction
+ * ## Scale-free by construction — but scale-STABILIZED per frame
  *
  * The value is a ratio of two amplitudes measured in the same pixel space on the same body in the
- * same frames, so the body scale cancels exactly and no torso-length normalization is applied or
- * needed. This module used to divide each side by `estimateBodyScale`'s clip-median
- * `torsoLengthPx` before taking a ratio that immediately cancelled it again — a no-op arithmetically,
- * but NOT a no-op behaviourally, because a clip with no resolvable shoulders/hips returned `null`
- * on a quantity it could in fact have measured. That dependency went with the prominence threshold
- * that was its only real consumer, exactly as it did for `verticalOscillationCm`.
+ * same frames, so the ratio needs no body-scale reference to exist: this module used to divide
+ * each side by `estimateBodyScale`'s clip-median `torsoLengthPx` before taking a ratio that
+ * immediately cancelled it again — a no-op arithmetically, but NOT a no-op behaviourally, because
+ * a clip with no resolvable shoulders/hips returned `null` on a quantity it could in fact have
+ * measured. That dependency went with the prominence threshold that was its only real consumer,
+ * exactly as it did for `verticalOscillationCm`.
+ *
+ * A single CLIP-WIDE reference cancelling is not the same thing as the scale being harmless,
+ * though: each series is now divided by a smoothed inter-shoulder trend before its fit
+ * (`armSwing.ts`, "Scale stabilization before the fit"), so a subject whose on-screen size changes
+ * during the clip is measured in body proportion rather than letting the large-scale frames
+ * dominate both sides' least squares.
  *
  * ## Both sides, one rhythm
  *
@@ -207,7 +213,7 @@ export function computeArmSwingSymmetry(
     Math.abs(left.fit.sinusoidR2 - right.fit.sinusoidR2) > SIDE_FIT_QUALITY_DISPARITY_R2
   ) {
     caveats.push(
-      'One arm was tracked noticeably better than the other in this clip, so part of the difference between them may be measurement rather than form.',
+      "One arm's swing rhythm fit its trace much less cleanly than the other's in this clip, so part of the difference between them may be measurement rather than form.",
     )
   } else if (weakestR2 < FIT_QUALITY_SATURATION_R2) {
     caveats.push(

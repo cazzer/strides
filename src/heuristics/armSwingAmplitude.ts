@@ -64,7 +64,10 @@ function nullResult(
  * absolute amplitude needs a scale reference to survive camera distance, so it is normalized by
  * `estimateBodyScale`'s clip-median torso length — the pipeline's shared normalizer — and a clip
  * with no resolvable shoulders/hips is a null naming the missing body-scale reference, the one
- * dependency the scale-free symmetry ratio deliberately shed.
+ * dependency the scale-free symmetry ratio deliberately shed. The per-side amplitudes arrive
+ * already scale-stabilized to the clip's reference (median) scale (`armSwing.ts`, "Scale
+ * stabilization before the fit"), which pairs naturally with the clip-MEDIAN torso length here —
+ * the torso normalization's semantics are unchanged.
  *
  * ## Confidence answers "was the worse arm measured well?"
  *
@@ -212,7 +215,7 @@ export function computeArmSwingAmplitude(
     Math.abs(left.fit.sinusoidR2 - right.fit.sinusoidR2) > SIDE_FIT_QUALITY_DISPARITY_R2
   ) {
     caveats.push(
-      'One arm was tracked noticeably better than the other in this clip, so part of this overall swing size may reflect measurement rather than form.',
+      "One arm's swing rhythm fit its trace much less cleanly than the other's in this clip, so part of this overall swing size may reflect measurement rather than form.",
     )
   } else if (weakestR2 < FIT_QUALITY_SATURATION_R2) {
     caveats.push(

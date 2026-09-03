@@ -57,6 +57,11 @@ function buildArmSwingFrames(params: {
    * amplitude — the STEP rhythm riding on the stride rhythm (see the symmetry suite's note on why
    * this is real rather than decorative). */
   harmonicRatio?: number
+  /** Whole-body on-screen scale growth across the clip — every body dimension multiplied by
+   * `g(t) = scaleGrowthFactor^(t / durationSec)`, exponential so the stabilizer's log-quadratic
+   * trend captures it exactly (see the symmetry suite's `scaleGrowthFactor` doc for the full
+   * reasoning). `1` (the default) is bit-identical to the ungrown fixture. */
+  scaleGrowthFactor?: number
   seed?: number
 }): RobustPoseFrame[] {
   const {
@@ -68,38 +73,43 @@ function buildArmSwingFrames(params: {
     leftJitterPx = 0,
     rightJitterPx = 0,
     harmonicRatio = 0,
+    scaleGrowthFactor = 1,
     seed = 1,
   } = params
   const frameCount = Math.round(durationSec * fps)
   const jitter = makeJitter(seed)
+  const bodyCenterX = (LEFT_SHOULDER_X + RIGHT_SHOULDER_X) / 2
 
   const frames: RobustPoseFrame[] = []
   for (let i = 0; i < frameCount; i += 1) {
     const t = i / fps
+    const g = Math.pow(scaleGrowthFactor, t / durationSec)
     const phase = 2 * Math.PI * swingFreqHz * t
     const harmonic = 2 * Math.PI * 2 * swingFreqHz * t
+    const leftShoulderX = bodyCenterX - (bodyCenterX - LEFT_SHOULDER_X) * g
+    const rightShoulderX = bodyCenterX + (RIGHT_SHOULDER_X - bodyCenterX) * g
     const leftWristY =
       SHOULDER_Y +
-      BASE_WRIST_OFFSET_Y -
-      (leftAmplitudePx / 2) * Math.sin(phase) +
-      ((leftAmplitudePx * harmonicRatio) / 2) * Math.sin(harmonic) +
+      BASE_WRIST_OFFSET_Y * g -
+      ((leftAmplitudePx * g) / 2) * Math.sin(phase) +
+      ((leftAmplitudePx * g * harmonicRatio) / 2) * Math.sin(harmonic) +
       jitter() * leftJitterPx
     const rightWristY =
       SHOULDER_Y +
-      BASE_WRIST_OFFSET_Y -
-      (rightAmplitudePx / 2) * Math.sin(phase + Math.PI) +
-      ((rightAmplitudePx * harmonicRatio) / 2) * Math.sin(harmonic) +
+      BASE_WRIST_OFFSET_Y * g -
+      ((rightAmplitudePx * g) / 2) * Math.sin(phase + Math.PI) +
+      ((rightAmplitudePx * g * harmonicRatio) / 2) * Math.sin(harmonic) +
       jitter() * rightJitterPx
 
     frames.push(
       buildFrame(
         {
-          left_shoulder: { x: LEFT_SHOULDER_X, y: SHOULDER_Y },
-          right_shoulder: { x: RIGHT_SHOULDER_X, y: SHOULDER_Y },
-          left_hip: { x: LEFT_HIP_X, y: HIP_Y },
-          right_hip: { x: RIGHT_HIP_X, y: HIP_Y },
-          left_wrist: { x: LEFT_SHOULDER_X, y: leftWristY },
-          right_wrist: { x: RIGHT_SHOULDER_X, y: rightWristY },
+          left_shoulder: { x: leftShoulderX, y: SHOULDER_Y },
+          right_shoulder: { x: rightShoulderX, y: SHOULDER_Y },
+          left_hip: { x: bodyCenterX - (bodyCenterX - LEFT_HIP_X) * g, y: SHOULDER_Y + TORSO_LENGTH_PX * g },
+          right_hip: { x: bodyCenterX + (RIGHT_HIP_X - bodyCenterX) * g, y: SHOULDER_Y + TORSO_LENGTH_PX * g },
+          left_wrist: { x: leftShoulderX, y: leftWristY },
+          right_wrist: { x: rightShoulderX, y: rightWristY },
         },
         t,
       ),
@@ -306,9 +316,29 @@ describe('computeArmSwingAmplitude', () => {
 
     expect(rightArmWorse.value).not.toBeNull()
     expect(rightArmWorse.confidence).toBeLessThan(bothEqual.confidence * 0.9)
-    expect(rightArmWorse.caveat).toContain('tracked noticeably better')
+    expect(rightArmWorse.caveat).toContain('fit its trace much less cleanly')
     expect(rightArmWorse.caveat).toContain('overall swing size')
-    expect(bothEqual.caveat ?? '').not.toContain('tracked noticeably better')
+    expect(bothEqual.caveat ?? '').not.toContain('fit its trace much less cleanly')
+  })
+
+  it('a subject growing 3× on screen reports the static body-proportion value — the growth cancels', () => {
+    // Whole-body exponential growth (strides-egw): the stabilized per-side amplitudes come out at
+    // the clip's reference (median inter-shoulder) scale — i.e. ×g at the median-sample instant —
+    // and `estimateBodyScale`'s clip-median torso is the same ×g at the same median instant, so
+    // the growth divides out exactly and the hand expectation is the STATIC one:
+    // (40 + 20) / (2 × 150) = 0.2.
+    const growing = computeArmSwingAmplitude(
+      buildArmSwingFrames({
+        ...BASE_PARAMS,
+        leftAmplitudePx: 40,
+        rightAmplitudePx: 20,
+        scaleGrowthFactor: 3,
+      }),
+      'front',
+    )
+
+    expect(growing.value).not.toBeNull()
+    expect(growing.value).toBeCloseTo((40 + 20) / (2 * TORSO_LENGTH_PX), 3)
   })
 
   it('never NaN: every degenerate input yields a finite number or null', () => {

@@ -1,7 +1,8 @@
 import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { HeuristicsConfig, MetricExemplar } from './types'
-import { resolvePoint } from './keypoints'
+import { resolveBilateralPair, resolvePoint } from './keypoints'
+import { distance, median } from './mathUtils'
 import { fitSpectralSinusoid } from './spectralFit'
 import type { SpectralFitFailureReason, SpectralFitResult } from './spectralFit'
 import { resolvedSpanCenter, selectBounceInstants } from './bounceInstants'
@@ -28,6 +29,23 @@ import {
  * class #36 deleted, two gates letting a metric family disagree with itself about
  * trustworthiness — so the gate constants live HERE, in the shared module, rather than
  * per-caller.
+ *
+ * ## Scale stabilization before the fit
+ *
+ * `fitSpectralSinusoid`'s model is a CONSTANT-amplitude sinusoid over a polynomial trend, and a
+ * clip whose subject changes on-screen size inside the fit window violates that premise for this
+ * signal specifically: the wrist-relative-to-shoulder excursion is a body-proportioned quantity,
+ * so its pixel amplitude scales with the subject. Demo 2 — this metric family's primary clip — is
+ * the measured case: the inter-shoulder span grows from ~120 px to ~358 px inside the fitted
+ * window, so the raw-pixel least squares weights the late, large-scale frames roughly 9:1 over the
+ * early ones and each side's "amplitude" is mostly a reading of the clip's end.
+ *
+ * The fix divides every sample by a per-frame scale factor before the fit — see
+ * `resolveScaleStabilizer` for the construction and the reasoning behind each piece of it (strict
+ * bilateral proxy, whole-window log-quadratic trend, no clamp). The output stays in PIXELS, at the
+ * clip's reference (median measured) scale, so downstream semantics are unchanged: the symmetry
+ * ratio still cancels the units, and `armSwingAmplitude`'s division by the clip-median torso
+ * length still pairs a reference-scale numerator with a clip-median denominator.
  */
 
 /**
@@ -86,6 +104,203 @@ export const MAX_SIDE_FREQUENCY_DISAGREEMENT = 0.25
  */
 export const SIDE_FIT_QUALITY_DISPARITY_R2 = 0.2
 
+/**
+ * Minimum frames on which BOTH shoulders independently resolve for the scale trend to be fitted
+ * at all — deliberately the same bar `fitSpectralSinusoid` sets for its own smallest fit
+ * (`MIN_SPECTRAL_FIT_SAMPLES`), for the same reason: a low-order model over a handful of points
+ * chases noise rather than describing anything. Below it the factor is IDENTICALLY 1 for every
+ * sample — an exact no-op, bit-equal to the raw-pixel behavior this stabilization replaced —
+ * rather than a poorly-founded trend quietly reshaping the series.
+ */
+export const MIN_SCALE_TREND_SAMPLES = 12
+
+/** Pivot magnitude below which the 3×3 trend system is treated as singular, relative to the
+ * largest entry — `spectralFit.ts`'s own convention, restated here because that module's solver is
+ * deliberately private (see its doc for why). */
+const TREND_PIVOT_RELATIVE_FLOOR = 1e-12
+
+/**
+ * Fitted log-trend range (max − min over the observed window) below which the trend is treated as
+ * FLAT and the factor snaps to the constant 1. A degeneracy floor in the same spirit as
+ * `spectralFit.ts`'s `DEGENERACY_RELATIVE_FLOOR`, not a tuning knob: 1e-6 is a within-window scale
+ * change of one part in a million — meaningless to any amplitude — while sitting eight orders of
+ * magnitude above the ~1e-14 coefficient noise a constant proxy leaves in `d`/`e`.
+ *
+ * This rung is what makes the constant-scale no-op EXACT rather than approximate, and exactness is
+ * load-bearing: dividing a series by `exp(~1e-14 wobble)` perturbs constant values at the same
+ * order as their own floating-point rounding, which is enough to turn a motionless-arm clip's
+ * honest `'degenerate-signal'` ("no oscillating vertical motion") into a spurious
+ * below-quality-gate reading over pure rounding noise.
+ */
+const FLAT_TREND_LOG_RANGE = 1e-6
+
+/**
+ * Gaussian elimination with partial pivoting for the one 3×3 normal-equation system this module
+ * forms. Private for the same reason `spectralFit.ts` keeps its solver private: it serves exactly
+ * one caller with exactly one conditioning story (a time-centered quadratic basis), and is not an
+ * invitation to solve arbitrary systems this way. Returns `null` — never a NaN-laden vector — when
+ * the system is singular to within the relative pivot floor.
+ */
+function solveTrendSystem(
+  matrix: readonly (readonly number[])[],
+  rhs: readonly number[],
+): number[] | null {
+  const n = rhs.length
+  const a = matrix.map((row, i) => [...row, rhs[i]])
+
+  let largest = 0
+  for (const row of a) {
+    for (let c = 0; c < n; c += 1) largest = Math.max(largest, Math.abs(row[c]))
+  }
+  if (!(largest > 0)) return null
+  const pivotFloor = largest * TREND_PIVOT_RELATIVE_FLOOR
+
+  for (let col = 0; col < n; col += 1) {
+    let pivotRow = col
+    for (let r = col + 1; r < n; r += 1) {
+      if (Math.abs(a[r][col]) > Math.abs(a[pivotRow][col])) pivotRow = r
+    }
+    if (Math.abs(a[pivotRow][col]) <= pivotFloor) return null
+    if (pivotRow !== col) {
+      const swap = a[pivotRow]
+      a[pivotRow] = a[col]
+      a[col] = swap
+    }
+    const pivot = a[col][col]
+    for (let r = col + 1; r < n; r += 1) {
+      const factor = a[r][col] / pivot
+      if (factor === 0) continue
+      for (let c = col; c <= n; c += 1) a[r][c] -= factor * a[col][c]
+    }
+  }
+
+  const solution = new Array<number>(n)
+  for (let i = n - 1; i >= 0; i -= 1) {
+    let sum = a[i][n]
+    for (let j = i + 1; j < n; j += 1) sum -= a[i][j] * solution[j]
+    solution[i] = sum / a[i][i]
+  }
+  return solution.every((value) => Number.isFinite(value)) ? solution : null
+}
+
+/**
+ * Builds the per-frame scale factor `f(t)` the swing series is divided by: a smoothed
+ * inter-shoulder-span trend, normalized so `f` reads 1 at the clip's reference (median measured)
+ * scale. Each piece is a deliberate choice:
+ *
+ * - **The proxy is the inter-shoulder distance, resolved STRICTLY bilaterally**
+ *   (`resolveBilateralPair`, never `resolveMidpoint`'s single-side fallback). A scale needs two
+ *   real points — a span measured against a fabricated stand-in point is a fabricated length, the
+ *   exact bug class `estimateHipWidth` and view detection's bilateral-spread signal already refuse
+ *   for the same reason. A frame whose proxy is missing still gets a factor (the trend evaluates
+ *   at every timestamp), so no swing sample is ever dropped for it.
+ * - **The trend is a whole-window least-squares quadratic in LOG space**,
+ *   `log(spanPx) ≈ c + d·t + e·t²` with time centered at the proxy samples' mean before the basis
+ *   is built (the same conditioning trick `fitSpectralSinusoid` documents). Log space because
+ *   scale is multiplicative — a 2× approach costs the same trend budget at any distance — and
+ *   because the exponentiated trend is positive by construction, so the divisor can never cross
+ *   zero. Three degrees of freedom because a 3-dof polynomial cannot represent ANY frequency in
+ *   the fitted band (1.2–4 Hz over a multi-second window): the stride-rate wobble the
+ *   inter-shoulder span genuinely carries (trunk counter-rotation, ~5.8% rms measured on Demo 2)
+ *   structurally cannot leak into the divisor, where it would multiply straight into the swing
+ *   series as in-band noise. A per-frame or heavily-smoothed divisor has no such guarantee.
+ * - **`f(t) = exp(trend(t)) / referencePx`**, where `referencePx` is the median of the measured
+ *   per-frame proxies — so the divided series stays in PIXELS, at the clip's reference scale,
+ *   rather than becoming a dimensionless shoulder-span multiple with different downstream units.
+ * - **No clamp on `f(t)`**: inside the observed window the exponentiated fit stays within the
+ *   data's own range, and the fallback ladder below guards the degenerate cases a clamp would
+ *   otherwise paper over.
+ *
+ * Fallback ladder — every rung returns the CONSTANT 1 (an exact no-op, not an approximate one):
+ * fewer than `MIN_SCALE_TREND_SAMPLES` frames with a usable bilateral proxy; a trend system too
+ * singular to solve (e.g. all proxy samples at one timestamp); a fitted trend flat to within
+ * `FLAT_TREND_LOG_RANGE` (see that constant for why this rung is what makes the constant-scale
+ * no-op exact); a non-finite or non-positive factor at evaluation time (unreachable from a solved
+ * fit over real input, guarded per the "never NaN" contract).
+ */
+function resolveScaleStabilizer(frames: RobustPoseFrame[]): (timestampSeconds: number) => number {
+  const times: number[] = []
+  const spans: number[] = []
+  for (const frame of frames) {
+    const shoulders = resolveBilateralPair(frame, 'left_shoulder', 'right_shoulder')
+    if (shoulders === null) continue
+    const span = distance(shoulders.left, shoulders.right)
+    if (!Number.isFinite(span) || span <= 0) continue
+    times.push(frame.timestamp)
+    spans.push(span)
+  }
+
+  if (spans.length < MIN_SCALE_TREND_SAMPLES) return () => 1
+
+  const n = spans.length
+  let tSum = 0
+  for (const t of times) tSum += t
+  const tMean = tSum / n
+
+  // Normal equations for `log(span) ≈ c + d·t̃ + e·t̃²` over the centered basis `t̃ = t − tMean`.
+  let sT = 0
+  let sT2 = 0
+  let sT3 = 0
+  let sT4 = 0
+  let sY = 0
+  let sTY = 0
+  let sT2Y = 0
+  for (let i = 0; i < n; i += 1) {
+    const t = times[i] - tMean
+    const y = Math.log(spans[i])
+    const t2 = t * t
+    sT += t
+    sT2 += t2
+    sT3 += t2 * t
+    sT4 += t2 * t2
+    sY += y
+    sTY += t * y
+    sT2Y += t2 * y
+  }
+
+  const coefficients = solveTrendSystem(
+    [
+      [n, sT, sT2],
+      [sT, sT2, sT3],
+      [sT2, sT3, sT4],
+    ],
+    [sY, sTY, sT2Y],
+  )
+  if (coefficients === null) return () => 1
+
+  const [c, d, e] = coefficients
+
+  // The flat-trend rung: the quadratic's extrema over the observed window sit at the window ends
+  // or at its vertex, so its full range is readable from at most three evaluations (`c` cancels
+  // out of a range).
+  let tLow = Infinity
+  let tHigh = -Infinity
+  for (const t of times) {
+    const centered = t - tMean
+    if (centered < tLow) tLow = centered
+    if (centered > tHigh) tHigh = centered
+  }
+  const logTrendAt = (t: number) => d * t + e * t * t
+  let trendMin = Math.min(logTrendAt(tLow), logTrendAt(tHigh))
+  let trendMax = Math.max(logTrendAt(tLow), logTrendAt(tHigh))
+  if (e !== 0) {
+    const vertex = -d / (2 * e)
+    if (vertex > tLow && vertex < tHigh) {
+      const atVertex = logTrendAt(vertex)
+      trendMin = Math.min(trendMin, atVertex)
+      trendMax = Math.max(trendMax, atVertex)
+    }
+  }
+  if (!(trendMax - trendMin > FLAT_TREND_LOG_RANGE)) return () => 1
+
+  const referencePx = median(spans)
+  return (timestampSeconds) => {
+    const t = timestampSeconds - tMean
+    const factor = Math.exp(c + d * t + e * t * t) / referencePx
+    return Number.isFinite(factor) && factor > 0 ? factor : 1
+  }
+}
+
 export const SHOULDER_NAME: Record<'left' | 'right', KeypointName> = {
   left: 'left_shoulder',
   right: 'right_shoulder',
@@ -105,7 +320,8 @@ export const ELBOW_NAME: Record<'left' | 'right', KeypointName> = {
 }
 
 export interface SideSwing {
-  /** The side's own wrist-relative-to-shoulder-y trace, `null` where it did not resolve, index-
+  /** The side's own scale-stabilized wrist-relative-to-shoulder-y trace, in px at the clip's
+   * reference scale (see `resolveScaleStabilizer`), `null` where it did not resolve, index-
    * parallel to `frames` — the shape `resolvedSpanCenter` reads. */
   seriesY: Array<number | null>
   /** The spectral fit of that trace, over the shared bounce-frequency grid. */
@@ -127,6 +343,12 @@ export interface SideSwing {
  * chest on the forward swing is a real, front-view-visible vertical motion, and the wrist — the
  * most distal available point — inherits the largest version of it. That input signal is unchanged;
  * only how an amplitude is read off it changed.
+ *
+ * Each sample is divided by the clip's smoothed inter-shoulder scale trend before the fit — the
+ * module doc's "Scale stabilization" section says why, `resolveScaleStabilizer` says how. The
+ * division changes sample VALUES only: the series' null pattern, `resolvedCount` and
+ * `interpolatedCount` are exactly what the raw series produces, because the trend evaluates at
+ * every timestamp whether or not that frame's own proxy resolved.
  *
  * ## Why a fit and not paired extrema
  *
@@ -163,6 +385,7 @@ export function computeSideSwing(
 ): SideSwing {
   let resolvedCount = 0
   let interpolatedCount = 0
+  const scaleFactorAt = resolveScaleStabilizer(frames)
 
   const seriesY = frames.map((frame) => {
     const shoulder = resolvePoint(frame, SHOULDER_NAME[side])
@@ -170,7 +393,7 @@ export function computeSideSwing(
     if (shoulder === null || wrist === null) return null
     resolvedCount += 1
     if (shoulder.interpolated || wrist.interpolated) interpolatedCount += 1
-    return wrist.y - shoulder.y
+    return (wrist.y - shoulder.y) / scaleFactorAt(frame.timestamp)
   })
 
   const samples: Array<{ t: number; v: number }> = []
