@@ -372,6 +372,17 @@ node scripts/ab-person-selection.mjs \
   `> before.txt` / `> after.txt` compare with `diff` and a provenance mismatch shows up on line 2.
   Verified: two same-version single-trial runs diff on exactly one line, `elapsedMs`.
   `--json <path>` also writes one record per (clip, arm) carrying every raw per-trial value.
+  ⚠️ **Use `rtk proxy diff before.txt after.txt`, NOT bare `diff`, whenever the conclusion
+  matters** (`strides-ef5`). This machine's shell rewrites `diff` through a summarizing wrapper
+  that has twice, in two different sessions, reported **"Files are identical" for two files with
+  different MD5s** — most recently on `strides-utn.4`'s acceptance gate, whose entire criterion
+  was "no field moves except `elapsedMs`". It fails in the SAFE-LOOKING direction, so nothing
+  prompts a second look, and it turns this A/B — the repo's sharpest correctness instrument —
+  into a rubber stamp. Neither sighting has ever reproduced under a controlled test (tried at
+  322, 500 and 1000 lines on 2026-09-03; plain `diff` was correct every time), so do not go
+  looking for a threshold to stay under: there isn't a known one. Cross-check with `md5` any
+  time the answer comes back "no difference". The older `rtk-diff-exit-code` note covers only
+  the exit status; this is worse, because the summary TEXT asserts equality.
 - One throwaway navigation warms the server before the matrix — vite's on-demand transform and
   dep pre-bundling of the tfjs/MediaPipe graph is server-side and paid once, so without it
   whichever (clip, arm) went first absorbs all of it and reads systematically wide in the range
