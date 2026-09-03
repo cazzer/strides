@@ -9,7 +9,7 @@
     "node": ">=20.19.0"
   },
   "scripts": {
-    "dev": "vite --host",
+    "dev": "vite --host --port 5177",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "vitest run",

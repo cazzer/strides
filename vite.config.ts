@@ -7,6 +7,7 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   base: '/strides/',
   plugins: [react(), tailwindcss()],
+port: 5177,
   resolve: {
     alias: {
       // See src/pose/backends/__shims__/mediapipe-pose.ts: @mediapipe/pose isn't a real
