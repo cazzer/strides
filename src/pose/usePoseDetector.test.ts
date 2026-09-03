@@ -56,6 +56,43 @@ describe('usePoseDetector', () => {
     expect(createDetectorMock).toHaveBeenCalledTimes(1)
   })
 
+  it('publishes the same phase through `load`, with progress absent', async () => {
+    // `strides-utn.1` builds the channel; `strides-utn.3` fills it. `progress: null` means
+    // INDETERMINATE, and a consumer must be able to tell that from a measured zero.
+    const fakeDetector = makeFakeDetector()
+    createDetectorMock.mockResolvedValue(fakeDetector)
+
+    const { result } = renderHook(() => usePoseDetector())
+
+    expect(result.current.load).toEqual({ phase: 'loading', progress: null })
+
+    await waitFor(() => expect(result.current.load.phase).toBe('ready'))
+    expect(result.current.load.progress).toBeNull()
+  })
+
+  it('reports a creation failure through `load` rather than only into an unread status', async () => {
+    createDetectorMock.mockRejectedValue(new Error('no webgl'))
+
+    const { result } = renderHook(() => usePoseDetector())
+
+    await waitFor(() => expect(result.current.load.phase).toBe('error'))
+  })
+
+  it('keeps `load` referentially stable across renders that do not change the phase', async () => {
+    const fakeDetector = makeFakeDetector()
+    createDetectorMock.mockResolvedValue(fakeDetector)
+
+    const { result, rerender } = renderHook(() => usePoseDetector())
+    await waitFor(() => expect(result.current.load.phase).toBe('ready'))
+
+    const settled = result.current.load
+    rerender()
+
+    // A fresh identity per render would push work downstream on every render forever — the same
+    // failure `sameClipSession` exists to stop one level down.
+    expect(result.current.load).toBe(settled)
+  })
+
   it('disposes the cached detector on unmount', async () => {
     const fakeDetector = makeFakeDetector()
     createDetectorMock.mockResolvedValue(fakeDetector)

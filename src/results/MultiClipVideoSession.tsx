@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import type { PoseDetector } from '../pose/detector'
+import type { ModelLoadStates } from '../pose/modelLoadState'
 import { AddClipAction } from '../video/AddClipAction'
 import { ClipLoadStatus } from '../video/ClipLoadStatus'
 import { ClipPicker } from '../video/ClipPicker'
@@ -24,6 +25,17 @@ export interface MultiClipVideoSessionProps {
   /** The one shared, stateful pose detector for the whole page — handed to exactly one active
    * clip at a time (see `nextActiveClipIndex`); every other clip gets `null`. */
   detector: PoseDetector | null
+  /**
+   * Both detector owners' model-download state, read in `App` and threaded here because this
+   * component owns the application header (`strides-utn.1`).
+   *
+   * **Deliberately not rendered yet.** `strides-utn.1` is the wire only; `strides-utn.5` owns the
+   * header entry that presents this, and the two run in parallel — a placeholder here would collide
+   * with the component that ticket is writing. Declared and received rather than deferred so the
+   * UI ticket has a seam that already exists and is already type-checked, instead of a second hop
+   * to invent.
+   */
+  modelLoad: ModelLoadStates
 }
 
 function makeClipId(): string {
@@ -85,7 +97,11 @@ function sameClipSession(previous: ClipSession | undefined, next: ClipSession): 
  * every class name looks right. So the header moved down here, and `App.tsx` keeps only the pose
  * detector.
  */
-export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) {
+// Props are taken whole and destructured one field at a time on purpose: `modelLoad` arrives here
+// and is not read until `strides-utn.5` renders it, and a destructured-but-unused binding would
+// have to be silenced with an eslint suppression, which reads as an accident rather than a seam.
+export function MultiClipVideoSession(props: MultiClipVideoSessionProps) {
+  const { detector } = props
   // "Choose a different video" (a whole-session reset) unmounts the results and returns the page
   // to the picker, so the button's focus needs to land on something that survives the transition —
   // the page heading, the one thing on the page that is always there. Same fix already applied

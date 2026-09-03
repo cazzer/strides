@@ -36,7 +36,16 @@ vi.mock('../video/posterFrame', async (importOriginal) => ({
 }))
 
 import type { ClipPoster } from '../video/posterFrame'
+import { IDLE_MODEL_LOAD_STATE } from '../pose/modelLoadState'
+import type { ModelLoadStates } from '../pose/modelLoadState'
 import { MultiClipVideoSession } from './MultiClipVideoSession'
+
+/** This component receives model-load state but renders none of it yet (`strides-utn.1` is the
+ * wire; `strides-utn.5` is the UI), so every case here can share one settled value. */
+const IDLE_MODEL_LOADS: ModelLoadStates = {
+  primary: IDLE_MODEL_LOAD_STATE,
+  scalePass: IDLE_MODEL_LOAD_STATE,
+}
 
 function makeFakeDetector(): PoseDetector {
   return { estimatePose: vi.fn(), dispose: vi.fn() }
@@ -212,7 +221,7 @@ afterEach(() => {
 
 describe('MultiClipVideoSession', () => {
   it('starts with zero clips and a full-page picker', () => {
-    render(<MultiClipVideoSession detector={null} />)
+    render(<MultiClipVideoSession detector={null} modelLoad={IDLE_MODEL_LOADS} />)
 
     // A genuinely empty session, not "one slot whose videoSource.status is 'empty'": there is no
     // clip, so there is no video element to be empty.
@@ -226,7 +235,7 @@ describe('MultiClipVideoSession', () => {
 
   it('single clip (N=1): auto-starts and reaches Analysis complete once ready', async () => {
     const detector = makeFakeDetector()
-    render(<MultiClipVideoSession detector={detector} />)
+    render(<MultiClipVideoSession detector={detector} modelLoad={IDLE_MODEL_LOADS} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run.mp4', { type: 'video/mp4' }))
@@ -238,7 +247,7 @@ describe('MultiClipVideoSession', () => {
   })
 
   it('one source, one clip: selecting several files at once creates one clip per file', async () => {
-    render(<MultiClipVideoSession detector={null} />)
+    render(<MultiClipVideoSession detector={null} modelLoad={IDLE_MODEL_LOADS} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     fireEvent.change(screen.getByLabelText(/choose a video file/i), {
@@ -258,7 +267,7 @@ describe('MultiClipVideoSession', () => {
   })
 
   it('the picker stays on the page while a clip is still loading, and is replaced once one is ready', async () => {
-    render(<MultiClipVideoSession detector={null} />)
+    render(<MultiClipVideoSession detector={null} modelLoad={IDLE_MODEL_LOADS} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run.mp4', { type: 'video/mp4' }))
@@ -298,7 +307,7 @@ describe('MultiClipVideoSession', () => {
       vi.fn().mockResolvedValue({ ok: true, status: 200, blob: () => Promise.resolve(demoBlob) }),
     )
 
-    render(<MultiClipVideoSession detector={null} />)
+    render(<MultiClipVideoSession detector={null} modelLoad={IDLE_MODEL_LOADS} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
@@ -338,7 +347,7 @@ describe('MultiClipVideoSession', () => {
         handle: { stop: vi.fn() },
       }))
 
-    render(<MultiClipVideoSession detector={makeFakeDetector()} />)
+    render(<MultiClipVideoSession detector={makeFakeDetector()} modelLoad={IDLE_MODEL_LOADS} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
@@ -391,7 +400,7 @@ describe('MultiClipVideoSession', () => {
     // design.md D1 / `results-view` "Clip playback loops only while that clip is presented". Two
     // ready clips with no preview open must BOTH be stopped: an always-on loop would decode and
     // composite N videos nobody can see for the life of the session.
-    render(<MultiClipVideoSession detector={makeFakeDetector()} />)
+    render(<MultiClipVideoSession detector={makeFakeDetector()} modelLoad={IDLE_MODEL_LOADS} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
@@ -426,7 +435,7 @@ describe('MultiClipVideoSession', () => {
   })
 
   it('the preview presents the clip’s already-mounted element, overlay and all', async () => {
-    render(<MultiClipVideoSession detector={makeFakeDetector()} />)
+    render(<MultiClipVideoSession detector={makeFakeDetector()} modelLoad={IDLE_MODEL_LOADS} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
@@ -467,7 +476,7 @@ describe('MultiClipVideoSession', () => {
       handle: { stop: vi.fn() },
     }))
 
-    render(<MultiClipVideoSession detector={makeFakeDetector()} />)
+    render(<MultiClipVideoSession detector={makeFakeDetector()} modelLoad={IDLE_MODEL_LOADS} />)
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
     markVideoReady(canonicalVideos()[0])
@@ -513,7 +522,7 @@ describe('MultiClipVideoSession', () => {
       }))
 
     const detector = makeFakeDetector()
-    render(<MultiClipVideoSession detector={detector} />)
+    render(<MultiClipVideoSession detector={detector} modelLoad={IDLE_MODEL_LOADS} />)
 
     // Load clip 1 through the full-page picker -- its primary pass starts sampling and hangs.
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
@@ -553,7 +562,7 @@ describe('MultiClipVideoSession', () => {
   })
 
   it('removes clips one by one, and removing the last one returns to the picker', async () => {
-    render(<MultiClipVideoSession detector={null} />)
+    render(<MultiClipVideoSession detector={null} modelLoad={IDLE_MODEL_LOADS} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
@@ -576,7 +585,7 @@ describe('MultiClipVideoSession', () => {
 
   it('releases the removed clip’s poster in `removeClip` itself, and leaves the survivor’s alone', async () => {
     const posters = posterPerFile()
-    render(<MultiClipVideoSession detector={null} />)
+    render(<MultiClipVideoSession detector={null} modelLoad={IDLE_MODEL_LOADS} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
@@ -611,7 +620,7 @@ describe('MultiClipVideoSession', () => {
 
   it('releases every clip’s poster in `handleChooseDifferentVideo` itself when the session resets', async () => {
     const posters = posterPerFile()
-    render(<MultiClipVideoSession detector={null} />)
+    render(<MultiClipVideoSession detector={null} modelLoad={IDLE_MODEL_LOADS} />)
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
@@ -658,7 +667,7 @@ describe('MultiClipVideoSession', () => {
       })
 
     const detector = makeFakeDetector()
-    render(<MultiClipVideoSession detector={detector} />)
+    render(<MultiClipVideoSession detector={detector} modelLoad={IDLE_MODEL_LOADS} />)
 
     // Load clip 1 -- its primary pass starts sampling and hangs, holding the shared detector.
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))

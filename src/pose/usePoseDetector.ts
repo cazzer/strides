@@ -1,14 +1,29 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createDetector } from './detector'
 import type { PoseDetector } from './detector'
+import type { ModelLoadPhase, ModelLoadState } from './modelLoadState'
 import { resolvePoseDetectorConfig } from './poseBackendConfig'
 
-export type PoseDetectorStatus = 'loading' | 'ready' | 'error'
+/**
+ * Exactly the union this was before — `'loading' | 'ready' | 'error'` — but derived from the shared
+ * phase vocabulary rather than restated beside it, so the two cannot drift. `'idle'` is excluded
+ * because this hook creates its detector on mount: there is no moment at which it is mounted and
+ * has not started. The scale-pass detector is the lazy one, and it is the reason `'idle'` exists in
+ * `ModelLoadPhase` at all.
+ */
+export type PoseDetectorStatus = Exclude<ModelLoadPhase, 'idle'>
 
 export interface SharedPoseDetector {
   status: PoseDetectorStatus
   /** Non-null iff status === 'ready'. */
   detector: PoseDetector | null
+  /**
+   * The same `status`, plus an optional determinate byte reading, in the shape the application
+   * header consumes for both detector owners (`strides-utn.1`). `progress` is `null` today and
+   * `strides-utn.3` is what populates it — this hook builds the channel, not the fill. Identity is
+   * stable between phase changes so a consumer can compare it by reference.
+   */
+  load: ModelLoadState
 }
 
 /**
@@ -69,5 +84,11 @@ export function usePoseDetector(): SharedPoseDetector {
     }
   }, [])
 
-  return { status, detector }
+  // `progress` is deliberately a literal `null` rather than a piece of state nothing writes:
+  // `strides-utn.1` builds the channel and `strides-utn.3` populates it, and a setter with no
+  // caller would read as an oversight rather than as a seam. Memoised so the header sees a stable
+  // identity between phase changes.
+  const load = useMemo<ModelLoadState>(() => ({ phase: status, progress: null }), [status])
+
+  return { status, detector, load }
 }
