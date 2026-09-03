@@ -344,8 +344,23 @@ aggregate of individually-detected peak-to-trough excursions: a prominence-thres
 confirms turning points between the real ones on ordinary tracking noise, so its aggregate is a
 statistic over a mixture of half-swings and wiggle rather than over the swing.
 
-The value SHALL be scale-free — the two amplitudes are measured in the same pixel space on the same
-body, so the system SHALL NOT require a resolvable body-scale reference in order to report a ratio.
+Each sample SHALL be scale-stabilized before the fit: divided by a per-frame factor derived from a
+whole-window least-squares quadratic trend of the LOG of the inter-shoulder distance, normalized so
+the factor reads 1 at the clip's reference (median measured) scale. The spectral fit's model is a
+CONSTANT-amplitude sinusoid, and a wrist-relative-to-shoulder excursion is a body-proportioned
+quantity — on a clip whose subject changes on-screen size inside the fit window, the raw-pixel
+least squares overweights the large-scale frames and reads mostly the clip's largest end. The
+scale proxy SHALL be resolved strictly bilaterally (both shoulders independently resolvable, never
+a single-side stand-in — a fabricated length is not a scale), and a frame whose proxy is missing
+SHALL still receive a factor from the trend, so no swing sample is ever dropped for it: the
+stabilization changes sample VALUES only, never the series' resolved/interpolated accounting. When
+the trend cannot be soundly fitted — too few bilateral proxy frames, an unsolvable system, or a
+trend flat to within a degeneracy floor — the factor SHALL be identically 1, an exact no-op equal
+to the raw-pixel computation.
+
+The value requires no body-scale reference to report a ratio — the two amplitudes are measured in
+the same (reference-scale) pixel space on the same body, so the system SHALL NOT require a
+resolvable torso in order to report one.
 
 #### Scenario: Symmetric swing scores near 1
 
@@ -364,6 +379,13 @@ body, so the system SHALL NOT require a resolvable body-scale reference in order
   (the step rhythm the shoulder itself carries) plus per-frame tracking jitter
 - **THEN** each side's reported amplitude tracks the underlying swing amplitude, and the reported
   ratio tracks the underlying amplitude ratio
+
+#### Scenario: A subject whose on-screen scale changes during the clip is measured in body proportion
+
+- **WHEN** the subject's on-screen size changes substantially inside the fit window (e.g. running
+  toward the camera) while each arm's swing amplitude stays constant in body units
+- **THEN** the reported ratio tracks the body-unit amplitude ratio — matching an otherwise-
+  identical clip with no scale change — rather than a ratio dominated by the largest-scale frames
 
 #### Scenario: A clip with no resolvable torso is still measured
 
@@ -2132,16 +2154,17 @@ to the footage rather than to the runner.
 The system SHALL therefore derive every confidence input for arm swing symmetry from the WORSE of
 the two arms: frame coverage, interpolated fraction, observed swing-cycle count, and a fit-quality
 factor ramping on the weaker arm's sinusoid partial R². When the two arms' fit qualities differ
-materially, the system SHALL additionally emit a caveat saying that one arm was tracked noticeably
-better than the other and that part of the difference between them may be measurement rather than
-form.
+materially, the system SHALL additionally emit a caveat saying that one arm's swing rhythm fit its
+trace much less cleanly than the other's and that part of the difference between them may be
+measurement rather than form. The caveat SHALL name the FIT disparity that actually fired it, not
+a tracking-coverage gap it never measured — the worse-fitting arm can be the better-detected one.
 
 #### Scenario: Degrading one arm's tracking alone lowers confidence
 
 - **WHEN** two otherwise-identical clips are compared, differing only in that one of them has
   materially noisier tracking on a single arm
-- **THEN** the noisier clip's `confidence` is lower, and its `caveat` reports that one arm was
-  tracked noticeably better than the other
+- **THEN** the noisier clip's `confidence` is lower, and its `caveat` reports that one arm's swing
+  rhythm fit its trace much less cleanly than the other's
 
 #### Scenario: An arm measured worse than the other is not averaged away
 
@@ -2156,9 +2179,11 @@ fitted swing period by construction, and SHALL NOT select it by scanning the raw
 The picture is captioned as one swing, top against bottom, and a pair chosen off the raw trace
 depicts drift and jitter that the reported amplitude explicitly excludes.
 
-Because the fitted series is `wrist.y − shoulder.y` in image-y, which grows downward, the fitted
-MAXIMUM is the wrist at its LOWEST on screen; the system SHALL name the pair by body position rather
-than by extremum kind, so that a caption cannot state the opposite of the truth.
+Because the fitted series is the scale-stabilized `wrist.y − shoulder.y` in image-y, which grows
+downward — the stabilizing divisor is positive by construction, so it preserves this sign
+convention — the fitted MAXIMUM is the wrist at its LOWEST on screen; the system SHALL name the
+pair by body position rather than by extremum kind, so that a caption cannot state the opposite of
+the truth.
 
 #### Scenario: The pair spans a half-cycle, not a sub-cycle wiggle
 
@@ -2828,8 +2853,11 @@ The system SHALL expose arm swing amplitude as a `MetricId` (`armSwingAmplitude`
 last in `MetricId` and every enumeration of it (after `kneeDrive`). Its `value` SHALL be the mean
 of the two sides' fitted peak-to-peak wrist-relative-to-shoulder vertical amplitudes — the same
 per-side spectral sinusoid fits arm swing symmetry reads, produced by the shared per-side
-computation, never a second fit of the same series — divided by `estimateBodyScale`'s clip-median
-torso length. `unit` SHALL be `'ratio'`. The metric measures wrist-travel AMPLITUDE as a 2D
+computation over the shared scale-stabilized series, never a second fit of the same series —
+divided by `estimateBodyScale`'s clip-median torso length. The per-side amplitudes arrive already
+at the clip's reference (median) scale, so the clip-median torso denominator pairs with a
+numerator standardized at the same reference and the normalization's semantics are unchanged.
+`unit` SHALL be `'ratio'`. The metric measures wrist-travel AMPLITUDE as a 2D
 movement proxy: neither its caveats nor its presentation SHALL claim to measure propulsive force,
 arm-drive effectiveness, or what the swing contributes to the stride, and its presentation SHALL
 distinguish it from arm swing symmetry (how big versus how even).
@@ -2841,8 +2869,9 @@ disagreement bound — never a second, separately-tunable gate on the same fitte
 two arm metrics can never disagree about whether the fits are trustworthy. Its confidence inputs
 SHALL each be the WORSE side's (frame coverage, interpolated fraction, observed cycles, fit
 quality), never an average of the two sides, and when the two sides' fit qualities diverge past
-the shared disparity bound the result SHALL carry a caveat saying part of the overall swing size
-may reflect measurement rather than form.
+the shared disparity bound the result SHALL carry a caveat saying one arm's swing rhythm fit its
+trace much less cleanly than the other's and that part of the overall swing size may reflect
+measurement rather than form.
 
 The metric SHALL report `value: null` with `confidence: 0` and a caveat naming the TRUE cause —
 never a false or conflated one — in each of these distinct cases: no resolvable shoulder/wrist
@@ -2897,8 +2926,9 @@ which the scale-free symmetry ratio does not need but a torso-normalized amplitu
 
 - **WHEN** the two sides' fitted R² differ by more than the shared disparity bound while both
   clear the gate
-- **THEN** the result carries a caveat saying one arm was tracked noticeably better than the
-  other and part of the overall swing size may reflect measurement rather than form
+- **THEN** the result carries a caveat saying one arm's swing rhythm fit its trace much less
+  cleanly than the other's and part of the overall swing size may reflect measurement rather
+  than form
 
 ### Requirement: Arm swing amplitude is front-view-primary, hard-gated away from side view
 
