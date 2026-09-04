@@ -29,9 +29,7 @@ describe('VideoInputPanel', () => {
     ).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^upload$/i })).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/choose a video file/i)).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole('button', { name: /demo 1 \(side view\)/i }),
-    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /demo/i })).not.toBeInTheDocument()
   })
 
   // The loading line and the load-error alert moved to `ClipLoadStatus` (see its own test file)

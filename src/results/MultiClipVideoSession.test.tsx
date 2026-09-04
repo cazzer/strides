@@ -137,7 +137,7 @@ async function chooseFile(file: File) {
 /**
  * Adds a clip through the HEADER's add-a-clip action, which is the only way in once a clip is
  * loaded. Both extra steps are the point rather than ceremony: the action presents the entire
- * `ClipPicker` (record, upload and both demo clips), and Record is its default tab, so a test that
+ * `ClipPicker` (record, upload and the bundled demo), and Record is its default tab, so a test that
  * wants a file has to ask for the Upload one. What this replaces was a bare `<FileUpload>` in the
  * page body, which offered no record path and no demo clips at all.
  */
@@ -219,11 +219,10 @@ describe('MultiClipVideoSession', () => {
     // A genuinely empty session, not "one slot whose videoSource.status is 'empty'": there is no
     // clip, so there is no video element to be empty.
     expect(canonicalVideos()).toHaveLength(0)
-    // All four ways in are reachable: record (default tab), upload, and the two demo clips.
+    // All three ways in are reachable: record (default tab), upload, and the bundled demo.
     expect(screen.getByRole('button', { name: /start recording/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /^upload$/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /demo 1 \(side view\)/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /demo 2 \(front view\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /demo \(3 clips\)/i })).toBeInTheDocument()
   })
 
   it('single clip (N=1): auto-starts and reaches Analysis complete once ready', async () => {
@@ -268,16 +267,16 @@ describe('MultiClipVideoSession', () => {
     // 'loading' is not 'loaded': the gate is `anyClipVideoReady`, not `clipIds.length`, so a clip
     // that never gets there leaves the reader a way forward rather than an empty page.
     expect(canonicalVideos()).toHaveLength(1)
-    expect(screen.getByRole('button', { name: /demo 1 \(side view\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /demo \(3 clips\)/i })).toBeInTheDocument()
     // The two presentations are complements, so the header action is absent for exactly as long as
     // the full-page picker is present. Otherwise the page would carry two Upload tabs, two file
-    // inputs and two pairs of demo buttons at once.
+    // inputs and two demo buttons at once.
     expect(screen.queryByRole('button', { name: /add a clip/i })).not.toBeInTheDocument()
 
     markVideoReady(canonicalVideos()[0])
 
     await waitFor(() =>
-      expect(screen.queryByRole('button', { name: /demo 1 \(side view\)/i })).not.toBeInTheDocument(),
+      expect(screen.queryByRole('button', { name: /demo \(3 clips\)/i })).not.toBeInTheDocument(),
     )
 
     // The picker collapsed INTO the header, and `video-input` requires it leave nothing behind:
@@ -289,11 +288,14 @@ describe('MultiClipVideoSession', () => {
     expect(main.textContent).not.toMatch(/add (another|a) clip/i)
   })
 
-  it('adds clip 2 from a demo button — a path that had no way in at all while the body block was upload-only', async () => {
+  it('adds the demo clips after clip 1 — a path that had no way in at all while the body block was upload-only', async () => {
     // Not a relocation test. Every `addClip` records a `pendingLoad` that the new `ClipSlot`
     // consumes on mount, so the new slot's own picker (gated on `status === 'empty'`) never
-    // rendered — the demo buttons and the record path were unreachable for clips 2..N, and upload
+    // rendered — the demo button and the record path were unreachable for clips 2..N, and upload
     // was the only way in. This is the fix, exercised through the session.
+    //
+    // The demo is one action loading THREE clips, so this also pins that a multi-clip source lands
+    // as several clips rather than as one: 1 uploaded + 3 demo = 4.
     const demoBlob = new Blob(['demo'], { type: 'video/mp4' })
     vi.stubGlobal(
       'fetch',
@@ -307,13 +309,16 @@ describe('MultiClipVideoSession', () => {
     markVideoReady(canonicalVideos()[0])
 
     fireEvent.click(await screen.findByRole('button', { name: /add a clip/i }))
-    fireEvent.click(screen.getByRole('button', { name: /demo 2 \(front view\)/i }))
+    fireEvent.click(screen.getByRole('button', { name: /demo \(3 clips\)/i }))
 
-    await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
-    // Same `pendingLoad` path as an uploaded clip, so it is indistinguishable downstream: it gets
-    // its own strip entry, numbered in clip-session order.
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(4))
+    // Same `pendingLoad` path as an uploaded clip, so each is indistinguishable downstream: they
+    // get their own strip entries, numbered in clip-session order.
     expect(
-      screen.getByRole('button', { name: /clip 2 of 2:/i }),
+      screen.getByRole('button', { name: /clip 2 of 4:/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /clip 4 of 4:/i }),
     ).toBeInTheDocument()
     // The picker collapsed again once it had handed the source over, rather than sitting open in
     // the header on top of a webcam preview nobody asked for.
@@ -573,7 +578,7 @@ describe('MultiClipVideoSession', () => {
     fireEvent.click(lastRemove)
 
     await waitFor(() => expect(canonicalVideos()).toHaveLength(0))
-    expect(screen.getByRole('button', { name: /demo 1 \(side view\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /demo \(3 clips\)/i })).toBeInTheDocument()
   })
 
   it('releases the removed clip’s poster in `removeClip` itself, and leaves the survivor’s alone', async () => {
@@ -636,7 +641,7 @@ describe('MultiClipVideoSession', () => {
     await act(async () => {})
     // Back to a genuinely empty session, not one seeded slot.
     await waitFor(() => expect(canonicalVideos()).toHaveLength(0))
-    expect(screen.getByRole('button', { name: /demo 1 \(side view\)/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /demo \(3 clips\)/i })).toBeInTheDocument()
   })
 
   it('removing the currently-ACTIVE, mid-analysis clip deterministically tears down its detector-holding pipeline before the next clip becomes active', async () => {

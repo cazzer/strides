@@ -99,16 +99,32 @@ node -e "import('./scripts/lib/harnessProvenance.mjs').then(m=>console.log(m.res
 npm run dev -- --port <that port> --strictPort &
 # poll: curl -sf http://localhost:<that port>/strides/
 ```
-- `page.getByRole('button', { name: /demo 1/i }).click()` loads a fixed reference clip — the
-  side-view track clip, the standard one for before/after comparisons, fetched live from Pexels
-  so this button needs network. `/demo 2/i` loads the local front-approach clip
-  (`src/video/demo-clips/park-approach.mp4`). The rendered labels are *Demo 1 (side view)* and
-  *Demo 2 (front view)*, now in **`src/video/ClipPicker.tsx`** (they moved out of
-  `VideoInputPanel.tsx` with the shell restructure — see "The app shell" below) — `'Try a demo
-  video'` survives only as `DemoVideoButton`'s unused default prop and matching on it finds
-  nothing, so ignore that string wherever older notes below still quote it. Alternative: Upload
-  tab + `input[type=file]` + `setInputFiles(path)` for a different clip.
-- **For clips 2..N, the same buttons live behind the header's add-a-clip action**, not in the page
+- ⚠️ **There is ONE demo button and it loads THREE clips** (`bundle-a-three-clip-demo`,
+  2026-09-04). `page.getByRole('button', { name: /demo \(3 clips\)/i }).click()` creates clips 1-3
+  of a single fused session — it is not a way to load one clip, and any driver that clicks it and
+  then reads "the" result is reading a three-clip fusion. The rendered label is *Demo (3 clips)*,
+  in **`src/video/ClipPicker.tsx`**. `'Try a demo video'`, `'Demo 1 (side view)'` and
+  `'Demo 2 (front view)'` all match nothing now; ignore those strings wherever older notes below
+  still quote them.
+- **To drive ONE clip, upload it** — every demo clip is a local file, so
+  Upload tab + `input[type=file]` + `setInputFiles(path)` is the per-clip route, and it needs no
+  network. The three, in the order the demo loads them:
+
+  | file (`src/video/demo-clips/`) | dimensions | frames | duration | view |
+  |---|---|---|---|---|
+  | `park-side-landscape.mp4` | 3840×2160 | 233 | 3.88 s | side |
+  | `park-side-portrait.mp4` | 1080×1920 | 345 | 12.17 s | side |
+  | `park-approach.mp4` | 2160×3840 | 99 | 1.65 s | front |
+
+  ⚠️ **The old Demo 1 — the Pexels side-view track clip — is GONE from the app**, and every
+  measurement recorded below under the name "Demo 1" was taken on it. Those readings do not
+  transfer to `park-side-landscape.mp4`: different runner, different camera, different frame rate
+  (25 fps vs 60). They are left exactly as measured rather than retrofitted, because they were
+  honestly measured and the clip still exists at a stable URL
+  (`https://videos.pexels.com/video-files/8533913/8533913-uhd_3840_2160_25fps.mp4`) — but read
+  "Demo 1" anywhere below as *retired footage*, not as something you can re-measure by clicking a
+  button. "Demo 2" below is still `park-approach.mp4`, same bytes, and its readings DO stand.
+- **The demo button lives behind the header's add-a-clip action for clips 2..N**, not in the page
   body. The full-page picker only renders at zero clips. See "The app shell" below.
 - Analysis starts **automatically** once the clip is ready and the detector has loaded — no
   button click needed. Wait for `page.getByText(/analyzing|processing results/i)` then
@@ -294,7 +310,7 @@ mutually-incomparable.
 node scripts/ab-person-selection.mjs \
   --arm 'off={"personSelection":{"enabled":false}}' \
   --arm 'on={"personSelection":{"enabled":true}}' \
-  --clips demo1,demo2,multiperson --trials 3
+  --clips side-landscape,side-portrait,front-approach,multiperson --trials 3
 # equivalently: npm run ab:person-selection -- --arm 'off={}' ...
 ```
 
@@ -309,9 +325,22 @@ node scripts/ab-person-selection.mjs \
   **including one level down**, because the app ignores keys it doesn't recognise: a typo like
   `{personSelection:{enable:true}}` would otherwise merge into nothing and yield an arm identical
   to baseline, reading in the report as a real "no effect".
-- **Clips**: `demo1` (side-view track, fetched live from Pexels — needs network), `demo2`
-  (`park-approach.mp4`, local and fast), `multiperson` (`e2e/fixtures/multiperson-track.mp4`, via
-  the Upload tab). Default: all three.
+- **Clips**: `side-landscape`, `side-portrait`, `front-approach` (the three bundled demo clips —
+  see the table above) and `multiperson` (`e2e/fixtures/multiperson-track.mp4`). Default: all
+  four. **Every one goes through the Upload tab**, including the demo clips: the demo button now
+  loads three clips at once, so it cannot serve as a per-clip arm — every arm would measure the
+  same fusion instead of the clip under test. Nothing here touches the network any more.
+  ⚠️ **The keys were `demo1`/`demo2` and were RENAMED, not repointed** — `demo1` meant the Pexels
+  clip, which is gone. A `before.txt` captured under the old keys diffs against a new one on every
+  clip row, by design: reusing `demo1` for different footage would make two incomparable
+  measurements look comparable. `front-approach` is the old `demo2`, same file, so those readings
+  carry over. **`side-portrait` is new** and lands in the default, so a default run is longer than
+  it used to be — name `--clips` explicitly for the old three-clip cost.
+  ⚠️ **`side-portrait` resolves NO vertical-oscillation family and no `cadence`** (null value,
+  `sampleSize` 0) despite the best view confidence (0.8366) and detection ratio (277/345) in the
+  corpus — the shared hip-bounce spectral fit misses its quality gate there. `trunkLean`,
+  `overstriding`, `kneeFlexion`, `footStrikePattern` and `kneeDrive` all resolve normally. Open as
+  `strides-aha`; don't read those nulls as a regression from whatever you are measuring.
 - Reads `playwright.config.ts` for the launch args, baseURL and dev-server command, and **refuses
   to run against a dev server it did not start** — stop it, pass `--port <n>`, or pass
   `--reuse-server`. Not pedantry: arms differ only by a `window` global, so a foreign checkout
@@ -895,9 +924,12 @@ What this changes for anything driving or reading the app:
 - **Recording and demo clips are now reachable for clips 2..N** — they were not. Every `addClip`
   records a `pendingLoad`, so the new slot's own picker (gated on `status === 'empty'`) never
   rendered, leaving upload as the only route past clip 1. Both verified live: recording a second
-  clip reaches `'Clip 2 of 2: Analyzed'`, and the Demo 2 button reaches
-  `'Combined from clip 2 of 2.'`
-- **`ClipPicker.tsx` owns the zero-clip state** as a full-page picker, and holds the demo buttons.
+  clip reaches `'Clip 2 of 2: Analyzed'`, and the demo button reaches
+  `'Combined from clip 2 of 2.'` (measured when the demo was one clip per button; the demo action
+  now adds three clips at once, so the same path from one loaded clip lands on clip 4 of 4).
+- **`ClipPicker.tsx` owns the zero-clip state** as a full-page picker, and holds the demo action
+  and its clip list (`DEMO_CLIP_URLS`). Since `bundle-a-three-clip-demo` that is one button
+  loading three clips, not a button per clip.
 - **The `86px` / `150px` header constants are gone.** Three of the four hardcoded offsets left with
   the restructure; the surviving `max-h-[calc(100vh-150px)]` was a *false* dependency and was
   removed rather than re-derived. Nothing in `src/` reads a hardcoded header height now.
@@ -1387,6 +1419,11 @@ above — only the presence or absence of a range is. See the rewritten **Determ
 real GPU (`ANGLE Metal Renderer: Apple M4 Pro`), reading the LAST `[evidence-coverage]` line.
 **Bit-identical across all three trials on all three clips** — per-metric status, exemplar
 `timestamp`/`pairedTimestamp`/`quality`/`cropSidePx`/`cropGrowth` to full precision.
+
+⚠️ **Those clip keys no longer exist and the Demo 1 column is retired footage.** Today's
+equivalent invocation is `--clips side-landscape,front-approach,multiperson`; `front-approach` is
+the same file this table's Demo 2 column was measured on, but `side-landscape` is DIFFERENT footage
+from its Demo 1, so that column is a record rather than a target. See the harness section above.
 
 | metric | Demo 1 | Demo 2 | multiperson |
 |---|---|---|---|

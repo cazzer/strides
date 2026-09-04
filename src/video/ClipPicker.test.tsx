@@ -10,8 +10,10 @@ afterEach(() => {
  * These four moved here verbatim from `VideoInputPanel.test.tsx` when the picker was extracted —
  * same interactions, same accessible names, only the callback they land on changed (`onSource`
  * instead of a `VideoSource`'s own `load`). The names are load-bearing beyond this file:
- * `e2e/multiPersonAcquisition.spec.ts` and `scripts/ab-person-selection.mjs` both drive `Upload`,
- * `input[type=file]`, `Demo 1 …` and `Demo 2 …` by exactly these strings.
+ * `e2e/multiPersonAcquisition.spec.ts` and `scripts/ab-person-selection.mjs` both drive `Upload`
+ * and `input[type=file]` by exactly these strings. The demo button is no longer among them: one
+ * action loading three clips cannot serve as a per-clip measurement arm, so the harness uploads
+ * each bundled clip individually instead.
  */
 describe('ClipPicker', () => {
   it('shows the Record tab by default with tab controls', () => {
@@ -34,18 +36,30 @@ describe('ClipPicker', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('calls onSource with the fetched blob when the demo video button is used', async () => {
+  it('offers exactly one demo action, not one per clip', () => {
+    render(<ClipPicker onSource={vi.fn()} />)
+    expect(screen.getAllByRole('button', { name: /demo/i })).toHaveLength(1)
+  })
+
+  it('calls onSource once per bundled demo clip', async () => {
     const blob = new Blob(['content'], { type: 'video/mp4' })
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({ ok: true, status: 200, blob: () => Promise.resolve(blob) }),
-    )
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, blob: () => Promise.resolve(blob) })
+    vi.stubGlobal('fetch', fetchMock)
 
     const onSource = vi.fn()
     render(<ClipPicker onSource={onSource} />)
-    fireEvent.click(screen.getByRole('button', { name: /demo 1 \(side view\)/i }))
+    fireEvent.click(screen.getByRole('button', { name: /demo \(3 clips\)/i }))
 
-    await waitFor(() => expect(onSource).toHaveBeenCalledWith(blob))
+    // One `onSource` per clip is what makes the demo a SESSION rather than a clip: the host
+    // creates one clip per call, so three calls are three clips fused into one result.
+    await waitFor(() => expect(onSource).toHaveBeenCalledTimes(3))
+    expect(onSource).toHaveBeenCalledWith(blob)
+
+    // Three distinct bundled assets, not the same one three times.
+    const fetched = fetchMock.mock.calls.map(([url]) => url)
+    expect(new Set(fetched).size).toBe(3)
   })
 
   it('calls onSource when a file is selected on the Upload tab', () => {

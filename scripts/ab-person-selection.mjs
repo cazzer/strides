@@ -25,7 +25,13 @@
  *                         window.__STRIDES_POSE_BACKEND_OVERRIDE__ the same way. Arms are joined
  *                         to --arm by LABEL, so one arm may set either plane or both; a label
  *                         named on only one plane gets `{}` on the other.
- *   --clips <a,b,c>       demo1 | demo2 | multiperson (default: all three)
+ *   --clips <a,b,c>       side-landscape | side-portrait | front-approach | multiperson
+ *                         (default: all four). ⚠️ These keys were `demo1`/`demo2` and now name
+ *                         the footage instead — `demo1` was the Pexels stock clip, which the UI
+ *                         no longer bundles, so its readings do not transfer to `side-landscape`.
+ *                         `side-portrait` is new coverage (345 frames, 12.17 s — the longest clip
+ *                         in the corpus) and joins the default, so a default run is longer than
+ *                         it used to be; name `--clips` explicitly to get the old three-clip cost.
  *   --trials <n>          Trials per (clip, arm). Default 3.
  *   --timeout <ms>        Per-trial wait for "Analysis complete". Default 300000.
  *   --port <n>            Dev-server port. Default is playwright.config.ts's, which derives one
@@ -43,12 +49,12 @@
  *   node scripts/ab-person-selection.mjs \
  *     --arm 'off={"personSelection":{"enabled":false}}' \
  *     --arm 'on={"personSelection":{"enabled":true}}' \
- *     --clips demo2 --trials 3
+ *     --clips front-approach --trials 3
  *
  *   node scripts/ab-person-selection.mjs \
  *     --backend-arm 'off={"trackingCrop":{"enabled":false}}' \
  *     --backend-arm 'on={"trackingCrop":{"enabled":true}}' \
- *     --clips demo1,demo2 --trials 3
+ *     --clips side-landscape,front-approach --trials 3
  *
  * Progress goes to stderr; only the report goes to stdout, with no timestamps and a fixed field
  * order, so `node scripts/ab-person-selection.mjs ... > before.txt` and a second run's
@@ -70,12 +76,41 @@ import {
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
+const DEMO_CLIP_DIR = path.join(REPO_ROOT, 'src', 'video', 'demo-clips')
+
+/**
+ * Every clip is driven through the Upload tab, including the three the UI bundles as its demo.
+ *
+ * That is a consequence of the demo becoming ONE action that loads three clips at once: a button
+ * that produces a fused three-clip session cannot serve as a per-clip measurement arm, because
+ * every arm would then measure the same fusion rather than the clip under test. Uploading each
+ * bundled file individually restores per-clip measurement — and removes the last network
+ * dependency in this harness, since the side-view clip used to be fetched live from Pexels.
+ *
+ * ⚠️ The keys name the FOOTAGE, not a button. They were `demo1`/`demo2`, and `demo1` meant the
+ * Pexels stock clip, which is no longer reachable from the UI at all. Reusing that key for
+ * different footage would make two incomparable measurements look comparable in a `before.txt` /
+ * `after.txt` diff — which is precisely the failure this harness's provenance header exists to
+ * catch — so the keys were renamed rather than repointed. Every anchor CLAUDE.md records under
+ * "Demo 1" was measured on the Pexels clip and does not transfer to `side-landscape`.
+ */
 const CLIPS = {
-  // Side-view track clip. Fetched live from Pexels by the demo button, so this one needs network.
-  demo1: { kind: 'demo', button: /demo 1/i },
-  // Front-approach clip, bundled at src/video/demo-clips/park-approach.mp4. Local and fast.
-  demo2: { kind: 'demo', button: /demo 2/i },
-  // Not wired into the UI — the e2e-only multi-person fixture, driven through the Upload tab.
+  // Landscape 4K side pass, 3840x2160, 233 frames, 3.88 s.
+  'side-landscape': {
+    kind: 'upload',
+    file: path.join(DEMO_CLIP_DIR, 'park-side-landscape.mp4'),
+  },
+  // Portrait side pass, 1080x1920, 345 frames, 12.17 s — the longest clip in the corpus.
+  'side-portrait': {
+    kind: 'upload',
+    file: path.join(DEMO_CLIP_DIR, 'park-side-portrait.mp4'),
+  },
+  // Front-approach clip, portrait 4K, 99 frames, 1.65 s. Formerly `demo2`; same bytes, same file.
+  'front-approach': {
+    kind: 'upload',
+    file: path.join(DEMO_CLIP_DIR, 'park-approach.mp4'),
+  },
+  // Not wired into the UI — the e2e-only multi-person fixture.
   multiperson: {
     kind: 'upload',
     file: path.join(REPO_ROOT, 'e2e', 'fixtures', 'multiperson-track.mp4'),
@@ -582,28 +617,18 @@ async function runTrial(
     await page.goto(baseURL)
 
     const startedAt = Date.now()
-    if (clip.kind === 'upload') {
-      await page.getByRole('button', { name: 'Upload' }).click()
-      await page.locator('input[type=file]').setInputFiles(clip.file)
-    } else {
-      await page.getByRole('button', { name: clip.button }).click()
-    }
+    // Every clip routes through Upload now — see CLIPS. The demo-button branch, and the
+    // "couldn't load the demo video" race that guarded it, are both gone: nothing this harness
+    // drives fetches over the network any more, so a download simply cannot be what fails.
+    await page.getByRole('button', { name: 'Upload' }).click()
+    await page.locator('input[type=file]').setInputFiles(clip.file)
 
-    const completed = page
-      .getByText(/analysis complete/i)
-      .waitFor({ timeout: timeoutMs })
-      .then(() => 'complete')
-    const downloadFailed = page
-      .getByText(/couldn't load the demo video/i)
-      .waitFor({ timeout: timeoutMs })
-      .then(() => 'demo-download-failed')
-    // Whichever loses the race settles later, after the page is gone; keep that handled.
-    completed.catch(() => {})
-    downloadFailed.catch(() => {})
-
-    const outcome = await Promise.race([completed, downloadFailed])
-    if (outcome !== 'complete') {
-      throw new Error(`${clipName}: the demo clip failed to download`)
+    try {
+      await page.getByText(/analysis complete/i).waitFor({ timeout: timeoutMs })
+    } catch (error) {
+      // A bare Playwright timeout names a selector, not a clip. On a four-clip matrix that leaves
+      // the reader to work out which trial died from the progress log's ordering.
+      throw new Error(`${clipName}: never reached "Analysis complete"`, { cause: error })
     }
     const elapsedMs = Date.now() - startedAt
 

@@ -1,46 +1,63 @@
 import { useState } from 'react'
 
 export interface DemoVideoButtonProps {
+  /**
+   * Called once per clip, in `videoUrls` order, as each clip's bytes arrive — not once with the
+   * whole set. The caller creates one clip per call, so the session fills in progressively.
+   */
   onLoaded: (blob: Blob) => void
   disabled?: boolean
-  /** Defaults to the original stock side-view track clip. */
-  videoUrl?: string
-  /** Button label — defaults to match the original single-demo copy. */
-  label?: string
+  /**
+   * The clips this action loads, in the order they should become clips 1..N. Required: a default
+   * would be a URL nobody reading the call site can see, and the clip ORDER is user-visible (the
+   * evidence captions name "clip 2 of 3").
+   */
+  videoUrls: readonly string[]
+  /** Button label. */
+  label: string
 }
 
 type DemoState = 'idle' | 'loading' | 'error'
 
-// Pexels' https://www.pexels.com/download/video/8533913/ redirects here. Fetching that
-// redirector URL directly fails: its 302 response itself carries no CORS header, so the
-// browser blocks the fetch mid-redirect even though this final CDN response does send
-// `access-control-allow-origin: *`. Fetching the resolved URL sidesteps that redirect leg.
-const DEFAULT_DEMO_VIDEO_URL =
-  'https://videos.pexels.com/video-files/8533913/8533913-uhd_3840_2160_25fps.mp4'
-
 /**
- * Fetches a fixed demo clip and hands it to the caller as a `Blob` — routed through the same
- * `URL.createObjectURL` path as `FileUpload`/`WebcamCapture` (via `useVideoSource().load()`),
- * rather than pointing `<video src>` straight at the remote URL, so the canonical video element
- * stays same-origin/untainted for the WebGL-based pose detector reading its pixels later.
+ * Fetches a fixed set of demo clips and hands each one to the caller as a `Blob` — routed through
+ * the same `URL.createObjectURL` path as `FileUpload`/`WebcamCapture` (via `useVideoSource().load()`),
+ * rather than pointing `<video src>` straight at the URL, so the canonical video element stays
+ * same-origin/untainted for the WebGL-based pose detector reading its pixels later.
+ *
+ * ### Why the clips are fetched one at a time
+ *
+ * The bundled set is ~69 MB. Fetching all of it before handing over the first clip would leave the
+ * page idle for the whole download; `Promise.all` plus an ordered emit has the same defect, since
+ * the first clip still waits on the slowest. Fetching sequentially and emitting each clip as it
+ * lands lets clip 1 analyze while clips 2 and 3 are still arriving.
+ *
+ * A clip arriving mid-analysis is the designed path rather than a race: `MultiClipVideoSession`
+ * hands the one shared detector to exactly one clip at a time (`nextActiveClipIndex`), so a clip
+ * added while another is running simply queues.
+ *
+ * A failure part-way through keeps the clips already delivered. They are real, loaded clips that
+ * the session is already analyzing — discarding them to report an all-or-nothing failure would
+ * throw away work the reader can see happening.
  */
 export function DemoVideoButton({
   onLoaded,
   disabled = false,
-  videoUrl = DEFAULT_DEMO_VIDEO_URL,
-  label = 'Try a demo video',
+  videoUrls,
+  label,
 }: DemoVideoButtonProps) {
   const [state, setState] = useState<DemoState>('idle')
 
   const runDemo = async () => {
     setState('loading')
     try {
-      const response = await fetch(videoUrl)
-      if (!response.ok) {
-        throw new Error(`Demo video request failed with status ${response.status}`)
+      for (const url of videoUrls) {
+        const response = await fetch(url)
+        if (!response.ok) {
+          throw new Error(`Demo video request failed with status ${response.status}`)
+        }
+        onLoaded(await response.blob())
       }
-      const blob = await response.blob()
-      onLoaded(blob)
       setState('idle')
     } catch {
       setState('error')
@@ -58,16 +75,14 @@ export function DemoVideoButton({
         {state === 'loading' ? 'Loading demo…' : label}
       </button>
 
-      {state === 'loading' && <p role="status">Downloading demo video…</p>}
+      {state === 'loading' && <p role="status">Loading demo clips…</p>}
 
       {state === 'error' && (
         <div
           className="border-2 border-black dark:border-white border-l-4 border-l-brand-600 dark:border-l-brand-400 p-4 space-y-2"
           role="alert"
         >
-          <p>
-            Couldn't load the demo video — check your connection and try again, or use your own.
-          </p>
+          <p>Couldn't load the demo video — try again, or use your own.</p>
         </div>
       )}
     </div>
