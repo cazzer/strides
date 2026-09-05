@@ -124,8 +124,8 @@ export function mostPlausibleView(plausibility: ViewPlausibility): View {
 /**
  * Rewrites a view-fit table into the one this clip is actually judged by, so that every metric's
  * existing `config.viewFitTable[metric][view]` lookup transparently reads a plausibility-resolved
- * entry. Resolving at the table rather than at each of the thirteen call sites is what makes this a
- * gating change and not thirteen metric changes.
+ * entry. Resolving at the table rather than at each of the twelve call sites is what makes this a
+ * gating change and not twelve metric changes.
  *
  *   - `multiplier` is the plausibility-weighted mean of the three rows. Because the weights sum
  *     to 1 and every other confidence factor is view-independent, that is exactly the confidence

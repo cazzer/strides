@@ -404,7 +404,7 @@ describe('computeArmSwingAmplitude — exemplars', () => {
     rightAmplitudePx: 24,
   })
 
-  it('emits one armSwingCycle pair per side — the shared kind, from the shared builder', () => {
+  it('emits one armSwingCycle pair per side, from the shared builder', () => {
     const exemplars = computeArmSwingAmplitude(frames, 'front').exemplars!
 
     expect(exemplars).toHaveLength(2)

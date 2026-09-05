@@ -12,12 +12,23 @@ right 0.512), and that nothing in that clip's footage can adjudicate how much of
 and how much is measurement.
 
 **Migration**: The per-side spectral fit, the scale stabilization and the exemplar builder are NOT
-removed — they live in the shared `armSwing.ts` module and are now specified by *Arm swing
-amplitude is a metric reporting the mean of the two arms' fitted swing amplitudes as a fraction of
-torso length*, which reads the identical per-side fits over the identical stabilized series. Only
-the `min/max` ratio and its `'percent'` output go. This requirement's harmonic-robustness scenario
-is a property of the shared per-side computation rather than of the ratio, and is re-stated on the
-amplitude requirement rather than dropped.
+removed — they live in the shared `armSwing.ts` module. Only the `min/max` ratio and its
+`'percent'` output go. Three parts of this requirement are re-homed rather than dropped, because
+each governs code that still runs on every clip:
+
+- **The spectral-fit estimator rule** (paragraph 2 — peak-to-peak of a per-side spectral sinusoid
+  fit, never an aggregate of individually-detected excursions) is carried by *Arm swing amplitude
+  is a metric reporting the mean of the two arms' fitted swing amplitudes as a fraction of torso
+  length*, which reads the identical per-side fits, and by that requirement's harmonic-robustness
+  scenario re-stated in per-side amplitude terms.
+- **The scale-stabilization contract** (paragraph 3 — the log-quadratic inter-shoulder trend, the
+  strict-bilateral proxy rule, "no swing sample is ever dropped", and the identically-1 exact
+  no-op) is re-added metric-neutrally as *The per-side arm-swing series is scale-stabilized before
+  it is fitted*, together with this requirement's scale-change scenario. It is NOT covered by the
+  amplitude requirement, which only *refers* to a "scale-stabilized series" without specifying it.
+- **The scale-free property** (paragraph 4 — no body-scale reference required) is genuinely
+  specific to the ratio and goes with it. `armSwingAmplitude` divides by a clip-median torso
+  length and states its own missing-normalizer null case.
 
 ### Requirement: Arm swing symmetry is front-view-primary, hard-gated away from side view
 
@@ -57,30 +68,81 @@ side-quality-disparity scenarios.
 
 ### Requirement: Arm swing symmetry's exemplar pair spans one fitted half-swing
 
-**Reason**: Removed with the metric that named it. Its first paragraph — the fitted-phase rule —
-is already stated by the arm swing amplitude requirement's exemplar clause.
+**Reason**: Removed with the metric that named it.
 
-**Migration**: Its SECOND paragraph is not covered anywhere else, and governs code that still runs
-on every clip: `buildSideExemplar` passes `maximumIs: 'lowest'` because the fitted series grows
-downward in image-y. Removing this requirement outright would leave the code keeping the behaviour,
-the migrated test still asserting it, and no requirement asking for it. It is therefore re-added,
-metric-neutrally, as *An arm-swing exemplar pair names its instants by body position, not by
-extremum kind*.
+**Migration**: **Neither** of its two paragraphs is covered anywhere else — no `armSwingAmplitude`
+requirement mentions exemplars, instants or phase, and `armSwingCycle` appears nowhere in
+`openspec/specs/` — and both govern code that still runs on every clip: `buildSideExemplar` derives
+the pair from `selectBounceInstants` on the fitted phase, and passes `maximumIs: 'lowest'` because
+the fitted series grows downward in image-y. Removing this requirement outright would leave the
+code keeping both behaviours, the migrated tests still asserting both, and no requirement asking
+for either. Both paragraphs and both scenarios are therefore re-added, metric-neutrally, as *An
+arm-swing exemplar pair spans one fitted half-swing and names its instants by body position*.
 
 ## ADDED Requirements
 
-### Requirement: An arm-swing exemplar pair names its instants by body position, not by extremum kind
+### Requirement: The per-side arm-swing series is scale-stabilized before it is fitted
 
-Because the fitted per-side arm-swing series is the scale-stabilized `wrist.y − shoulder.y` in
-image-y, which grows downward — the stabilizing divisor is positive by construction, so it
-preserves this sign convention — the fitted MAXIMUM is the wrist at its LOWEST on screen. The
-system SHALL name a ghosted arm-swing pair by body position rather than by extremum kind, so that a
-caption cannot state the opposite of the truth.
+Each sample of a per-side arm-swing series SHALL be scale-stabilized before the fit: divided by a
+per-frame factor derived from a whole-window least-squares quadratic trend of the LOG of the
+inter-shoulder distance, normalized so the factor reads 1 at the clip's reference (median measured)
+scale. The spectral fit's model is a CONSTANT-amplitude sinusoid, and a wrist-relative-to-shoulder
+excursion is a body-proportioned quantity — on a clip whose subject changes on-screen size inside
+the fit window, the raw-pixel least squares overweights the large-scale frames and reads mostly the
+clip's largest end. The scale proxy SHALL be resolved strictly bilaterally (both shoulders
+independently resolvable, never a single-side stand-in — a fabricated length is not a scale), and a
+frame whose proxy is missing SHALL still receive a factor from the trend, so no swing sample is
+ever dropped for it: the stabilization changes sample VALUES only, never the series'
+resolved/interpolated accounting. When the trend cannot be soundly fitted — too few bilateral proxy
+frames, an unsolvable system, or a trend flat to within a degeneracy floor — the factor SHALL be
+identically 1, an exact no-op equal to the raw-pixel computation.
 
-This is stated of the shared per-side exemplar builder rather than of any one metric, because every
-consumer of that builder inherits the same trap: reading the extremum kind straight through
-produces a caption that says the exact opposite of what the image shows, while passing every type
-check.
+This is stated of the shared per-side computation rather than of any one metric, because the
+stabilization is a property of how that series is produced and every consumer of it inherits the
+result. The exactness of the no-op is load-bearing rather than cosmetic: dividing constant values
+by a numerically-almost-1 factor perturbs them at the same order as their own floating-point
+rounding, which is enough to turn a motionless-arm clip's honest no-oscillation reading into a
+spurious below-quality-gate one.
+
+#### Scenario: A subject whose on-screen scale changes during the clip is measured in body proportion
+
+- **WHEN** the subject's on-screen size changes substantially inside the fit window (e.g. running
+  toward the camera) while each arm's swing amplitude stays constant in body units
+- **THEN** each side's fitted amplitude tracks the body-unit amplitude — matching an otherwise-
+  identical clip with no scale change — rather than an amplitude dominated by the largest-scale
+  frames
+
+#### Scenario: An unsoundly-fittable trend is an exact no-op, not an approximate one
+
+- **WHEN** the clip offers too few strictly-bilateral proxy frames to fit the trend, or the fitted
+  trend is flat to within the degeneracy floor
+- **THEN** every per-side fitted amplitude equals the raw-pixel computation exactly, not merely to
+  within an epsilon
+
+### Requirement: An arm-swing exemplar pair spans one fitted half-swing and names its instants by body position
+
+The system SHALL derive each side's ghosted arm-swing exemplar pair from that side's fitted PHASE —
+the two sampled frames nearest a fitted maximum and its adjacent fitted minimum — so the pair spans
+half a fitted swing period by construction, and SHALL NOT select it by scanning the raw trace for
+extrema. The picture is captioned as one swing, top against bottom, and a pair chosen off the raw
+trace depicts drift and jitter that the reported amplitude explicitly excludes.
+
+Because the fitted series is the scale-stabilized `wrist.y − shoulder.y` in image-y, which grows
+downward — the stabilizing divisor is positive by construction, so it preserves this sign
+convention — the fitted MAXIMUM is the wrist at its LOWEST on screen; the system SHALL name the
+pair by body position rather than by extremum kind, so that a caption cannot state the opposite of
+the truth.
+
+Both rules are stated of the shared per-side exemplar builder rather than of any one metric,
+because every consumer of that builder inherits them: a pair scanned off the raw trace contradicts
+the number printed beside it, and reading the extremum kind straight through produces a caption
+that says the exact opposite of what the image shows, while passing every type check.
+
+#### Scenario: The pair spans a half-cycle, not a sub-cycle wiggle
+
+- **WHEN** an arm-swing exemplar is emitted for a side on a clip with a fitted swing rhythm
+- **THEN** the interval between that exemplar's `timestamp` and its `pairedTimestamp` is half that
+  side's fitted swing period, to within the clip's own frame interval
 
 #### Scenario: The base instant is the wrist at its highest
 

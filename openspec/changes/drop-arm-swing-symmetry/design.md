@@ -62,19 +62,41 @@ obvious fix (delete the line) silently drops it:
 - `index.test.ts` — the `propagate-view-confidence-to-metric-gating` regressions, which exist
   because "multiplying confidence by that low number would delete" a front-primary metric.
 
-## D5. Why one requirement is REMOVED **and** re-ADDED
+## D5. What a REMOVED requirement was still carrying — corrected after review
 
-`Arm swing symmetry's exemplar pair spans one fitted half-swing` carries two paragraphs. The first
-(derive the pair from the fitted phase) is already stated by the amplitude requirement. The second
-is **the only spec-level statement of the image-y sign convention**:
+**The first pass got this half right and shipped a false claim with it.** It said the removed
+exemplar requirement's fitted-phase paragraph "is already stated by the amplitude requirement". It
+is not. Verified: none of the three `armSwingAmplitude` requirements
+(`form-heuristics/spec.md:2850`, `:2933`, `:2960`) contains the words exemplar, instant, phase,
+ghost, half-swing or `pairedTimestamp`, and `git grep -rn "armSwingCycle" openspec/specs/` returns
+**zero hits**. The rule was going unowned while `armSwing.ts:441` still implements it and
+`armSwing.test.ts:307` still asserts it.
 
-> the fitted MAXIMUM is the wrist at its LOWEST on screen; the system SHALL name the pair by body
-> position rather than by extremum kind, so that a caption cannot state the opposite of the truth.
+The same defect turned out to affect a second surface, missed entirely on the first pass. Three
+distinct contracts lived inside REMOVED requirements while governing code that survives:
 
-It governs `armSwing.ts`'s `maximumIs: 'lowest'`, which `armSwingAmplitude` still executes on every
-clip, and which a migrated test still asserts. Removing it outright would leave the code keeping
-the behaviour, the test still asserting it, and **no requirement asking for it**. It is re-added
-metric-neutrally, stated of the shared exemplar builder rather than of any one consumer.
+| contract | lives in | implemented at | asserted at | re-homed as |
+|---|---|---|---|---|
+| the log-quadratic scale stabilizer, its strict-bilateral proxy rule, "no swing sample is ever dropped", and the **identically-1 exact no-op** | R1 ¶3 | `armSwing.ts` `resolveScaleStabilizer` | `armSwing.test.ts` (two bit-exact `toBe`) | ADDED *The per-side arm-swing series is scale-stabilized before it is fitted* |
+| derive the pair from the fitted PHASE, never a raw-extremum scan | R6 ¶1 | `armSwing.ts` `buildSideExemplar` | `armSwing.test.ts` | ADDED *An arm-swing exemplar pair spans one fitted half-swing and names its instants by body position* |
+| image-y sign: the fitted MAXIMUM is the wrist at its LOWEST | R6 ¶2 | same, `maximumIs: 'lowest'` | same | same ADDED, ¶2 |
+
+The stabilizer one is the sharper miss. The amplitude requirement only ever *refers* to "the shared
+scale-stabilized series" and to amplitudes that "arrive already at the clip's reference (median)
+scale" — a reference to stabilization, not a specification of it. Nothing else in `openspec/specs/`
+mentions `inter-shoulder` or `stabiliz` outside the removed requirement. After archive,
+`MIN_SCALE_TREND_SAMPLES` and `FLAT_TREND_LOG_RANGE` would have been implemented, pinned bit-exactly
+by this change's own tests, and **asked for by no requirement** — so a later change deleting either
+rung would validate clean.
+
+Both ADDED requirements are stated of the shared computation rather than of any metric, mirroring
+how the code is actually factored (`computeSideSwing`, `buildSideExemplar`). That is the point: a
+contract owned by a consumer is a contract that leaves when the consumer does, which is the exact
+failure this whole change was written to avoid on the test side.
+
+**What genuinely did go with the ratio**, and is not re-homed: R1 ¶4's scale-free property (no body
+scale required). `armSwingAmplitude` divides by a clip-median torso length and states its own
+missing-normalizer null case, so that paragraph would be false if carried forward.
 
 ## D6. Two spec claims that stopped being true, and were restated rather than deleted
 

@@ -361,8 +361,12 @@ node scripts/ab-person-selection.mjs \
   | same exemplar's `cropSidePx` | **320** (the `EVIDENCE_CROP_MIN_SIDE_PX` floor), no spread | 398.733 `[320..398.733]` |
 
   Trial 1 agrees in both regimes; trials 2+ are what move. Only the fresh regime reproduces the
-  coverage this file records for that clip. ⚠️ **The exemplar TIMESTAMPS in that table are stale as
-  a present-day reading** — `2ed7f0b` re-derived `armSwingSymmetry`'s instants from a spectral fit,
+  coverage this file records for that clip. ⚠️ **`armSwingSymmetry` no longer exists** — it was
+  withdrawn by `strides-zhv` (see the retirement note in "Three metric-layer changes" below); the
+  identical exemplar is `armSwingAmplitude`'s today, at the same instants and the same 320 px floor,
+  so the regime contrast this table demonstrates still reproduces under that name.
+  ⚠️ **The exemplar TIMESTAMPS in that table are also stale as
+  a present-day reading** — `2ed7f0b` re-derived that metric's instants from a spectral fit,
   and on `c79d307` the fresh-process value is `0.934267` (still at `cropSidePx` 320, still with no
   spread). The regime contrast the table demonstrates is unaffected. The damage is the same shape as
   a foreign dev server:
@@ -658,9 +662,12 @@ control only, never a target.
 **Update (#36, same day): no longer diagnostics-only.** `verticalOscillationCm` is now the
 vertical-oscillation family's third real `MetricId` (`FormHeuristicsResult.verticalOscillationCm`,
 after `verticalOscillation`/`verticalRatio` — this took the panel from eight metrics to **nine**;
-⚠️ the `MetricId` union has since grown to **thirteen**, which is the count to check against today —
-`src/heuristics/types.ts`, and `strides-x8w` swept three stale "ten" counts out of `src/` and the
-results-view spec on 2026-08-29)
+⚠️ the `MetricId` union grew to thirteen and then **dropped back to twelve** when
+`armSwingSymmetry` was withdrawn (`strides-zhv`, 2026-09-05); **twelve** is the count to check
+against today — `src/heuristics/types.ts`. Both count changes needed a sweep of stale prose counts:
+`strides-x8w` swept three stale "ten" counts out of `src/` and the results-view spec on 2026-08-29,
+and `strides-zhv` swept twelve stale "thirteen" counts out of `src/` plus a normative SHALL in the
+results-view spec)
 — `computeVerticalOscillationCmMetric` (`verticalOscillationCm.ts`) wraps the calculation described
 below with a `value`/`confidence`/`viewFit`/`caveat`, view-tolerant on the identical terms
 `verticalOscillation` uses (side 1.0 / front 0.85 / ambiguous 0.6 — it has no denominator to be
@@ -1162,6 +1169,22 @@ inherit the primary's view and render 4.53 cm; it is now blocked on `strides-h6r
 
 Full tables: `openspec/changes/archive/2026-08-31-explain-the-step-width-pass-gap/design.md`.
 
+⚠️ **`armSwingSymmetry` IS GONE FROM THE APP** (`strides-zhv`, 2026-09-05) — withdrawn on the
+user's decision ("it is never accurate"): it resolved on exactly one clip of three, caveated, off a
+`sampleSize` of 2. **`MetricId` is twelve, and every `armSwingSymmetry` row, column and reading
+below is RETIRED FOOTAGE — a record of what was measured, never a target to re-measure or a
+regression to check against.** The measurements are left exactly as taken rather than retrofitted,
+because they were honestly measured; but nothing in the app emits that metric now, and a harness
+looking for its rows will find none. What SURVIVES is the shared `src/heuristics/armSwing.ts` — the
+per-side spectral fit, the scale stabilization, the gate constants and the `armSwingCycle` exemplar
+builder — all of it still exercised by **`armSwingAmplitude`**, which keeps its own two per-side
+images. So read `armSwingSymmetry` below as *the shared arm-swing machinery, seen through a
+withdrawn consumer*: statements about the FIT, the crop or the exemplar instants generally still
+hold and are now `armSwingAmplitude`'s; statements about the min/max RATIO, its `'percent'` unit or
+its card do not. Its coverage rows in the two tables below (`excluded | ✅ 2 | excluded`) are
+`armSwingAmplitude`'s today, at the same instants. Beads `strides-9c9` and `strides-56e` were
+re-pointed to `armSwingAmplitude`, not closed.
+
 **2. `armSwingSymmetry` is fitted, not scanned** (`strides-gzl`, `2ed7f0b`, archived
 `2026-08-29-fit-arm-swing-amplitude`). The prominence-threshold extremum scan was latching onto
 sub-cycle wiggles — 9 half-swings per side on Demo 2 across a window holding ~4.8, with spacings
@@ -1384,7 +1407,7 @@ see the caveat under the table:
 | `overstriding` | **`all-gated-out`** | excluded | **`all-gated-out`** |
 | `cadence` | `not-emitted` by design | `not-emitted` | `not-emitted` |
 | `kneeFlexion` | ✅ 1 | excluded | ✅ 1 |
-| `armSwingSymmetry` | excluded | ✅ 2 | excluded |
+| `armSwingSymmetry` ⚠️ RETIRED, now `armSwingAmplitude` | excluded | ✅ 2 | excluded |
 | `footStrikePattern` | ✅ 2 | excluded | ✅ 2 |
 | `stepWidth` | excluded | ✅ 1 | excluded |
 | `stepWidthCm` | excluded | excluded | excluded |
@@ -1434,7 +1457,7 @@ from its Demo 1, so that column is a record rather than a target. See the harnes
 | `overstriding` | ✅ 1 | excluded | ✅ 1 |
 | `cadence` | `not-emitted` by design | `not-emitted` | `not-emitted` |
 | `kneeFlexion` | ✅ 1 | excluded | ✅ 1 |
-| `armSwingSymmetry` | excluded | ✅ 2 | excluded |
+| `armSwingSymmetry` ⚠️ RETIRED, now `armSwingAmplitude` | excluded | ✅ 2 | excluded |
 | `footStrikePattern` | ✅ 2 | excluded | ✅ 2 |
 | `stepWidth` | excluded | ✅ 1 | excluded |
 | `stepWidthCm` | excluded | excluded | excluded |

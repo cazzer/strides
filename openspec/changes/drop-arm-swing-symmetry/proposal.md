@@ -45,8 +45,11 @@ has:
 
 ## Impact
 
-- Affected specs: `form-heuristics` (6 removed, 4 modified, 1 added), `multi-clip-analysis`
-  (1 modified), `results-view` (1 modified).
+- Affected specs: `form-heuristics` (6 removed, 4 modified, **2 added**), `multi-clip-analysis`
+  (1 modified), `results-view` (**2 modified**). The two ADDED requirements re-home contracts that
+  lived inside removed requirements while governing code that survives — the scale stabilizer and
+  the exemplar builder's two rules — stated of the shared computation rather than of any metric.
+  The second `results-view` MODIFIED corrects a normative SHALL that counted thirteen `MetricId`s.
 - Affected code: `src/heuristics/` (`types.ts`, `index.ts`, `armSwing.ts` comments,
   `armSwingAmplitude.ts`, `verticalRatio.ts`, `stepWidthCm.ts`, `viewPlausibility.ts`),
   `src/results/` (`metricConfidence.ts`, `MetricsPanel.tsx`, `fuseHeuristics.ts`, evidence module

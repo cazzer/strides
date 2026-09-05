@@ -54,3 +54,19 @@
 
 - [x] 7.1 Re-point `strides-9c9` and `strides-56e` rather than closing them
 - [x] 7.2 File the follow-ups this change deliberately did not do
+
+## 8. Review round 1 — spec deltas only (code approved as-is)
+
+- [x] 8.1 🔴 Re-home the scale-stabilization contract (R1 ¶3 + its scale-change scenario), which
+      the first pass deleted and re-homed nowhere: ADDED *The per-side arm-swing series is
+      scale-stabilized before it is fitted*, plus an exact-no-op scenario for the two rungs the
+      migrated tests pin bit-exactly
+- [x] 8.2 🔴 Verify the claim that the amplitude requirement already states the fitted-phase rule.
+      **It does not** — confirmed by reading all three `armSwingAmplitude` requirements and by
+      `grep armSwingCycle openspec/specs/` returning zero. Fold BOTH paragraphs of the removed
+      exemplar requirement, and both its scenarios, into the metric-neutral ADDED requirement
+- [x] 8.3 🔴 Correct the two false Reason/Migration texts and `design.md` D5
+- [x] 8.4 🟡 MODIFIED for `results-view`'s "thirteen `MetricId`s" normative SHALL; sweep 12 stale
+      `thirteen` counts from `src/`, leaving the grafted-exemplar measurement records alone
+- [x] 8.5 🟡 CLAUDE.md retirement pointer — measurements left exactly as taken
+- [x] 8.6 🟢 Drop "the shared kind" from an exemplar test title
