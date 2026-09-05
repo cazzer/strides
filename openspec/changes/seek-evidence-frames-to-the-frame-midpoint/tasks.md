@@ -69,8 +69,12 @@
 - [x] 4.5 Playback path (D7): re-measure under `{"sequentialSampling":{"enabled":false}}` on
       `side-landscape`. **Drawn frame unchanged; the midpoint stays uniform across samplers, and
       the pre-registered fallback of gating it to WebCodecs was not needed.**
-- [x] 4.6 Regression anchor: `verticalOscillationCm` and its `fit.*` fields unmoved — covered by
-      4.2's empty diff.
+- [x] 4.6 Regression anchor: `verticalOscillationCm` and its `fit.*` fields unmoved. **Not measured
+      by 4.2** — `scripts/ab-person-selection.mjs` discards every `[analysis-diagnostics:` line, and
+      the anchor lives on the scale-pass one. It holds by CONTAINMENT instead: both calibration
+      terms are read only inside `drawInstant`'s seek, and reach no `ClipEvidencePlan`, no
+      `robustFrames[].timestamp` and no diagnostics payload — so there is no path by which a
+      heuristics input, and therefore the anchor, could move.
 
 ## 5. Gates
 

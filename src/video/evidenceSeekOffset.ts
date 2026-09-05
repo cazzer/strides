@@ -4,8 +4,8 @@ import { canUseSequentialDecode } from './webCodecsSupport'
 import { resolveSamplingRobustnessConfig } from '../results/samplingRobustnessConfig'
 
 /**
- * Resolves `EvidenceExtractionOptions.seekOffsetSeconds` for one clip — the number
- * `extractFrames.ts` adds to a planned timestamp before seeking a detached `<video>`.
+ * Resolves the seek-time calibration for one clip — the two numbers `extractFrames.ts` adds to a
+ * planned timestamp before seeking a detached `<video>`.
  *
  * ### The bug this exists to close (gh #69, ground-truthed, not hypothesised)
  *
@@ -70,9 +70,9 @@ import { resolveSamplingRobustnessConfig } from '../results/samplingRobustnessCo
  * nowhere else. */
 export interface EvidenceSeekCalibration {
   /** Media→presentation clock conversion, or `0` where the two already agree. */
-  offsetSeconds: number
+  readonly offsetSeconds: number
   /** Half a frame, or `0` where the clip's frame duration is not derivable. */
-  midpointOffsetSeconds: number
+  readonly midpointOffsetSeconds: number
 }
 
 const NO_CALIBRATION: EvidenceSeekCalibration = {
@@ -123,6 +123,24 @@ export function editListSeekOffsetSeconds(track: ContainerVideoTrackTiming): num
  * carries no usable `stts` table), and for a rate that is not a positive finite number. Same "a
  * wrong number is worse than none" posture `editListSeekOffsetSeconds` takes: zero is exactly the
  * behaviour that shipped before this existed, so declining costs nothing that was already working.
+ *
+ * ### Precondition: the median frame duration must also be the SHORTEST one
+ *
+ * `nominalFps` is a weighted MEDIAN across the `stts` run-length table, not a minimum, so on a
+ * variable-frame-rate track this returns half of a TYPICAL frame rather than half of the frame
+ * being sought. Landing inside the target interval is only guaranteed while every frame is at
+ * least as long as the median — i.e. while the median IS the minimum. Invert the mixture and the
+ * offset overshoots: a track that is mostly 1536-tick frames with a minority at 512, on a 15360
+ * timescale, yields a ~50 ms midpoint against a short frame's whole 33.3 ms interval, so every
+ * instant naming a short frame silently draws the frame AFTER it. That failure produces a
+ * plausible image rather than a crash, which is why it is stated here rather than only in the
+ * design that derived it.
+ *
+ * It holds across this repo's corpus — the only variable-rate clip, `park-side-portrait.mp4`, is
+ * 335 samples at 512 ticks against 10 at 1536 across 21 runs, so its median is also its minimum.
+ * Enforcing it rather than documenting it would need the per-run `stts` deltas, which
+ * `ContainerVideoTrackTiming` does not carry; exposing them widens the container probe's public
+ * shape for this one caller.
  */
 export function frameMidpointOffsetSeconds(track: ContainerVideoTrackTiming): number {
   const fps = track.nominalFps

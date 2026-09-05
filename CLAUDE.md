@@ -1552,7 +1552,7 @@ reasoning that once argued for leaving it at 0 was right about the diagnosis and
 remedy: the correct value genuinely is per-clip (it is that clip's own edit list) **and** per-sampler
 (exactly 0 for every WebM/webcam clip and every MP4 `canUseSequentialDecode` turns down), so no
 single constant works — but both facts are recoverable from the clip's own bytes.
-`resolveEvidenceSeekOffsetSeconds(blob)` re-derives them using the same two predicates the analysis
+`resolveEvidenceSeekCalibration(blob)` re-derives them using the same two predicates the analysis
 run itself used (`resolveSamplingRobustnessConfig().sequentialSampling.enabled` and
 `canUseSequentialDecode(blob)`, both pure functions of the blob and the environment), reads the
 `elst` via `containerTiming.ts`, caches per `Blob`, and returns **0** for any edit list that is not a
