@@ -39,7 +39,7 @@ describe('computeViewPlausibility', () => {
     // distance past a threshold; `compare-view-confidence-across-labels` has since moved the bar
     // to 0.45 and it reads ~0.53. Either way it is NOT evidence that the clip might be a side
     // view: side needs BSR <= 0.30 (measured 0.55) AND SER >= 0.80 (measured 0.34). Every
-    // metric gated on this must therefore see front, undiluted — degrading `armSwingSymmetry`
+    // metric gated on this must therefore see front, undiluted — degrading `armSwingAmplitude`
     // toward its `ambiguous` row here would delete a metric whose evidence images plainly show
     // both arms.
     const plausibility = computeViewPlausibility(0.5507, 0.3389, CONFIG)
@@ -159,15 +159,15 @@ describe('resolveViewFitTable', () => {
 
   it('keeps a front-primary metric measurable when only side is ruled out', () => {
     // BSR mid-band but past side's bar, SER fully front (the shape of a clip 0.13% short of the
-    // front label). Today this is 'ambiguous' and `armSwingSymmetry` is hard-excluded as
+    // front label). Today this is 'ambiguous' and `armSwingAmplitude` is hard-excluded as
     // structurally unmeasurable, on the strength of a side view the geometry rules out.
     const plausibility: ViewPlausibility = { side: 0, front: 0.8, ambiguous: 0.2 }
 
     const resolved = resolveViewFitTable(table, plausibility)
 
-    expect(resolved.armSwingSymmetry.ambiguous.fit).toBe('primary')
+    expect(resolved.armSwingAmplitude.ambiguous.fit).toBe('primary')
     // 0.8 * 1.0 (front) + 0.2 * 0.2 (ambiguous) — reported, and discounted for the doubt.
-    expect(resolved.armSwingSymmetry.ambiguous.multiplier).toBeCloseTo(0.84, 10)
+    expect(resolved.armSwingAmplitude.ambiguous.multiplier).toBeCloseTo(0.84, 10)
   })
 
   it('keeps a sagittal metric excluded when it is unsuitable from every view still standing', () => {
@@ -196,9 +196,9 @@ describe('resolveViewFitTable', () => {
     // Side-primary and front-primary metrics land on the same multiplier: neither view is
     // favoured, and both stay excluded exactly as a flat ambiguous label leaves them today.
     expect(resolved.trunkLean.ambiguous.fit).toBe('unsuitable')
-    expect(resolved.armSwingSymmetry.ambiguous.fit).toBe('unsuitable')
+    expect(resolved.armSwingAmplitude.ambiguous.fit).toBe('unsuitable')
     expect(resolved.trunkLean.ambiguous.multiplier).toBeCloseTo(0.375, 10)
-    expect(resolved.armSwingSymmetry.ambiguous.multiplier).toBeCloseTo(0.375, 10)
+    expect(resolved.armSwingAmplitude.ambiguous.multiplier).toBeCloseTo(0.375, 10)
     // A view-tolerant metric keeps more than the flat 0.6 ambiguous row, because half the mass
     // does sit on views it is measurable from.
     expect(resolved.verticalOscillation.ambiguous.multiplier).toBeCloseTo(0.7625, 10)

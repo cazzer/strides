@@ -617,10 +617,10 @@ describe('per-metric mark sets', () => {
     expect(caliper.polarity).toBe(1)
   })
 
-  it('armSwingSymmetry draws the arm chain, a shoulder horizontal and a vertical wrist bar', () => {
+  it('armSwingAmplitude draws the arm chain, a shoulder horizontal and a vertical wrist bar', () => {
     const annotation = planEvidenceAnnotations(
       plan({
-        metric: 'armSwingSymmetry',
+        metric: 'armSwingAmplitude',
         kind: 'armSwingCycle',
         side: 'right',
         base: instant([
@@ -637,7 +637,7 @@ describe('per-metric mark sets', () => {
     )
     const bar = byRole(annotation.ops, 'armSwingCaliper')[0] as EvidenceCaliperOp
     expect(bar.axis).toBe('vertical')
-    // `wrist.y − shoulder.y` at the wrist's own x — `armSwingSymmetry.ts:117`.
+    // `wrist.y − shoulder.y` at the wrist's own x — `armSwing.ts:405`.
     expect([bar.x1, bar.y1, bar.x2, bar.y2]).toEqual([400, 250, 400, 420])
     expect(bar.polarity).toBeNull()
   })
@@ -645,7 +645,7 @@ describe('per-metric mark sets', () => {
   it('the arm chain is not drawn through a missing elbow', () => {
     const annotation = planEvidenceAnnotations(
       plan({
-        metric: 'armSwingSymmetry',
+        metric: 'armSwingAmplitude',
         kind: 'armSwingCycle',
         side: 'right',
         base: instant([
@@ -1314,7 +1314,7 @@ describe('the honesty rule', () => {
     {
       kind: 'armSwingCycle',
       plan: plan({
-        metric: 'armSwingSymmetry',
+        metric: 'armSwingAmplitude',
         kind: 'armSwingCycle',
         side: 'right',
         base: instant([

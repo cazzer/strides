@@ -46,7 +46,6 @@ function makeHeuristics(): FormHeuristicsResult {
     overstriding: { ...base, metric: 'overstriding', value: 0.1 },
     cadence: { ...base, metric: 'cadence', value: 170, unit: 'stepsPerMinute' },
     kneeFlexion: { ...base, metric: 'kneeFlexion', value: 110, unit: 'degrees' },
-    armSwingSymmetry: { ...base, metric: 'armSwingSymmetry', value: 0.9, unit: 'percent' },
     footStrikePattern: {
       ...base,
       metric: 'footStrikePattern',

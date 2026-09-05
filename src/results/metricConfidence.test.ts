@@ -80,15 +80,15 @@ describe('metricTier', () => {
   })
 
   it('is "excluded" for a viewFit: unsuitable metric via the explicit viewFit clause', () => {
-    // The live shape: armSwingSymmetry on a side-view clip measures a value, but the camera
+    // The live shape: armSwingAmplitude on a side-view clip measures a value, but the camera
     // geometry is classified unsuitable (the far arm is occluded/superimposed) — structurally
     // unmeasurable, so excluded regardless of what the confidence arithmetic produced.
     expect(
       metricTier(
         makeMetric({
-          metric: 'armSwingSymmetry',
+          metric: 'armSwingAmplitude',
           value: 0.5,
-          unit: 'percent',
+          unit: 'ratio',
           confidence: 0.06,
           viewFit: 'unsuitable',
         }),

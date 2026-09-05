@@ -6,7 +6,7 @@ import type { RobustPoseFrame } from '../pose/robustness/types'
 
 /**
  * Fixed torso length matching syntheticGait.ts's own convention (shoulder-mid to hip-mid = 150px).
- * Unlike the scale-free symmetry sibling, this metric DIVIDES by it, so the expected values below
+ * This metric DIVIDES by it, so the expected values below
  * carry it explicitly: value = (leftAmplitudePx + rightAmplitudePx) / (2 × TORSO_LENGTH_PX).
  */
 const TORSO_LENGTH_PX = 150
@@ -38,7 +38,7 @@ function makeJitter(seed: number): () => number {
 /**
  * Builds a `RobustPoseFrame[]` with a resolvable torso (shoulders+hips) and each wrist oscillating
  * in y relative to its own shoulder — the exact signal the shared `computeSideSwing` reads. Same
- * generator as `armSwingSymmetry.test.ts`'s: left and right swing in opposite phase, each with its
+ * generator as `armSwing.test.ts`'s: left and right swing in opposite phase, each with its
  * own configurable amplitude, so with the jitter/harmonic knobs at their `0` defaults each side is
  * an exact sinusoid whose peak-to-trough excursion is exactly that side's `amplitudePx` — and the
  * expected VALUE here is hand-computable as `(left + right) / (2 × TORSO_LENGTH_PX)`.
@@ -54,12 +54,12 @@ function buildArmSwingFrames(params: {
   leftJitterPx?: number
   rightJitterPx?: number
   /** Amplitude of a second harmonic at 2x `swingFreqHz`, as a fraction of that side's own
-   * amplitude — the STEP rhythm riding on the stride rhythm (see the symmetry suite's note on why
-   * this is real rather than decorative). */
+   * amplitude — the STEP rhythm riding on the stride rhythm (see `armSwing.test.ts`'s note on
+   * why this is real rather than decorative). */
   harmonicRatio?: number
   /** Whole-body on-screen scale growth across the clip — every body dimension multiplied by
    * `g(t) = scaleGrowthFactor^(t / durationSec)`, exponential so the stabilizer's log-quadratic
-   * trend captures it exactly (see the symmetry suite's `scaleGrowthFactor` doc for the full
+   * trend captures it exactly (see `armSwing.test.ts`'s `scaleGrowthFactor` doc for the full
    * reasoning). `1` (the default) is bit-identical to the ungrown fixture. */
   scaleGrowthFactor?: number
   seed?: number
@@ -124,9 +124,9 @@ const BASE_PARAMS = {
   swingFreqHz: 1.5,
 }
 
-/** The realistic fixture the symmetry suite uses for its gate/caveat cases — stride-rate swing,
- * step-rate harmonic, modest jitter — reused so the two metrics' shared gates are exercised
- * against the same shape of trace. */
+/** The realistic fixture `armSwing.test.ts` uses for its shared-fit cases — stride-rate swing,
+ * step-rate harmonic, modest jitter — reused so this metric's gates are exercised against the
+ * same shape of trace the shared module is measured on. */
 const REALISTIC = {
   ...BASE_PARAMS,
   leftAmplitudePx: 40,
@@ -177,11 +177,26 @@ describe('computeArmSwingAmplitude', () => {
     expect(result.caveat).toContain('side view')
   })
 
+  it('an ambiguous-view clip: still computed, viewFit unsuitable, confidence capped near the 0.2 multiplier', () => {
+    const frames = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 40,
+    })
+
+    const result = computeArmSwingAmplitude(frames, 'ambiguous')
+
+    expect(result.value).not.toBeNull()
+    expect(result.viewFit).toBe('unsuitable')
+    expect(result.confidence).toBeLessThan(0.25)
+    expect(result.caveat).toContain('ambiguous view')
+  })
+
   it('below the SHARED fit-quality gate the metric publishes nothing, on either arm', () => {
     const frames = buildArmSwingFrames(REALISTIC)
 
-    // The realistic fixture's own fits sit around 0.79-0.84, so a 0.9 gate rejects it — the same
-    // config key, and therefore the same verdict, the symmetry metric reaches on this trace.
+    // The realistic fixture's own fits sit around 0.79-0.84, so a 0.9 gate rejects it — the
+    // shared `armSwingMinFitR2` key, read against the weaker arm.
     const strict = computeArmSwingAmplitude(frames, 'front', {
       ...DEFAULT_HEURISTICS_CONFIG,
       armSwingMinFitR2: 0.9,
@@ -191,6 +206,24 @@ describe('computeArmSwingAmplitude', () => {
     expect(strict.value).toBeNull()
     expect(strict.confidence).toBe(0)
     expect(strict.caveat).toContain('too irregular to measure')
+  })
+
+  it('a swing rhythm too irregular to fit on one arm yields null, never a fabricated amplitude', () => {
+    // The gate reached by real noise rather than by a tightened config: the left arm swings
+    // cleanly and the right arm is jitter with no rhythm in it at all. An estimator that reads
+    // *some* amplitude off the right arm averages a fictional number into the mean.
+    const frames = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 0,
+      rightJitterPx: 20,
+      seed: 7,
+    })
+
+    const result = computeArmSwingAmplitude(frames, 'front')
+
+    expect(result.value).toBeNull()
+    expect(result.caveat).toContain('too irregular to measure')
   })
 
   it('a rhythm mismatch between the two arms is not averaged into an amplitude', () => {
@@ -223,15 +256,15 @@ describe('computeArmSwingAmplitude', () => {
 
     expect(result.value).toBeNull()
     expect(result.confidence).toBe(0)
-    // Its own wording, not the symmetry metric's "not comparable": what failed is the existence
-    // of one swing rhythm to size.
+    // The caveat names the absence of one swing rhythm to size, never the comparability of the
+    // two arms.
     expect(result.caveat).toContain('a single arm-swing size cannot be measured')
   })
 
   it('no resolvable body scale: null with the missing-normalizer caveat, never a claim about the arms', () => {
     // Shoulders and wrists resolve and fit cleanly; HIPS never do, so `estimateBodyScale` has
-    // nothing to measure. The scale-free symmetry sibling measures this clip; a torso-normalized
-    // amplitude cannot, and the caveat must name the true cause.
+    // nothing to measure. The per-side fits themselves succeed here; a torso-normalized
+    // amplitude still cannot be formed, and the caveat must name the true cause.
     const frames = buildArmSwingFrames({
       ...BASE_PARAMS,
       leftAmplitudePx: 40,
@@ -307,8 +340,8 @@ describe('computeArmSwingAmplitude', () => {
   it('the side-quality disparity caveat fires, in amplitude terms, and costs confidence', () => {
     const bothEqual = computeArmSwingAmplitude(buildArmSwingFrames(REALISTIC), 'front')
     // Identical swing on both arms; only the RIGHT arm's tracking is degraded — a magnitude does
-    // not self-cancel per-side tracking asymmetry the way the symmetry ratio partially does, so
-    // this caveat matters MORE here, not less.
+    // not self-cancel per-side tracking asymmetry — the worse arm's error lands undiluted in the
+    // mean, so this caveat is load-bearing rather than decorative.
     const rightArmWorse = computeArmSwingAmplitude(
       buildArmSwingFrames({ ...REALISTIC, rightJitterPx: 9, seed: 42 }),
       'front',

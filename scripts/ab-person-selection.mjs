@@ -544,7 +544,7 @@ async function warmUpAndReadRenderer(launchArgs, baseURL) {
  *
  * **`browser` is a fresh process per trial unless `--reuse-browser` says otherwise**, and that is
  * a measurement decision rather than hygiene (`strides-9wp`). Reusing one Chromium across trials
- * shifts Demo 2's sampling from trial 2 onward: `armSwingSymmetry`'s exemplar moves from
+ * shifts Demo 2's sampling from trial 2 onward: the `armSwingCycle` exemplar moves from
  * t=0.984317 with a 320 px crop (the `EVIDENCE_CROP_MIN_SIDE_PX` floor, subject 264.7 px) to
  * t=1.468133 with a 398.7 px crop (subject 449.4 px). Only the fresh-process regime reproduces
  * the coverage CLAUDE.md records for that clip. The damage is the same shape as measuring against

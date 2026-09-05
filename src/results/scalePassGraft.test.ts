@@ -128,11 +128,6 @@ function makeResult(
     overstriding: makeMetric({ metric: 'overstriding', value: 0.08, unit: 'ratio' }),
     cadence: makeMetric({ metric: 'cadence', value: 172, unit: 'stepsPerMinute' }),
     kneeFlexion: makeMetric({ metric: 'kneeFlexion', value: 110 }),
-    armSwingSymmetry: makeMetric({
-      metric: 'armSwingSymmetry',
-      value: 0.92,
-      unit: 'percent',
-    }),
     footStrikePattern: makeMetric({
       metric: 'footStrikePattern',
       value: 0.02,
@@ -188,7 +183,6 @@ describe('graftScalePassResult', () => {
     expect(grafted.overstriding).toBe(primary.overstriding)
     expect(grafted.cadence).toBe(primary.cadence)
     expect(grafted.kneeFlexion).toBe(primary.kneeFlexion)
-    expect(grafted.armSwingSymmetry).toBe(primary.armSwingSymmetry)
     expect(grafted.footStrikePattern).toBe(primary.footStrikePattern)
     expect(grafted.stepWidth).toBe(primary.stepWidth)
   })
@@ -355,7 +349,6 @@ describe('withSubjectDivergenceCaveat', () => {
     expect(caveated.overstriding).toBe(grafted.overstriding)
     expect(caveated.cadence).toBe(grafted.cadence)
     expect(caveated.kneeFlexion).toBe(grafted.kneeFlexion)
-    expect(caveated.armSwingSymmetry).toBe(grafted.armSwingSymmetry)
     expect(caveated.footStrikePattern).toBe(grafted.footStrikePattern)
     expect(caveated.stepWidth).toBe(grafted.stepWidth)
   })
@@ -449,7 +442,6 @@ describe('dropGraftedExemplars', () => {
     expect(dropped.overstriding).toBe(caveated.overstriding)
     expect(dropped.cadence).toBe(caveated.cadence)
     expect(dropped.kneeFlexion).toBe(caveated.kneeFlexion)
-    expect(dropped.armSwingSymmetry).toBe(caveated.armSwingSymmetry)
     expect(dropped.footStrikePattern).toBe(caveated.footStrikePattern)
     expect(dropped.stepWidth).toBe(caveated.stepWidth)
   })

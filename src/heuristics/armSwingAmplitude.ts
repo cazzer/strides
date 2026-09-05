@@ -36,20 +36,18 @@ function nullResult(
 
 /**
  * Arm swing amplitude: the MEAN of the two arms' fitted peak-to-peak wrist-relative-to-shoulder
- * vertical swing amplitudes, as a fraction of torso length — how BIG the swing is, where the
- * sibling `armSwingSymmetry` reports how EVEN it is from the identical two fits.
+ * vertical swing amplitudes, as a fraction of torso length — how BIG the swing is.
  *
- * ## The same fits, the same gates — by construction
+ * ## The shared fits, the shared gates — by construction
  *
  * Both per-side fits come from the shared `computeSideSwing` (`armSwing.ts`), and every trust
  * gate is the SHARED one: the weaker arm's R² against `config.armSwingMinFitR2`, the shared
  * `MIN_ARM_SWING_CYCLES` floor, and the shared `MAX_SIDE_FREQUENCY_DISAGREEMENT` cross-side
- * rhythm bound. Never a second gate constant on the same fitted signal — two gates would let the
- * arm-metric family disagree with itself about whether the fits are trustworthy, the bug class
- * #36 deleted — so with identical inputs the two arm cards null together and carry the same
- * confidence.
+ * rhythm bound. Never a second gate constant on the same fitted signal — two gates would let two
+ * readers of one fit disagree about whether it is trustworthy, the bug class #36 deleted — so a
+ * future second consumer of `armSwing.ts` inherits this gate rather than choosing its own.
  *
- * The rhythm bound is not a symmetry-only concern here (design.md D6): on the multi-person clip
+ * The cross-side rhythm bound earns its place here on its own (design.md D6): on the multi-person clip
  * the right arm's fit lands on the STEP rhythm at R² 0.324 — clearing the 0.3 gate — while the
  * left fits the stride rhythm. A mean of an arm-swing amplitude and a step-bounce amplitude is
  * not an arm-swing amplitude, and only the cross-side check catches it. Which side found the true
@@ -58,13 +56,14 @@ function nullResult(
  *
  * ## Mean, not min — and why the normalizer is the torso
  *
- * The mean answers "how big" (design.md D1); the min is redundant with the symmetry ratio and
- * headlines the worst-measured number. With the symmetry ratio `r` published beside a mean `m`,
- * the weaker side is recoverable as `2·m·r / (1 + r)`, so nothing is lost. Unlike the ratio, an
- * absolute amplitude needs a scale reference to survive camera distance, so it is normalized by
+ * The mean answers "how big" (design.md D1); the min headlines the worst-measured number instead
+ * of the swing. D1 also argued the min was recoverable from a published symmetry ratio — that
+ * ratio was withdrawn (`strides-zhv`), so the per-side amplitudes are no longer recoverable from
+ * this card at all, and the mean now stands on its primary ground alone. An absolute amplitude
+ * needs a scale reference to survive camera distance, so it is normalized by
  * `estimateBodyScale`'s clip-median torso length — the pipeline's shared normalizer — and a clip
- * with no resolvable shoulders/hips is a null naming the missing body-scale reference, the one
- * dependency the scale-free symmetry ratio deliberately shed. The per-side amplitudes arrive
+ * with no resolvable shoulders/hips is a null naming the missing body-scale reference. The
+ * per-side amplitudes arrive
  * already scale-stabilized to the clip's reference (median) scale (`armSwing.ts`, "Scale
  * stabilization before the fit"), which pairs naturally with the clip-MEDIAN torso length here —
  * the torso normalization's semantics are unchanged.
@@ -72,17 +71,18 @@ function nullResult(
  * ## Confidence answers "was the worse arm measured well?"
  *
  * Every input is the WORSE side's — `frameCoverage`, `interpolatedFraction`, `sampleSize` and
- * `fitQuality` — for the symmetry module's own stated reason: an average hides exactly the case
- * that must not read as confident, one arm measured materially worse than the other. A magnitude
- * does not self-cancel per-side tracking asymmetry the way a ratio partially does, so when the
- * two fits' quality diverges past the shared `SIDE_FIT_QUALITY_DISPARITY_R2` the caveat says part
- * of the overall swing SIZE may be measurement rather than form.
+ * `fitQuality` — never an average, because an average hides exactly the case that must not read
+ * as confident: one arm measured materially worse than the other, whose measurement error lands
+ * undiluted in a mean. So when the two fits' quality diverges past the shared
+ * `SIDE_FIT_QUALITY_DISPARITY_R2` the caveat says part of the overall swing SIZE may be
+ * measurement rather than form.
  *
  * ## View
  *
- * Front-view-primary on `armSwingSymmetry`'s exact terms — a side view occludes or superimposes
- * the far arm, and an amplitude averaged over a visible arm and an occluded one is contaminated
- * just as a comparison is. Per "never a silent wrong number", the value is still computed and
+ * Front-view-primary: a side view occludes or superimposes the far arm — an occlusion/separability
+ * failure rather than a loss of the swing signal itself — and an amplitude averaged over one
+ * visible arm and one occluded arm is contaminated by the occlusion. Per "never a silent wrong
+ * number", the value is still computed and
  * returned even when the view is unsuitable (`viewFitTable.armSwingAmplitude` caps confidence low
  * instead). It is an honest 2D movement-amplitude proxy: how far the wrists travel, saying
  * nothing about what the swing contributes to the stride.
@@ -97,8 +97,7 @@ export function computeArmSwingAmplitude(
   const left = computeSideSwing(frames, 'left', config)
   const right = computeSideSwing(frames, 'right', config)
 
-  // Worse-side aggregation throughout, matching `computeArmSwingSymmetry` input for input — see
-  // this function's doc for why an average is wrong here too.
+  // Worse-side aggregation throughout — see this function's doc for why an average is wrong here.
   const frameCoverage =
     frames.length === 0
       ? 0
@@ -112,8 +111,8 @@ export function computeArmSwingAmplitude(
     )
   }
 
-  // Either side failing to fit is fatal to a MEAN, exactly as it is to a comparison — there is no
-  // honest average over a side that produced no amplitude.
+  // Either side failing to fit is fatal to a MEAN — there is no honest average over a side that
+  // produced no amplitude.
   if (!left.fit.ok) {
     return nullResult(
       viewFitEntry.fit,
@@ -132,9 +131,8 @@ export function computeArmSwingAmplitude(
   const minFitR2 = config.armSwingMinFitR2
   const weakestR2 = Math.min(left.fit.sinusoidR2, right.fit.sinusoidR2)
   if (weakestR2 < minFitR2) {
-    // The SHARED gate, on the same grounds the symmetry metric states: below it the weaker fit's
-    // amplitude describes noise, and a mean over one real amplitude and one noise amplitude is
-    // not an arm-swing amplitude.
+    // The SHARED gate: below it the weaker fit's amplitude describes noise, and a mean over one
+    // real amplitude and one noise amplitude is not an arm-swing amplitude.
     return nullResult(
       viewFitEntry.fit,
       'Arm positions were tracked, but the swing rhythm on one arm was too irregular to measure.',
@@ -146,8 +144,8 @@ export function computeArmSwingAmplitude(
     Math.abs(left.fit.frequencyHz - right.fit.frequencyHz) /
     Math.min(left.fit.frequencyHz, right.fit.frequencyHz)
   if (frequencyDisagreement > MAX_SIDE_FREQUENCY_DISAGREEMENT) {
-    // Distinct wording from the symmetry metric's not-comparable caveat: what failed here is not
-    // the comparability of two amplitudes but the existence of one swing rhythm to size.
+    // The caveat names the absence of one swing rhythm to size, never the comparability of the
+    // two arms — what failed is that the clip yielded no single rhythm to measure a size against.
     return nullResult(
       viewFitEntry.fit,
       'Each arm was tracked, but the two swing rhythms did not match, so a single arm-swing size cannot be measured.',
@@ -223,8 +221,8 @@ export function computeArmSwingAmplitude(
     )
   }
 
-  // One candidate per side, gated and ranked together — the same two ghosted pairs, from the same
-  // fits, the symmetry metric emits (`'armSwingCycle'` is deliberately shared; design.md D4).
+  // One candidate per side, gated and ranked together: the budget is per-metric, so gating each
+  // arm separately would apply the cap twice and could keep two pictures of one arm.
   const exemplars = selectExemplars([
     ...buildSideExemplar('left', left, frames),
     ...buildSideExemplar('right', right, frames),

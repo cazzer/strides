@@ -130,7 +130,7 @@ export const EVIDENCE_GHOST_MARK_OPACITY = 0.5
  * close-in-time case falls out of it, and the live data says that is unreachable: on
  * `e2e/fixtures/multiperson-track.mp4` the two-sampled-frame `kneeFlexion` pair reads IoU
  * **0.2476**, while Demo 2's perfectly legible `verticalOscillation` bounce reads **0.8330** and
- * its `armSwingSymmetry` and `stepWidth` pairs read 0.3656 and 0.2984. IoU orders these BACKWARDS
+ * its `armSwingCycle` and `stepWidth` pairs read 0.3656 and 0.2984. IoU orders these BACKWARDS
  * — any threshold low enough to reject the broken pair rejects three good ones first — because a
  * bounding box is blind to motion INSIDE itself: a knee swinging through a box changes the pose
  * completely while barely moving the hull, and a small far-away limb box changes shape a lot

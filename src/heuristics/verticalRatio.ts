@@ -233,8 +233,8 @@ function buildStridePairExemplar(pairs: StridePair[]): MetricExemplar[] {
  *
  * ## Fraction, not pre-multiplied percent
  *
- * `unit: 'percent'` already has an established meaning in this package, from `armSwingSymmetry`: a
- * dimensionless 0..1 comparison, NOT a fraction of torso length (`types.ts`'s doc on
+ * `unit: 'percent'` has a fixed meaning in this package: a dimensionless 0..1 comparison, NOT a
+ * fraction of torso length (`types.ts`'s doc on
  * `MetricResult.unit`). `value` here is exactly `fit.peakToPeakAmplitude / stride.strideLengthPx`
  * — a ratio of two pixel quantities in the same pixel space (real-world scale cancels, the same
  * trick `verticalOscillation`'s and `overstriding`'s torso-length normalization already rely on),

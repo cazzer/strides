@@ -105,7 +105,7 @@ export type EvidenceMarkRole =
   | 'hipWidthSegment'
   /** Vertical line at one stride endpoint's hip-mid x (`strideLength.ts:178-182`). */
   | 'strideTick'
-  /** Horizontal line through the shoulder — the origin `armSwingSymmetry.ts:117` measures the
+  /** Horizontal line through the shoulder — the origin `armSwing.ts:405` measures the
    * wrist against. */
   | 'shoulderHorizontal'
   /** Horizontal line at the bounce signal's midpoint y. */
@@ -121,7 +121,7 @@ export type EvidenceMarkRole =
    * `overstriding`, `footStrikePattern` and `stepWidth`. Their denominators are clip medians and
    * exist in no single frame, which is why nothing is labelled. */
   | 'ankleOffsetCaliper'
-  /** Vertical span `wrist.y − shoulder.y` (`armSwingSymmetry.ts:117`). */
+  /** Vertical span `wrist.y − shoulder.y` (`armSwing.ts:405`). */
   | 'armSwingCaliper'
   /** Horizontal span between the two stride ticks. */
   | 'strideCaliper'
@@ -846,9 +846,10 @@ function buildArmSwingMarks(ctx: InstantContext): void {
     }
   }
   if (wrist === null) return
-  // `wrist.y − shoulder.y` — `armSwingSymmetry.ts:117`'s per-side series, the drawable half. The
-  // card's value is `min/max` of two per-side MEDIANS (`:264-271`), a ratio BETWEEN the two
-  // images, so it belongs to neither and no polarity convention applies to one bar.
+  // `wrist.y − shoulder.y` — `armSwing.ts:405`'s per-side series, the drawable half. The card's
+  // value is the MEAN of the two sides' fitted amplitudes over a clip-median torso length, so it
+  // spans both images and a denominator in neither: it belongs to no single bar, and no polarity
+  // convention applies to one.
   builder.caliper(
     'armSwingCaliper',
     'vertical',

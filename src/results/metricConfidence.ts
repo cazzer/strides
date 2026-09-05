@@ -8,7 +8,6 @@ export const METRIC_LABELS: Record<MetricId, string> = {
   overstriding: 'Overstriding',
   cadence: 'Cadence',
   kneeFlexion: 'Knee flexion',
-  armSwingSymmetry: 'Arm swing symmetry',
   footStrikePattern: 'Foot strike pattern',
   stepWidth: 'Step width',
   stepWidthCm: 'Step width (cm)',

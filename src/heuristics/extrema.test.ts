@@ -57,8 +57,8 @@ describe('findLocalExtrema', () => {
   it('never smooths or pairs extrema across a gap: two runs are detected fully independently', () => {
     // Run 1 (indices 0-1): [0, 10] -> min@0, max@1 (rises straight to the end).
     // Run 2 (indices 3-4, after a gap at index 2): [10, 0] -> max@3, min@4 (falls straight from
-    // the start). Note extrema[1] and extrema[2] are BOTH 'max' — this is exactly the case
-    // armSwingSymmetry.ts's amplitude-pairing loop has to guard against, since a naive
+    // the start). Note extrema[1] and extrema[2] are BOTH 'max' — this is exactly the case a
+    // consumer pairing extrema into amplitudes has to guard against, since a naive
     // "pair every consecutive pair" would fabricate an amplitude across the gap.
     const series = [
       { t: 0, v: 0 },

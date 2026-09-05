@@ -171,17 +171,6 @@ const FAKE_HEURISTICS: FormHeuristicsResult = {
     sampleSize: 5,
     caveat: null,
   },
-  armSwingSymmetry: {
-    metric: 'armSwingSymmetry',
-    value: 0.9,
-    unit: 'percent',
-    confidence: 1,
-    viewFit: 'primary',
-    interpolatedFraction: 0,
-    frameCoverage: 1,
-    sampleSize: 5,
-    caveat: null,
-  },
   footStrikePattern: {
     metric: 'footStrikePattern',
     value: 0.01,

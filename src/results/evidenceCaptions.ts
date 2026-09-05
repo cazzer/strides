@@ -80,8 +80,9 @@ export function captionFor(plan: EvidenceFramePlan): string {
  * instants separately, "X, ghosted against Y" with the base first — `bounceInstants`,
  * `kneeFlexion`, `overstriding`, `trunkLean` — and it is those this sentence points into. The other
  * two name the PAIR as one whole and no clause of theirs names an instant: `verticalRatio`'s "One
- * stride: consecutive {side}-foot strikes, ghosted together" and `armSwingSymmetry`'s "Top and
- * bottom of one {side}-arm swing, ghosted together". On those, "the first instant named above" has
+ * stride: consecutive {side}-foot strikes, ghosted together" and `armSwingAmplitude`'s "Top and
+ * bottom of one {side}-arm swing, ghosted together" (emitted by the shared `armSwing.ts`
+ * builder). On those, "the first instant named above" has
  * nothing to point at — harmless today, because the rest of the sentence still says truthfully that
  * two frames are blended, and neither kind is demotable, so neither ever appears beside one body.
  *

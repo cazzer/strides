@@ -69,8 +69,6 @@ const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
   cadence: 'How many steps per minute you take, both feet combined.',
   kneeFlexion:
     'How much your knee bends during the swing phase of your stride, both legs combined.',
-  armSwingSymmetry:
-    'How evenly your left and right arms swing relative to each other — 100% is perfectly even, lower values mean one arm is swinging noticeably more than the other.',
   footStrikePattern:
     'Whether your foot tends to land heel-, midfoot-, or forefoot-first — approximated from ankle position relative to the knee at footstrike, not a direct foot-angle measurement.',
   stepWidth:
@@ -80,7 +78,7 @@ const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
   kneeDrive:
     'How high you lift your thigh at the peak of each stride — the angle between your thigh and vertical, both legs combined. A movement-amplitude measurement from the video only: it says how far the knee comes up, not how much force is behind it. Distinct from knee flexion, which measures how much the knee bends.',
   armSwingAmplitude:
-    'How far your wrists travel up and down through one arm swing, as a percentage of your torso length, averaged across both arms. A movement-amplitude measurement from the video only: it says how big the swing is, not what it contributes to your stride. Distinct from arm swing symmetry, which compares one arm to the other.',
+    'How far your wrists travel up and down through one arm swing, as a percentage of your torso length, averaged across both arms. A movement-amplitude measurement from the video only: it says how big the swing is, not what it contributes to your stride.',
 }
 
 const FOOT_STRIKE_CLASS_LABELS: Record<FootStrikeClass, string> = {
@@ -100,7 +98,7 @@ function formatValue(metric: MetricResult): string {
   }
   if (metric.unit === 'degrees') return `${metric.value.toFixed(1)}°`
   if (metric.unit === 'stepsPerMinute') return `${Math.round(metric.value)} steps/min`
-  // 'percent' is a dimensionless 0..1 comparison (e.g. armSwingSymmetry's min/max ratio) — unlike
+  // 'percent' is a dimensionless 0..1 comparison (verticalRatio's bounce/strideLength) — unlike
   // 'ratio', it is NOT a fraction of torso length, so it gets no "of torso length" suffix.
   if (metric.unit === 'percent') return `${(metric.value * 100).toFixed(1)}%`
   // 'centimeters' (verticalOscillationCm only) is an absolute physical quantity with no
@@ -379,7 +377,6 @@ export function MetricsPanel({
     heuristics.overstriding,
     heuristics.cadence,
     heuristics.kneeFlexion,
-    heuristics.armSwingSymmetry,
     heuristics.footStrikePattern,
     heuristics.stepWidth,
     heuristics.stepWidthCm,

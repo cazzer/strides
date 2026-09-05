@@ -15,20 +15,19 @@ import {
 
 /**
  * The shared per-side arm-swing computation — the per-side fit, its gate/policy constants, and
- * the per-side exemplar builder — extracted verbatim from `armSwingSymmetry.ts` so that
- * `armSwingAmplitude` (how BIG the swing is) reads the identical fitted signal `armSwingSymmetry`
- * (how EVEN it is) already reads. Siblings each call `computeSideSwing` themselves and re-run the
- * fit, exactly as `verticalOscillationCm`/`verticalRatio` each call the exported
- * `analyzeHipBounce` — no cross-metric memoization exists in `index.ts`, and the fit is one cheap
- * linear least-squares per side.
+ * the per-side exemplar builder. `armSwingAmplitude` (how BIG the swing is) is its consumer
+ * today; it calls `computeSideSwing` itself and runs the fit, exactly as
+ * `verticalOscillationCm`/`verticalRatio` each call the exported `analyzeHipBounce` — no
+ * cross-metric memoization exists in `index.ts`, and the fit is one cheap linear least-squares per
+ * side.
  *
  * **One deliberate difference from the `hipBounce.ts` precedent**: `analyzeBounceSignal`'s
  * callers each own their own gate policy (`verticalOscillationMinFitR2` vs `cadenceMinFitR2` —
- * two config keys answering two different questions). The two ARM metrics are MANDATED to share
- * gate policy on the same fitted signal — a second gate constant on the identical fit is the bug
- * class #36 deleted, two gates letting a metric family disagree with itself about
+ * two config keys answering two different questions). Every consumer of THIS fitted signal is
+ * MANDATED to share one gate policy — a second, separately-tunable gate constant on the identical
+ * fit is the bug class #36 deleted, two gates letting a metric family disagree with itself about
  * trustworthiness — so the gate constants live HERE, in the shared module, rather than
- * per-caller.
+ * per-caller, and a future second consumer inherits the gate rather than choosing its own.
  *
  * ## Scale stabilization before the fit
  *
@@ -43,9 +42,9 @@ import {
  * The fix divides every sample by a per-frame scale factor before the fit — see
  * `resolveScaleStabilizer` for the construction and the reasoning behind each piece of it (strict
  * bilateral proxy, whole-window log-quadratic trend, no clamp). The output stays in PIXELS, at the
- * clip's reference (median measured) scale, so downstream semantics are unchanged: the symmetry
- * ratio still cancels the units, and `armSwingAmplitude`'s division by the clip-median torso
- * length still pairs a reference-scale numerator with a clip-median denominator.
+ * clip's reference (median measured) scale, so downstream semantics are unchanged:
+ * `armSwingAmplitude`'s division by the clip-median torso length still pairs a reference-scale
+ * numerator with a clip-median denominator.
  */
 
 /**
@@ -74,12 +73,12 @@ export const FIT_QUALITY_SATURATION_R2 = 0.8
  * Maximum fractional disagreement between the two sides' fitted frequencies, above which the two
  * amplitudes are not treated as comparable at all.
  *
- * **This is the check that distinguishes a real asymmetry from a measured one**, and it exists
+ * **This is the check that distinguishes a real reading from a measured artifact**, and it exists
  * because the R² gate provably does not catch it. Both arms belong to one body and swing on one
  * rhythm, so two fits landing on materially different frequencies means at least one of them found
- * something that is not the arm swing — and a ratio between an arm-swing amplitude and some other
- * oscillation's amplitude is not a symmetry measurement, however confidently each side fitted on
- * its own. Measured live on `e2e/fixtures/multiperson-track.mp4` (2026-08-29): left 1.48 Hz at
+ * something that is not the arm swing — and any statistic combining an arm-swing amplitude with
+ * some other oscillation's amplitude is not an arm-swing measurement, however confidently each
+ * side fitted on its own. Measured live on `e2e/fixtures/multiperson-track.mp4` (2026-08-29): left 1.48 Hz at
  * R² 0.676, right **2.80 Hz** at R² 0.324 — the right side had latched onto the step rhythm
  * (cadence 174 spm = 2.90 Hz) rather than the stride rhythm, cleared the R² gate anyway, and the
  * reported 0.349 ratio was a comparison between two different oscillations.
@@ -96,10 +95,10 @@ export const MAX_SIDE_FREQUENCY_DISAGREEMENT = 0.25
  * measured one arm materially better than the other.
  *
  * Confidence already carries this numerically — it ramps on the WEAKER side's fit, below — but a
- * number alone cannot tell a reader that the asymmetry they are looking at may be a property of
- * the footage rather than of the runner. On a clip where one arm spends the measured window
- * further from the camera (Demo 2: left R² 0.778, right R² 0.497), the weaker-looking arm is also
- * the worse-measured one, and that coincidence is exactly what a symmetry number must not present
+ * number alone cannot tell a reader that what they are looking at may be a property of the
+ * footage rather than of the runner. On a clip where one arm spends the measured window further
+ * from the camera (Demo 2: left R² 0.778, right R² 0.497), the smaller-swinging arm is also the
+ * worse-measured one, and that coincidence is exactly what a reported swing size must not present
  * as a finding. A judgment call, in the same spirit as `presenceMinConsecutiveFrames`.
  */
 export const SIDE_FIT_QUALITY_DISPARITY_R2 = 0.2
@@ -435,9 +434,9 @@ export function caveatForFailure(reason: SpectralFitFailureReason, sampleCount: 
  * One ghosted pair per side: the wrist at the top and the bottom of ONE fitted half-swing, half a
  * fitted period apart by construction.
  *
- * Two of them, one per arm, is what makes an ASYMMETRY metric legible as a picture — one arm's
- * swing only means anything next to the other's, so this metric spends its whole two-exemplar
- * budget on the comparison rather than on two views of one arm.
+ * Two of them, one per arm, is what makes the measurement legible as a picture — each pair spans
+ * the very excursion the reported amplitude is taken over, so the whole two-exemplar budget goes
+ * to one pair per arm rather than to two views of one arm.
  *
  * **The instants come from the fitted PHASE, never from a scan of the raw trace**, and the pair is
  * resolved by the same `selectBounceInstants` the vertical-oscillation family uses — see that
@@ -451,7 +450,7 @@ export function caveatForFailure(reason: SpectralFitFailureReason, sampleCount: 
  * DOWNWARD, so the sinusoid's MAXIMUM is the wrist at its LOWEST on screen. Getting this backwards
  * produces a caption that says the exact opposite of the truth while passing every type check; the
  * hazard is documented at length in `bounceInstants.ts` and asserted against fixture geometry in
- * `armSwingSymmetry.test.ts`.
+ * `armSwing.test.ts`.
  *
  * Scored on DETECTION ALONE, via an empty distribution — same reasoning `buildBounceCycleExemplar`
  * records: a fitted amplitude has no per-instance values to form a distribution from, and inventing

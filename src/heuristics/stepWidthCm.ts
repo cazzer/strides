@@ -93,7 +93,7 @@ function nullResult(
  * clip gets one clear "wrong backend" caveat, never a confusing "no footstrikes" message for a
  * clip that actually tracked fine.
  *
- * View-gated like `armSwingSymmetry`, not `overstriding`/`trunkLean`: step width is a
+ * View-gated like `armSwingAmplitude`, not `overstriding`/`trunkLean`: step width is a
  * mediolateral (side-to-side) offset, primary from front/rear, unsuitable from the side — see
  * `viewFitTable.stepWidthCm`'s own doc in `types.ts`.
  *

@@ -10,7 +10,6 @@ import { computeTrunkLean } from './trunkLean'
 import { computeOverstriding } from './overstriding'
 import { computeCadence } from './cadence'
 import { computeKneeFlexion } from './kneeFlexion'
-import { computeArmSwingSymmetry } from './armSwingSymmetry'
 import { computeFootStrikePattern } from './footStrikePattern'
 import { computeStepWidth } from './stepWidth'
 import { computeStepWidthCm } from './stepWidthCm'
@@ -79,7 +78,6 @@ export function computeFormHeuristics(
     overstriding: computeOverstriding(frames, gatedView, gatedConfig),
     cadence: computeCadence(frames, gatedView, gatedConfig),
     kneeFlexion: computeKneeFlexion(frames, gatedView, gatedConfig),
-    armSwingSymmetry: computeArmSwingSymmetry(frames, gatedView, gatedConfig),
     footStrikePattern: computeFootStrikePattern(frames, gatedView, gatedConfig),
     stepWidth: computeStepWidth(frames, gatedView, gatedConfig),
     stepWidthCm: computeStepWidthCm(frames, gatedView, gatedConfig),

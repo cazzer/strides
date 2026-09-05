@@ -69,7 +69,6 @@ export type MetricId =
   | 'overstriding'
   | 'cadence'
   | 'kneeFlexion'
-  | 'armSwingSymmetry'
   | 'footStrikePattern'
   | 'stepWidth'
   | 'stepWidthCm'
@@ -120,8 +119,7 @@ export interface ViewDetectionResult {
  * per-measurement rather than "footstrike"/"frame": three different metrics can pick the same
  * instant for three different reasons, and a caption has to say which reason it is.
  *
- * Members are added by the metric that needs them — `armSwingSymmetry` adds its own when it
- * starts emitting.
+ * Members are added by the metric that needs them, when it starts emitting.
  */
 export type MetricExemplarKind =
   | 'kneeFlexionPeak'
@@ -134,11 +132,9 @@ export type MetricExemplarKind =
    * (all three read the same shape of fit). `cadence` reads that fit too and deliberately emits
    * nothing: a rate is a property of a sequence, and these two stills depict an amplitude. */
   | 'bounceCycle'
-  /** One arm-swing half-cycle — the wrist at its highest and its lowest, on ONE side, shared by
-   * `armSwingSymmetry` and `armSwingAmplitude` (both read the same shape of per-side fit, via the
-   * shared `armSwing.ts` builder). Two of these (one per arm) is what makes either metric legible:
-   * for symmetry the comparison IS the evidence, and for amplitude the pair spans the very
-   * excursion the mean is taken over. */
+  /** One arm-swing half-cycle — the wrist at its highest and its lowest, on ONE side, emitted by
+   * `armSwingAmplitude` via the shared `armSwing.ts` builder. Two of these (one per arm) is what
+   * makes the metric legible: each pair spans the very excursion the mean is taken over. */
   | 'armSwingCycle'
   /** One stride — two consecutive same-side footstrikes, the interval whose hip-mid horizontal
    * displacement is `verticalRatio`'s DENOMINATOR. Distinct from `'bounceCycle'`, which is that
@@ -283,9 +279,9 @@ export interface MetricResult {
    * 'stepsPerMinute' is cadence's own physical unit. 'percent' is a dimensionless 0..1 comparison
    * that is NOT a fraction of torso length — kept distinct from 'ratio' specifically because
    * `formatValue` in MetricsPanel.tsx bakes "% of torso length" into 'ratio''s formatting, which
-   * would misstate a dimensionless ratio. Two metrics use it: armSwingSymmetry's
-   * min(left,right)/max(left,right), and verticalRatio's bounce/strideLength (both pixel-space
-   * ratios where real-world scale cancels — see verticalRatio.ts's module doc). 'centimeters'
+   * would misstate a dimensionless ratio. verticalRatio's bounce/strideLength is its only
+   * producer — a pixel-space ratio where real-world scale cancels (see verticalRatio.ts's module
+   * doc). 'centimeters'
    * (American spelling, matching every identifier in this codebase that names the unit) is an
    * ABSOLUTE physical quantity with no denominator at all — unlike every other unit here, it is
    * not relative to torso length, stride length, or anything else about the runner's own body.
@@ -494,7 +490,6 @@ export interface FormHeuristicsResult {
   overstriding: MetricResult
   cadence: MetricResult
   kneeFlexion: MetricResult
-  armSwingSymmetry: MetricResult
   footStrikePattern: MetricResult
   stepWidth: MetricResult
   stepWidthCm: MetricResult
@@ -719,13 +714,12 @@ export interface HeuristicsConfig {
   /** Minimum sinusoid partial R², on the WEAKER of the two arms, for a fitted arm-swing amplitude
    * pair to be published at all. Same shape and same default as `verticalOscillationMinFitR2` /
    * `cadenceMinFitR2` — each caller owns its own "is this fit trustworthy" policy — but read
-   * against the weaker side specifically, because a noise-fitted amplitude on one arm becomes a
-   * fabricated asymmetry rather than merely a fuzzy number. It replaced
+   * against the weaker side specifically, because a mean over one real amplitude and one
+   * noise-fitted one is not an arm-swing amplitude at all. It replaced
    * `armSwingMinProminenceRatio`, whose extrema-prominence estimator was measured latching onto
-   * sub-cycle wiggles (see `armSwingSymmetry.ts`). THE gate for both arm metrics —
-   * `armSwingSymmetry` and `armSwingAmplitude` gate the identical per-side fits
-   * (`armSwing.ts`) on this one key, deliberately never a second constant, so the family cannot
-   * disagree with itself about whether the fits are trustworthy. */
+   * sub-cycle wiggles (see `armSwing.ts`). THE gate for the shared per-side fits — every consumer
+   * of `armSwing.ts` gates on this one key, deliberately never a second constant, so no two
+   * readers of the identical fit can disagree about whether it is trustworthy. */
   armSwingMinFitR2: number // 0.3
 
   /** Half-width, as a fraction of torsoLengthPx, of the "midfoot" band in `footStrikePattern`'s
@@ -835,14 +829,6 @@ export const DEFAULT_VIEW_FIT_TABLE: HeuristicsConfig['viewFitTable'] = {
     front: { fit: 'unsuitable', multiplier: 0.1 },
     ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
   },
-  // Mirror image of trunkLean/overstriding: side view occludes/superimposes the far arm rather
-  // than making the swing signal invisible, so side is unsuitable and front is primary here — see
-  // `openspec/changes/add-arm-swing-symmetry-metric/design.md` for the full reasoning.
-  armSwingSymmetry: {
-    front: { fit: 'primary', multiplier: 1.0 },
-    side: { fit: 'unsuitable', multiplier: 0.1 },
-    ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
-  },
   footStrikePattern: {
     side: { fit: 'primary', multiplier: 1.0 },
     front: { fit: 'unsuitable', multiplier: 0.1 },
@@ -851,7 +837,7 @@ export const DEFAULT_VIEW_FIT_TABLE: HeuristicsConfig['viewFitTable'] = {
   // Mediolateral, the opposite view-tolerance from most existing (sagittal-plane) metrics: a
   // side-on camera looks straight along the axis this metric measures (foot offset from the
   // hip midline), collapsing it toward a degenerate reading, while front/rear view is exactly
-  // where mediolateral foot placement is visible. Mirrors armSwingSymmetry's row (front primary,
+  // where mediolateral foot placement is visible. Mirrors armSwingAmplitude's row (front primary,
   // side unsuitable) — arm swing is occluded/superimposed in side view for a different reason
   // (separability, not axis collapse), but lands on the identical numbers.
   stepWidth: {
@@ -874,9 +860,9 @@ export const DEFAULT_VIEW_FIT_TABLE: HeuristicsConfig['viewFitTable'] = {
     front: { fit: 'unsuitable', multiplier: 0.1 },
     ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
   },
-  // Copies armSwingSymmetry's row exactly, not merely similarly: the two arm metrics read the
-  // identical per-side fits, and a side view occludes/superimposes the far arm — an amplitude
-  // averaged over a visible arm and an occluded one is contaminated just as a comparison is.
+  // A side view occludes or superimposes the far arm — an occlusion/separability failure rather
+  // than a loss of the swing signal itself — and an amplitude averaged over one visible arm and
+  // one occluded arm is contaminated by the occlusion.
   armSwingAmplitude: {
     front: { fit: 'primary', multiplier: 1.0 },
     side: { fit: 'unsuitable', multiplier: 0.1 },

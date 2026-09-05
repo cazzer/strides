@@ -96,7 +96,6 @@ const FAKE_HEURISTICS = {
   overstriding: makeMetric('overstriding'),
   cadence: makeMetric('cadence', { unit: 'stepsPerMinute' }),
   kneeFlexion: makeMetric('kneeFlexion', { unit: 'degrees' }),
-  armSwingSymmetry: makeMetric('armSwingSymmetry', { unit: 'percent' }),
   footStrikePattern: makeMetric('footStrikePattern'),
   stepWidth: makeMetric('stepWidth', { unit: 'percent' }),
   stepWidthCm: makeMetric('stepWidthCm', { unit: 'centimeters', value: null, confidence: 0 }),

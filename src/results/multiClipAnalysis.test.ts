@@ -44,7 +44,6 @@ function makeHeuristics(confidence = 1): FormHeuristicsResult {
     overstriding: makeMetric('overstriding', confidence),
     cadence: makeMetric('cadence', confidence),
     kneeFlexion: makeMetric('kneeFlexion', confidence),
-    armSwingSymmetry: makeMetric('armSwingSymmetry', confidence),
     footStrikePattern: makeMetric('footStrikePattern', confidence),
     stepWidth: makeMetric('stepWidth', confidence),
     stepWidthCm: makeMetric('stepWidthCm', confidence),

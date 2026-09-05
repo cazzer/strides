@@ -88,7 +88,6 @@ function makeHeuristics(overrides: Partial<FormHeuristicsResult> = {}): FormHeur
     overstriding: makeMetric({ metric: 'overstriding', unit: 'ratio' }),
     cadence: makeMetric({ metric: 'cadence', unit: 'stepsPerMinute', value: 170 }),
     kneeFlexion: makeMetric({ metric: 'kneeFlexion' }),
-    armSwingSymmetry: makeMetric({ metric: 'armSwingSymmetry', unit: 'percent', value: 0.9 }),
     footStrikePattern: makeMetric({ metric: 'footStrikePattern', unit: 'ratio' }),
     stepWidth: makeMetric({ metric: 'stepWidth', unit: 'percent', value: 0.15 }),
     stepWidthCm: {
@@ -321,7 +320,6 @@ describe('computeAnalysisDiagnostics', () => {
     expect(Object.keys(diagnostics.metrics).sort()).toEqual(
       [
         'armSwingAmplitude',
-        'armSwingSymmetry',
         'cadence',
         'footStrikePattern',
         'kneeDrive',

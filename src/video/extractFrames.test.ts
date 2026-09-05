@@ -61,7 +61,6 @@ const ALL_METRICS: MetricId[] = [
   'overstriding',
   'cadence',
   'kneeFlexion',
-  'armSwingSymmetry',
   'footStrikePattern',
   'stepWidth',
   'stepWidthCm',

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { computeFormHeuristics } from './index'
 import { detectView } from './viewDetection'
 import { estimateStrideLength } from './strideLength'
-import { computeArmSwingSymmetry } from './armSwingSymmetry'
+import { computeArmSwingAmplitude } from './armSwingAmplitude'
 import { computeTrunkLean } from './trunkLean'
 import { computeVerticalOscillation } from './verticalOscillation'
 import { computeStepWidth } from './stepWidth'
@@ -45,7 +45,7 @@ describe('computeFormHeuristics', () => {
     expect(result.overstriding.value).not.toBeNull()
     expect(result.cadence.value).not.toBeNull()
     expect(result.footStrikePattern.value).not.toBeNull()
-    // stepWidth is front-primary/side-unsuitable (the mirror of armSwingSymmetry) -- still
+    // stepWidth is front-primary/side-unsuitable (the mirror of armSwingAmplitude) -- still
     // computed on this side-view clip, per "never a silent wrong number", just view-discounted.
     expect(result.stepWidth.value).not.toBeNull()
     // kneeDrive resolves on this fixture: the knee sits at the hip-ankle midpoint, so the thigh
@@ -54,7 +54,7 @@ describe('computeFormHeuristics', () => {
     expect(result.kneeDrive.unit).toBe('degrees')
     // stepWidthCm shares stepWidth's view-fit row (front primary), so side is unsuitable here too;
     // it's still computed (never a silent wrong number) but excluded for the same reason
-    // armSwingSymmetry is below.
+    // armSwingAmplitude is below.
     expect(result.stepWidthCm.viewFit).toBe('unsuitable')
     // PARAMS carries no pixelsPerMeter -- an "unscaled" clip, like every non-MediaPipe backend --
     // so stepWidthCm also reports its availability caveat rather than a value, same as
@@ -63,13 +63,10 @@ describe('computeFormHeuristics', () => {
     expect(result.stepWidthCm.confidence).toBe(0)
     expect(result.stepWidthCm.caveat).toMatch(/no real-world scale could be measured/i)
     // generateSyntheticGait's elbow/wrist keypoints are static relative to the shoulder (this
-    // shared fixture has no arm-swing motion), so armSwingSymmetry correctly reports null here
-    // ("no complete arm-swing cycle") rather than a fabricated value — see armSwingSymmetry.test.ts
-    // for dedicated coverage of a clip that actually swings, including its own view-gating case.
-    expect(result.armSwingSymmetry.value).toBeNull()
-    expect(result.armSwingSymmetry.confidence).toBe(0)
-    // armSwingAmplitude reads the identical per-side fits through the shared armSwing.ts module,
-    // so it nulls here for the same reason, on the same clip.
+    // shared fixture has no arm-swing motion), so armSwingAmplitude correctly reports null here
+    // ("no complete arm-swing cycle") rather than a fabricated value — see armSwing.test.ts and
+    // armSwingAmplitude.test.ts for dedicated coverage of a clip that actually swings, including
+    // its own view-gating case.
     expect(result.armSwingAmplitude.value).toBeNull()
     expect(result.armSwingAmplitude.confidence).toBe(0)
     // PARAMS carries no pixelsPerMeter -- an "unscaled" clip, like every non-MediaPipe backend --
@@ -88,14 +85,12 @@ describe('computeFormHeuristics', () => {
     expect(result.overstriding.viewFit).toBe('primary')
     expect(result.cadence.viewFit).toBe('primary')
     expect(result.footStrikePattern.viewFit).toBe('primary')
-    // armSwingSymmetry is the mirror image of trunkLean/overstriding: side is its unsuitable
-    // view, not its primary one.
-    expect(result.armSwingSymmetry.viewFit).toBe('unsuitable')
-    // stepWidth mirrors armSwingSymmetry's row exactly: front-primary, side-unsuitable.
+    // stepWidth mirrors armSwingAmplitude's row exactly: front-primary, side-unsuitable.
     expect(result.stepWidth.viewFit).toBe('unsuitable')
     // kneeDrive copies kneeFlexion's row: side-primary.
     expect(result.kneeDrive.viewFit).toBe('primary')
-    // armSwingAmplitude copies armSwingSymmetry's row: front-primary, so side is unsuitable.
+    // armSwingAmplitude is the mirror image of trunkLean/overstriding: side is its unsuitable
+    // view, not its primary one.
     expect(result.armSwingAmplitude.viewFit).toBe('unsuitable')
 
     // footStrikePattern's caveat is non-null even here, in the fully-populated clean case — the
@@ -261,16 +256,15 @@ describe('computeFormHeuristics', () => {
     // Cadence is view-tolerant like verticalOscillation, not hard-gated like trunkLean/
     // overstriding — see viewFitTable.cadence in types.ts and design.md.
     expect(result.cadence.viewFit).toBe('tolerated')
-    expect(result.armSwingSymmetry.viewFit).toBe('unsuitable')
     expect(result.footStrikePattern.viewFit).toBe('unsuitable')
     // stepWidth is front-primary, so it is ALSO 'unsuitable' on an ambiguous view -- same
-    // reasoning as armSwingSymmetry above.
+    // reasoning as armSwingAmplitude below.
     expect(result.stepWidth.viewFit).toBe('unsuitable')
     // stepWidthCm shares stepWidth's row -- hard-gated the same way, not view-tolerant.
     expect(result.stepWidthCm.viewFit).toBe('unsuitable')
     // kneeDrive copies kneeFlexion's row -- hard-gated away from ambiguous views too.
     expect(result.kneeDrive.viewFit).toBe('unsuitable')
-    // armSwingAmplitude copies armSwingSymmetry's row -- same hard gate on ambiguous views.
+    // armSwingAmplitude is front-primary too -- same hard gate on ambiguous views.
     expect(result.armSwingAmplitude.viewFit).toBe('unsuitable')
   })
 
@@ -285,7 +279,6 @@ describe('computeFormHeuristics', () => {
     expect(result.trunkLean.value).toBeNull()
     expect(result.overstriding.value).toBeNull()
     expect(result.cadence.value).toBeNull()
-    expect(result.armSwingSymmetry.value).toBeNull()
     expect(result.footStrikePattern.value).toBeNull()
     expect(result.stepWidth.value).toBeNull()
     expect(result.stepWidthCm.value).toBeNull()
@@ -297,7 +290,6 @@ describe('computeFormHeuristics', () => {
     expect(result.trunkLean.confidence).toBe(0)
     expect(result.overstriding.confidence).toBe(0)
     expect(result.cadence.confidence).toBe(0)
-    expect(result.armSwingSymmetry.confidence).toBe(0)
     expect(result.footStrikePattern.confidence).toBe(0)
     expect(result.stepWidth.confidence).toBe(0)
     expect(result.stepWidthCm.confidence).toBe(0)
@@ -365,8 +357,8 @@ describe('computeFormHeuristics', () => {
     expect(result.trunkLean).toEqual(
       computeTrunkLean(frames, 'side', DEFAULT_HEURISTICS_CONFIG),
     )
-    expect(result.armSwingSymmetry).toEqual(
-      computeArmSwingSymmetry(frames, 'side', DEFAULT_HEURISTICS_CONFIG),
+    expect(result.armSwingAmplitude).toEqual(
+      computeArmSwingAmplitude(frames, 'side', DEFAULT_HEURISTICS_CONFIG),
     )
     expect(result.verticalOscillation).toEqual(
       computeVerticalOscillation(frames, 'side', DEFAULT_HEURISTICS_CONFIG),
@@ -378,7 +370,7 @@ describe('computeFormHeuristics', () => {
     // from side view's (0.26 vs 0.80). `detectView`'s margin-based confidence reads very low
     // there — BSR is 0.01 into a 0.11-wide ramp, so ~0.09, averaged with a ~0.33 SER margin —
     // but side is ruled out twice over, so nothing about the metrics should move: this is
-    // the case where multiplying confidence by that low number would delete `armSwingSymmetry`
+    // the case where multiplying confidence by that low number would delete `armSwingAmplitude`
     // and `stepWidth` on a clip that plainly shows both arms.
     const frames = withBilateralSpread(
       generateSyntheticGait({ ...PARAMS, strideAmplitudePx: 20 }),
@@ -390,10 +382,10 @@ describe('computeFormHeuristics', () => {
     expect(result.view.view).toBe('front')
     expect(result.view.confidence).toBeLessThan(0.25)
     expect(result.view.plausibility).toEqual({ side: 0, front: 1, ambiguous: 0 })
-    expect(result.armSwingSymmetry.viewFit).toBe('primary')
+    expect(result.armSwingAmplitude.viewFit).toBe('primary')
     expect(result.stepWidth.viewFit).toBe('primary')
-    expect(result.armSwingSymmetry).toEqual(
-      computeArmSwingSymmetry(frames, 'front', DEFAULT_HEURISTICS_CONFIG),
+    expect(result.armSwingAmplitude).toEqual(
+      computeArmSwingAmplitude(frames, 'front', DEFAULT_HEURISTICS_CONFIG),
     )
     // The seven sagittal metrics stay excluded, exactly as a front label excludes them today.
     expect(result.verticalRatio.viewFit).toBe('unsuitable')
@@ -410,7 +402,7 @@ describe('computeFormHeuristics', () => {
 
   it('reports, rather than excludes, a front-primary metric when only side is ruled out', () => {
     // BSR 0.42 — past side view's bar but 0.03 short of front's, so the label stays 'ambiguous' —
-    // with a fully front-like SER. The old gate hard-excluded `armSwingSymmetry` here as
+    // with a fully front-like SER. The old gate hard-excluded `armSwingAmplitude` here as
     // structurally unmeasurable, on the strength of a side view the geometry rules out.
     const frames = withBilateralSpread(
       generateSyntheticGait({ ...PARAMS, strideAmplitudePx: 20 }),
@@ -427,10 +419,10 @@ describe('computeFormHeuristics', () => {
     // What the label alone would have produced, for contrast — still the case for any caller that
     // gates on the label rather than the plausibility.
     expect(
-      computeArmSwingSymmetry(frames, 'ambiguous', DEFAULT_HEURISTICS_CONFIG).viewFit,
+      computeArmSwingAmplitude(frames, 'ambiguous', DEFAULT_HEURISTICS_CONFIG).viewFit,
     ).toBe('unsuitable')
 
-    expect(result.armSwingSymmetry.viewFit).toBe('primary')
+    expect(result.armSwingAmplitude.viewFit).toBe('primary')
 
     // `stepWidth` is front-primary too, and unlike arm swing it produces a value on this fixture
     // (whose arms are rigid), so it shows the whole effect: measured, no longer excluded, and
@@ -474,7 +466,7 @@ describe('computeFormHeuristics', () => {
     expect(result.overstriding.viewFit).toBe('unsuitable')
     expect(result.kneeFlexion.viewFit).toBe('unsuitable')
     expect(result.footStrikePattern.viewFit).toBe('unsuitable')
-    expect(result.armSwingSymmetry.viewFit).toBe('unsuitable')
+    expect(result.armSwingAmplitude.viewFit).toBe('unsuitable')
     expect(result.stepWidth.viewFit).toBe('unsuitable')
     // View-tolerant metrics still report, as they do from any view.
     expect(result.verticalOscillation.viewFit).toBe('tolerated')

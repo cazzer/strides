@@ -54,7 +54,7 @@ function signalSupport(
  * view the data supports. On the front-approach demo clip the two answers diverge completely —
  * BSR clears the front bar by 0.13% (so the margin reads 0.0771) while BOTH of side view's
  * conditions fail by more than a factor of two (so side is ruled out, and front is the only view
- * left standing). Multiplying metric confidence by 0.0771 there would degrade `armSwingSymmetry`
+ * left standing). Multiplying metric confidence by 0.0771 there would degrade `armSwingAmplitude`
  * toward its `ambiguous` row — i.e. delete it — on the strength of a side view the geometry
  * positively excludes.
  *

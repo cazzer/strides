@@ -86,7 +86,6 @@ function makeResult(
     overstriding: makeMetric('overstriding', confidence),
     cadence: makeMetric('cadence', confidence, { unit: 'stepsPerMinute' }),
     kneeFlexion: makeMetric('kneeFlexion', confidence, { unit: 'degrees' }),
-    armSwingSymmetry: makeMetric('armSwingSymmetry', confidence, { unit: 'percent' }),
     footStrikePattern: makeMetric('footStrikePattern', confidence),
     stepWidth: makeMetric('stepWidth', confidence, { unit: 'percent' }),
     stepWidthCm: makeMetric('stepWidthCm', confidence, { unit: 'centimeters' }),
@@ -116,19 +115,19 @@ describe('fuseFormHeuristicsResults', () => {
   it('picks each metric independently from whichever clip has higher confidence', () => {
     const clip0 = makeResult(0.5, {
       trunkLean: makeMetric('trunkLean', 0.9, { value: 5, unit: 'degrees' }),
-      armSwingSymmetry: makeMetric('armSwingSymmetry', 0.2, { value: 0.1, unit: 'percent' }),
+      armSwingAmplitude: makeMetric('armSwingAmplitude', 0.2, { value: 0.1, unit: 'ratio' }),
     })
     const clip1 = makeResult(0.5, {
       trunkLean: makeMetric('trunkLean', 0.3, { value: 99, unit: 'degrees' }),
-      armSwingSymmetry: makeMetric('armSwingSymmetry', 0.8, { value: 0.7, unit: 'percent' }),
+      armSwingAmplitude: makeMetric('armSwingAmplitude', 0.8, { value: 0.7, unit: 'ratio' }),
     })
 
     const fused = fuseFormHeuristicsResults([clip0, clip1])
 
     expect(fused.trunkLean.value).toBe(5)
     expect(fused.trunkLean.caveat).toBe('Combined from clip 1 of 2.')
-    expect(fused.armSwingSymmetry.value).toBe(0.7)
-    expect(fused.armSwingSymmetry.caveat).toBe('Combined from clip 2 of 2.')
+    expect(fused.armSwingAmplitude.value).toBe(0.7)
+    expect(fused.armSwingAmplitude.caveat).toBe('Combined from clip 2 of 2.')
   })
 
   it('surfaces a metric that resolves on only one of N clips rather than excluding it', () => {
@@ -291,7 +290,6 @@ const WINNER_BY_METRIC: Record<MetricId, number> = {
   overstriding: 3,
   cadence: 0,
   kneeFlexion: 2,
-  armSwingSymmetry: 1,
   footStrikePattern: 3,
   stepWidth: 2,
   stepWidthCm: 1,
@@ -323,10 +321,6 @@ function makeIndexedClip(clipIndex: number): FormHeuristicsResult {
     overstriding: makeMetric('overstriding', confidence('overstriding'), { value }),
     cadence: makeMetric('cadence', confidence('cadence'), { value, unit: 'stepsPerMinute' }),
     kneeFlexion: makeMetric('kneeFlexion', confidence('kneeFlexion'), { value, unit: 'degrees' }),
-    armSwingSymmetry: makeMetric('armSwingSymmetry', confidence('armSwingSymmetry'), {
-      value,
-      unit: 'percent',
-    }),
     footStrikePattern: makeMetric('footStrikePattern', confidence('footStrikePattern'), { value }),
     stepWidth: makeMetric('stepWidth', confidence('stepWidth'), { value, unit: 'percent' }),
     stepWidthCm: makeMetric('stepWidthCm', confidence('stepWidthCm'), {
