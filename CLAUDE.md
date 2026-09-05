@@ -1580,6 +1580,69 @@ clip's stored timestamp sits ~1 µs above the double-subtraction result, putting
 ~0.6 µs window just above the frame's presentation timestamp. The arithmetic is correct and lands
 **on** the frame boundary by construction. **Explicitly not to be fixed with an epsilon.**
 
+⚠️ **That residual is now CLOSED, and by not aiming at the boundary at all** (2026-09-05,
+`strides-5t4`, `seek-evidence-frames-to-the-frame-midpoint`). The seek target gained a SECOND
+per-clip term beside the edit-list shift: **half the track's nominal frame duration**, so it asks
+for the MIDDLE of a frame's presentation interval. `currentTime = t` displays the frame whose
+interval *contains* `t`, so the midpoint is the semantically correct request rather than a fudge,
+and it absorbs ±8.3 ms at 60 fps where the boundary absorbed nothing. Read the two terms as
+different kinds of thing: the edit-list shift is a **clock conversion** (per clip AND per sampler),
+the midpoint is a **targeting policy** (per clip only, and applied on *every* sampler). They stay
+separate fields — `resolveEvidenceSeekOffsetSeconds` became **`resolveEvidenceSeekCalibration`**,
+returning `{ offsetSeconds, midpointOffsetSeconds }` — and compose as
+`timestamp + offsetSeconds + midpointOffsetSeconds`.
+
+Three measurements worth not repeating:
+
+- **Chromium TRUNCATES seconds→microseconds.** Assigning `3.049999666666667` reads back
+  `3.049999`. Every earlier note calling the rounding mode unverified is now answered. A 60 fps
+  frame on a 15360 timescale starts at `n/60` s, a whole microsecond only when `n mod 3 == 0`, so
+  **two thirds of that clip's frame boundaries are unrepresentable in the seek API** and every one
+  of them truncates DOWN into the previous frame.
+- **Measured effect** on `park-side-landscape.mp4`, PSNR argmax against ffmpeg-reconstructed crops:
+  `footStrikePattern`'s two cards moved from source frames **182 → 183** (19.19 dB, runner-up
+  14.61) and **203 → 204** (20.85 dB, runner-up 15.20). Confirmed by looking: at 182/203 a
+  separated shadow band with tarmac visible between sole and shadow; at 183/204 a continuous
+  sole/ground line. Frame indices are ffmpeg's decoded index, which on these clips **is** the
+  container's media frame index — `select='eq(n\,183)'` reports `pts_time 3.05`, and
+  `-ignore_editlist 1` changes nothing, so ffmpeg does not apply the edit list at all.
+- **The midpoint is a no-op on the playback path**, verified rather than assumed: six
+  boundary-vs-boundary-plus-half pure-Chromium seeks across `park-side-landscape` and
+  `park-approach` (the latter at the playback arm's own real planned instants) came back
+  **byte-identical**. rVFC `mediaTime` is a frame start, so half a frame stays inside it. The
+  playback arm on `side-landscape` cannot be checked end to end at all — every metric is
+  `metric-excluded` there — so `front-approach` is the clip to use for that.
+
+Derived values, per clip: side-landscape `1/120`, side-portrait `1/60`, front-approach
+`1001/120000`. Zero for every clip with no derivable frame duration — WebM, webcam, audio-only, no
+`stts` — which is exactly the seek that shipped before. Cost: every clip now pays the container
+probe even with `sequentialSampling` disabled, where the old early return skipped it (25.2 ms on
+the 4K clip, 8.1 ms on front-approach, cached per blob).
+
+⚠️ **A/B gate for that change: bit-identical.** `--clips side-landscape,side-portrait,front-approach
+--trials 3 --evidence`, before/after: **3 differing lines, all `elapsedMs`**, and the
+elapsedMs-stripped body md5 matched exactly. Nothing in `metrics.*`, `sampling.*`,
+`personSelection.*`, `view.*` or `evidence.*` moved — which is the point: this changes which pixels
+an image is drawn from and no number any metric was computed from.
+
+⚠️ **SEPARATE, OPEN, and it contradicts the paragraph above this one: on `park-side-landscape.mp4`
+Chromium's `currentTime` runs on the container's MEDIA clock — the edit list is NOT applied**
+(`strides-09b`, filed 2026-09-05). `video.duration` reads **3.883333** (= 233/60, the full media
+duration) rather than 3.884 (the `elst` `segment_duration` ÷ 1000); and a **pure Chromium seek with
+no app involved** to `currentTime = 2.0` draws **media frame 120** at a clean unimodal PSNR peak
+(21.35 dB, runner-up 20.19) where the edit-list-applied model predicts 122. Both app footstrike
+images corroborate: seeking `3.049999666666667` drew media frame 182, which is
+`floor(3.049999 × 60)` exactly. So the `−512/15360` term this section documents as a FIX is moving
+that clip's seek **two frames early**, and after the midpoint the drawn frame is 2 frames from the
+instant the metric measured rather than 0. **This does not undo the midpoint** — its effect is `+1`
+frame whatever the offset is, the two terms are independent by construction, and the frame it now
+lands on is the keyframe-confirmed first-contact frame. But the `+2 frames` measurement recorded in
+the table above was taken on the retired Pexels Demo 1 and on `multiperson-track.mp4`, not on
+`park-side-landscape.mp4` — and note those are **different files on an identical lattice** (md5
+`5da45ab…` vs `106dcee…`, both 15360/512/60 fps/233 frames), so a reading on one is not a reading on
+the other. Re-measuring the offset across the whole corpus is `strides-09b`; do not assume either
+answer.
+
 **The extreme-role `1.5·MAD` risk fired — and only for `overstriding`.** An extreme instant's
 typicality is `|v − median| / (3·MAD)`, so clearing `MIN_EXEMPLAR_QUALITY = 0.5` needs
 `|v − median| ≥ 1.5·MAD`. Measured per-instance distributions (primary MoveNet pass, **bit-identical

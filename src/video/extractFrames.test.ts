@@ -13,18 +13,19 @@ import { stubCanvas2DContext } from '../test/canvasTestUtils'
 import type { FakeCanvasRenderingContext2D } from '../test/canvasTestUtils'
 import { makeVideoSeekable } from '../test/videoTestUtils'
 import { stubRequestVideoFrameCallback } from '../test/videoFrameCallbackTestUtils'
-const { resolveEvidenceSeekOffsetSecondsMock } = vi.hoisted(() => ({
-  resolveEvidenceSeekOffsetSecondsMock: vi.fn(),
+const { resolveEvidenceSeekCalibrationMock } = vi.hoisted(() => ({
+  resolveEvidenceSeekCalibrationMock: vi.fn(),
 }))
 
 // The derivation itself is tested against controlled containers in `evidenceSeekOffset.test.ts`;
-// mocked here so this file keeps asserting WIRING (does the derived number reach the seek) rather
+// mocked here so this file keeps asserting WIRING (do the derived numbers reach the seek) rather
 // than re-testing edit-list parsing through a fake blob that carries no container at all.
 vi.mock('./evidenceSeekOffset', () => ({
-  resolveEvidenceSeekOffsetSeconds: resolveEvidenceSeekOffsetSecondsMock,
+  resolveEvidenceSeekCalibration: resolveEvidenceSeekCalibrationMock,
 }))
 
 import {
+  DEFAULT_EVIDENCE_MIDPOINT_OFFSET_SECONDS,
   DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS,
   EVIDENCE_OUTPUT_MAX_SIDE_PX,
   extractClipEvidence,
@@ -33,8 +34,11 @@ import {
 } from './extractFrames'
 
 beforeEach(() => {
-  resolveEvidenceSeekOffsetSecondsMock.mockReset()
-  resolveEvidenceSeekOffsetSecondsMock.mockResolvedValue(0)
+  resolveEvidenceSeekCalibrationMock.mockReset()
+  resolveEvidenceSeekCalibrationMock.mockResolvedValue({
+    offsetSeconds: 0,
+    midpointOffsetSeconds: 0,
+  })
 })
 
 /**
@@ -236,7 +240,12 @@ function compositeWeights(draws: RecordedDraw[]): Map<number, number> {
  * that has nothing to do with what they test.
  */
 function drawnTimeOf(instant: EvidenceInstantPlan): number {
-  return Math.max(0, instant.timestamp + DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS)
+  return Math.max(
+    0,
+    instant.timestamp +
+      DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS +
+      DEFAULT_EVIDENCE_MIDPOINT_OFFSET_SECONDS,
+  )
 }
 
 describe('extractPlannedFrames', () => {
@@ -340,6 +349,126 @@ describe('extractPlannedFrames', () => {
       PAIR.base.timestamp + 0.033,
       PAIR.ghost!.timestamp + 0.033,
     ])
+  })
+
+  it('composes the edit-list shift and the midpoint into one seek', async () => {
+    stubCanvas2DContext()
+    const { video } = seekableVideo()
+    const seeked: number[] = []
+    video.addEventListener('seeked', () => seeked.push(video.currentTime))
+
+    await extractPlannedFrames(video, planWith({ footStrikePattern: [SINGLE] }), {
+      seekOffsetSeconds: -0.5,
+      midpointOffsetSeconds: 0.25,
+    })
+
+    expect(seeked).toEqual([SINGLE.base.timestamp - 0.25])
+  })
+
+  it('seeks INSIDE the frame the plan names, not to a boundary a whole microsecond cannot express', async () => {
+    // `park-side-landscape.mp4`, measured: 15360 timescale, 60 fps, `elst media_time` 512, and a
+    // sampler timestamp truncated to six decimals. Chromium truncates `currentTime` to integer
+    // microseconds (measured: assigning 3.049999666666667 reads back 3.049999), so the old
+    // boundary target floored into the PREVIOUS frame and drew an airborne foot. Half a frame
+    // later lands mid-interval, correct under truncation and under round-to-nearest alike.
+    stubCanvas2DContext()
+    const { video } = seekableVideo()
+    const seeked: number[] = []
+    video.addEventListener('seeked', () => seeked.push(video.currentTime))
+
+    const strike = (timestamp: number) => ({
+      ...SINGLE,
+      base: { ...SINGLE.base, timestamp },
+    })
+
+    await extractPlannedFrames(
+      video,
+      planWith({ footStrikePattern: [strike(3.083333), strike(3.433333)] }),
+      { seekOffsetSeconds: -(512 / 15360), midpointOffsetSeconds: 1 / 120 },
+    )
+
+    // Asserted in the microsecond domain Chromium actually quantises to, not as an exact double:
+    // the three-term sum carries a ulp (3.4083330000000003) that the quantisation erases, and
+    // pinning the double would fail on arithmetic that is not the thing under test.
+    expect(seeked.map((t) => Math.trunc(t * 1e6))).toEqual([3058333, 3408333])
+    // Both land strictly inside their frame's interval — [3050000, 3066667) and
+    // [3400000, 3416667) µs. Without the midpoint the target quantises to 3049999 µs, one
+    // microsecond BELOW the boundary, which is the whole defect.
+    expect(Math.trunc((3.083333 - 512 / 15360) * 1e6)).toBe(3049999)
+  })
+
+  it('never seeks before zero, whatever the offsets sum to', async () => {
+    stubCanvas2DContext()
+    const { video } = seekableVideo()
+    // Parked away from zero first, so seeking to the clamped 0 is a real seek rather than
+    // `seekTo`'s `'already-there'` short-circuit — which would make this assert nothing.
+    video.currentTime = 1
+    const seeked: number[] = []
+    video.addEventListener('seeked', () => seeked.push(video.currentTime))
+
+    await extractPlannedFrames(
+      video,
+      planWith({
+        footStrikePattern: [{ ...SINGLE, base: { ...SINGLE.base, timestamp: 0 } }],
+      }),
+      { seekOffsetSeconds: -0.08, midpointOffsetSeconds: 1 / 120 },
+    )
+
+    expect(seeked).toEqual([0])
+  })
+
+  it('clamps the final frame to the clip end rather than seeking past it', async () => {
+    stubCanvas2DContext()
+    const { video } = seekableVideo()
+    // The idiom `useVideoSource.test.ts` uses — jsdom's own `duration` is a read-only NaN.
+    Object.defineProperty(video, 'duration', { configurable: true, value: 3.85 })
+    const seeked: number[] = []
+    video.addEventListener('seeked', () => seeked.push(video.currentTime))
+
+    await extractPlannedFrames(
+      video,
+      planWith({
+        footStrikePattern: [{ ...SINGLE, base: { ...SINGLE.base, timestamp: 3.848 } }],
+      }),
+      { seekOffsetSeconds: 0, midpointOffsetSeconds: 1 / 120 },
+    )
+
+    expect(seeked).toEqual([3.85])
+  })
+
+  it('declines to clamp against a duration the element does not really report', async () => {
+    stubCanvas2DContext()
+    // jsdom reports NaN; a live webcam recording reports Infinity. Comparing against either would
+    // poison the target or never fire, so the browser's own clamp is left to do it.
+    for (const duration of [Number.NaN, Infinity]) {
+      const { video } = seekableVideo()
+      Object.defineProperty(video, 'duration', { configurable: true, value: duration })
+      const seeked: number[] = []
+      video.addEventListener('seeked', () => seeked.push(video.currentTime))
+
+      await extractPlannedFrames(
+        video,
+        planWith({
+          footStrikePattern: [{ ...SINGLE, base: { ...SINGLE.base, timestamp: 9.5 } }],
+        }),
+        { seekOffsetSeconds: 0, midpointOffsetSeconds: 0.25 },
+      )
+
+      expect(seeked).toEqual([9.75])
+    }
+  })
+
+  it('seeks the plan unchanged when handed an element and no options at all', async () => {
+    // This entry point has a `<video>`, not a blob, so it has nothing to derive from — both terms
+    // fall back to their zero defaults rather than being guessed.
+    stubCanvas2DContext()
+    const { video } = seekableVideo()
+    const seeked: number[] = []
+    video.addEventListener('seeked', () => seeked.push(video.currentTime))
+
+    await extractPlannedFrames(video, planWith({ trunkLean: [PAIR] }))
+
+    expect(seeked).toEqual([PAIR.base.timestamp, PAIR.ghost!.timestamp])
   })
 
   it('draws a single-instant exemplar once, and sizes the canvas to the crop when it is smaller than the cap', async () => {
@@ -559,12 +688,15 @@ describe('extractClipEvidence', () => {
    * the value is per clip (its own edit list) and per sampler (0 whenever the `<video>` path ran),
    * so no single number can be right. This asserts the derived value actually reaches the seek.
    */
-  it('seeks by the offset derived from this clip, not by a constant', async () => {
+  it('seeks by the calibration derived from this clip, not by a constant', async () => {
     stubCanvas2DContext()
     const { seeked, restore } = makeAllVideosSeekable()
     const createSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:evidence')
     const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
-    resolveEvidenceSeekOffsetSecondsMock.mockResolvedValue(-0.08)
+    resolveEvidenceSeekCalibrationMock.mockResolvedValue({
+      offsetSeconds: -0.08,
+      midpointOffsetSeconds: 0.02,
+    })
 
     try {
       const sourceBlob = new Blob(['x'])
@@ -573,11 +705,13 @@ describe('extractClipEvidence', () => {
         plan: planWith({ trunkLean: [PAIR] }),
       })
 
-      expect(resolveEvidenceSeekOffsetSecondsMock).toHaveBeenCalledWith(sourceBlob)
+      expect(resolveEvidenceSeekCalibrationMock).toHaveBeenCalledWith(sourceBlob)
+      // One derivation per clip, not one per instant: the container parse is the expensive part.
+      expect(resolveEvidenceSeekCalibrationMock).toHaveBeenCalledTimes(1)
       expect(evidence.trunkLean.status).toBe('extracted')
       expect(seeked).toEqual([
-        PAIR.base.timestamp - 0.08,
-        PAIR.ghost!.timestamp - 0.08,
+        PAIR.base.timestamp - 0.06,
+        PAIR.ghost!.timestamp - 0.06,
       ])
     } finally {
       restore()
@@ -586,7 +720,27 @@ describe('extractClipEvidence', () => {
     }
   })
 
-  it('lets an explicit offset win, and never derives one it was handed', async () => {
+  it('seeks the plan exactly when the clip yields no calibration — every WebM and webcam blob', async () => {
+    stubCanvas2DContext()
+    const { seeked, restore } = makeAllVideosSeekable()
+    const createSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:evidence')
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+
+    try {
+      await extractClipEvidence({
+        sourceBlob: new Blob(['x']),
+        plan: planWith({ trunkLean: [PAIR] }),
+      })
+
+      expect(seeked).toEqual([PAIR.base.timestamp, PAIR.ghost!.timestamp])
+    } finally {
+      restore()
+      createSpy.mockRestore()
+      revokeSpy.mockRestore()
+    }
+  })
+
+  it('lets explicit offsets win, and never derives ones it was handed', async () => {
     stubCanvas2DContext()
     const { seeked, restore } = makeAllVideosSeekable()
     const createSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:evidence')
@@ -595,11 +749,41 @@ describe('extractClipEvidence', () => {
     try {
       await extractClipEvidence(
         { sourceBlob: new Blob(['x']), plan: planWith({ trunkLean: [PAIR] }) },
+        { seekOffsetSeconds: 0, midpointOffsetSeconds: 0 },
+      )
+
+      expect(resolveEvidenceSeekCalibrationMock).not.toHaveBeenCalled()
+      expect(seeked).toEqual([PAIR.base.timestamp, PAIR.ghost!.timestamp])
+    } finally {
+      restore()
+      createSpy.mockRestore()
+      revokeSpy.mockRestore()
+    }
+  })
+
+  it('pins one term without pinning the other', async () => {
+    // The two answer different questions, so a caller silencing the edit-list shift has said
+    // nothing about the microsecond lattice — and would previously have lost both.
+    stubCanvas2DContext()
+    const { seeked, restore } = makeAllVideosSeekable()
+    const createSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:evidence')
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    resolveEvidenceSeekCalibrationMock.mockResolvedValue({
+      offsetSeconds: -0.08,
+      midpointOffsetSeconds: 0.02,
+    })
+
+    try {
+      await extractClipEvidence(
+        { sourceBlob: new Blob(['x']), plan: planWith({ trunkLean: [PAIR] }) },
         { seekOffsetSeconds: 0 },
       )
 
-      expect(resolveEvidenceSeekOffsetSecondsMock).not.toHaveBeenCalled()
-      expect(seeked).toEqual([PAIR.base.timestamp, PAIR.ghost!.timestamp])
+      expect(resolveEvidenceSeekCalibrationMock).toHaveBeenCalledTimes(1)
+      expect(seeked).toEqual([
+        PAIR.base.timestamp + 0.02,
+        PAIR.ghost!.timestamp + 0.02,
+      ])
     } finally {
       restore()
       createSpy.mockRestore()

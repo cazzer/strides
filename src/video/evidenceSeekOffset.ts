@@ -40,15 +40,51 @@ import { resolveSamplingRobustnessConfig } from '../results/samplingRobustnessCo
  * session — needs a prop threaded through `MultiClipVideoSession`/`useSessionEvidence`; see this
  * module's ticket for why that seam was not taken here.)
  *
+ * ### The second term: half a frame (`strides-5t4`)
+ *
+ * A frame's presentation timestamp is frequently **not representable in the seek API**. Chromium
+ * quantises `currentTime` to integer microseconds — measured, not assumed: assigning
+ * `3.049999666666667` reads back `3.049999`, so the conversion TRUNCATES. At 60 fps on a 15360
+ * timescale a frame boundary lands on a whole microsecond only when its index is a multiple of 3,
+ * so two thirds of this corpus's boundaries cannot be asked for at all, and every one of the
+ * remaining targets is one truncated ulp away from falling into the previous frame.
+ *
+ * `currentTime = t` displays the frame whose presentation interval CONTAINS `t`, so the middle of
+ * that interval is the semantically correct request rather than a fudge — and it is robust to the
+ * microsecond lattice, to the rounding mode (it is correct under truncation AND under
+ * round-to-nearest), and to the sub-microsecond truncation the sampler's own timestamps carry. It
+ * absorbs half a frame of error where targeting the boundary absorbs none.
+ *
+ * The two terms stay separate rather than being summed into one number. The edit-list shift is a
+ * CLOCK CONVERSION — per clip and per sampler, zero whenever the `<video>` path ran. The midpoint
+ * is a TARGETING POLICY — per clip only, and correct on every sampler, because the quantisation is
+ * a property of `HTMLVideoElement.currentTime` and not of whatever produced the timestamp.
+ *
  * **Never mutates `robustFrames[].timestamp`.** That array is the sampling layer's own truth and is
- * correct in its own domain; this is a seek-time calibration and nothing else reads it.
+ * correct in its own domain; this is a seek-time calibration and nothing else reads it. Which is
+ * the whole reason the midpoint is reached this way: it moves the pixels an image is drawn from
+ * without moving a single number any metric was computed from.
  */
+
+/** Both seek-time terms for one clip, in seconds. Added to a planned timestamp at seek time and
+ * nowhere else. */
+export interface EvidenceSeekCalibration {
+  /** Media→presentation clock conversion, or `0` where the two already agree. */
+  offsetSeconds: number
+  /** Half a frame, or `0` where the clip's frame duration is not derivable. */
+  midpointOffsetSeconds: number
+}
+
+const NO_CALIBRATION: EvidenceSeekCalibration = {
+  offsetSeconds: 0,
+  midpointOffsetSeconds: 0,
+}
 
 /** A Blob is stable for a clip's lifetime, so one derivation per clip is enough — and the session
  * evidence pass legitimately re-runs extraction mid-session when the scale pass grafts
  * `verticalOscillationCm` in, which would otherwise pay for a second full demux to reach the same
  * answer. */
-const cache = new WeakMap<Blob, Promise<number>>()
+const cache = new WeakMap<Blob, Promise<EvidenceSeekCalibration>>()
 
 /**
  * Seconds to SUBTRACT from a raw media-clock timestamp to land on the presentation clock, read off
@@ -79,45 +115,82 @@ export function editListSeekOffsetSeconds(track: ContainerVideoTrackTiming): num
   return entry.mediaTime / track.mediaTimescaleHz
 }
 
-async function derive(blob: Blob): Promise<number> {
-  // Cheapest and most conclusive first: with the sequential plane switched off, nothing ever
-  // reaches the WebCodecs clock, so no container detail can matter.
+/**
+ * Half of one nominal frame's duration, in seconds — the distance from a frame's presentation
+ * boundary to the middle of its interval.
+ *
+ * `0` for any track whose frame duration is not derivable (`nominalFps` is `null` when the track
+ * carries no usable `stts` table), and for a rate that is not a positive finite number. Same "a
+ * wrong number is worse than none" posture `editListSeekOffsetSeconds` takes: zero is exactly the
+ * behaviour that shipped before this existed, so declining costs nothing that was already working.
+ */
+export function frameMidpointOffsetSeconds(track: ContainerVideoTrackTiming): number {
+  const fps = track.nominalFps
+  if (fps === null || !Number.isFinite(fps) || fps <= 0) return 0
+  return 1 / fps / 2
+}
+
+/**
+ * The media→presentation shift, or `0` where it does not apply. Split out because the midpoint
+ * must NOT inherit these gates: `sequentialSampling` and `canUseSequentialDecode` decide which
+ * CLOCK a timestamp is on, and the microsecond lattice the midpoint answers to is a property of
+ * the seek API that every clip on every sampler meets.
+ */
+async function deriveEditListOffset(
+  blob: Blob,
+  track: ContainerVideoTrackTiming,
+): Promise<number> {
+  // With the sequential plane switched off, nothing ever reaches the WebCodecs clock, so no
+  // container detail can matter.
   if (!resolveSamplingRobustnessConfig().sequentialSampling.enabled) return 0
-
-  let probeBytes: ArrayBuffer
-  try {
-    probeBytes = await blob.arrayBuffer()
-  } catch {
-    return 0
-  }
-  const probe = await probeContainerTiming(probeBytes)
-  if (probe.parseStatus !== 'ok') return 0
-  const track = probe.videoTracks[0]
-  if (track === undefined) return 0
-
   const offset = editListSeekOffsetSeconds(track)
   // The expensive gate is deliberately last: it is the only one that costs a full demux, and it is
   // only ever reachable on an MP4 that actually carries a shifting edit list. A clip with no
   // correction to make never pays for it.
   if (offset === 0) return 0
   if (!(await canUseSequentialDecode(blob))) return 0
-
   return -offset
 }
 
+async function derive(blob: Blob): Promise<EvidenceSeekCalibration> {
+  // The probe now runs FIRST, where the `sequentialSampling` early return used to sit: the frame
+  // duration is only reachable through it, and the midpoint needs that whatever the sampler was.
+  // One `arrayBuffer()` and one parse yield both terms — measured at 25.2 ms on the 4K clip and
+  // 8.1 ms on the front-approach one, against extraction's ~3.5 s, and cached per blob.
+  let probeBytes: ArrayBuffer
+  try {
+    probeBytes = await blob.arrayBuffer()
+  } catch {
+    return NO_CALIBRATION
+  }
+  const probe = await probeContainerTiming(probeBytes)
+  if (probe.parseStatus !== 'ok') return NO_CALIBRATION
+  const track = probe.videoTracks[0]
+  if (track === undefined) return NO_CALIBRATION
+
+  return {
+    offsetSeconds: await deriveEditListOffset(blob, track),
+    midpointOffsetSeconds: frameMidpointOffsetSeconds(track),
+  }
+}
+
 /**
- * `0` unless this clip's frames were sampled through WebCodecs AND its container shifts the media
- * clock against the presentation clock — in which case the negative of that shift, so a planned
- * timestamp seeks to the frame the analysis actually measured.
+ * This clip's two seek-time terms.
  *
- * Never throws and never rejects: every failure to establish the two facts degrades to `0`, which
- * is the value that was correct before this existed.
+ * `offsetSeconds` is `0` unless the clip's frames were sampled through WebCodecs AND its container
+ * shifts the media clock against the presentation clock. `midpointOffsetSeconds` is `0` unless the
+ * container names a frame rate. Both are `0` for every blob whose container does not parse — every
+ * WebM and every webcam recording — which is the behaviour that was correct before either existed.
+ *
+ * Never throws and never rejects: every failure to establish a fact degrades to `0`.
  */
-export function resolveEvidenceSeekOffsetSeconds(blob: Blob | null): Promise<number> {
-  if (blob === null) return Promise.resolve(0)
+export function resolveEvidenceSeekCalibration(
+  blob: Blob | null,
+): Promise<EvidenceSeekCalibration> {
+  if (blob === null) return Promise.resolve(NO_CALIBRATION)
   const cached = cache.get(blob)
   if (cached !== undefined) return cached
-  const pending = derive(blob).catch(() => 0)
+  const pending = derive(blob).catch(() => NO_CALIBRATION)
   cache.set(blob, pending)
   return pending
 }

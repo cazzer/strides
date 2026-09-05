@@ -9,7 +9,7 @@ import type {
 import { evidenceOutputSide } from '../results/evidenceFrames'
 import { planEvidenceAnnotations } from '../results/evidenceAnnotations'
 import { drawEvidenceAnnotation } from './drawEvidenceAnnotations'
-import { resolveEvidenceSeekOffsetSeconds } from './evidenceSeekOffset'
+import { resolveEvidenceSeekCalibration } from './evidenceSeekOffset'
 import {
   FRAME_PRESENTATION_TIMEOUT_MS,
   LOAD_TIMEOUT_MS,
@@ -89,8 +89,27 @@ export const EVIDENCE_OUTPUT_MAX_SIDE_PX = 640
  * (`evidenceSeekOffset.ts`) rather than reading a number from here. Zero remains correct for every
  * clip that has no correction to make — every WebM/webcam blob and every MP4 whose container does
  * not shift the two clocks — which is why it stays the default an explicit caller inherits.
+ *
+ * It is no longer the whole seek target: that is now the planned timestamp PLUS this shift PLUS
+ * `DEFAULT_EVIDENCE_MIDPOINT_OFFSET_SECONDS`'s derived counterpart, in that order.
  */
 export const DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS = 0
+
+/**
+ * The second seek-time term's fallback: half a frame, so the seek asks for the MIDDLE of a frame's
+ * presentation interval rather than its start boundary (`strides-5t4`).
+ *
+ * `currentTime = t` displays the frame whose interval contains `t`, so the midpoint is the
+ * semantically correct request — the boundary is the one point in the interval where a
+ * sub-microsecond error changes the answer, and Chromium's measured truncation of `currentTime` to
+ * integer microseconds guarantees such an error on any boundary that is not a whole microsecond.
+ *
+ * **Zero is correct for every clip with no derivable frame duration** — WebM, webcam recordings,
+ * audio-only input, and any track with no usable `stts` — where it reproduces exactly the seek that
+ * shipped before this existed. Like the offset above, the real value is per clip and is derived
+ * from the clip's own bytes by `evidenceSeekOffset.ts`.
+ */
+export const DEFAULT_EVIDENCE_MIDPOINT_OFFSET_SECONDS = 0
 
 export interface EvidenceExtractionOptions {
   /**
@@ -102,6 +121,12 @@ export interface EvidenceExtractionOptions {
    * exactly pass `0`.
    */
   seekOffsetSeconds?: number
+  /**
+   * Half a frame, in seconds (see `DEFAULT_EVIDENCE_MIDPOINT_OFFSET_SECONDS`). Derived and
+   * overridden independently of `seekOffsetSeconds`: the two answer different questions, and a
+   * caller pinning one has said nothing about the other.
+   */
+  midpointOffsetSeconds?: number
   /** Cap on the drawn canvas side (see `EVIDENCE_OUTPUT_MAX_SIDE_PX`). */
   maxOutputSidePx?: number
   /** Bounded wait for `loadeddata` on a detached element. */
@@ -154,6 +179,7 @@ export interface ClipEvidenceInput {
 
 interface ResolvedOptions {
   seekOffsetSeconds: number
+  midpointOffsetSeconds: number
   maxOutputSidePx: number
   loadTimeoutMs: number
   seekTimeoutMs: number
@@ -166,6 +192,8 @@ function resolveOptions(options: EvidenceExtractionOptions): ResolvedOptions {
   return {
     seekOffsetSeconds:
       options.seekOffsetSeconds ?? DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS,
+    midpointOffsetSeconds:
+      options.midpointOffsetSeconds ?? DEFAULT_EVIDENCE_MIDPOINT_OFFSET_SECONDS,
     maxOutputSidePx: options.maxOutputSidePx ?? EVIDENCE_OUTPUT_MAX_SIDE_PX,
     loadTimeoutMs: options.loadTimeoutMs ?? LOAD_TIMEOUT_MS,
     seekTimeoutMs: options.seekTimeoutMs ?? SEEK_TIMEOUT_MS,
@@ -192,7 +220,22 @@ async function drawInstant(
   outputSide: number,
   options: ResolvedOptions,
 ): Promise<boolean> {
-  const target = Math.max(0, instant.timestamp + options.seekOffsetSeconds)
+  // Edit-list shift FIRST, then the midpoint. The shift converts a media-clock frame START to a
+  // presentation-clock frame START; only after that is "add half an interval" the middle of the
+  // interval `currentTime` will be compared against. Both terms are additive so the order does not
+  // move the number today — it stays correct if a non-unity-rate edit list is ever admitted.
+  const requested =
+    instant.timestamp + options.seekOffsetSeconds + options.midpointOffsetSeconds
+  // The LAST frame's interval ends at the clip's end, so half a frame past its start can sit
+  // beyond a duration the element will refuse. Clamped only against a duration it actually
+  // reports: jsdom gives `NaN` and a webcam recording gives `Infinity`, and comparing against
+  // either would poison the target or never fire.
+  const target = Math.max(
+    0,
+    Number.isFinite(video.duration)
+      ? Math.min(requested, video.duration)
+      : requested,
+  )
   const outcome = await seekTo(video, target, options.seekTimeoutMs)
   if (outcome === 'timed-out') return false
   // `'already-there'` skips the wait rather than shortening it: the short-circuit means the element
@@ -296,9 +339,10 @@ function extractionFailed(plan: ClipEvidencePlan): ClipEvidence {
  * shape as `sampleClip(video, ...)`. Readiness is not re-checked here; `extractClipEvidence` below
  * is the entry point that owns loading.
  *
- * `options.seekOffsetSeconds` falls back to `DEFAULT_EVIDENCE_SEEK_OFFSET_SECONDS` here rather
- * than being derived: this entry point is handed an element, not a blob, so it has nothing to
- * derive from. `extractClipEvidence` is the one that owns the bytes and therefore the derivation.
+ * `options.seekOffsetSeconds` and `options.midpointOffsetSeconds` fall back to their
+ * `DEFAULT_EVIDENCE_*` constants here rather than being derived: this entry point is handed an
+ * element, not a blob, so it has nothing to derive from. `extractClipEvidence` is the one that
+ * owns the bytes and therefore the derivation.
  *
  * Metrics are extracted in the plan's own key order, and every metric that planned at least one
  * image but produced none reports `'extraction-failed'` rather than an empty list.
@@ -353,19 +397,28 @@ async function decodeClipEvidence(
   if (options.signal?.aborted) return extractionFailed(plan)
 
   // Derived from THIS clip's bytes, not read off a constant — see `evidenceSeekOffset.ts`. An
-  // explicit option still wins, so a caller (and every unit test) can pin the seek exactly.
-  // Resolved here rather than in `resolveOptions` because it is async and because it needs the
-  // blob, which only this function has.
-  const seekOffsetSeconds =
-    options.seekOffsetSeconds ??
-    (await resolveEvidenceSeekOffsetSeconds(sourceBlob))
-  const withOffset: EvidenceExtractionOptions = { ...options, seekOffsetSeconds }
-  const resolved = resolveOptions(withOffset)
+  // explicit option still wins PER TERM, so a caller (and every unit test) can pin either seek
+  // component exactly without silently pinning the other. Resolved here rather than in
+  // `resolveOptions` because it is async and because it needs the blob, which only this function
+  // has — and in ONE call, so a clip pays for at most one container parse.
+  const needsDerivation =
+    options.seekOffsetSeconds === undefined ||
+    options.midpointOffsetSeconds === undefined
+  const calibration = needsDerivation
+    ? await resolveEvidenceSeekCalibration(sourceBlob)
+    : null
+  const calibrated: EvidenceExtractionOptions = {
+    ...options,
+    seekOffsetSeconds: options.seekOffsetSeconds ?? calibration?.offsetSeconds,
+    midpointOffsetSeconds:
+      options.midpointOffsetSeconds ?? calibration?.midpointOffsetSeconds,
+  }
+  const resolved = resolveOptions(calibrated)
 
   return withDecodedVideo(
     sourceBlob,
     resolved.loadTimeoutMs,
-    (video) => extractPlannedFrames(video, plan, withOffset),
+    (video) => extractPlannedFrames(video, plan, calibrated),
     () => extractionFailed(plan),
   )
 }

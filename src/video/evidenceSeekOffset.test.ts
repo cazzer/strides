@@ -21,7 +21,8 @@ vi.mock('../results/samplingRobustnessConfig', () => ({
 
 import {
   editListSeekOffsetSeconds,
-  resolveEvidenceSeekOffsetSeconds,
+  frameMidpointOffsetSeconds,
+  resolveEvidenceSeekCalibration,
 } from './evidenceSeekOffset'
 
 function makeTrack(
@@ -145,67 +146,187 @@ describe('editListSeekOffsetSeconds', () => {
   })
 })
 
-describe('resolveEvidenceSeekOffsetSeconds', () => {
-  it('negates the edit-list shift when the clip really did sample through WebCodecs', async () => {
-    await expect(resolveEvidenceSeekOffsetSeconds(makeBlob())).resolves.toBeCloseTo(-0.08, 10)
+describe('frameMidpointOffsetSeconds', () => {
+  it("is half a frame for the three bundled clips' declared rates", () => {
+    // Read off the real containers with this repo's own box walk: side-landscape 15360/256,
+    // side-portrait 15360/512, front-approach 60000/1001.
+    expect(frameMidpointOffsetSeconds(makeTrack({ nominalFps: 60 }))).toBe(1 / 120)
+    expect(frameMidpointOffsetSeconds(makeTrack({ nominalFps: 30 }))).toBe(1 / 60)
+    expect(frameMidpointOffsetSeconds(makeTrack({ nominalFps: 60000 / 1001 }))).toBe(
+      1001 / 120000,
+    )
   })
 
-  it('is exactly zero when the sequential plane is switched off', async () => {
-    resolveConfigMock.mockReturnValue({ sequentialSampling: { enabled: false } })
+  it('is zero when the container names no frame rate', () => {
+    // `nominalFps` is null for a track with no usable `stts` — and zero here reproduces exactly
+    // the seek that shipped before the midpoint existed.
+    expect(frameMidpointOffsetSeconds(makeTrack({ nominalFps: null }))).toBe(0)
+  })
 
-    await expect(resolveEvidenceSeekOffsetSeconds(makeBlob())).resolves.toBe(0)
-    // The whole point of checking this first: nothing else is even consulted.
-    expect(probeContainerTimingMock).not.toHaveBeenCalled()
+  it('is zero rather than infinite or NaN for a rate that is not a positive finite number', () => {
+    expect(frameMidpointOffsetSeconds(makeTrack({ nominalFps: 0 }))).toBe(0)
+    expect(frameMidpointOffsetSeconds(makeTrack({ nominalFps: -30 }))).toBe(0)
+    expect(frameMidpointOffsetSeconds(makeTrack({ nominalFps: Infinity }))).toBe(0)
+    expect(frameMidpointOffsetSeconds(makeTrack({ nominalFps: Number.NaN }))).toBe(0)
+  })
+})
+
+describe('resolveEvidenceSeekCalibration', () => {
+  /** The three bundled clips' real container shapes, read off the files with a box walk. */
+  const sideLandscape = makeTrack({
+    mediaTimescaleHz: 15360,
+    movieTimescaleHz: 1000,
+    nominalFps: 60,
+    elst: [
+      { segmentDuration: 3884, mediaTime: 512, mediaRateInteger: 1, mediaRateFraction: 0 },
+    ],
+  })
+  const sidePortrait = makeTrack({
+    mediaTimescaleHz: 15360,
+    movieTimescaleHz: 1000,
+    nominalFps: 30,
+    elst: [
+      { segmentDuration: 12167, mediaTime: 1024, mediaRateInteger: 1, mediaRateFraction: 0 },
+    ],
+  })
+  const frontApproach = makeTrack({
+    mediaTimescaleHz: 60000,
+    movieTimescaleHz: 1000,
+    nominalFps: 60000 / 1001,
+    elst: [
+      { segmentDuration: 1652, mediaTime: 2002, mediaRateInteger: 1, mediaRateFraction: 0 },
+    ],
+  })
+
+  it("reads both terms off side-landscape's own container", async () => {
+    probeContainerTimingMock.mockResolvedValue(okProbe(sideLandscape))
+
+    await expect(resolveEvidenceSeekCalibration(makeBlob())).resolves.toEqual({
+      offsetSeconds: -(512 / 15360),
+      midpointOffsetSeconds: 1 / 120,
+    })
+  })
+
+  it("reads both terms off side-portrait's own container", async () => {
+    probeContainerTimingMock.mockResolvedValue(okProbe(sidePortrait))
+
+    await expect(resolveEvidenceSeekCalibration(makeBlob())).resolves.toEqual({
+      offsetSeconds: -(1024 / 15360),
+      midpointOffsetSeconds: 1 / 60,
+    })
+  })
+
+  it("reads both terms off front-approach's own container", async () => {
+    probeContainerTimingMock.mockResolvedValue(okProbe(frontApproach))
+
+    await expect(resolveEvidenceSeekCalibration(makeBlob())).resolves.toEqual({
+      offsetSeconds: -(2002 / 60000),
+      midpointOffsetSeconds: 1001 / 120000,
+    })
+  })
+
+  it('negates the edit-list shift when the clip really did sample through WebCodecs', async () => {
+    const { offsetSeconds } = await resolveEvidenceSeekCalibration(makeBlob())
+    expect(offsetSeconds).toBeCloseTo(-0.08, 10)
+  })
+
+  it('still measures the midpoint when the sequential plane is switched off', async () => {
+    // The two terms answer different questions: `sequentialSampling` decides which CLOCK a
+    // timestamp is on, while the microsecond lattice is a property of the seek API that this clip
+    // meets on either sampler. Zeroing both here is what would leave the playback path seeking
+    // frame boundaries for no reason.
+    resolveConfigMock.mockReturnValue({ sequentialSampling: { enabled: false } })
+    probeContainerTimingMock.mockResolvedValue(okProbe(sideLandscape))
+
+    await expect(resolveEvidenceSeekCalibration(makeBlob())).resolves.toEqual({
+      offsetSeconds: 0,
+      midpointOffsetSeconds: 1 / 120,
+    })
     expect(canUseSequentialDecodeMock).not.toHaveBeenCalled()
   })
 
-  it('is exactly zero when this clip could not have taken the sequential path', async () => {
+  it('still measures the midpoint when this clip could not have taken the sequential path', async () => {
     // A portrait phone capture (non-identity tkhd matrix) or an undecodable codec: the container
     // carries a real edit list, but the `<video>` path ran, so its timestamps are already correct.
     canUseSequentialDecodeMock.mockResolvedValue(false)
+    probeContainerTimingMock.mockResolvedValue(okProbe(sideLandscape))
 
-    await expect(resolveEvidenceSeekOffsetSeconds(makeBlob())).resolves.toBe(0)
+    await expect(resolveEvidenceSeekCalibration(makeBlob())).resolves.toEqual({
+      offsetSeconds: 0,
+      midpointOffsetSeconds: 1 / 120,
+    })
   })
 
-  it('is exactly zero for a container that does not parse — every WebM/webcam blob', async () => {
+  it('still measures the midpoint for a track carrying no edit list at all', async () => {
+    probeContainerTimingMock.mockResolvedValue(
+      okProbe(makeTrack({ nominalFps: 60, elst: [] })),
+    )
+
+    await expect(resolveEvidenceSeekCalibration(makeBlob())).resolves.toEqual({
+      offsetSeconds: 0,
+      midpointOffsetSeconds: 1 / 120,
+    })
+    // The expensive gate stays unreachable on a clip with no shift to correct.
+    expect(canUseSequentialDecodeMock).not.toHaveBeenCalled()
+  })
+
+  it('is zero on both terms for a container that does not parse — every WebM/webcam blob', async () => {
     probeContainerTimingMock.mockResolvedValue({
       parseStatus: 'parse-error',
       error: 'not an mp4',
       videoTracks: [],
     })
 
-    await expect(resolveEvidenceSeekOffsetSeconds(makeBlob())).resolves.toBe(0)
+    await expect(resolveEvidenceSeekCalibration(makeBlob())).resolves.toEqual({
+      offsetSeconds: 0,
+      midpointOffsetSeconds: 0,
+    })
   })
 
-  it('is exactly zero for an MP4 that parses but has no video track', async () => {
+  it('is zero on both terms for an unrecognised container', async () => {
+    probeContainerTimingMock.mockResolvedValue({
+      parseStatus: 'unsupported-container',
+      videoTracks: [],
+    })
+
+    await expect(resolveEvidenceSeekCalibration(makeBlob())).resolves.toEqual({
+      offsetSeconds: 0,
+      midpointOffsetSeconds: 0,
+    })
+  })
+
+  it('is zero on both terms for an MP4 that parses but has no video track', async () => {
     probeContainerTimingMock.mockResolvedValue({ parseStatus: 'ok', videoTracks: [] })
 
-    await expect(resolveEvidenceSeekOffsetSeconds(makeBlob())).resolves.toBe(0)
+    await expect(resolveEvidenceSeekCalibration(makeBlob())).resolves.toEqual({
+      offsetSeconds: 0,
+      midpointOffsetSeconds: 0,
+    })
   })
 
-  it('never pays for a demux on a clip with no correction to make', async () => {
-    probeContainerTimingMock.mockResolvedValue(okProbe(makeTrack({ elst: [] })))
-
-    await expect(resolveEvidenceSeekOffsetSeconds(makeBlob())).resolves.toBe(0)
-    expect(canUseSequentialDecodeMock).not.toHaveBeenCalled()
-  })
-
-  it('is zero, not a rejection, when the blob cannot be read', async () => {
+  it('is zero on both terms, not a rejection, when the blob cannot be read', async () => {
     const blob = makeBlob()
     vi.spyOn(blob, 'arrayBuffer').mockRejectedValue(new Error('gone'))
 
-    await expect(resolveEvidenceSeekOffsetSeconds(blob)).resolves.toBe(0)
+    await expect(resolveEvidenceSeekCalibration(blob)).resolves.toEqual({
+      offsetSeconds: 0,
+      midpointOffsetSeconds: 0,
+    })
   })
 
-  it('is zero for a null blob', async () => {
-    await expect(resolveEvidenceSeekOffsetSeconds(null)).resolves.toBe(0)
+  it('is zero on both terms for a null blob', async () => {
+    await expect(resolveEvidenceSeekCalibration(null)).resolves.toEqual({
+      offsetSeconds: 0,
+      midpointOffsetSeconds: 0,
+    })
   })
 
-  it('derives once per clip — the gallery re-extracts mid-session when the scale pass grafts', async () => {
+  it('derives once per clip — evidence re-extracts mid-session when the scale pass grafts', async () => {
     const blob = makeBlob()
 
-    await expect(resolveEvidenceSeekOffsetSeconds(blob)).resolves.toBeCloseTo(-0.08, 10)
-    await expect(resolveEvidenceSeekOffsetSeconds(blob)).resolves.toBeCloseTo(-0.08, 10)
+    const first = await resolveEvidenceSeekCalibration(blob)
+    const second = await resolveEvidenceSeekCalibration(blob)
+    expect(second).toEqual(first)
 
     expect(probeContainerTimingMock).toHaveBeenCalledTimes(1)
     expect(canUseSequentialDecodeMock).toHaveBeenCalledTimes(1)
