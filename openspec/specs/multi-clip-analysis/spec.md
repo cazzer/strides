@@ -23,9 +23,9 @@ input by reference, unchanged. Given zero inputs, the function SHALL throw.
 #### Scenario: Each metric independently picks its highest-confidence source
 
 - **WHEN** fusion is given two clips where clip 0 has higher confidence on `trunkLean` and clip 1
-  has higher confidence on `armSwingSymmetry`
+  has higher confidence on `armSwingAmplitude`
 - **THEN** the fused result's `trunkLean` is clip 0's object (with clip 0's provenance caveat) and
-  its `armSwingSymmetry` is clip 1's object (with clip 1's provenance caveat)
+  its `armSwingAmplitude` is clip 1's object (with clip 1's provenance caveat)
 
 #### Scenario: A metric that resolves on only one clip surfaces that clip's value
 

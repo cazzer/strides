@@ -331,125 +331,6 @@ The system SHALL include `kneeFlexion: MetricResult` in `FormHeuristicsResult`, 
   holding the most plausibility mass, which is that result's `view.view` label whenever the clip
   commits to a label) present in the same result as the other three metrics
 
-### Requirement: Arm swing symmetry compares per-side wrist-relative-to-shoulder swing amplitude
-
-The system SHALL compute arm swing symmetry as `min(leftAmplitude, rightAmplitude) /
-max(leftAmplitude, rightAmplitude)` — a `'percent'`-unit, 0-1 ratio where `1` means perfectly
-symmetric swing and values approaching `0` mean one arm swings substantially more than the other.
-
-Each side's amplitude SHALL be the PEAK-TO-PEAK amplitude of a spectral sinusoid fit of that side's
-wrist-y position relative to its own shoulder-y, fitted independently per side over the same
-frequency grid the other spectral-fit metrics use. The system SHALL NOT read the amplitude as an
-aggregate of individually-detected peak-to-trough excursions: a prominence-thresholded extremum scan
-confirms turning points between the real ones on ordinary tracking noise, so its aggregate is a
-statistic over a mixture of half-swings and wiggle rather than over the swing.
-
-Each sample SHALL be scale-stabilized before the fit: divided by a per-frame factor derived from a
-whole-window least-squares quadratic trend of the LOG of the inter-shoulder distance, normalized so
-the factor reads 1 at the clip's reference (median measured) scale. The spectral fit's model is a
-CONSTANT-amplitude sinusoid, and a wrist-relative-to-shoulder excursion is a body-proportioned
-quantity — on a clip whose subject changes on-screen size inside the fit window, the raw-pixel
-least squares overweights the large-scale frames and reads mostly the clip's largest end. The
-scale proxy SHALL be resolved strictly bilaterally (both shoulders independently resolvable, never
-a single-side stand-in — a fabricated length is not a scale), and a frame whose proxy is missing
-SHALL still receive a factor from the trend, so no swing sample is ever dropped for it: the
-stabilization changes sample VALUES only, never the series' resolved/interpolated accounting. When
-the trend cannot be soundly fitted — too few bilateral proxy frames, an unsolvable system, or a
-trend flat to within a degeneracy floor — the factor SHALL be identically 1, an exact no-op equal
-to the raw-pixel computation.
-
-The value requires no body-scale reference to report a ratio — the two amplitudes are measured in
-the same (reference-scale) pixel space on the same body, so the system SHALL NOT require a
-resolvable torso in order to report one.
-
-#### Scenario: Symmetric swing scores near 1
-
-- **WHEN** both arms show comparable, matched vertical swing amplitude across the clip
-- **THEN** the returned ratio is close to `1`
-
-#### Scenario: Asymmetric swing scores lower than a matched symmetric case
-
-- **WHEN** one arm's swing amplitude is substantially smaller than the other's, all else equal
-- **THEN** the returned ratio is meaningfully lower than the ratio computed from an otherwise-
-  identical symmetric case
-
-#### Scenario: Amplitude survives a swing trace carrying a step-rate harmonic
-
-- **WHEN** each arm's trace is its swing rhythm plus a smaller oscillation at twice that frequency
-  (the step rhythm the shoulder itself carries) plus per-frame tracking jitter
-- **THEN** each side's reported amplitude tracks the underlying swing amplitude, and the reported
-  ratio tracks the underlying amplitude ratio
-
-#### Scenario: A subject whose on-screen scale changes during the clip is measured in body proportion
-
-- **WHEN** the subject's on-screen size changes substantially inside the fit window (e.g. running
-  toward the camera) while each arm's swing amplitude stays constant in body units
-- **THEN** the reported ratio tracks the body-unit amplitude ratio — matching an otherwise-
-  identical clip with no scale change — rather than a ratio dominated by the largest-scale frames
-
-#### Scenario: A clip with no resolvable torso is still measured
-
-- **WHEN** both shoulders and both wrists resolve across the clip but no body-scale reference
-  (shoulder-to-hip torso segment) resolves in any frame
-- **THEN** a non-null `value` is returned rather than `null`
-
-### Requirement: Arm swing symmetry is front-view-primary, hard-gated away from side view
-
-The system SHALL treat `'front'` as the primary view for arm swing symmetry
-(`viewFitTable.armSwingSymmetry.front = { fit: 'primary', multiplier: 1.0 }`) and `'side'` as
-unsuitable (`multiplier: 0.1`) — the mirror image of trunk lean/overstriding's side-view-primary
-gating — because a side view occludes or superimposes the far arm rather than because the swing
-signal itself is invisible from the side. `'ambiguous'` SHALL also be treated as unsuitable
-(`multiplier: 0.2`). The system SHALL still compute and return a value when the view is `'side'`
-or `'ambiguous'`, never substituting `null` purely because the view is unsuitable.
-
-View SHALL never be a reason to withhold a value, and measurement quality SHALL always be one,
-independently and on every view: a clip whose swing rhythm cannot be fitted comparably on both arms
-reports `null` whether it is front, side or ambiguous.
-
-#### Scenario: Front-view clip is the primary, highest-confidence case
-
-- **WHEN** arm swing symmetry is computed against a `'front'`-classified clip with resolvable,
-  separable left/right wrist and shoulder positions
-- **THEN** a non-null `value` is returned with `viewFit: 'primary'`
-
-#### Scenario: Side-view clip is computed, not withheld, but flagged unsuitable
-
-- **WHEN** arm swing symmetry is computed against a `'side'`-classified clip with resolvable arm
-  positions whose swing rhythm fits comparably on both arms
-- **THEN** a non-null `value` is returned with `viewFit: 'unsuitable'`, confidence capped low by
-  the `0.1` multiplier, and a non-null `caveat`
-
-### Requirement: Arm swing symmetry follows the shared output contract
-
-The system SHALL return a `MetricResult` for arm swing symmetry using the `'percent'` unit, with
-`value: null` and `confidence: 0` whenever either arm has no resolvable shoulder/wrist position or
-no complete swing cycle is detected in the clip, and SHALL NOT throw for any well-typed
-`RobustPoseFrame[]` input, including an empty array.
-
-A swing cycle SHALL count as detected on a side only when that side's spectral fit is well posed AND
-its sinusoid partial R² reaches `armSwingMinFitR2`. Either side failing that is fatal to the whole
-comparison, not merely to its own half of it: a fitted-noise amplitude on one arm publishes as a
-fabricated ASYMMETRY rather than as a fuzzy number, which is a worse failure than reporting nothing.
-
-#### Scenario: Insufficient data yields null, not a crash
-
-- **WHEN** one or both arms have no resolvable shoulder/wrist position, or no complete swing cycle
-  is detected on one or both sides
-- **THEN** `value` is `null`, `confidence` is `0`, `caveat` is non-null, and no exception is thrown
-
-#### Scenario: Empty frame list produces a well-formed result
-
-- **WHEN** arm swing symmetry is computed against an empty `RobustPoseFrame[]`
-- **THEN** it returns `value: null`, `confidence: 0`, without throwing
-
-#### Scenario: One arm fits, the other is noise
-
-- **WHEN** one arm's swing fits cleanly and the other arm's trace has no rhythm in it that reaches
-  `armSwingMinFitR2`
-- **THEN** `value` is `null` and `caveat` is non-null, rather than a ratio between a real amplitude
-  and a noise amplitude
-
 ### Requirement: Foot strike pattern is an explicitly-labeled proxy, hard-gated to side view
 
 The system SHALL compute a foot strike pattern indicator (heel / midfoot / forefoot) as a
@@ -1258,11 +1139,10 @@ mediolateral axis this metric reads).
 
 The system SHALL treat `'front'` as the primary view for step width
 (`viewFitTable.stepWidth.front = { fit: 'primary', multiplier: 1.0 }`) and `'side'` as unsuitable
-(`multiplier: 0.1`) — mirroring `armSwingSymmetry`'s view-fit row, since a side-on camera looks
-straight along the mediolateral axis step width measures, collapsing it toward a degenerate
-reading. `'ambiguous'` SHALL also be treated as unsuitable (`multiplier: 0.2`). The system SHALL
-still compute and return a value when the view is `'side'` or `'ambiguous'`, never substituting
-`null` purely because the view is unsuitable.
+(`multiplier: 0.1`), since a side-on camera looks straight along the mediolateral axis step width
+measures, collapsing it toward a degenerate reading. `'ambiguous'` SHALL also be treated as
+unsuitable (`multiplier: 0.2`). The system SHALL still compute and return a value when the view is
+`'side'` or `'ambiguous'`, never substituting `null` purely because the view is unsuitable.
 
 #### Scenario: Front-view clip is the primary, highest-confidence case
 
@@ -1361,11 +1241,11 @@ excluded from that computation only, not treated as a whole-clip failure.
 
 The system SHALL treat `'front'` as the primary view for step width in centimetres
 (`viewFitTable.stepWidthCm.front = { fit: 'primary', multiplier: 1.0 }`) and `'side'` as
-unsuitable (`multiplier: 0.1`) — mirroring `armSwingSymmetry`'s identical front-primary/
-side-unsuitable gating exactly, not merely similarly — because a side-on camera collapses the
-mediolateral (side-to-side) offset this metric measures onto the same image axis the hip already
-occupies, producing a confidently-wrong small number rather than an obviously-degraded one.
-`'ambiguous'` SHALL also be treated as unsuitable (`multiplier: 0.2`). The system SHALL still
+unsuitable (`multiplier: 0.1`) — mirroring its ratio sibling `stepWidth`'s identical
+front-primary/side-unsuitable gating exactly, not merely similarly — because a side-on camera
+collapses the mediolateral (side-to-side) offset this metric measures onto the same image axis the
+hip already occupies, producing a confidently-wrong small number rather than an obviously-degraded
+one. `'ambiguous'` SHALL also be treated as unsuitable (`multiplier: 0.2`). The system SHALL still
 compute and return a value when the view is `'side'` or `'ambiguous'` and a scale-and-footstrikes
 value would otherwise resolve, never substituting `null` purely because the view is unsuitable.
 
@@ -2117,86 +1997,6 @@ into its confidence over the same frames.
 - **THEN** side-primary and front-primary metrics alike resolve to their `'ambiguous'` rows' fit,
   neither direction favoured, while view-tolerant metrics continue to report
 
-### Requirement: Arm swing symmetry rejects a comparison between two different rhythms
-
-Both arms belong to one body and swing on one rhythm, so the system SHALL compare the two sides'
-fitted frequencies to each other before taking any ratio between their amplitudes. When they
-disagree by more than a bounded fraction of the lower of the two, the system SHALL report
-`value: null` with a caveat naming the mismatch, rather than a ratio.
-
-This check is not redundant with the per-side quality gate and SHALL NOT be replaced by tightening
-it: two fits can each clear a per-side gate while describing different oscillations. Measured on
-`e2e/fixtures/multiperson-track.mp4` (2026-08-29), the left arm fitted 1.48 Hz at R² 0.676 and the
-right fitted 2.80 Hz at R² 0.324 — the right arm had found the STEP rhythm (cadence 174 spm =
-2.90 Hz) rather than the stride rhythm, and the 0.349 ratio published between them compared two
-different things.
-
-#### Scenario: Two arms fitted on different rhythms report no ratio
-
-- **WHEN** each arm's trace oscillates cleanly but at a materially different frequency from the
-  other's
-- **THEN** `value` is `null`, `confidence` is `0`, and `caveat` names that the two swing rhythms did
-  not match
-
-#### Scenario: Two arms on the same rhythm are compared normally
-
-- **WHEN** both arms' fitted frequencies agree to within the bound, whatever their amplitudes
-- **THEN** a non-null `value` is returned
-
-### Requirement: Arm swing symmetry's confidence reads the worse-measured arm, never an average
-
-A symmetry comparison is only as trustworthy as its less-observed side, and averaging is
-specifically wrong for this metric rather than merely imprecise: the case that must not read as
-confident is one arm measured materially worse than the other, and that is exactly the case an
-average hides — while also being the case most likely to produce an apparent asymmetry that belongs
-to the footage rather than to the runner.
-
-The system SHALL therefore derive every confidence input for arm swing symmetry from the WORSE of
-the two arms: frame coverage, interpolated fraction, observed swing-cycle count, and a fit-quality
-factor ramping on the weaker arm's sinusoid partial R². When the two arms' fit qualities differ
-materially, the system SHALL additionally emit a caveat saying that one arm's swing rhythm fit its
-trace much less cleanly than the other's and that part of the difference between them may be
-measurement rather than form. The caveat SHALL name the FIT disparity that actually fired it, not
-a tracking-coverage gap it never measured — the worse-fitting arm can be the better-detected one.
-
-#### Scenario: Degrading one arm's tracking alone lowers confidence
-
-- **WHEN** two otherwise-identical clips are compared, differing only in that one of them has
-  materially noisier tracking on a single arm
-- **THEN** the noisier clip's `confidence` is lower, and its `caveat` reports that one arm's swing
-  rhythm fit its trace much less cleanly than the other's
-
-#### Scenario: An arm measured worse than the other is not averaged away
-
-- **WHEN** one arm fits well and the other fits poorly but still above `armSwingMinFitR2`
-- **THEN** `confidence` reflects the poorly-fitting arm, not the mean of the two
-
-### Requirement: Arm swing symmetry's exemplar pair spans one fitted half-swing
-
-The system SHALL derive each side's ghosted exemplar pair from that side's fitted PHASE — the two
-sampled frames nearest a fitted maximum and its adjacent fitted minimum — so the pair spans half a
-fitted swing period by construction, and SHALL NOT select it by scanning the raw trace for extrema.
-The picture is captioned as one swing, top against bottom, and a pair chosen off the raw trace
-depicts drift and jitter that the reported amplitude explicitly excludes.
-
-Because the fitted series is the scale-stabilized `wrist.y − shoulder.y` in image-y, which grows
-downward — the stabilizing divisor is positive by construction, so it preserves this sign
-convention — the fitted MAXIMUM is the wrist at its LOWEST on screen; the system SHALL name the
-pair by body position rather than by extremum kind, so that a caption cannot state the opposite of
-the truth.
-
-#### Scenario: The pair spans a half-cycle, not a sub-cycle wiggle
-
-- **WHEN** arm swing symmetry emits an exemplar for a side on a clip with a fitted swing rhythm
-- **THEN** the interval between that exemplar's `timestamp` and its `pairedTimestamp` is half that
-  side's fitted swing period, to within the clip's own frame interval
-
-#### Scenario: The base instant is the wrist at its highest
-
-- **WHEN** arm swing symmetry emits an exemplar for a side
-- **THEN** its `timestamp` names the frame where that side's wrist sits higher on screen relative to
-  its shoulder, and its `pairedTimestamp` the frame where it sits lower
-
 ### Requirement: Footstrike timing is derived from the fitted hip-bounce phase
 
 The system SHALL derive the **instant** of each footstrike from the fitted hip-bounce phase, and
@@ -2851,22 +2651,21 @@ well-typed `RobustPoseFrame[]` input including an empty array.
 
 The system SHALL expose arm swing amplitude as a `MetricId` (`armSwingAmplitude`), positioned
 last in `MetricId` and every enumeration of it (after `kneeDrive`). Its `value` SHALL be the mean
-of the two sides' fitted peak-to-peak wrist-relative-to-shoulder vertical amplitudes — the same
-per-side spectral sinusoid fits arm swing symmetry reads, produced by the shared per-side
-computation over the shared scale-stabilized series, never a second fit of the same series —
-divided by `estimateBodyScale`'s clip-median torso length. The per-side amplitudes arrive already
+of the two sides' fitted peak-to-peak wrist-relative-to-shoulder vertical amplitudes — the
+per-side spectral sinusoid fits produced by the shared per-side computation (`computeSideSwing`)
+over the shared scale-stabilized series, never a second fit of the same series — divided by
+`estimateBodyScale`'s clip-median torso length. The per-side amplitudes arrive already
 at the clip's reference (median) scale, so the clip-median torso denominator pairs with a
 numerator standardized at the same reference and the normalization's semantics are unchanged.
 `unit` SHALL be `'ratio'`. The metric measures wrist-travel AMPLITUDE as a 2D
 movement proxy: neither its caveats nor its presentation SHALL claim to measure propulsive force,
-arm-drive effectiveness, or what the swing contributes to the stride, and its presentation SHALL
-distinguish it from arm swing symmetry (how big versus how even).
+arm-drive effectiveness, or what the swing contributes to the stride.
 
-The metric's trust gates SHALL be the SHARED arm-swing gates, applied to the identical fitted
-signal arm swing symmetry gates on — the weaker arm's sinusoid partial R² against
-`armSwingMinFitR2`, the shared minimum-cycle floor, and the shared cross-side fitted-frequency
-disagreement bound — never a second, separately-tunable gate on the same fitted signal, so the
-two arm metrics can never disagree about whether the fits are trustworthy. Its confidence inputs
+The metric's trust gates SHALL be the SHARED arm-swing gates, applied to the fitted signal the
+shared module produces — the weaker arm's sinusoid partial R² against `armSwingMinFitR2`, the
+shared minimum-cycle floor, and the shared cross-side fitted-frequency disagreement bound — never a
+second, separately-tunable gate on the same fitted signal, so a future second consumer of
+`computeSideSwing` inherits the gate rather than choosing its own. Its confidence inputs
 SHALL each be the WORSE side's (frame coverage, interpolated fraction, observed cycles, fit
 quality), never an average of the two sides, and when the two sides' fit qualities diverge past
 the shared disparity bound the result SHALL carry a caveat saying one arm's swing rhythm fit its
@@ -2878,10 +2677,9 @@ never a false or conflated one — in each of these distinct cases: no resolvabl
 position for one or both arms; a per-side swing rhythm that could not be fitted (too few samples,
 too short a clip, or no oscillating motion — the shared per-side failure wording); a fitted
 rhythm on the weaker arm below the shared R² gate; the two arms' fitted rhythms disagreeing past
-the shared bound (its own wording stating a single arm-swing size cannot be measured — distinct
-from the symmetry metric's not-comparable wording, because what failed here is the existence of
-one swing rhythm to size); and no resolvable body-scale reference (shoulders/hips) in the clip,
-which the scale-free symmetry ratio does not need but a torso-normalized amplitude does.
+the shared bound, naming that what failed is the existence of one swing rhythm to size rather than
+the arms themselves; and no resolvable body-scale reference (shoulders/hips) in the clip, which a
+torso-normalized amplitude requires even though the underlying per-side fits do not.
 
 #### Scenario: A clean front clip reports the mean of the two sides' normalized amplitudes
 
@@ -2891,6 +2689,13 @@ which the scale-free symmetry ratio does not need but a torso-normalized amplitu
 - **THEN** `value` equals the mean of the two fitted peak-to-peak amplitudes divided by the
   clip-median torso length, `unit` is `'ratio'`, and `confidence` reflects view fit, worse-side
   coverage, worse-side interpolation, worse-side observed cycles and worse-side fit quality
+
+#### Scenario: Amplitude survives a swing trace carrying a step-rate harmonic
+
+- **WHEN** each arm's trace is its swing rhythm plus a smaller oscillation at twice that frequency
+  (the step rhythm the shoulder itself carries) plus per-frame tracking jitter
+- **THEN** each side's fitted amplitude tracks that side's underlying swing amplitude, rather than
+  a statistic over the sub-cycle wiggles a prominence-threshold extremum scan would confirm
 
 #### Scenario: One arm fitting only noise publishes nothing
 
@@ -2905,7 +2710,8 @@ which the scale-free symmetry ratio does not need but a torso-normalized amplitu
   e.g. one arm's fit latched onto the step rhythm while the other fitted the stride rhythm, both
   clearing the R² gate
 - **THEN** `value` is `null`, `confidence` is `0`, and the caveat states that a single arm-swing
-  size cannot be measured — distinct in wording from the symmetry metric's rhythm-mismatch caveat
+  size cannot be measured, naming the absence of one swing rhythm to size rather than the
+  comparability of the two arms
 
 #### Scenario: A missing body-scale reference nulls the normalized amplitude with its own caveat
 
@@ -2934,14 +2740,13 @@ which the scale-free symmetry ratio does not need but a torso-normalized amplitu
 
 The system SHALL treat `'front'` as the primary view for arm swing amplitude
 (`viewFitTable.armSwingAmplitude.front = { fit: 'primary', multiplier: 1.0 }`) and `'side'` as
-unsuitable (`multiplier: 0.1`) — copying `armSwingSymmetry`'s identical
-front-primary/side-unsuitable gating exactly, not merely similarly — because a side view occludes
-or superimposes the far arm, an occlusion/separability failure that contaminates a two-arm
-amplitude just as it contaminates a two-arm comparison. `'ambiguous'` SHALL also be treated as
-unsuitable (`multiplier: 0.2`). The system SHALL still compute and return a value when the view
-is `'side'` or `'ambiguous'` and a value would otherwise resolve, never substituting `null`
-purely because the view is unsuitable, and SHALL attach a caveat naming the unsuitable camera
-angle via the shared view phrasing.
+unsuitable (`multiplier: 0.1`) — because a side view occludes or superimposes the far arm, an
+occlusion/separability failure rather than a loss of the swing signal itself, and an amplitude
+averaged over one visible arm and one occluded arm is contaminated by the occlusion. `'ambiguous'`
+SHALL also be treated as unsuitable (`multiplier: 0.2`). The system SHALL still compute and return
+a value when the view is `'side'` or `'ambiguous'` and a value would otherwise resolve, never
+substituting `null` purely because the view is unsuitable, and SHALL attach a caveat naming the
+unsuitable camera angle via the shared view phrasing.
 
 #### Scenario: Front-view clip is the primary, highest-confidence case
 
@@ -2956,6 +2761,13 @@ angle via the shared view phrasing.
 - **THEN** a non-null `value` is returned with `viewFit: 'unsuitable'`, confidence capped low by
   the `0.1` multiplier, and a caveat stating the measurement is not reliable from that camera
   angle
+
+#### Scenario: An ambiguous-view clip is computed, not withheld, and capped at the ambiguous multiplier
+
+- **WHEN** arm swing amplitude is computed against an `'ambiguous'`-classified clip where a value
+  would otherwise resolve
+- **THEN** a non-null `value` is returned with `viewFit: 'unsuitable'`, confidence capped low by
+  the `0.2` multiplier, and a caveat naming the ambiguous camera angle
 
 ### Requirement: Arm swing amplitude participates in the shared orchestration and output contract
 
@@ -2986,4 +2798,73 @@ well-typed `RobustPoseFrame[]` input including an empty array.
   body scale, or a clip with an unsuitable view
 - **THEN** `value` is either a finite number or `null`, never `NaN` or `Infinity`, and
   `confidence` is `0` whenever `value` is `null`
+
+### Requirement: The per-side arm-swing series is scale-stabilized before it is fitted
+
+Each sample of a per-side arm-swing series SHALL be scale-stabilized before the fit: divided by a
+per-frame factor derived from a whole-window least-squares quadratic trend of the LOG of the
+inter-shoulder distance, normalized so the factor reads 1 at the clip's reference (median measured)
+scale. The spectral fit's model is a CONSTANT-amplitude sinusoid, and a wrist-relative-to-shoulder
+excursion is a body-proportioned quantity — on a clip whose subject changes on-screen size inside
+the fit window, the raw-pixel least squares overweights the large-scale frames and reads mostly the
+clip's largest end. The scale proxy SHALL be resolved strictly bilaterally (both shoulders
+independently resolvable, never a single-side stand-in — a fabricated length is not a scale), and a
+frame whose proxy is missing SHALL still receive a factor from the trend, so no swing sample is
+ever dropped for it: the stabilization changes sample VALUES only, never the series'
+resolved/interpolated accounting. When the trend cannot be soundly fitted — too few bilateral proxy
+frames, an unsolvable system, or a trend flat to within a degeneracy floor — the factor SHALL be
+identically 1, an exact no-op equal to the raw-pixel computation.
+
+This is stated of the shared per-side computation rather than of any one metric, because the
+stabilization is a property of how that series is produced and every consumer of it inherits the
+result. The exactness of the no-op is load-bearing rather than cosmetic: dividing constant values
+by a numerically-almost-1 factor perturbs them at the same order as their own floating-point
+rounding, which is enough to turn a motionless-arm clip's honest no-oscillation reading into a
+spurious below-quality-gate one.
+
+#### Scenario: A subject whose on-screen scale changes during the clip is measured in body proportion
+
+- **WHEN** the subject's on-screen size changes substantially inside the fit window (e.g. running
+  toward the camera) while each arm's swing amplitude stays constant in body units
+- **THEN** each side's fitted amplitude tracks the body-unit amplitude — matching an otherwise-
+  identical clip with no scale change — rather than an amplitude dominated by the largest-scale
+  frames
+
+#### Scenario: An unsoundly-fittable trend is an exact no-op, not an approximate one
+
+- **WHEN** the clip offers too few strictly-bilateral proxy frames to fit the trend, or the fitted
+  trend is flat to within the degeneracy floor
+- **THEN** every per-side fitted amplitude equals the raw-pixel computation exactly, not merely to
+  within an epsilon
+
+### Requirement: An arm-swing exemplar pair spans one fitted half-swing and names its instants by body position
+
+The system SHALL derive each side's ghosted arm-swing exemplar pair from that side's fitted PHASE —
+the two sampled frames nearest a fitted maximum and its adjacent fitted minimum — so the pair spans
+half a fitted swing period by construction, and SHALL NOT select it by scanning the raw trace for
+extrema. The picture is captioned as one swing, top against bottom, and a pair chosen off the raw
+trace depicts drift and jitter that the reported amplitude explicitly excludes.
+
+Because the fitted series is the scale-stabilized `wrist.y − shoulder.y` in image-y, which grows
+downward — the stabilizing divisor is positive by construction, so it preserves this sign
+convention — the fitted MAXIMUM is the wrist at its LOWEST on screen; the system SHALL name the
+pair by body position rather than by extremum kind, so that a caption cannot state the opposite of
+the truth.
+
+Both rules are stated of the shared per-side exemplar builder rather than of any one metric,
+because every consumer of that builder inherits them: a pair scanned off the raw trace contradicts
+the number printed beside it, and reading the extremum kind straight through produces a caption
+that says the exact opposite of what the image shows, while passing every type check.
+
+#### Scenario: The pair spans a half-cycle, not a sub-cycle wiggle
+
+- **WHEN** an arm-swing exemplar is emitted for a side on a clip with a fitted swing rhythm
+- **THEN** the interval between that exemplar's `timestamp` and its `pairedTimestamp` is half that
+  side's fitted swing period, to within the clip's own frame interval
+
+#### Scenario: The base instant is the wrist at its highest
+
+- **WHEN** an arm-swing exemplar is emitted for a side
+- **THEN** its `timestamp` names the frame where that side's wrist sits higher on screen relative
+  to its shoulder, and its `pairedTimestamp` the frame where it sits lower
 

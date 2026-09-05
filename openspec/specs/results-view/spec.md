@@ -230,7 +230,7 @@ a blank field.
 
 ### Requirement: Metrics panel readouts with measurability and confidence tiers
 
-The system SHALL display, for each of the thirteen `MetricId`s in `FormHeuristicsResult`, its value in
+The system SHALL display, for each of the twelve `MetricId`s in `FormHeuristicsResult`, its value in
 plain language and a label naming the metric, partitioned into three tiers that determine how —
 and whether — a value renders at all, rather than a single uniform card style for every metric.
 Exclusion is reserved for metrics that are **structurally unmeasurable** — nothing was measured
@@ -1329,7 +1329,6 @@ For most metrics they are not, and the gap is structural rather than incidental:
   distance in any image is its unit.
 - `verticalRatio` reports a quotient formed across two **different** exemplars — a bounce cycle and a
   stride pair. Each image shows one factor of it; neither image shows the quotient.
-- `armSwingSymmetry` reports a ratio **between** its two images, one per side. Neither image shows it.
 - `overstriding` and `footStrikePattern` divide a drawable pixel offset by a **clip-median torso
   length**. The numerator is drawable; the denominator exists in no single frame.
 - `stepWidth` divides its drawable offset by a **clip-median hip width**. The hip-to-hip segment is
