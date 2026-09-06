@@ -76,9 +76,17 @@ That is the collision this change resolves in favour of the joint (see D4).
 ## D4. Why aiming REPLACES subject-centring rather than composing with it
 
 Both rules re-place the same rectangle on the same axes, so where both apply only one can win.
-Composition is not available: on `kneeDrive` subject-centring is precisely what moves the crop away
-from the knee, so any scheme that lets it act first and then aims within what it left would have to
-undo it.
+Composition is not available **where aiming actually moves the crop**: on `kneeDrive`
+subject-centring is precisely what moves the crop away from the knee, so any scheme that lets it act
+first and then aims within what it left would have to undo it.
+
+Considered and rejected: composing them only where aiming is a no-op. Where containment or the frame
+clamp pins the aim, `focusAimedCropRect`'s interval collapses and it returns `current` unchanged, so
+subject-centring could still run there without ever contradicting an aim. Rejected because it buys
+nothing and costs clarity — the rule would then read "aiming wins, except when it had no opinion, in
+which case a different rule wins", and a reader would have to derive which regime a given crop is in
+before predicting its placement. A metric that names a focus joint is framed by one rule on every
+clip.
 
 Aiming is the narrower and better-evidenced statement of the same intent. `subjectCentredCropRect`
 exists (`strides-e9b`) to stop floor-inflated area landing on whoever stands beside the runner; a
@@ -103,31 +111,45 @@ Where the interval is empty — the frame cap made the crop narrower than the bo
 crop keeps its existing placement, that being the best available placement of a square that cannot
 contain its own contents.
 
-## D5. `kneeDrive`'s image changes instant on `side-landscape`, and why that is a pre-existing rule
+## D5. `kneeDrive` keeps `slice(0, 1)` and takes `cropFocus` alone — the alternates were reverted
 
-Giving `kneeDrive` alternates hands the walk a list it did not have, and the walk's **existing**
-"demotion is the LAST RESORT" ordering (`strides-ddj`) then applies:
+**Review round 1 overruled the first pass here, and the evidence is in the first pass's own probe.**
+Fix 1 (the ranked-alternates list) is load-bearing for `kneeFlexion` and a pure cost for
+`kneeDrive`. What the first pass measured, and what that measurement actually shows:
 
-| | before | after |
-|---|---|---|
-| instant | 2.26667, right | **3.28333, right** |
-| paired | `null` (**collapsed-pair**) | **3.35** (a real ghost) |
-| quality | 1.000 | **0.7437** |
-| `cropSidePx` | 320 | 357.786 |
-| knee `fx` / `fy` | 0.042 / 0.677 | **0.500 / 0.500** |
+| | baseline | with alternates (reverted) | shipped: `cropFocus` only |
+|---|---|---|---|
+| instant | 2.26667, right | 3.28333, right | **2.26667, right** |
+| paired | `null` (**collapsed-pair**) | 3.35 (a real ghost) | `null` (**collapsed-pair**) |
+| quality | 1.000 | 0.7437 | **1.000** |
+| `cropSidePx` | 320 | 357.786 | **320** |
+| crop `x` / `y` | 2142.115 / 1261.949 | — | **1995.621 / 1318.611** |
+| knee `fx` / `fy` | 0.042 / 0.677 | 0.500 / 0.500 | **0.500 / 0.500** |
 
-The walk planned three candidates and stopped: 1.000 collapsed, 0.795 far-apart-demoted, 0.744 a
-drawable pair. 0.744 is therefore the **best-scoring candidate that renders as a pair**.
+The `cropFocus`-only column is not a new measurement: it is the first pass's own probe line for the
+candidate the alternates list DISCARDED. Its crop centres on (2155.62, 1478.61), which is the knee
+to full precision. **So aiming alone already reaches 0.500 / 0.500 on this metric's old instant, and
+the alternates list buys it nothing.**
 
-Trading a quality-1.000 demoted single for a quality-0.744 genuine pair is the repo's own written
-policy, and `kneeDrive`'s own module doc agrees with it: "one still of a lifted thigh, with nothing
-to read the lift against, is not evidence." The new image is busier at the 142 px inline size — the
-runner is smaller and behind a chain-link fence at t ≈ 3.3 — but it shows the comparison the
-caption promises, where the old one could not. Recorded here rather than smoothed over, so a
-reviewer can overrule it on sight.
+What the list cost: the t = 3.283 image has the runner smaller and cut off at the crop's right edge,
+a fence post down the middle, and the 35 % ghost sitting directly on a bystander in a white cap
+(confirmed present in the source frame). And the quality drop is **not** a `detectionFactor`
+artifact — `pairQuality` is a `Math.min`, and `detectionFactor` over `kneeDrive`'s two-keypoint seed
+can only be 0, 0.5 or 1, so 0.7437 is the peak's own `typicalityFactor`. Typicality is exactly what
+that card's median number is about, so this is a real loss of representativeness, not a bookkeeping
+one.
 
-`kneeFlexion` on the same clip takes the same route and the result is unambiguous: the winning
-candidate is a real pair at t = 2.5 ↔ 2.6333, quality 0.806, knee at **0.500 / 0.500**.
+**The principled counter is real and is preserved, not dismissed.** `kneeDrive` has the same even-pool
+exposure `kneeFlexion` has, and `slice(0, 1)` leaves it one parity bit from the same bug. But on
+this corpus its candidates score 1.000 / 0.7955 / 0.7437 — **no tie was ever active** — so the list
+bought a latent guarantee and spent a live image for it. The real culprit is the walk's
+unconditional "a pair at ANY rank beats a demoted single" rule meeting a longer list; a
+quality-aware version would let both metrics carry alternates with no regression. Filed as
+**`strides-hw8`**, which also records what to change here when it ships.
+
+`kneeFlexion` keeps its list, and on the same clip the result is unambiguous: the winning candidate
+is a real pair at t = 2.5 ↔ 2.6333, quality 0.806, knee at **0.500 / 0.500** — where its baseline
+was a collapsed single at `fx` 0.050 with the runner two-thirds out of frame.
 
 ## D6. Measured framing, before and after
 
@@ -139,14 +161,20 @@ resolved position — added, measured and **reverted** per the repo's add-measur
 | clip | metric | before: instant / `fx` / `fy` | after: instant / `fx` / `fy` |
 |---|---|---|---|
 | `side-landscape` | `kneeFlexion` | 3.51667 left / **0.0501** / **0.7626** | 2.5 right / **0.5000** / **0.5000** |
-| `side-landscape` | `kneeDrive` | 2.26667 right / **0.0422** / **0.6771** | 3.28333 right / **0.5000** / **0.5000** |
+| `side-landscape` | `kneeDrive` | 2.26667 right / **0.0422** / **0.6771** | 2.26667 right (**unchanged**) / **0.5000** / **0.5000** |
 | `side-portrait` | `kneeFlexion` | 5.7 left / 0.3983 / 0.4871 | 5.7 left (**unchanged**) / **0.5000** / **0.5000** |
 | `side-portrait` | `kneeDrive` | 5.46667 right / 0.5678 / 0.5979 | 5.46667 right (**unchanged**) / **0.5000** / **0.5000** |
 
 **`side-portrait` does not regress**: both metrics keep their instant, their quality
 (1.0 and 0.955047), their `cropSidePx` (330.58890281989864 and 320) and their `cropGrowth`. Only
-the crop's `x`/`y` move, which the coverage line does not report — which is why the A/B shows
-nothing for that clip and the probe is what demonstrates the improvement.
+the crop's `x`/`y` move. When this table was first measured that made the clip invisible to the
+A/B — the coverage line reported no field that could change — and the probe was the only
+demonstration. **That gap is now closed**: `focusOffset` is on the line (D8), so `side-portrait`'s
+improvement is visible in the A/B itself and a later aiming regression there cannot ship green.
+
+⚠️ **The `kneeDrive` after-column is the `cropFocus`-only result**, per D5 — the alternates list
+that moved its instant to 3.28333 was reverted in review round 1. Aiming alone reaches
+0.5000/0.5000 at its original 2.26667 instant.
 
 `front-approach` is **out of scope and vacuous, not failed**: `kneeFlexion` and `kneeDrive` are
 both `viewFit: unsuitable` there, tier-3 excluded, and report `metric-excluded` on the coverage
@@ -167,10 +195,26 @@ the bystander at the left edge where they were. No promotion.
 diff` shows zero changed assignments. Only a crop's `x`/`y` move, so `cropSidePx`, `cropGrowth`,
 `isTooFarApartPair` and `evidencePairCropGrowth` are all blind to the aiming.
 
-`focusOffset` is added to `EvidenceFramePlan` but deliberately **not** to the
-`[evidence-coverage]` payload: that payload is an enumerated field list, so adding one would put a
-new row on every metric of every clip and swamp the diff that is this change's own gate. The cost
-is that a future regression in aiming is not visible on the coverage line — see "Open" below.
+`focusOffset` is added to `EvidenceFramePlan` **and to the `[evidence-coverage]` payload**. The
+first pass omitted it, on the grounds that the payload is an enumerated field list so a new row on
+every metric of every clip would swamp this change's own gate diff. **Review round 1 overruled
+that**, on the repo's own written precedent: `EvidenceCoverageExemplar.cropGrowth`'s doc says it is
+a number on that line "for the same reason: it is what `EVIDENCE_MAX_PAIR_CROP_GROWTH`'s calibration
+bracket is stated in, so re-checking that bracket on real footage should not need a probe patch and
+a private console prefix." This change's acceptance criterion is stated in exactly the quantity
+`focusOffset` measures, and re-checking it DID need a probe patch and a private prefix — with the
+consequence, admitted in D6, that on `side-portrait` (one of the two in-scope clips) the A/B is
+blind to the entire effect of the change and a future aiming regression ships green. A one-time
+measurement artifact is not a reason for a permanent contract gap, and
+`scripts/ab-person-selection.mjs` flattens whatever keys are present precisely so a ticket adding a
+diagnostic need not edit the harness. `strides-ddj` broke this same contract three days earlier
+(`demotedFromPair` → `demotion`), took the 20-removed / 21-added diff, and recorded it.
+
+**Recorded, because this change inherits a blind spot rather than opening one:** the coverage line
+carries `cropSidePx` but not `crop.x` / `crop.y`, so `subjectCentredCropRect` (`strides-e9b`) is
+equally invisible to any harness reading that line — it too moves only a crop's position. That
+predates this change. But it is now the second placement rule to ship unobservable, and two is when
+a gap becomes a policy; `focusOffset` closes the half of it this change is responsible for.
 
 ## D9. A/B gate
 
@@ -180,25 +224,67 @@ node scripts/ab-person-selection.mjs --arm 'base={}' \
 ```
 
 Three trials per clip, fresh Chromium per trial, dev server started and identity-verified by the
-run, real GPU. Before/after differ on **exactly** these lines:
+run, real GPU (`ANGLE Metal Renderer: Apple M4 Pro`). **Re-run after review round 1**, because two
+of that round's fixes change what the report contains: reverting `kneeDrive`'s alternates puts its
+rows back on baseline, and putting `focusOffset` on the coverage line adds a row per exemplar.
 
-- `evidence.clips[0].metrics.kneeFlexion.exemplars[0].*` on `side-landscape` — `cropGrowth`
-  `null` → 1.41593, `cropSidePx` 320 → 656.637, `demotion` `collapsed-pair` → `null`,
-  `pairedTimestamp` `null` → 2.63333, `quality` 0.993409 → 0.806473, `side` left → right,
-  `timestamp` 3.51667 → 2.5
-- `evidence.clips[0].metrics.kneeDrive.exemplars[0].*` on `side-landscape` — as tabulated in D5
-- three `elapsedMs` lines, ranges overlapping in both directions
+`before.txt` is base `a23fd4d`. **69 differing lines: 11 removed, 29 added, and 29 unchanged
+context.** Nothing outside `evidence.*` and `elapsedMs` appears anywhere in the diff — verified by
+filtering the diff for changed lines matching neither prefix, which returns empty. No `metrics.*`,
+`sampling.*`, `personSelection.*` or `view.*` field moved on any clip.
 
-**Nothing in `metrics.*`, `sampling.*`, `personSelection.*` or `view.*` moved on any clip**, and
-neither `side-portrait` nor `front-approach` moved at all. Compared with
-`rtk proxy diff` and cross-checked with `md5` on the body below the provenance header
-(`b5d7544f116901b61a988a68db177255` → `cfaa04c7276288fe7f252c504431f7b4`), per `strides-ef5`.
+| | removed | added |
+|---|---|---|
+| provenance header (`# commit:`) | 1 | 1 |
+| `kneeFlexion.exemplars[0]` on `side-landscape` | 7 | 7 |
+| `elapsedMs` | 3 | 3 |
+| `focusOffset` rows (new field, no removals) | 0 | **18** |
+| **total** | **11** | **29** |
+
+**`kneeDrive` is back to baseline.** It contributes no removed line at all, and exactly one added
+one — its own `focusOffset`. Its instant, quality, `cropSidePx`, `demotion` and `side` on both side
+clips are bit-identical to `a23fd4d`.
+
+**`kneeFlexion` on `side-landscape` is the only pre-existing field set that moves**, and it is the
+defect: `timestamp` 3.51667 → **2.5**, `side` left → **right**, `demotion` `collapsed-pair` →
+**`null`** (a real ghost), `pairedTimestamp` `null` → **2.63333**, `cropSidePx` 320 → **656.637**,
+`cropGrowth` `null` → **1.41593**, `quality` 0.993409 → **0.806473**.
+
+**The new field reports the fix directly, which is what it was added for.** Every knee row on both
+side clips reads `focusOffset` **exactly `0`** — integer zero in the JSON, not a rounded float, on
+all three trials of both clips:
+
+| clip | metric | instant | `focusOffset` |
+|---|---|---|---|
+| `side-landscape` | `kneeFlexion` | 2.5 right | **0** |
+| `side-landscape` | `kneeDrive` | 2.26667 right (**unchanged**) | **0** |
+| `side-portrait` | `kneeFlexion` | 5.7 left (**unchanged**) | **0** |
+| `side-portrait` | `kneeDrive` | 5.46667 right (**unchanged**) | **0** |
+
+`0` is Chebyshev distance zero, i.e. `fx` = `fy` = 0.500 exactly — the D6 probe reading, now
+reproduced by the standing harness with no probe patch. **`side-portrait` was invisible to this
+gate before round 1** (nothing it reported could move on that clip); it now demonstrates its own
+improvement.
+
+Every other metric on every clip gained a `focusOffset` of `null` and moved nothing else.
+`front-approach` contributes only `null` rows: both knee metrics are `metric-excluded` there, so
+they have no exemplar rows at all.
+
+⚠️ **`elapsedMs` on `front-approach` reads high**, 2880 [2859..3559] → 3606 [3527..4876], barely
+overlapping. Wall-clock only, and this run shared the machine with other work; `detected 99/99` is
+identical on all three trials, so throughput is unaffected. Recorded rather than smoothed.
+
+Compared with `rtk proxy diff`, per `strides-ef5`. The body-below-header md5s
+(`b5d7544f116901b61a988a68db177255` → `4cb600a504e21504c1d4fe2ebc073f38`) differ, which is the
+expected direction here — the failure mode that rule guards against is a false "identical", and
+this diff is not empty.
 
 ## Open
 
-- **`focusOffset` is not on the `[evidence-coverage]` line**, so the aiming this change adds is not
-  observable from a harness without a probe. Deliberate, to keep this change's own A/B diff
-  readable; worth revisiting if a second consumer of the number appears.
-- **`kneeDrive`'s new `side-landscape` image is a busier picture than the one it replaces** (D5). It
-  is the correct outcome under the repo's own last-resort ordering and it shows the comparison its
-  caption promises, but it is a visible change a reviewer may want to overrule.
+- **The walk's "a pair at ANY rank beats a demoted single" rule is not quality-aware** — filed as
+  **`strides-hw8`**. It is why `kneeDrive` ships `slice(0, 1)` rather than the alternates list its
+  shape otherwise warrants (D5), and until it is fixed that metric keeps the even-pool tie exposure
+  `kneeFlexion` actually hit. `strides-hw8` records exactly what to change here when it ships.
+- **`crop.x` / `crop.y` are still absent from the `[evidence-coverage]` line**, so
+  `subjectCentredCropRect`'s placement remains unobservable from a harness (D8). Pre-existing, not
+  opened here, and `focusOffset` closes the half this change is responsible for.

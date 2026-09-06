@@ -1341,7 +1341,7 @@ contain both instants it was captioned for. Full measurement in the `verticalRat
 on `startsWith('[evidence-coverage]')`, and it carries **nothing image-shaped** (no canvas, `Blob`,
 object URL or data URI — verified by scanning 38 captured lines). It reports, per clip:
 `frameCount`, and per metric either `{status:'planned', exemplars:[{kind, side?, quality, timestamp,
-pairedTimestamp, demotion, cropSidePx, cropGrowth}]}` or `{status:'no-evidence', reason}`
+pairedTimestamp, demotion, cropSidePx, cropGrowth, focusOffset}]}` or `{status:'no-evidence', reason}`
 where reason is
 `not-emitted | all-gated-out | metric-excluded | frames-unavailable | extraction-failed`. Plus
 `sourceIndices`, the per-metric winning clip index.
@@ -1355,6 +1355,16 @@ instant was too similar to tell apart" is the exact inverse of what a far-apart 
 `cropGrowth` is still `null` on a demoted plan, so **the reading that CAUSED a far-apart demotion is
 not on this line**; re-checking `EVIDENCE_MAX_PAIR_CROP_GROWTH`'s bracket against a rejected pair
 still needs a probe.
+
+⚠️ **`focusOffset` was ADDED on 2026-09-05 (`strides-dxd`)** — the same kind of contract widening,
+one ADDED row per exemplar on every clip and no removals, so a `before.txt` captured earlier diffs
+against a later one on those rows by design. It is how far the joint the card reports on ended up
+from the middle of its image (Chebyshev, as a fraction of the crop side; `0` dead centre, `0.5` on
+an edge), `null` where the exemplar named no focus joint or that joint did not resolve at the base
+instant. On the line for `cropGrowth`'s stated reason — it is the quantity that placement rule's
+criterion is stated in, so re-checking it should not need a probe patch. **`crop.x` / `crop.y` are
+still NOT on this line**, so `subjectCentredCropRect`'s placement remains invisible to a harness;
+see "How a crop gets PLACED" below.
 
 `[analysis-diagnostics]` is untouched — same six
 top-level keys, ~5.5-5.6 kB, no exemplar data — and `vite build` output contains **zero** occurrences
@@ -1749,6 +1759,55 @@ present-day rendering):
 
 Also confirmed by looking: joints land on the right body throughout, and the annotation painter
 order is correct (hips render *under* the amber cross rather than over it).
+
+### How a crop gets PLACED — three rules, and aiming now outranks the other two (2026-09-05, `strides-dxd`)
+
+`computeEvidenceCropRect` sizes a square from the exemplar's `cropKeypoints` box (padding ×1.6,
+`EVIDENCE_CROP_MIN_SIDE_PX` floor of 320, `min(w,h)` frame cap) and then *places* it. Three rules
+can decide the placement, and **only one ever runs**:
+
+1. **Aimed at a named joint** — `focusAimedCropRect`, if the exemplar carries `cropFocus`.
+2. **Centred on the subject** — `subjectCentredCropRect` (`strides-e9b`), if not, and if the FLOOR
+   (never the padding, never the cap) is what made the crop wider than the runner on one axis while
+   the other axis is narrower than the crop.
+3. **Centred on its own box** — `computeCropRect`'s placement, otherwise.
+
+⚠️ **Aiming SUPERSEDES subject-centring for any exemplar naming a focus joint, and the two knee
+metrics now name one.** `computeEvidenceCropRect` returns from `focusAimedCropRect` **before
+`frameSubjectExtentBox` is ever computed**, so on `kneeFlexion` and `kneeDrive` the bystander guard
+is not merely inactive — it is unreachable, on every clip. Two consequences worth knowing before
+touching either rule:
+
+- **`subjectCentredCropRect`'s doc still cites `kneeFlexion` on `multiperson-track.mp4`** ("riding
+  66 px up the body … promotes a walking bystander into the centre of the picture") as the
+  justification for its second clause. That measurement was honest and is left in place, but it no
+  longer describes a path that metric can take. **The `footStrikePattern` half of the same
+  paragraph — riding 104 px up and reframing a foot close-up as a whole-body shot — is still live
+  and still what the clause protects.**
+- **What replaces the guard is structural, not incidental**: the focus joint is one of the
+  *runner's own* keypoints, so the centre of the picture is a point on the runner by construction —
+  a stronger statement than "centred on the subject's midline". And at peak flexion the knee is the
+  LOWEST seed, so aiming moves a knee crop DOWN the body, the opposite direction from the ride-up
+  that promoted the bystander. Both pinned by unit tests on the multiperson geometry, and confirmed
+  by looking at the rendered images on that clip.
+
+**`cropFocus` names ONE joint and is absent by design on a relation** — a bounce amplitude, a
+stride length, a step width are each about two positions, and aiming at either end would emphasise a
+point the card is not reporting on. An exemplar naming none is framed exactly as it was before.
+
+**Reading it from a harness**: `[evidence-coverage]`'s per-exemplar records carry **`focusOffset`**
+— Chebyshev distance from the crop's centre as a fraction of its side, `0` dead centre and `0.5` on
+an edge, `null` where no focus joint was named or it did not resolve. Added because the placement
+is otherwise invisible: only `x`/`y` move, and the line reports `cropSidePx` but **not `crop.x` /
+`crop.y`**, so `subjectCentredCropRect` remains unobservable there to this day. Do not read a
+`null` as "perfectly centred" — the walk's own tie-break abstains on it for exactly that reason.
+
+Measured knee position within its own crop, `fx`/`fy`, before → after (`0.5` is dead centre):
+`side-landscape` `kneeFlexion` **0.0501/0.7626 → 0.5000/0.5000** (and its instant moves, t=3.51667
+left → 2.5 right, because an even 14-peak pool tied bit-exactly and stable-sort handed it to the leg
+that was two-thirds out of frame); `side-landscape` `kneeDrive` **0.0422/0.6771 → 0.5000/0.5000**
+at the SAME instant; both `side-portrait` metrics reach 0.5000/0.5000 with instant, quality and
+`cropSidePx` unchanged.
 
 **N-clip provenance works.** Re-measured on a two-clip session (Demo 2 via the demo button,
 multiperson added through the header add-a-clip action): **10 images / 7 sections**, and every

@@ -475,7 +475,7 @@ export function cropKeypoints(
  *
  * `ranked` is a quality-descending list of pairs already rendered into exemplars, best first —
  * `selectExtremePairs`' output for the two range metrics, and the sorted peak/trough candidate list
- * for the two knee metrics. The head becomes the emitted exemplar and the rest hang off it as
+ * for `kneeFlexion`. The head becomes the emitted exemplar and the rest hang off it as
  * `alternates`, so the metric still emits exactly ONE `MetricExemplar` and
  * `MAX_EXEMPLARS_PER_METRIC` keeps counting images.
  *

@@ -272,21 +272,13 @@ describe('computeKneeDrive exemplars', () => {
     expect(evidence.cropFocus).toBe('left_knee')
   })
 
-  it('offers every other scored peak as a ranked alternative', () => {
-    // kneeFlexion's contract, clause for clause and for the same reason: nearness to the median is
-    // the whole ranking, so it cannot separate two peaks equidistant from it.
+  it('emits one peak and offers no ranked alternatives', () => {
+    // Deliberately NOT kneeFlexion's contract, though the shape is identical (`strides-hw8`):
+    // offering the list moved this metric off a well-framed quality-1.000 collapsed single onto a
+    // 0.744 pair, via the walk's unconditional "a pair at any rank beats a demoted single" rule.
     const result = computeKneeDrive(buildKneeDriveFrames(3), 'side')
-    const [evidence] = result.exemplars!
 
     expect(result.exemplars).toHaveLength(1)
-    expect(evidence.alternates!.length).toBeGreaterThan(0)
-    for (const [i, alternate] of evidence.alternates!.entries()) {
-      expect(alternate.kind).toBe('kneeDrivePeak')
-      expect(alternate.cropFocus).toBe(`${alternate.side}_knee`)
-      expect(alternate.quality).toBeLessThanOrEqual(
-        i === 0 ? evidence.quality : evidence.alternates![i - 1].quality,
-      )
-      expect(alternate.alternates).toBeUndefined()
-    }
+    expect(result.exemplars![0].alternates).toBeUndefined()
   })
 })

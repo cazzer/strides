@@ -10,7 +10,6 @@ import { findLocalExtrema } from './extrema'
 import type { Extremum } from './extrema'
 import { computeMetricConfidence } from './confidence'
 import {
-  attachPairAlternates,
   cropKeypoints,
   describeDistribution,
   pairQuality,
@@ -86,9 +85,13 @@ interface DrivePeak {
  * lifted thigh, with nothing to read the lift against, is not evidence. (Post-planning demotion
  * for an uncroppable pair is `SINGLE_INSTANT_KINDS`' separate business.)
  *
- * Every scored candidate is offered, best first — head plus `alternates` — on kneeFlexion's exact
- * terms and for its exact reason: nearness to the median is the whole ranking, and it cannot
- * separate two peaks equidistant from it.
+ * ONE candidate is emitted, unlike `kneeFlexion`, which shares this shape and offers its whole
+ * ranked list. This metric has the same latent exposure — an even peak pool ties bit-exactly at the
+ * median and this sort cannot separate the tie — but on the reference corpus no tie is active
+ * (candidates score 1.000 / 0.7955 / 0.7437), and offering the list is not free: `strides-dxd`
+ * measured it moving this metric off a well-framed 1.000 collapsed single onto a 0.744 genuine
+ * pair, via the walk's unconditional "a pair at ANY rank beats a demoted single" rule. Until that
+ * rule is quality-aware (`strides-hw8`), the list is offered per metric on evidence.
  */
 function buildExemplars(
   peaks: DrivePeak[],
@@ -134,11 +137,11 @@ function buildExemplars(
     })
   }
 
-  // One pair, not two: a second near-median peak would be the same picture of the same runner. The
-  // rest ride along as ranked alternates, for the reason `kneeFlexion.buildExemplars` gives — an
-  // even candidate pool ties bit-exactly at the median and this sort cannot separate the tie.
+  // One pair, not two: a second near-median peak would be the same picture of the same runner. And
+  // one candidate, not the ranked list `kneeFlexion` offers — see this function's doc for what
+  // offering it measured here.
   candidates.sort((a, b) => b.quality - a.quality)
-  return attachPairAlternates(candidates)
+  return candidates.slice(0, 1)
 }
 
 function adjacentMinimum(

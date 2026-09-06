@@ -135,23 +135,34 @@ Emitting exemplars SHALL NOT change any metric's `value`, `confidence`, `viewFit
 
 ### Requirement: A representative-instant exemplar offers ranked alternatives on the same terms as a range exemplar
 
-A metric that selects ONE representative instant from a pool of scored candidates SHALL emit, with
-it, the **lower-ranked candidates it did not choose**, ordered by the same score that chose the
-winner, on exactly the terms a range exemplar's alternatives are already offered: first entry
-identical to what the metric would have emitted alone, every entry a complete and independently
-renderable exemplar of the same kind, one level deep, each subject to the same emission gate, and
-none of it changing how many images the metric may produce.
+Where a metric that selects ONE representative instant from a pool of scored candidates offers the
+**lower-ranked candidates it did not choose**, it SHALL offer them ordered by the same score that
+chose the winner, on exactly the terms a range exemplar's alternatives are already offered: first
+entry identical to what the metric would have emitted alone, every entry a complete and
+independently renderable exemplar of the same kind, one level deep, each subject to the same
+emission gate, and none of it changing how many images the metric may produce.
 
-The reason is sharper here than for a range. Such a metric ranks candidates by nearness to its own
-median, and that score is **structurally unable to separate two candidates equidistant from the
-median** — which an even candidate pool produces by construction, at bit-identical quality. Emitting
-only the head therefore hands the choice to whatever order the candidates were built in, and
-construction order is not evidence about which instant makes the better picture. Offering the list
-moves that decision to the only layer that can see the frame.
+**At least one such metric SHALL offer them**, because the need is sharper here than for a range.
+Such a metric ranks candidates by nearness to its own median, and that score is **structurally
+unable to separate two candidates equidistant from the median** — which an even candidate pool
+produces by construction, at bit-identical quality. Emitting only the head therefore hands the
+choice to whatever order the candidates were built in, and construction order is not evidence about
+which instant makes the better picture. Offering the list moves that decision to the only layer that
+can see the frame.
+
+**Whether EVERY such metric offers them is deliberately not mandated here, and is decided per metric
+on measurement.** Offering a longer list interacts with the consumer's rule that a pair rendered at
+any rank beats a demoted single: on a metric whose own pool does not actually tie, that can move the
+image off a well-framed, maximally-representative instant onto a materially less representative one
+that happens to render as a pair. Measured on this repository's landscape side-view reference clip,
+that cost was a fall from the top of the typicality scale to roughly three quarters of it, for a
+guarantee against a tie that clip never presents. Until that consumer-side rule weighs the metric's
+own score, the exposure is recorded rather than paid blind.
 
 #### Scenario: A tied candidate is offered rather than discarded
 
-- **WHEN** a metric's candidate pool contains two instants its own score cannot separate
+- **WHEN** a metric that offers alternatives has a candidate pool containing two instants its own
+  score cannot separate
 - **THEN** both are offered, head and alternative, so the consumer rather than the build order
   decides between them
 
@@ -161,3 +172,10 @@ moves that decision to the only layer that can see the frame.
   best-scoring instant
 - **THEN** the emitted exemplar is the one the metric emitted before alternatives existed, with the
   same instants and the same quality
+
+#### Scenario: A metric of the same shape may still emit its head alone
+
+- **WHEN** a metric that selects one representative instant from a scored pool is measured to lose a
+  better-framed, more representative image by offering its list
+- **THEN** it emits only the head, carrying no alternatives, and the consumer treats it exactly as
+  it treats any exemplar offering none

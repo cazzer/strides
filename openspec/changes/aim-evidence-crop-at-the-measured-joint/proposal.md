@@ -40,11 +40,18 @@ already flush against `x = 0` — there is no other in-frame placement.
 - **A crop naming a focus joint is aimed at it**, subject to still containing the measured region
   and still lying inside the frame. That placement takes precedence over centring on the subject,
   which is the rule that was pulling `kneeDrive`'s crop off the knee.
-- **`kneeFlexion` and `kneeDrive` name the knee** and **offer their whole ranked candidate list**,
-  head plus `alternates`, on the terms the two range metrics already use.
+- **`kneeFlexion` and `kneeDrive` name the knee.** `kneeFlexion` additionally **offers its whole
+  ranked candidate list**, head plus `alternates`, on the terms the two range metrics already use —
+  it is the metric whose pool actually ties. `kneeDrive` keeps emitting its head alone: aiming
+  already centres its existing image, and offering the list was measured to cost it a better one
+  (design D5, follow-up `strides-hw8`).
 - **The fallback walk separates candidates the metric scored equally by framing.** Quality still
   dominates absolutely; framing only decides where the metric's own ranking is indifferent. An
   exemplar naming no focus joint keeps first-wins ordering exactly.
+
+- **`focusOffset` joins the development-only `[evidence-coverage]` line**, so the quantity this
+  change's own criterion is stated in is checkable from a harness rather than only from a probe
+  patch.
 
 Nothing that reads a crop's SIZE can observe any of this: `cropSidePx`, `cropGrowth`,
 `EVIDENCE_MAX_PAIR_CROP_GROWTH` and `EVIDENCE_CROP_MIN_SIDE_PX` are untouched, and only `x`/`y`
@@ -60,6 +67,9 @@ move.
   verified by a three-clip `scripts/ab-person-selection.mjs --evidence` A/B, where the only
   non-`elapsedMs` differences are `kneeFlexion`'s and `kneeDrive`'s own exemplar rows on
   `park-side-landscape.mp4`.
-- `kneeDrive`'s image on that clip changes instant, from a quality-1.000 collapsed single to a
-  quality-0.744 genuine pair. That is the pre-existing "demotion is the walk's LAST RESORT" rule
-  acting on a list it did not have before, not a new preference — see design.md D5.
+- `kneeFlexion`'s image on that clip changes instant, from a quality-0.993 collapsed single with
+  the runner two-thirds out of frame to a quality-0.806 genuine pair with the knee dead centre.
+  `kneeDrive` keeps its instant and its quality and only its crop moves — see design.md D5.
+- Every exemplar row on every clip gains a `focusOffset` field. That is a deliberate
+  `[evidence-coverage]` contract widening, on `cropGrowth`'s stated precedent; a capture taken
+  before this change diffs against a later one with one added row per exemplar.

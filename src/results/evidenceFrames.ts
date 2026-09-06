@@ -491,8 +491,10 @@ export interface EvidenceFramePlan {
    * frame.
    *
    * Not a render input either: it exists so `planExemplarWithFallback` can order candidates the
-   * METRIC scored identically. A metric's candidates all name the same focus joint or none of
-   * them do, so this is never compared against a `null` from a different metric.
+   * METRIC scored identically. The two reasons for a `null` are not equivalent — naming no focus
+   * joint is uniform across a metric's candidates, but failing to resolve one is a property of the
+   * individual frame — so neither is a reading, and `outranksForFallback` abstains on either
+   * rather than reading an absence as a perfectly-centred `0`.
    */
   focusOffset: number | null
 }
@@ -954,10 +956,19 @@ export function frameSubjectExtentBox(
  *    a scene that contains a whole person. When the crop is larger than the subject on both axes it
  *    already holds all of them, and moving it only swaps one piece of background for another with
  *    nothing in hand to prefer either. Dropping this clause is not a theoretical loss: on
- *    `multiperson-track.mp4` it is what stops `kneeFlexion` from riding 66 px up the body (which
- *    promotes a walking bystander from a pair of legs at the edge into the centre of the picture)
- *    and `footStrikePattern` from riding 104 px up (which reframes a foot close-up as a whole-body
- *    shot with the sole clipped off). Both were measured, both on this clip, both prevented here.
+ *    `multiperson-track.mp4` it is what stops `footStrikePattern` from riding 104 px up the body,
+ *    which reframes a foot close-up as a whole-body shot with the sole clipped off. That half was
+ *    measured on this clip and is still prevented here.
+ *
+ *    ⚠️ The same paragraph used to cite `kneeFlexion` riding 66 px up the same clip — promoting a
+ *    walking bystander from a pair of legs at the edge into the centre of the picture — and that
+ *    reading is honest but no longer describes a path this metric can take. `kneeFlexion` names a
+ *    `cropFocus` since `strides-dxd`, so `computeEvidenceCropRect` returns from
+ *    `focusAimedCropRect` before `frameSubjectExtentBox` is ever computed, and NO clause of this
+ *    rule protects it on any clip. What protects it instead is that the crop is aimed at the
+ *    runner's own knee, which is on the runner by construction — pinned by a test on this same
+ *    clip. The measurement is kept because it is still what this clause does for any metric that
+ *    reaches it.
  *
  * **Why CENTRED and not flush.** Centring leaves `(side − subjectExtent) / 2` of margin at BOTH
  * ends of the axis, which is the largest margin obtainable at either end — the minimax placement
@@ -1459,10 +1470,16 @@ export function planExemplarFrames(
  * the left-leg peak is the one where the runner is two-thirds out of frame. Nothing about the leg
  * made it the better picture; the iteration order did.
  *
- * A plan with no `focusOffset` reads as `0` — no opinion, and therefore never beats an equal — so
- * for a metric naming no focus joint every comparison is false and the first drawable candidate
- * wins, exactly as it did before framing entered the ordering. All of one metric's candidates name
- * the same focus joint or none of them do, so `0` is never standing in for a real reading.
+ * **A `null` `focusOffset` ABSTAINS rather than scoring zero.** It means one of two things — the
+ * exemplar named no focus joint, or it named one that did not resolve at its base frame — and
+ * neither is a reading of where anything landed. Only the first is uniform across a metric's
+ * candidates: `cropFocus` is set by the metric for all of them or for none, but resolution is a
+ * property of the individual frame, so one candidate's focus joint can be lost while its
+ * neighbours' resolve. Treating that absence as `0` would make the unaimed candidate — the one
+ * that fell through to `computeCropRect`'s own placement — beat every aimed one, which is exactly
+ * the inversion this rule exists to remove. So a comparison involving a `null` on either side is
+ * false, and for a metric naming no focus joint every comparison is false and the first drawable
+ * candidate wins, exactly as it did before framing entered the ordering.
  */
 function outranksForFallback(
   candidate: EvidenceFramePlan,
@@ -1471,7 +1488,9 @@ function outranksForFallback(
   if (incumbent === null) return true
   if (candidate.quality !== incumbent.quality)
     return candidate.quality > incumbent.quality
-  return (candidate.focusOffset ?? 0) < (incumbent.focusOffset ?? 0)
+  if (candidate.focusOffset === null || incumbent.focusOffset === null)
+    return false
+  return candidate.focusOffset < incumbent.focusOffset
 }
 
 /**
@@ -1530,9 +1549,12 @@ export function planExemplarWithFallback(
   for (const candidate of [exemplar, ...(exemplar.alternates ?? [])]) {
     if (candidate.quality < MIN_EXEMPLAR_QUALITY) continue
     // Candidates arrive best-first, so once a pair has been drawn nothing scoring below it can win
-    // and the rest of the list need not be planned. This is what keeps the walk's cost — and, for
-    // an exemplar whose candidates do not tie, its outcome — exactly what they were. No such stop
-    // while only demoted plans are in hand: a pair at ANY rank still beats a demoted single.
+    // and the rest of the list need not be planned. That keeps the OUTCOME exactly what it was for
+    // an exemplar whose candidates do not tie. It does not keep the cost exactly what it was: a
+    // tied exemplar now plans every candidate at the winning quality before breaking — measured 3
+    // extra plans on `park-side-landscape.mp4` and 2 on `park-side-portrait.mp4`, all rejected,
+    // both outcomes byte-identical. No such stop while only demoted plans are in hand: a pair at
+    // ANY rank still beats a demoted single.
     if (paired !== null && candidate.quality < paired.quality) break
     const plan = planExemplarFrames(
       metric,
@@ -1704,6 +1726,19 @@ export interface EvidenceCoverageExemplar {
    * on real footage should not need a probe patch and a private console prefix.
    */
   cropGrowth: number | null
+  /**
+   * `EvidenceFramePlan.focusOffset` — how far the joint the card is about ended up from the middle
+   * of the image, as a fraction of the crop's side. `null` where the exemplar named no focus joint
+   * or that joint did not resolve at the base instant.
+   *
+   * On the line for `cropGrowth`'s reason, which applies to it more sharply: `strides-dxd`'s
+   * acceptance criterion is stated in exactly this quantity, and re-checking it needed a probe
+   * patch and a private console prefix — so on `park-side-portrait.mp4`, one of the two clips the
+   * fix was for, the standing A/B was blind to the entire effect of the change and a later aiming
+   * regression would ship green. A new row per aimed metric per clip is a one-time diff in the
+   * gate that adds it, against a permanent gap in what the gate can see.
+   */
+  focusOffset: number | null
 }
 
 export interface EvidenceCoverageMetric {
@@ -1762,6 +1797,7 @@ export function summarizeEvidenceCoverage(
                   demotion: item.demotion,
                   cropSidePx: item.crop.side,
                   cropGrowth: item.cropGrowth,
+                  focusOffset: item.focusOffset,
                 })),
               }
             : { status: 'no-evidence', reason: entry.reason, exemplars: [] }

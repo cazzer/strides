@@ -1130,6 +1130,63 @@ describe('focusAimedCropRect', () => {
     })!
     expect(aimed.side).toBe(plain.side)
   })
+
+  it('keeps a floor-inflated crop on the runner, which is what subject-centring was for', () => {
+    // An aimed metric never reaches `subjectCentredCropRect` — `computeEvidenceCropRect` returns
+    // before `frameSubjectExtentBox` is even computed — so the bystander guarantee has to come
+    // from aiming itself, on the same floor-inflated geometry that rule exists for: a small leg
+    // box the 320 px display floor inflates past the runner's own width. The guarantee is
+    // structural rather than incidental. The focus joint is one of the RUNNER's keypoints, so the
+    // centre of the picture is a point on the runner by construction — a stronger statement than
+    // "centred on the subject's midline", which is what subject-centring was reaching for.
+    const frame = withLimb(
+      bodyFrame({ left: 750, right: 950, top: 250, bottom: 850 }),
+      { minX: 860, maxX: 900, minY: 520, maxY: 640 },
+    )
+    const roi = frameCropBox(frame, [...LIMB_SEED])!
+    const subject = frameSubjectExtentBox([frame])!
+    // The guarded regime: the floor, not the padding, is what made the crop wider than the runner.
+    expect(evidenceCropPaddedSide(roi)).toBe(192)
+    // The knee is the lower end of its own seed box, as it is at peak flexion.
+    const knee = { x: 900, y: 640 }
+    const crop = computeEvidenceCropRect([frame], [...LIMB_SEED], HD, knee)!
+    expect(crop.side).toBe(EVIDENCE_CROP_MIN_SIDE_PX)
+
+    const centre = { x: crop.x + crop.side / 2, y: crop.y + crop.side / 2 }
+    expect(centre).toEqual(knee)
+    expect(centre.x).toBeGreaterThanOrEqual(subject.minX)
+    expect(centre.x).toBeLessThanOrEqual(subject.maxX)
+    expect(centre.y).toBeGreaterThanOrEqual(subject.minY)
+    expect(centre.y).toBeLessThanOrEqual(subject.maxY)
+  })
+
+  it('moves a multiperson knee crop DOWN the body, not up into the bystander', () => {
+    // The one clause of `subjectCentredCropRect` that `kneeFlexion` used to depend on: on
+    // `multiperson-track.mp4` its crop is larger than the runner on BOTH axes, so that rule
+    // DECLINED to move it, because riding 66 px up the body promotes a walking bystander from a
+    // pair of legs at the top edge into the middle of the picture. Aiming re-places a crop the
+    // declining clause left alone, so the direction is the assertion: the knee is the LOWEST seed
+    // at peak flexion, so aiming moves the crop away from the top edge, not toward it.
+    const frame = withLimb(
+      bodyFrame({ left: 400, right: 516, top: 500, bottom: 790 }),
+      { minX: 410, maxX: 509, minY: 600, maxY: 746 },
+    )
+    const roi = frameCropBox(frame, [...LIMB_SEED])!
+    const subject = frameSubjectExtentBox([frame])!
+    const knee = { x: 509, y: 746 }
+    const declined = computeEvidenceCropRect([frame], [...LIMB_SEED], HD)!
+    const aimed = computeEvidenceCropRect([frame], [...LIMB_SEED], HD, knee)!
+
+    expect(aimed.y).toBeGreaterThan(declined.y)
+    expect(aimed.side).toBe(declined.side)
+    expect(aimed.x + aimed.side / 2).toBe(knee.x)
+    expect(aimed.y + aimed.side / 2).toBe(knee.y)
+    // Still the runner's own knee at the centre, and the measured region still in the picture.
+    expect(knee.x).toBeLessThanOrEqual(subject.maxX)
+    expect(knee.y).toBeLessThanOrEqual(subject.maxY)
+    expect(roi.minY).toBeGreaterThanOrEqual(aimed.y)
+    expect(roi.maxY).toBeLessThanOrEqual(aimed.y + aimed.side)
+  })
 })
 
 describe('evidenceFocusOffset', () => {
@@ -2341,6 +2398,47 @@ describe('planExemplarWithFallback', () => {
       expect(plan!.base.timestamp).toBeCloseTo(0.3, 10)
     })
 
+    it('abstains rather than reading an unresolved focus joint as perfectly centred', () => {
+      // `focusOffset` is `null` for two different reasons — the exemplar named no focus joint, or
+      // it named one the pipeline LOST at that instant — and only the first is uniform across a
+      // metric's candidates. Reading either as `0` would make the candidate whose crop was never
+      // aimed, and which therefore fell through to `computeCropRect`'s own placement, beat every
+      // aimed one: exactly the inversion this ordering exists to remove. Not reachable through
+      // either knee metric today, whose focus joint is a seed of their own series, but the field
+      // is designed for reuse and the failure is silent.
+      const withKnee = [0, 1, 2, 3, 4, 5, 6].map((i) =>
+        hipFrame(Number((i * 0.1).toFixed(2)), 60 + i * 40, 540, 100, {
+          // Lost at the first instant only — the alternate's base, not the head's.
+          ...(i === 0 ? {} : { left_knee: { x: 60 + i * 40, y: 640 } }),
+        }),
+      )
+      const kneeFocused = (
+        timestamp: number,
+        pairedTimestamp: number,
+        alternates?: MetricExemplar[],
+      ): MetricExemplar =>
+        exemplar({
+          kind: 'kneeFlexionPeak',
+          timestamp,
+          pairedTimestamp,
+          quality: 0.9,
+          cropFocus: 'left_knee',
+          ...(alternates === undefined ? {} : { alternates }),
+        })
+
+      const plan = planExemplarWithFallback(
+        'kneeFlexion',
+        kneeFocused(0.2, 0.6, [kneeFocused(0, 0.4)]),
+        withKnee,
+        HD,
+        TOLERANCE,
+      )
+
+      // The head is aimed and off-centre; the alternate is not aimed at all. The head keeps.
+      expect(plan!.base.timestamp).toBeCloseTo(0.2, 10)
+      expect(plan!.focusOffset).toBeGreaterThan(0)
+    })
+
     it('leaves an exemplar naming no focus joint on first-wins ordering', () => {
       // Every plan then reports no offset, so no comparison can ever be true and the walk returns
       // exactly what it returned before framing entered the ordering.
@@ -2853,6 +2951,9 @@ describe('summarizeEvidenceCoverage', () => {
           // ghosting cost this image 416/320.
           cropGrowth:
             (260 * EVIDENCE_CROP_PADDING_MULTIPLIER) / EVIDENCE_CROP_MIN_SIDE_PX,
+          // `trunkLeanRange` names no focus joint — a range is about a RELATION between two
+          // instants, not about one joint — so there is no aim to report.
+          focusOffset: null,
         },
       ],
     })
@@ -2871,6 +2972,37 @@ describe('summarizeEvidenceCoverage', () => {
     expect(payload.clips[0].metrics.verticalOscillation?.reason).toBe(
       'metric-excluded',
     )
+  })
+
+  it('reports how far an aimed crop left its focus joint from the centre', () => {
+    // On the line for `cropGrowth`'s reason, which bites harder here: this IS the quantity
+    // `strides-dxd`'s acceptance criterion is stated in, and re-checking it needed a probe patch
+    // and a private console prefix — so on one of the two clips the fix was for, the standing A/B
+    // could not see the effect of the change at all and a later aiming regression would ship green.
+    const plan = planClipEvidence(
+      heuristicsResult({
+        kneeFlexion: {
+          exemplars: [
+            exemplar({
+              kind: 'kneeFlexionPeak',
+              pairedTimestamp: 0.9,
+              cropFocus: 'left_hip',
+            }),
+          ],
+        },
+      }),
+      frames,
+      HD,
+    )
+    const payload = summarizeEvidenceCoverage(
+      [{ clipIndex: 0, frameCount: frames.length, plan }],
+      {},
+    )
+    const [item] = payload.clips[0].metrics.kneeFlexion!.exemplars
+
+    expect(item.focusOffset).toBeTypeOf('number')
+    expect(item.focusOffset).toBeGreaterThanOrEqual(0)
+    expect(item.focusOffset).toBeLessThanOrEqual(0.5)
   })
 
   it('round-trips through JSON unchanged', () => {

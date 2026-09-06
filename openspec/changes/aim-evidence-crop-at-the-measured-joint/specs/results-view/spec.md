@@ -126,6 +126,14 @@ focus joint: a bounce amplitude, a stride length and a step width are each about
 aiming at either end of such a relation would emphasise a point the card is not reporting on. An
 exemplar naming none SHALL be framed exactly as it was before focus joints existed.
 
+How far the named joint actually ended up from the centre of its image SHALL be reported on the
+development-only evidence coverage output, as a number beside the crop side already there, with an
+explicit absence where the exemplar named no focus joint or that joint did not resolve at the
+depicted instant. That is the quantity this placement rule is stated in and judged on, so
+re-checking it on real footage SHALL NOT require patching a probe into the pipeline — without it a
+standing before/after comparison is blind to the whole effect of this rule on any clip whose crop
+side and instants do not happen to move.
+
 A pair whose two instants are indistinguishable — near-identical crop regions, both resolving to the
 same sampled frame, or **separated by fewer sampled frame intervals than can express a difference in
 gait phase** — SHALL be demoted to a single frame, or dropped when the metric has no honest
@@ -215,7 +223,7 @@ reported at all, the clip's frames are unavailable, or extraction failed).
 #### Scenario: A minimum-sized limb crop is placed on the runner, not on the limb
 
 - **WHEN** an exemplar names a small limb region whose padded box falls below the crop's minimum side,
-  and the runner is narrower than that minimum but taller than it
+  and names no focus joint, and the runner is narrower than that minimum but taller than it
 - **THEN** the crop is centred horizontally on the runner's own keypoint extent rather than on the
   limb box, so the enlargement the minimum introduced is spent on the runner instead of on whatever
   stands beside them, while the crop's side, its aspect ratio and the limb region's presence in the
@@ -223,8 +231,8 @@ reported at all, the clip's frames are unavailable, or extraction failed).
 
 #### Scenario: A crop that already holds the whole subject is left where it is
 
-- **WHEN** a minimum-sized crop is larger than the subject on both axes — a distant runner in a foot
-  or knee close-up, say
+- **WHEN** a minimum-sized crop whose exemplar names no focus joint is larger than the subject on
+  both axes — a distant runner in a foot close-up, say
 - **THEN** the crop is not re-placed, because moving it would exchange one region of background for
   another with nothing to choose between them, and a crop that rode up the body would reframe a foot
   close-up as a whole-body shot and pull whatever stands behind the runner into the middle of it
@@ -250,6 +258,14 @@ reported at all, the clip's frames are unavailable, or extraction failed).
   edge, so no in-frame placement can bring the named joint any nearer the centre
 - **THEN** the crop is exactly the one the frame clamp already produced, rather than a rectangle
   that runs outside the frame
+
+#### Scenario: The coverage output reports how far the aimed joint landed from the centre
+
+- **WHEN** an evidence run completes in a development build and emits its separately-prefixed
+  evidence coverage output
+- **THEN** each exemplar record carries that image's own focus offset as a number, and an explicit
+  absence for an exemplar that named no focus joint or whose joint did not resolve at the depicted
+  instant, so a later regression in where a crop is aimed is visible without a probe patch
 
 #### Scenario: A near-identical pair is demoted rather than blended
 
@@ -369,7 +385,11 @@ is iterated first, which selected the instant where the runner is two-thirds out
 order is not evidence about which picture is better.
 
 An exemplar naming no focus joint SHALL have no such preference, and its walk SHALL behave exactly
-as it did before framing entered the ordering: the first candidate that renders wins.
+as it did before framing entered the ordering: the first candidate that renders wins. The same
+SHALL hold for a candidate whose named joint did not resolve at its own base instant: having no
+reading is not the same as reading as perfectly centred, and treating it as the latter would let a
+candidate whose crop was never aimed displace every candidate that was — the exact inversion this
+preference exists to remove.
 
 That preference SHALL apply to the demoted candidates too. On a clip where every candidate at the
 winning score collapses, the demoted pool IS the outcome, and ordering it by arrival alone would
@@ -400,6 +420,13 @@ slot its exemplar already owned and SHALL NOT let one metric render more images 
   focus joint in the middle of its image while the other's is clamped against a frame edge
 - **THEN** the better-framed one is rendered, and the same holds when neither can be drawn as a
   pair and the result is a demoted single
+
+#### Scenario: A candidate whose named joint was lost does not win the tie by default
+
+- **WHEN** two candidates carry the identical quality and one of them names a focus joint that did
+  not resolve at its own base instant, so its crop was never aimed
+- **THEN** the preference abstains rather than treating the missing reading as a perfectly-centred
+  one, and the aimed candidate is not displaced by the unaimed one
 
 #### Scenario: A better-framed candidate does not outrank a better-scoring one
 
