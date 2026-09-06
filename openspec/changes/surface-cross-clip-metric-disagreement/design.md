@@ -112,7 +112,7 @@ Rendered on the real three-clip demo session, `footStrikePattern`:
 > Foot strike pattern is an approximation based on ankle position relative to the knee at
 > footstrike, not a direct measurement of foot-ground angle. Treat the heel/midfoot/forefoot label
 > as a rough indicator, not a clinical classification. Combined from clip 1 of 3. The clips
-> disagree: clip 2 read a forefoot strike. Which reading is closer to the truth is not established.
+> disagree: clip 2 read a forefoot strike. Nothing here settles which clip is right.
 
 Four properties, each deliberate:
 

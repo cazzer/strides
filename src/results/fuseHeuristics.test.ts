@@ -111,8 +111,7 @@ describe('fusionProvenanceCaveat', () => {
 describe('fusionDisagreementCaveat', () => {
   it('names the clip and what it read, and claims no winner', () => {
     expect(fusionDisagreementCaveat([{ clipNumber: 2, reading: 'a forefoot strike' }])).toBe(
-      'The clips disagree: clip 2 read a forefoot strike. Which reading is closer to the truth ' +
-        'is not established.',
+      'The clips disagree: clip 2 read a forefoot strike. Nothing here settles which clip is right.',
     )
   })
 
@@ -124,7 +123,7 @@ describe('fusionDisagreementCaveat', () => {
       ]),
     ).toBe(
       'The clips disagree: clip 2 read a forefoot strike and clip 3 read a midfoot strike. ' +
-        'Which reading is closer to the truth is not established.',
+        'Nothing here settles which clip is right.',
     )
   })
 })
@@ -148,7 +147,7 @@ describe('fuseFormHeuristicsResults — cross-clip disagreement', () => {
 
     expect(fused.footStrikePattern.caveat).toBe(
       'Combined from clip 1 of 2. The clips disagree: clip 2 read a forefoot strike. ' +
-        'Which reading is closer to the truth is not established.',
+        'Nothing here settles which clip is right.',
     )
   })
 
@@ -176,7 +175,7 @@ describe('fuseFormHeuristicsResults — cross-clip disagreement', () => {
 
     expect(fused.footStrikePattern.caveat).toBe(
       'Foot strike pattern is an approximation. Combined from clip 1 of 2. The clips disagree: ' +
-        'clip 2 read a forefoot strike. Which reading is closer to the truth is not established.',
+        'clip 2 read a forefoot strike. Nothing here settles which clip is right.',
     )
   })
 
@@ -234,7 +233,7 @@ describe('fuseFormHeuristicsResults — cross-clip disagreement', () => {
 
     expect(fused.footStrikePattern.caveat).toBe(
       'Combined from clip 1 of 3. The clips disagree: clip 2 read a forefoot strike and clip 3 ' +
-        'read a midfoot strike. Which reading is closer to the truth is not established.',
+        'read a midfoot strike. Nothing here settles which clip is right.',
     )
   })
 

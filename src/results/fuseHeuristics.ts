@@ -40,8 +40,9 @@ const FOOT_STRIKE_READINGS: Record<FootStrikeClass, string> = {
  * that word — not the number — as the card's value. Two clips landing either side of that band
  * genuinely tell the reader two different things.
  *
- * Every other `MetricId` was surveyed and yields `null`, two of them after being weighed and
- * declined rather than for want of anything to compare:
+ * Every other `MetricId` was surveyed and yields `null` — three of them (`stepWidth`,
+ * `stepWidthCm`, `cadence`) after being weighed and declined rather than for want of anything to
+ * compare:
  *
  * - **`stepWidth` / `stepWidthCm`** do own an interpretive boundary — `value < 0` emits their
  *   "crossover gait" caveat — but it is a bare zero-crossing with no dead zone. A value
@@ -54,8 +55,19 @@ const FOOT_STRIKE_READINGS: Record<FootStrikeClass, string> = {
  *   category the value is read in: two clips 60 steps/min apart can share its verdict, and two
  *   clips a grid step apart can differ on it. It answers a different question.
  *
- * The remaining seven carry no value-keyed branch of any kind. A metric gains coverage here by
- * growing a real classifier, not by having this file invent one.
+ * The remaining five — `verticalOscillation`, `verticalRatio`, `verticalOscillationCm`,
+ * `kneeFlexion`, `armSwingAmplitude` — carry no value-keyed branch of any kind. (`overstriding`,
+ * `trunkLean` and `kneeDrive` are counted with the declines above, since the zero-crossing
+ * objection is what rules them out.) A metric gains coverage here by growing a real classifier,
+ * not by having this file invent one.
+ *
+ * ⚠️ **This never reads `confidence`, and that is deliberate but not free.** Fusion has already
+ * used confidence to choose, and the loser being EQUALLY confident is the whole reason this
+ * exists. But `metricTier` excludes only on a null value or an unsuitable `viewFit`, so a
+ * view-suitable clip whose own card would read "Low confidence" is quoted at equal billing —
+ * reachable here, since `MIN_FOOT_STRIKE_SAMPLE_SIZE` is 4 and a median can rest on 1-3 strikes.
+ * The copy is written to stay true in that case: it says nothing here settles which clip is
+ * right, which is a claim about this analysis, not about what is knowable from the footage.
  *
  * Reads `DEFAULT_HEURISTICS_CONFIG` for the band rather than threading the config that computed
  * the result, matching what `MetricsPanel.formatValue` already does to render the same word — so
@@ -94,7 +106,7 @@ export function fusionDisagreementCaveat(
   const clause = joinWithAnd(
     entries.map((entry) => `clip ${entry.clipNumber} read ${entry.reading}`),
   )
-  return `The clips disagree: ${clause}. Which reading is closer to the truth is not established.`
+  return `The clips disagree: ${clause}. Nothing here settles which clip is right.`
 }
 
 function pickBestWithIndex<T extends { confidence: number }>(
