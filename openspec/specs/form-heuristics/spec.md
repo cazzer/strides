@@ -1317,6 +1317,17 @@ region of the frame this exemplar is about. `cropKeypoints` SHALL be named by th
 the exemplar, not re-derived downstream from the `MetricId`, so that knowledge of what a metric
 measured lives only in the module that measures it.
 
+An exemplar MAY additionally name the ONE keypoint its card's number is about — the joint a reader
+is being asked to look at. `cropKeypoints` cannot answer that question: it bounds the region the
+image must CONTAIN, and its centre is wherever that region's geometry puts it, which for a joint at
+one end of a limb chain is systematically off-centre. A metric whose picture is of one joint SHALL
+name it. A metric whose number is a relation between two positions — an amplitude, a stride length,
+a width across a midline — SHALL NOT, because there is no single joint at the centre of such a
+picture and naming either end would emphasise a point the card is not reporting on.
+
+Like `cropKeypoints`, that name SHALL be stated by the metric that took the measurement and SHALL
+NOT be re-derived downstream from the `MetricId`.
+
 A metric whose exemplar pairs two instants that need **not** share a side SHALL additionally state
 the side each instant's own measurement was about, per instant. `side` cannot express this: it is a
 pair-level claim, present only when both instants share a side, so on a deliberately opposite-side
@@ -1348,6 +1359,14 @@ entirely rather than emitting a low-quality exemplar.
 
 Emitting exemplars SHALL NOT change any metric's `value`, `confidence`, `viewFit`,
 `interpolatedFraction`, `frameCoverage`, `sampleSize`, or `caveat`.
+
+#### Scenario: A one-joint metric names the joint its number is about
+
+- **WHEN** a metric whose number is read at a single joint — a knee angle at peak flexion, a thigh
+  lift measured to the knee — emits an exemplar
+- **THEN** that exemplar names that joint, and a metric reporting an amplitude or a stride length
+  names none, so a consumer can tell "no joint is at the centre of this picture" from "the metric
+  forgot to say"
 
 #### Scenario: An exemplar addresses its instant by timestamp across the presence-trim boundary
 
@@ -2867,4 +2886,51 @@ that says the exact opposite of what the image shows, while passing every type c
 - **WHEN** an arm-swing exemplar is emitted for a side
 - **THEN** its `timestamp` names the frame where that side's wrist sits higher on screen relative
   to its shoulder, and its `pairedTimestamp` the frame where it sits lower
+
+### Requirement: A representative-instant exemplar offers ranked alternatives on the same terms as a range exemplar
+
+Where a metric that selects ONE representative instant from a pool of scored candidates offers the
+**lower-ranked candidates it did not choose**, it SHALL offer them ordered by the same score that
+chose the winner, on exactly the terms a range exemplar's alternatives are already offered: first
+entry identical to what the metric would have emitted alone, every entry a complete and
+independently renderable exemplar of the same kind, one level deep, each subject to the same
+emission gate, and none of it changing how many images the metric may produce.
+
+**At least one such metric SHALL offer them**, because the need is sharper here than for a range.
+Such a metric ranks candidates by nearness to its own median, and that score is **structurally
+unable to separate two candidates equidistant from the median** — which an even candidate pool
+produces by construction, at bit-identical quality. Emitting only the head therefore hands the
+choice to whatever order the candidates were built in, and construction order is not evidence about
+which instant makes the better picture. Offering the list moves that decision to the only layer that
+can see the frame.
+
+**Whether EVERY such metric offers them is deliberately not mandated here, and is decided per metric
+on measurement.** Offering a longer list interacts with the consumer's rule that a pair rendered at
+any rank beats a demoted single: on a metric whose own pool does not actually tie, that can move the
+image off a well-framed, maximally-representative instant onto a materially less representative one
+that happens to render as a pair. Measured on this repository's landscape side-view reference clip,
+that cost was a fall from the top of the typicality scale to roughly three quarters of it, for a
+guarantee against a tie that clip never presents. Until that consumer-side rule weighs the metric's
+own score, the exposure is recorded rather than paid blind.
+
+#### Scenario: A tied candidate is offered rather than discarded
+
+- **WHEN** a metric that offers alternatives has a candidate pool containing two instants its own
+  score cannot separate
+- **THEN** both are offered, head and alternative, so the consumer rather than the build order
+  decides between them
+
+#### Scenario: Offering the list does not change the winner
+
+- **WHEN** a metric that offers alternatives is computed over a candidate set with a single
+  best-scoring instant
+- **THEN** the emitted exemplar is the one the metric emitted before alternatives existed, with the
+  same instants and the same quality
+
+#### Scenario: A metric of the same shape may still emit its head alone
+
+- **WHEN** a metric that selects one representative instant from a scored pool is measured to lose a
+  better-framed, more representative image by offering its list
+- **THEN** it emits only the head, carrying no alternatives, and the consumer treats it exactly as
+  it treats any exemplar offering none
 
