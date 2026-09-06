@@ -263,4 +263,30 @@ describe('computeKneeDrive exemplars', () => {
       "Peak knee drive (left leg), ghosted against the same leg's thigh swept back",
     )
   })
+
+  it('names the knee as the joint the crop should be aimed at', () => {
+    // The knee is the end of the thigh whose lift IS this card's number, and it sits at one end of
+    // a two-point seed box rather than at its centre.
+    const [evidence] = computeKneeDrive(buildKneeDriveFrames(3), 'side').exemplars!
+
+    expect(evidence.cropFocus).toBe('left_knee')
+  })
+
+  it('offers every other scored peak as a ranked alternative', () => {
+    // kneeFlexion's contract, clause for clause and for the same reason: nearness to the median is
+    // the whole ranking, so it cannot separate two peaks equidistant from it.
+    const result = computeKneeDrive(buildKneeDriveFrames(3), 'side')
+    const [evidence] = result.exemplars!
+
+    expect(result.exemplars).toHaveLength(1)
+    expect(evidence.alternates!.length).toBeGreaterThan(0)
+    for (const [i, alternate] of evidence.alternates!.entries()) {
+      expect(alternate.kind).toBe('kneeDrivePeak')
+      expect(alternate.cropFocus).toBe(`${alternate.side}_knee`)
+      expect(alternate.quality).toBeLessThanOrEqual(
+        i === 0 ? evidence.quality : evidence.alternates![i - 1].quality,
+      )
+      expect(alternate.alternates).toBeUndefined()
+    }
+  })
 })

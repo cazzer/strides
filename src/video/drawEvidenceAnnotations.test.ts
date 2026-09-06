@@ -194,6 +194,7 @@ function ghostedPairAnnotation(): EvidenceAnnotation {
     travelDirection: 1,
     demotion: null,
     cropGrowth: 1.4,
+    focusOffset: null,
   }
   return planEvidenceAnnotations(plan, MAX_OUTPUT_SIDE)
 }
@@ -221,6 +222,7 @@ function bounceAnnotation(): EvidenceAnnotation {
       travelDirection: 1,
       demotion: null,
       cropGrowth: null,
+      focusOffset: null,
     },
     MAX_OUTPUT_SIDE,
   )

@@ -484,6 +484,17 @@ export interface EvidenceFramePlan {
    * dropped and has no plan to carry a field.
    */
   cropGrowth: number | null
+  /**
+   * `evidenceFocusOffset` for this plan's crop and the exemplar's `cropFocus` joint at the base
+   * instant — how far the joint the card is about ended up from the middle of the image. `null`
+   * where the exemplar names no focus joint, or where that joint does not resolve at the base
+   * frame.
+   *
+   * Not a render input either: it exists so `planExemplarWithFallback` can order candidates the
+   * METRIC scored identically. A metric's candidates all name the same focus joint or none of
+   * them do, so this is never compared against a `null` from a different metric.
+   */
+  focusOffset: number | null
 }
 
 /**
@@ -845,11 +856,16 @@ function isUsableFrameSize(frameSize: EvidenceFrameSize): boolean {
  * side is always exactly what the padding/floor/cap math produced, and a subject half out of frame
  * yields an in-bounds rect rather than a negative-width one. Squareness is what makes the evidence
  * read as a coherent set rather than a ragged pile.
+ *
+ * `focus` is the exemplar's `cropFocus` joint resolved at the BASE frame, when it names one. It
+ * decides only WHERE the finished square sits, never how big it is, and it takes precedence over
+ * `subjectCentredCropRect` — see `focusAimedCropRect` for why the two cannot both apply.
  */
 export function computeEvidenceCropRect(
   frames: RobustPoseFrame[],
   cropKeypoints: KeypointName[],
   frameSize: EvidenceFrameSize,
+  focus: { x: number; y: number } | null = null,
 ): CropRectPx | null {
   if (!isUsableFrameSize(frameSize)) return null
   const boxes = frames
@@ -864,6 +880,7 @@ export function computeEvidenceCropRect(
     EVIDENCE_CROP_PADDING_MULTIPLIER,
     EVIDENCE_CROP_MIN_SIDE_PX,
   )
+  if (focus !== null) return focusAimedCropRect(crop, union, focus, frameSize)
   const subject = frameSubjectExtentBox(frames)
   return subject === null
     ? crop
@@ -989,6 +1006,86 @@ export function subjectCentredCropRect(
     frameSize.height - crop.side,
   )
   return { x, y, side: crop.side }
+}
+
+/**
+ * Re-places an already-sized crop so the JOINT the card's number is about sits as near the centre
+ * of the image as the rectangle can be moved to put it. Same `side`, same frame, only `x`/`y`
+ * move — so, exactly as with `subjectCentredCropRect`, nothing that reads a crop's size
+ * (`evidencePairCropGrowth`, `isTooFarApartPair`, the coverage line's `cropSidePx`) can observe
+ * this at all.
+ *
+ * **The defect (`strides-dxd`).** `computeCropRect` centres on the box `cropKeypoints` spans, and
+ * a joint at one end of a limb chain is not at that box's centre. `kneeFlexion` seeds on
+ * hip/knee/ankle, and at peak flexion the knee is the LOWEST of the three — measured on
+ * `park-side-landscape.mp4`, it lands in the bottom quarter (fy 0.68–0.77) on all fourteen
+ * candidate instants, not on an unlucky one. The card says "peak knee flexion" and the knee is in
+ * a corner.
+ *
+ * **Why this REPLACES subject-centring rather than composing with it.** Both rules re-place the
+ * same rectangle on the same axes, so where both would fire only one can win. Aiming at the joint
+ * is the narrower and better-evidenced statement of the same intent: subject-centring exists to
+ * stop floor-inflated area landing on whatever stands beside the runner, and a crop centred on the
+ * runner's own knee is centred on the runner by construction. They genuinely disagree — measured
+ * on the same clip, `kneeDrive`'s crop is subject-centred 101 px away from the knee, which is what
+ * puts the knee at `fx` 0.042 — and when they do, the card's own subject wins.
+ *
+ * **Containment is the constraint that keeps this honest.** The crop must still contain `cropBox`,
+ * the region the metric measured: `kneeFlexion`'s image has to show the hip and the ankle or the
+ * angle at the knee reads against nothing. So the aim is clamped into the interval of positions
+ * that still hold the whole box, and only then into the frame. Where the interval is empty — the
+ * frame cap has made the crop narrower than the box — the crop keeps the position
+ * `computeCropRect` gave it, which is the best available placement of a square that cannot hold
+ * its own box.
+ *
+ * That clamp is why aiming is never worse than not aiming: `computeCropRect`'s own box-centred
+ * placement satisfies containment whenever the box fits, so the aimed position is a move from
+ * there TOWARD the joint along each axis, never away from it.
+ */
+export function focusAimedCropRect(
+  crop: CropRectPx,
+  cropBox: BoundingBoxPx,
+  focus: { x: number; y: number },
+  frameSize: EvidenceFrameSize,
+): CropRectPx {
+  if (!isUsableFrameSize(frameSize)) return crop
+
+  const aim = (
+    current: number,
+    focusOn: number,
+    boxMin: number,
+    boxMax: number,
+    frameExtent: number,
+  ) => {
+    const lo = Math.max(boxMax - crop.side, 0)
+    const hi = Math.min(boxMin, frameExtent - crop.side)
+    if (lo > hi) return current
+    return Math.min(Math.max(focusOn - crop.side / 2, lo), hi)
+  }
+
+  return {
+    x: aim(crop.x, focus.x, cropBox.minX, cropBox.maxX, frameSize.width),
+    y: aim(crop.y, focus.y, cropBox.minY, cropBox.maxY, frameSize.height),
+    side: crop.side,
+  }
+}
+
+/**
+ * How far the exemplar's focus joint ended up from the centre of its crop, as a fraction of the
+ * crop's side: `0` is dead centre and `0.5` is on the edge. Chebyshev rather than Euclidean,
+ * because the quantity a reader notices is the distance to the NEAREST edge.
+ *
+ * The only consumer is `planExemplarWithFallback`'s tie-break, which needs one number per plan to
+ * order candidates the metric scored identically.
+ */
+export function evidenceFocusOffset(
+  crop: CropRectPx,
+  focus: { x: number; y: number },
+): number {
+  return Math.max(
+    Math.abs(focus.x - (crop.x + crop.side / 2)),
+    Math.abs(focus.y - (crop.y + crop.side / 2)),
+  ) / crop.side
 }
 
 /**
@@ -1302,10 +1399,18 @@ export function planExemplarFrames(
   // body drawn. Measured on Demo 1: 912.197 px rather than the tighter box a single strike names.
   const drawnFrames =
     ghost === null ? [resolved.base] : [resolved.base, ghost]
+  // Resolved at the BASE frame specifically: the base is the instant the card reports on, so it is
+  // that instant's joint the reader is being pointed at. The crop still contains the union across
+  // both drawn frames, so aiming at one of them never drops the other out of the picture.
+  const focus =
+    exemplar.cropFocus === undefined
+      ? null
+      : resolvePoint(resolved.base, exemplar.cropFocus)
   const crop = computeEvidenceCropRect(
     drawnFrames,
     exemplar.cropKeypoints,
     frameSize,
+    focus,
   )
   if (crop === null) return null
 
@@ -1337,11 +1442,40 @@ export function planExemplarFrames(
       ghost === null || ghostBox === null
         ? null
         : evidencePairCropGrowth(baseBox, ghostBox, frameSize),
+    focusOffset: focus === null ? null : evidenceFocusOffset(crop, focus),
   }
 }
 
 /**
- * One exemplar → the plan for the first of its ranked pairs that can actually be DRAWN.
+ * Orders two drawable plans of the SAME exemplar. The metric's own `quality` dominates — an
+ * alternate exists to be a fallback, never to outrank a more representative instant — and framing
+ * breaks a tie.
+ *
+ * **A tie here is not a rarity, it is a construction** (`strides-dxd`). `kneeFlexion` pools an even
+ * number of peaks on `park-side-landscape.mp4`, so its median is the mean of the two middle values
+ * and those two are EXACTLY equidistant from it; `typicality` is a function of that distance, so
+ * their qualities are bit-identical. `Array.prototype.sort` is stable and the metric pushes peaks
+ * left-leg-first, so before this the left leg won every such tie unconditionally — and on that clip
+ * the left-leg peak is the one where the runner is two-thirds out of frame. Nothing about the leg
+ * made it the better picture; the iteration order did.
+ *
+ * A plan with no `focusOffset` reads as `0` — no opinion, and therefore never beats an equal — so
+ * for a metric naming no focus joint every comparison is false and the first drawable candidate
+ * wins, exactly as it did before framing entered the ordering. All of one metric's candidates name
+ * the same focus joint or none of them do, so `0` is never standing in for a real reading.
+ */
+function outranksForFallback(
+  candidate: EvidenceFramePlan,
+  incumbent: EvidenceFramePlan | null,
+): boolean {
+  if (incumbent === null) return true
+  if (candidate.quality !== incumbent.quality)
+    return candidate.quality > incumbent.quality
+  return (candidate.focusOffset ?? 0) < (incumbent.focusOffset ?? 0)
+}
+
+/**
+ * One exemplar → the plan for the best of its ranked pairs that can actually be DRAWN.
  *
  * `planExemplarFrames` answers "can this exact pair be rendered honestly", and its `null` is
  * final for that pair — but it was being treated as final for the whole metric. The emitting
@@ -1371,6 +1505,14 @@ export function planExemplarFrames(
  * whose alternate draws at 1.866: a good ghost would have become a lone frame, and the coverage
  * line would still have shown an image, so the regression would have read as a fix.
  *
+ * **Candidates the metric scored EQUALLY are separated by framing**, via `outranksForFallback` —
+ * the one respect in which this is no longer "the first that renders". Where the metric's own
+ * ranking is indifferent, the walk is the only layer that can see which candidate puts the
+ * measured joint in the middle of its image rather than in a corner, and preferring the
+ * better-framed one costs nothing: they are, by the metric's own score, equally representative.
+ * Where the metric's ranking is NOT indifferent it still decides alone, and where the exemplar
+ * names no focus joint the ordering degenerates to first-wins exactly as before.
+ *
  * The returned plan is the SELECTED pair's own throughout — its instants, its `quality`, its
  * `cropGrowth` — so nothing downstream, the `[evidence-coverage]` line included, is ever told
  * about a pair the image does not show.
@@ -1383,9 +1525,15 @@ export function planExemplarWithFallback(
   toleranceSeconds: number,
   travelDirection: EvidenceTravelDirection = evidenceTravelDirection(frames),
 ): EvidenceFramePlan | null {
+  let paired: EvidenceFramePlan | null = null
   let demoted: EvidenceFramePlan | null = null
   for (const candidate of [exemplar, ...(exemplar.alternates ?? [])]) {
     if (candidate.quality < MIN_EXEMPLAR_QUALITY) continue
+    // Candidates arrive best-first, so once a pair has been drawn nothing scoring below it can win
+    // and the rest of the list need not be planned. This is what keeps the walk's cost — and, for
+    // an exemplar whose candidates do not tie, its outcome — exactly what they were. No such stop
+    // while only demoted plans are in hand: a pair at ANY rank still beats a demoted single.
+    if (paired !== null && candidate.quality < paired.quality) break
     const plan = planExemplarFrames(
       metric,
       candidate,
@@ -1396,14 +1544,17 @@ export function planExemplarWithFallback(
     )
     if (plan === null) continue
     // `demotion === null` rather than `ghost !== null`, so that a genuine single-instant exemplar
-    // — which never had a pair to lose — returns immediately instead of being filed as a
-    // consolation prize and walked past.
-    if (plan.demotion === null) return plan
-    // The FIRST demotable candidate is kept, not the last: candidates arrive best-first, so the
-    // best demoted single is the one the highest-ranked demotable pair produced.
-    demoted ??= plan
+    // — which never had a pair to lose — is filed as a winner rather than as a consolation prize.
+    if (plan.demotion === null) {
+      if (outranksForFallback(plan, paired)) paired = plan
+    } else if (outranksForFallback(plan, demoted)) {
+      // The demoted pool is ordered by the same rule, not merely by arrival: on a clip where every
+      // candidate collapses, this pool IS the outcome, and leaving it to arrival order would put
+      // the leg-iteration tie-break straight back.
+      demoted = plan
+    }
   }
-  return demoted
+  return paired ?? demoted
 }
 
 /**

@@ -135,6 +135,35 @@ describe('computeKneeFlexion exemplars', () => {
     expect(evidence.cropKeypoints).toEqual(['left_hip', 'left_knee', 'left_ankle'])
   })
 
+  it('names the knee as the joint the crop should be aimed at', () => {
+    // The knee is the vertex of the angle this card reports AND the lowest of the three seeds at
+    // peak flexion, so the seed box's own centre puts it near the bottom edge of the picture.
+    const [evidence] = computeKneeFlexion(buildKneeFlexionFrames(3), 'side').exemplars!
+
+    expect(evidence.cropFocus).toBe('left_knee')
+  })
+
+  it('offers every other scored peak as a ranked alternative', () => {
+    // The emitting sort ranks on nearness to the median alone, and cannot separate two peaks
+    // equidistant from it — an EVEN pool makes the two middle ones exactly so. Which of them makes
+    // the better picture is a question about the frame, and only the evidence layer can answer it,
+    // so the list has to reach it.
+    const result = computeKneeFlexion(buildKneeFlexionFrames(3), 'side')
+    const [evidence] = result.exemplars!
+
+    expect(result.exemplars).toHaveLength(1)
+    expect(evidence.alternates!.length).toBeGreaterThan(0)
+    // Ranked, gated, and one level deep — the shared `attachPairAlternates` contract.
+    for (const [i, alternate] of evidence.alternates!.entries()) {
+      expect(alternate.kind).toBe('kneeFlexionPeak')
+      expect(alternate.cropFocus).toBe(`${alternate.side}_knee`)
+      expect(alternate.quality).toBeLessThanOrEqual(
+        i === 0 ? evidence.quality : evidence.alternates![i - 1].quality,
+      )
+      expect(alternate.alternates).toBeUndefined()
+    }
+  })
+
   it('names the trough as a real extension instant, not the peak itself', () => {
     const frames = buildKneeFlexionFrames(3)
 

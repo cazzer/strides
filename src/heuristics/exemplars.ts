@@ -471,11 +471,13 @@ export function cropKeypoints(
  */
 /**
  * The one place a ranked list of pairs is folded into the winner-plus-alternates shape a metric
- * emits — shared so the two range metrics cannot build it differently.
+ * emits — shared so no two metrics can build it differently.
  *
- * `ranked` is `selectExtremePairs`' output already rendered into exemplars, best first. The head
- * becomes the emitted exemplar and the rest hang off it as `alternates`, so a range metric still
- * emits exactly ONE `MetricExemplar` and `MAX_EXEMPLARS_PER_METRIC` keeps counting images.
+ * `ranked` is a quality-descending list of pairs already rendered into exemplars, best first —
+ * `selectExtremePairs`' output for the two range metrics, and the sorted peak/trough candidate list
+ * for the two knee metrics. The head becomes the emitted exemplar and the rest hang off it as
+ * `alternates`, so the metric still emits exactly ONE `MetricExemplar` and
+ * `MAX_EXEMPLARS_PER_METRIC` keeps counting images.
  *
  * Alternates are gated on `MIN_EXEMPLAR_QUALITY` HERE, unlike the head, which `selectExemplars`
  * gates as it always has. Two reasons they cannot simply ride along ungated: `MetricExemplar`'s own

@@ -8,6 +8,7 @@ import { findLocalExtrema } from './extrema'
 import type { Extremum } from './extrema'
 import { computeMetricConfidence } from './confidence'
 import {
+  attachPairAlternates,
   cropKeypoints,
   describeDistribution,
   pairQuality,
@@ -80,6 +81,11 @@ interface FlexionPeak {
  * A peak with no adjacent trough (the extrema list ran out, or a tracking gap put a second peak
  * next to it) is dropped rather than demoted to a single frame: one still of a bent knee, with
  * nothing to read the bend against, is not evidence.
+ *
+ * Every scored candidate is offered, best first — the head as the exemplar and the rest as its
+ * `alternates`. Being near the median is the whole of this metric's ranking, and two peaks
+ * equidistant from it are indistinguishable to it; which of them makes the better PICTURE is a
+ * question about the frame, answerable only downstream.
  */
 function buildExemplars(
   peaks: FlexionPeak[],
@@ -117,12 +123,20 @@ function buildExemplars(
       quality: pairQuality(peakQuality, troughQuality),
       label: `Peak knee flexion (${peak.side} leg), ghosted against the same leg near full extension`,
       cropKeypoints: cropKeypoints(seed, [], [frames[peak.frameIndex], frames[trough.index]]),
+      // The knee is the VERTEX of the angle this card reports, and it is also the lowest of the
+      // three seeds at peak flexion — so the seed box's centroid puts it near the bottom edge of
+      // every candidate. The evidence layer aims the crop here instead.
+      cropFocus: knee,
     })
   }
 
-  // One pair, not two: a second near-median peak would be the same picture of the same runner.
+  // One pair, not two: a second near-median peak would be the same picture of the same runner. The
+  // rest ride along as ranked alternates rather than being discarded, because this sort cannot
+  // separate two peaks equidistant from the median — an EVEN pool makes the two middle values
+  // exactly so, and their qualities bit-identical — and the layer that can is the one that knows
+  // where in the frame each one puts the knee.
   candidates.sort((a, b) => b.quality - a.quality)
-  return candidates.slice(0, 1)
+  return attachPairAlternates(candidates)
 }
 
 function adjacentMinimum(

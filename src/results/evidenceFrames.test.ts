@@ -40,7 +40,9 @@ import {
   computeEvidenceCropRect,
   evidenceOutputSide,
   evidenceCropPaddedSide,
+  evidenceFocusOffset,
   evidenceCropSideDemand,
+  focusAimedCropRect,
   frameSubjectExtentBox,
   subjectCentredCropRect,
   evidencePairCropGrowth,
@@ -1015,6 +1017,135 @@ describe('subjectCentredCropRect', () => {
     expect(crop.x).toBe(500 - 160)
     expect(roi.minY).toBeGreaterThanOrEqual(crop.y)
     expect(roi.maxY).toBeLessThanOrEqual(crop.y + crop.side)
+  })
+})
+
+describe('focusAimedCropRect', () => {
+  /**
+   * `kneeFlexion`'s shape at peak flexion, scaled to 1080p arithmetic: the seed is hip/knee/ankle
+   * and the KNEE is the lowest of the three, so the seed box's own centre sits well above it. The
+   * limb keypoints stand in for that box and `left_wrist` for the knee.
+   */
+  const kneeFrame = () =>
+    withLimb(bodyFrame({ left: 750, right: 950, top: 250, bottom: 850 }), {
+      minX: 800,
+      maxX: 900,
+      minY: 400,
+      maxY: 560,
+    })
+
+  it('puts the focus joint in the middle when there is room to', () => {
+    const frame = kneeFrame()
+    const crop = computeEvidenceCropRect([frame], [...LIMB_SEED], HD, {
+      x: 900,
+      y: 560,
+    })!
+    expect(crop.side).toBe(EVIDENCE_CROP_MIN_SIDE_PX)
+    expect(crop.x + crop.side / 2).toBe(900)
+    expect(crop.y + crop.side / 2).toBe(560)
+  })
+
+  it('takes precedence over centring on the subject', () => {
+    // The `kneeDrive` failure on `park-side-landscape.mp4`: the floor made the crop wider than the
+    // runner, so the subject rule fired and pulled the crop AWAY from the knee. Same frame, both
+    // routes, so the disagreement is the assertion.
+    const frame = kneeFrame()
+    const subjectCentred = computeEvidenceCropRect([frame], [...LIMB_SEED], HD)!
+    const aimed = computeEvidenceCropRect([frame], [...LIMB_SEED], HD, {
+      x: 900,
+      y: 560,
+    })!
+    expect(subjectCentred.x).toBe(850 - 160)
+    expect(aimed.x).not.toBe(subjectCentred.x)
+    expect(aimed.side).toBe(subjectCentred.side)
+  })
+
+  it('never pushes the measured region out of the picture', () => {
+    // The knee is at the bottom edge of its own seed box, so aiming dead-centre on it would put
+    // the hip above the top of the crop. Containment is what stops the angle being drawn against
+    // nothing.
+    const frame = withLimb(bodyFrame({ left: 750, right: 950, top: 250, bottom: 850 }), {
+      minX: 800,
+      maxX: 900,
+      minY: 300,
+      maxY: 600,
+    })
+    const roi = frameCropBox(frame, [...LIMB_SEED])!
+    const crop = computeEvidenceCropRect([frame], [...LIMB_SEED], HD, {
+      x: 900,
+      y: 600,
+    })!
+    expect(crop.y + crop.side / 2).toBeGreaterThan(600 - crop.side / 2)
+    expect(roi.minX).toBeGreaterThanOrEqual(crop.x)
+    expect(roi.maxX).toBeLessThanOrEqual(crop.x + crop.side)
+    expect(roi.minY).toBeGreaterThanOrEqual(crop.y)
+    expect(roi.maxY).toBeLessThanOrEqual(crop.y + crop.side)
+  })
+
+  it('stays inside the frame, and is never worse than not aiming', () => {
+    // `park-side-landscape.mp4`'s shipped `kneeFlexion` instant: the runner is two-thirds out of
+    // frame left, the crop is already flush at x = 0, and no placement can centre the knee. Aiming
+    // must leave it exactly where it was rather than running off the edge.
+    const frame = withLimb(bodyFrame({ left: 10, right: 200, top: 900, bottom: 1000 }), {
+      minX: 16,
+      maxX: 196,
+      minY: 920,
+      maxY: 990,
+    })
+    const unaimed = computeEvidenceCropRect([frame], [...LIMB_SEED], HD)!
+    const aimed = computeEvidenceCropRect([frame], [...LIMB_SEED], HD, {
+      x: 16,
+      y: 990,
+    })!
+    expect(aimed.x).toBe(0)
+    expect(unaimed.x).toBe(0)
+    expect(aimed.x + aimed.side).toBeLessThanOrEqual(HD.width)
+  })
+
+  it('keeps the crop where it was when the frame cap left no room to aim', () => {
+    // `side < paddedSide` whenever the cap wins, so the crop can be narrower than the box it must
+    // hold and no position contains it. The pre-existing placement is the best available.
+    const small: EvidenceFrameSize = { width: 400, height: 300 }
+    const box: BoundingBoxPx = { minX: 40, maxX: 340, minY: 20, maxY: 280 }
+    const unaimed = { x: 40, y: 0, side: 300 }
+    expect(focusAimedCropRect(unaimed, box, { x: 340, y: 280 }, small)).toEqual(
+      unaimed,
+    )
+  })
+
+  it('is a no-op on an unusable frame size', () => {
+    const box: BoundingBoxPx = { minX: 0, maxX: 10, minY: 0, maxY: 10 }
+    const crop = { x: 5, y: 5, side: 320 }
+    expect(focusAimedCropRect(crop, box, { x: 0, y: 0 }, { width: 0, height: 0 })).toBe(
+      crop,
+    )
+  })
+
+  it('never changes the side, so nothing that reads a crop size can observe it', () => {
+    const frame = kneeFrame()
+    const plain = computeEvidenceCropRect([frame], [...LIMB_SEED], HD)!
+    const aimed = computeEvidenceCropRect([frame], [...LIMB_SEED], HD, {
+      x: 900,
+      y: 560,
+    })!
+    expect(aimed.side).toBe(plain.side)
+  })
+})
+
+describe('evidenceFocusOffset', () => {
+  it('is 0 at the centre and 0.5 at an edge', () => {
+    const crop = { x: 100, y: 200, side: 320 }
+    expect(evidenceFocusOffset(crop, { x: 260, y: 360 })).toBe(0)
+    expect(evidenceFocusOffset(crop, { x: 100, y: 360 })).toBe(0.5)
+    expect(evidenceFocusOffset(crop, { x: 260, y: 520 })).toBe(0.5)
+  })
+
+  it('reads the distance to the NEAREST edge, so one bad axis is not averaged away', () => {
+    // Chebyshev, not Euclidean: `park-side-landscape.mp4`'s shipped instant is dead-centre
+    // vertically and jammed against the left edge, and a mean of the two axes would call that
+    // half-framed.
+    const crop = { x: 0, y: 0, side: 320 }
+    expect(evidenceFocusOffset(crop, { x: 16, y: 160 })).toBeCloseTo(0.45, 10)
   })
 })
 
@@ -2137,6 +2268,87 @@ describe('planExemplarWithFallback', () => {
 
     expect(plan!.ghost).toBeNull()
     expect(plan!.base.timestamp).toBeCloseTo(0.1, 10)
+  })
+
+  describe('breaking a tie on framing', () => {
+    /**
+     * Two candidates the metric scored IDENTICALLY, one of which puts its focus joint in the
+     * middle of the picture and the other at the edge. This is `kneeFlexion`'s shape on
+     * `park-side-landscape.mp4`, where an even peak pool makes the two middle values exactly
+     * equidistant from the median and their qualities bit-identical, so the emitting sort is
+     * indifferent and iteration order decided.
+     */
+    const focused = (
+      timestamp: number,
+      pairedTimestamp: number,
+      quality: number,
+      alternates?: MetricExemplar[],
+    ): MetricExemplar =>
+      exemplar({
+        kind: 'kneeFlexionPeak',
+        timestamp,
+        pairedTimestamp,
+        quality,
+        cropFocus: 'left_hip',
+        ...(alternates === undefined ? {} : { alternates }),
+      })
+
+    /**
+     * The subject walking rightwards from the left frame edge at 40 px a sample, so an instant
+     * early in the clip cannot be centred on — its crop is already clamped at `x = 0` — and one a
+     * few samples later can. That is `park-side-landscape.mp4`'s shape with the runner's exit
+     * mirrored to an entry.
+     */
+    const edgeFrames = () =>
+      [0, 1, 2, 3, 4, 5, 6].map((i) =>
+        hipFrame(Number((i * 0.1).toFixed(2)), 60 + i * 40, 540),
+      )
+
+    const planAt = (candidate: MetricExemplar) =>
+      planExemplarWithFallback('kneeFlexion', candidate, edgeFrames(), HD, TOLERANCE)
+
+    it('prefers the better-framed of two equally-scored candidates', () => {
+      // Both pairs span four sampled intervals and both draw as pairs, so the last-resort rule is
+      // not what decides here — framing is.
+      const plan = planAt(focused(0, 0.4, 0.9, [focused(0.2, 0.6, 0.9)]))
+
+      expect(plan!.demotion).toBeNull()
+      expect(plan!.base.timestamp).toBeCloseTo(0.2, 10)
+      expect(plan!.quality).toBe(0.9)
+      expect(plan!.focusOffset).toBeLessThan(0.4)
+    })
+
+    it('never lets framing outrank the metric’s own score', () => {
+      // The better-framed candidate is a whole tier down, and being well-placed is not being
+      // representative: a card showing a well-framed atypical instant is a worse claim than a
+      // well-scored awkward one.
+      const plan = planAt(focused(0, 0.4, 0.9, [focused(0.2, 0.6, 0.8)]))
+
+      expect(plan!.base.timestamp).toBe(0)
+      expect(plan!.quality).toBe(0.9)
+      expect(plan!.focusOffset).toBeGreaterThan(0.4)
+    })
+
+    it('orders the demoted pool by framing too, since a demoted single can be the outcome', () => {
+      // Both pairs are one sampled interval apart, under
+      // `EVIDENCE_MIN_PAIR_SEPARATION_INTERVALS`, so both collapse and this pool IS the result.
+      // Leaving it to arrival order would put the iteration-order tie-break straight back — which
+      // is exactly the case on `park-side-landscape.mp4`, where every `kneeFlexion` candidate at
+      // the winning quality collapses.
+      const plan = planAt(focused(0, 0.1, 0.9, [focused(0.3, 0.4, 0.9)]))
+
+      expect(plan!.demotion).toBe('collapsed-pair')
+      expect(plan!.base.timestamp).toBeCloseTo(0.3, 10)
+    })
+
+    it('leaves an exemplar naming no focus joint on first-wins ordering', () => {
+      // Every plan then reports no offset, so no comparison can ever be true and the walk returns
+      // exactly what it returned before framing entered the ordering.
+      const plan = planFor(range(0, 0.4, 0.9, [range(0.1, 0.5, 0.9)]))
+
+      expect(plan!.focusOffset).toBeNull()
+      expect(plan!.base.timestamp).toBe(0)
+    })
   })
 })
 

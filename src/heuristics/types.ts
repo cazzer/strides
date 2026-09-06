@@ -208,6 +208,24 @@ export interface MetricExemplar {
    * of what a metric measured stays in the module that measures it. */
   cropKeypoints: KeypointName[]
   /**
+   * The ONE keypoint the card's number is about — the joint the reader is being asked to look at,
+   * which for both knee metrics is the knee whether it is the measured angle's vertex
+   * (`kneeFlexion`) or the end whose lift is the measurement (`kneeDrive`). The crop is AIMED here
+   * rather than at the centre of `cropKeypoints`' box.
+   *
+   * `cropKeypoints` cannot answer this. It bounds the region the image must CONTAIN, and its
+   * centroid is wherever that region's geometry happens to put it — which for a joint at one end
+   * of a limb chain is systematically off-centre. Measured on `park-side-landscape.mp4`: at peak
+   * flexion the knee is the lowest of hip/knee/ankle on all fourteen candidate instants, so the
+   * box centroid lands it in the bottom quarter of every one of them.
+   *
+   * Optional, and absent means "this exemplar has no single joint at its centre" — a bounce
+   * amplitude, a stride length and a step width are all about a RELATION between points rather
+   * than about one of them, and aiming at either end of such a relation would be a false emphasis.
+   * A consumer with no focus point frames the crop exactly as it did before this field existed.
+   */
+  cropFocus?: KeypointName
+  /**
    * Which keypoints THIS instant's own measurement was about — the set an ANNOTATION of the
    * instant at `timestamp` should draw.
    *

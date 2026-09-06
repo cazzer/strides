@@ -10,6 +10,7 @@ import { findLocalExtrema } from './extrema'
 import type { Extremum } from './extrema'
 import { computeMetricConfidence } from './confidence'
 import {
+  attachPairAlternates,
   cropKeypoints,
   describeDistribution,
   pairQuality,
@@ -84,6 +85,10 @@ interface DrivePeak {
  * next to it) is dropped rather than demoted to a single frame at build time: one still of a
  * lifted thigh, with nothing to read the lift against, is not evidence. (Post-planning demotion
  * for an uncroppable pair is `SINGLE_INSTANT_KINDS`' separate business.)
+ *
+ * Every scored candidate is offered, best first — head plus `alternates` — on kneeFlexion's exact
+ * terms and for its exact reason: nearness to the median is the whole ranking, and it cannot
+ * separate two peaks equidistant from it.
  */
 function buildExemplars(
   peaks: DrivePeak[],
@@ -121,12 +126,19 @@ function buildExemplars(
       quality: pairQuality(peakQuality, troughQuality),
       label: `Peak knee drive (${peak.side} leg), ghosted against the same leg's thigh swept back`,
       cropKeypoints: cropKeypoints(seed, [], [frames[peak.frameIndex], frames[trough.index]]),
+      // The knee is the end of the thigh whose lift IS this card's number, and it sits at one end
+      // of a two-point seed box rather than at its centre. Aiming there also overrides the
+      // subject-centring rule, which on `park-side-landscape.mp4` was pulling this crop 101 px away
+      // from the knee and putting it at the frame's edge.
+      cropFocus: knee,
     })
   }
 
-  // One pair, not two: a second near-median peak would be the same picture of the same runner.
+  // One pair, not two: a second near-median peak would be the same picture of the same runner. The
+  // rest ride along as ranked alternates, for the reason `kneeFlexion.buildExemplars` gives — an
+  // even candidate pool ties bit-exactly at the median and this sort cannot separate the tie.
   candidates.sort((a, b) => b.quality - a.quality)
-  return candidates.slice(0, 1)
+  return attachPairAlternates(candidates)
 }
 
 function adjacentMinimum(

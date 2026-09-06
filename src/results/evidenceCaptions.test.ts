@@ -31,6 +31,7 @@ function framePlan(
     travelDirection: 1,
     demotion: null,
     cropGrowth: null,
+    focusOffset: null,
     ...overrides,
   }
 }
