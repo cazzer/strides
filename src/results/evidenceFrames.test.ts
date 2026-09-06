@@ -2478,7 +2478,7 @@ describe('planMetricEvidence', () => {
     expect(plan.status === 'planned' && plan.items).toHaveLength(MAX_EXEMPLARS_PER_METRIC)
   })
 
-  it('reports all-gated-out when no exemplar offers a drawable pair', () => {
+  it('reports undrawable when no exemplar offers a drawable pair', () => {
     // A `bounceCycle`, whose reported amplitude IS the difference between its two instants, so
     // there is no demoted single to fall back to and the metric genuinely loses its evidence.
     const plan = planOf(
@@ -2503,7 +2503,7 @@ describe('planMetricEvidence', () => {
       crossingFrames(),
     )
 
-    expect(reasonOf(plan)).toBe('all-gated-out')
+    expect(reasonOf(plan)).toBe('undrawable')
   })
 
   it('renders a demoted single rather than gating a single-instant metric out entirely', () => {
@@ -2599,13 +2599,13 @@ describe('planMetricEvidence', () => {
     ).toBe('frames-unavailable')
   })
 
-  it('reports all-gated-out when the metric emitted nothing this run', () => {
+  it('reports no-candidates when the metric emitted nothing this run', () => {
     expect(reasonOf(planOf(metricResult('trunkLean'), frames))).toBe(
-      'all-gated-out',
+      'no-candidates',
     )
   })
 
-  it('reports all-gated-out when every candidate fails to resolve here', () => {
+  it('reports undrawable when every candidate fails to resolve here', () => {
     expect(
       reasonOf(
         planOf(
@@ -2615,7 +2615,40 @@ describe('planMetricEvidence', () => {
           frames,
         ),
       ),
-    ).toBe('all-gated-out')
+    ).toBe('undrawable')
+  })
+
+  // `strides-tj5`: which layer withheld the image is the whole point of these three verdicts, and
+  // the failure they were split out of was a single string that named rules which had not run. One
+  // metric, three inputs differing only in what it offered, three distinct answers — so a collapse
+  // back to one string fails here rather than in a live A/B months later.
+  it('tells apart offering nothing, offering too little, and offering the undrawable', () => {
+    const offeredNothing = reasonOf(planOf(metricResult('trunkLean'), frames))
+    const belowGate = reasonOf(
+      planOf(
+        metricResult('trunkLean', {
+          exemplars: [
+            exemplar({ quality: MIN_EXEMPLAR_QUALITY - Number.EPSILON * 4 }),
+          ],
+        }),
+        frames,
+      ),
+    )
+    const cannotDraw = reasonOf(
+      planOf(
+        metricResult('trunkLean', {
+          exemplars: [exemplar({ quality: 1, timestamp: 42 })],
+        }),
+        frames,
+      ),
+    )
+
+    expect([offeredNothing, belowGate, cannotDraw]).toEqual([
+      'no-candidates',
+      'below-quality-gate',
+      'undrawable',
+    ])
+    expect(new Set([offeredNothing, belowGate, cannotDraw]).size).toBe(3)
   })
 
   it('re-applies the quality gate at exactly the shared threshold', () => {
@@ -2635,7 +2668,7 @@ describe('planMetricEvidence', () => {
       }),
       frames,
     )
-    expect(reasonOf(drop)).toBe('all-gated-out')
+    expect(reasonOf(drop)).toBe('below-quality-gate')
   })
 })
 
@@ -2648,7 +2681,7 @@ describe('planClipEvidence', () => {
     expect(plan.cadence).toEqual({ status: 'no-evidence', reason: 'not-emitted' })
     expect(plan.trunkLean).toEqual({
       status: 'no-evidence',
-      reason: 'all-gated-out',
+      reason: 'no-candidates',
     })
   })
 
@@ -2882,7 +2915,7 @@ describe('planClipEvidence with the grafting pass’s own frames', () => {
       heuristicsResult({ stepWidthCm: { exemplars: [exemplar({ timestamp: 5 })] } }),
       primary,
       HD,
-    ).stepWidthCm)).toBe('all-gated-out')
+    ).stepWidthCm)).toBe('undrawable')
   })
 
   it('leaves every non-grafted metric byte-identical to the un-routed plan', () => {
@@ -3026,7 +3059,9 @@ describe('summarizeEvidenceCoverage', () => {
   it('reports every no-evidence reason verbatim, including one substituted upstream', () => {
     const reasons: EvidenceUnavailableReason[] = [
       'not-emitted',
-      'all-gated-out',
+      'no-candidates',
+      'below-quality-gate',
+      'undrawable',
       'metric-excluded',
       'frames-unavailable',
       // Never produced by this module — the extraction layer substitutes it before summarizing.
@@ -3037,9 +3072,13 @@ describe('summarizeEvidenceCoverage', () => {
       'trunkLean',
       'overstriding',
       'kneeFlexion',
+      'kneeDrive',
+      'footStrikePattern',
       'stepWidth',
       'stepWidthCm',
     ]
+    // One metric per reason, so the round trip cannot pass by coincidence with a reason unexercised.
+    expect(metrics).toHaveLength(reasons.length)
     metrics.forEach((metric, i) => {
       plan[metric] = { status: 'no-evidence', reason: reasons[i] }
     })

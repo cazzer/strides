@@ -1343,7 +1343,8 @@ object URL or data URI — verified by scanning 38 captured lines). It reports, 
 `frameCount`, and per metric either `{status:'planned', exemplars:[{kind, side?, quality, timestamp,
 pairedTimestamp, demotion, cropSidePx, cropGrowth, focusOffset}]}` or `{status:'no-evidence', reason}`
 where reason is
-`not-emitted | all-gated-out | metric-excluded | frames-unavailable | extraction-failed`. Plus
+`not-emitted | no-candidates | below-quality-gate | undrawable | metric-excluded |
+frames-unavailable | extraction-failed`. Plus
 `sourceIndices`, the per-metric winning clip index.
 
 ⚠️ **`demotion` REPLACED the `demotedFromPair` boolean on 2026-09-01 (`strides-ddj`)** — a contract
@@ -1365,6 +1366,42 @@ instant. On the line for `cropGrowth`'s stated reason — it is the quantity tha
 criterion is stated in, so re-checking it should not need a probe patch. **`crop.x` / `crop.y` are
 still NOT on this line**, so `subjectCentredCropRect`'s placement remains invisible to a harness;
 see "How a crop gets PLACED" below.
+
+⚠️ **`all-gated-out` was REPLACED by three reasons on 2026-09-05 (`strides-tj5`)** — a contract
+break in `demotion`'s shape, but a tiny one: `all-gated-out` occurred on **exactly two rows** in the
+whole three-clip corpus, both `overstriding`'s, on the two side clips. It is now
+`no-candidates` (the metric offered this layer no exemplar at all) | `below-quality-gate` (offered,
+and every one under `MIN_EXEMPLAR_QUALITY` when the plan layer re-asserts it) | `undrawable`
+(cleared the gate, and this layer's own resolution/framing rules rejected every one). The old single
+verdict did not merely generalise, it **misdirected**: its own doc said "candidates existed and none
+survived the quality gate or this layer's own resolution rules", and in the case that produced the
+split no candidate existed and not one of `resolveExemplarFrames` / `frameCropBox` /
+`isNearIdenticalPair` / `isTooCloseInTimePair` / `isTooFarApartPair` / `computeEvidenceCropRect` ever
+ran. Read `no-candidates` as **"stop looking at the crop constants — go read the metric's own
+exemplar scoring"**. Nothing else moved: `status` is still `'no-evidence'`, `exemplars` still `[]`,
+no metric value or image changed, and `EvidenceUnavailableReason` still has no reader in the UI.
+
+⚠️ **The MARGIN is still not on this line** (`strides-ehr`). The reason names the layer, not how
+close the gate came. `selectExemplars` returns `undefined` rather than reporting what it dropped, so
+`no-candidates` cannot distinguish "the metric formed no candidate" from "the metric's own gate kept
+them all" — and the numbers that would settle it (overstriding's best pair quality **0.36723** on
+`side-landscape` and **0.43044** on `side-portrait`, against 0.5) still need a probe.
+
+⚠️ **`overstriding` renders a number on both side clips and an image on NEITHER, and on
+`side-landscape` that is STRUCTURAL** (`strides-tj5`, measured 2026-09-05; follow-up `strides-6gd`).
+Its exemplar is an EXTREME pair, so clearing 0.5 needs an instant ≥ 1.5 MADs from the median on
+**each** side — and that clip's maximum over all five strikes is **1.3234 MADs**, so not one instant
+clears it, unreachable at any `detectionFactor`. `side-portrait` reaches 1.8070 on its low side and
+1.2913 on its high side, failing on the high side alone. **Three things the bead guessed and the
+measurement refuted**, worth not re-deriving: `detectionFactor` is **1.0** on every strike of both
+clips (which `interpolatedFraction: 0` already implies — a zero fraction means all three seed
+keypoints resolved `'detected'`); the distribution is **`usable: true`** on both, so the flat-`0.5`
+fallback never fires; and that fallback would have **PASSED** the gate anyway, since `0.5 >= 0.5`.
+Note `strides-ddj` had already put `overstrideRange` in `SINGLE_INSTANT_KINDS` *because the card
+reports a MEDIAN* — a median-reporting card with an extreme-pair picture is the mismatch
+`strides-6gd` carries, alongside `strides-9uj` and `strides-n66`. **Do not reach for
+`MIN_EXEMPLAR_QUALITY`**: `overstriding` and `trunkLean` sit at exactly 0.500 where they DO emit, so
+shaving the ramp trades this coverage for theirs.
 
 `[analysis-diagnostics]` is untouched — same six
 top-level keys, ~5.5-5.6 kB, no exemplar data — and `vite build` output contains **zero** occurrences

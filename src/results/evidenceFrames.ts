@@ -522,17 +522,45 @@ export type EvidenceDemotion = 'collapsed-pair' | 'far-apart-pair'
  * metric never emits" from "this run produced nothing" from "we never got as far as trying".
  *
  * - `not-emitted` — the metric emits no exemplars by design (`cadence`).
- * - `all-gated-out` — candidates existed and none survived the quality gate or this layer's own
- *   resolution rules.
+ * - `no-candidates` — the metric offered this layer no exemplar at all.
+ * - `below-quality-gate` — candidates were offered and every one scored below
+ *   `MIN_EXEMPLAR_QUALITY` when this layer re-asserted it.
+ * - `undrawable` — candidates cleared the quality gate and every one failed this layer's own
+ *   resolution and framing rules.
  * - `metric-excluded` — the metric renders no card at all (no value, or camera geometry that
  *   cannot support the measurement), so there is nothing for a picture to explain.
  * - `frames-unavailable` — the clip has no usable sampled frames or no usable pixel dimensions.
  * - `extraction-failed` — planned fine, but the impure extractor could not produce the image. Never
  *   produced by this module; the layer that extracts substitutes it before summarizing.
+ *
+ * **The middle three replaced a single `all-gated-out`, which MISDIRECTED rather than merely
+ * generalised** (`strides-tj5`). Its doc read "candidates existed and none survived the quality gate
+ * or this layer's own resolution rules" — and on the case that produced this split, `overstriding`
+ * on both side-view demo clips, no candidate existed and not one of those resolution rules ever ran.
+ * The rejection was the extreme-role typicality ramp inside `selectExemplars`, one layer up:
+ * measured best pair quality 0.36723 (`park-side-landscape.mp4`) and 0.43044
+ * (`park-side-portrait.mp4`) against the 0.5 threshold, with `detectionFactor` 1.0 on every strike
+ * and a usable distribution on both clips. A reader following the old verdict goes looking at crop
+ * geometry and display constants that are not involved — and the bead's own traced mechanism did
+ * exactly that.
+ *
+ * ⚠️ **`no-candidates` deliberately does NOT say which of its two causes applied.** "The metric
+ * formed no candidate" and "the metric's own `selectExemplars` kept none" are the identical
+ * observation from here — `MetricResult.exemplars` absent — because that selector returns
+ * `undefined` rather than reporting what it dropped. Naming either would be a guess presented as a
+ * verdict. Recovering the margin needs the metric to report its best rejected candidate, which is a
+ * `MetricResult` field and eleven call sites — filed as `strides-ehr`, not done here.
+ *
+ * `below-quality-gate` is unreachable through `selectExemplars`, which filters first — it exists
+ * because `planMetricEvidence` re-asserts the gate deliberately, for an exemplar that reached a
+ * `MetricResult` without going through the shared selector. Folding that outcome into `undrawable`
+ * would be a false statement about which rule fired.
  */
 export type EvidenceUnavailableReason =
   | 'not-emitted'
-  | 'all-gated-out'
+  | 'no-candidates'
+  | 'below-quality-gate'
+  | 'undrawable'
   | 'metric-excluded'
   | 'frames-unavailable'
   | 'extraction-failed'
@@ -1594,6 +1622,12 @@ export function planExemplarWithFallback(
  * many images one card can grow. The budget is applied AFTER this layer's own drops, so a metric
  * whose first choice cannot be resolved here still spends its second — and without re-sorting,
  * because the emitting metric already ranked them and a second ranking here could disagree.
+ *
+ * **The three "no evidence" verdicts below are separable on purpose and must stay so**
+ * (`strides-tj5`): whether the metric offered nothing, offered only sub-threshold candidates, or
+ * offered good ones this layer could not draw, is exactly the question of WHICH LAYER withheld the
+ * image. Collapsing them back into one string would restore a verdict that names rules which, in
+ * the commonest case, never ran. See `EvidenceUnavailableReason`.
  */
 export function planMetricEvidence(
   metric: MetricResult,
@@ -1616,9 +1650,21 @@ export function planMetricEvidence(
     return { status: 'no-evidence', reason: 'frames-unavailable' }
   }
 
-  const candidates = (metric.exemplars ?? []).filter(
+  // Three separable verdicts, not one (`strides-tj5`). Which of them a metric lands on says which
+  // LAYER withheld the image, and that is the difference between a reader looking at the metric's
+  // own exemplar scoring and looking at this module's crop geometry.
+  const offered = metric.exemplars ?? []
+  if (offered.length === 0) {
+    return { status: 'no-evidence', reason: 'no-candidates' }
+  }
+
+  const candidates = offered.filter(
     (exemplar) => exemplar.quality >= MIN_EXEMPLAR_QUALITY,
   )
+  if (candidates.length === 0) {
+    return { status: 'no-evidence', reason: 'below-quality-gate' }
+  }
+
   const items = candidates
     .map((exemplar) =>
       planExemplarWithFallback(
@@ -1635,7 +1681,7 @@ export function planMetricEvidence(
 
   return items.length > 0
     ? { status: 'planned', items }
-    : { status: 'no-evidence', reason: 'all-gated-out' }
+    : { status: 'no-evidence', reason: 'undrawable' }
 }
 
 /**
