@@ -1368,8 +1368,12 @@ still NOT on this line**, so `subjectCentredCropRect`'s placement remains invisi
 see "How a crop gets PLACED" below.
 
 ⚠️ **`all-gated-out` was REPLACED by three reasons on 2026-09-05 (`strides-tj5`)** — a contract
-break in `demotion`'s shape, but a tiny one: `all-gated-out` occurred on **exactly two rows** in the
-whole three-clip corpus, both `overstriding`'s, on the two side clips. It is now
+break of the same KIND as `demotion`'s (`strides-ddj`), though not the same shape and not in that
+field, which is untouched: `demotion` added and removed *rows* (20 / 21), whereas this changes a
+*value* on two existing rows and adds none — which is why `scripts/ab-person-selection.mjs` needed
+no edit either time, since `flatten` walks whatever keys exist. A tiny break: `all-gated-out`
+occurred on **exactly two rows** in the whole three-clip corpus, both `overstriding`'s, on the two
+side clips. It is now
 `no-candidates` (the metric offered this layer no exemplar at all) | `below-quality-gate` (offered,
 and every one under `MIN_EXEMPLAR_QUALITY` when the plan layer re-asserts it) | `undrawable`
 (cleared the gate, and this layer's own resolution/framing rules rejected every one). The old single

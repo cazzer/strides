@@ -544,12 +544,21 @@ export type EvidenceDemotion = 'collapsed-pair' | 'far-apart-pair'
  * geometry and display constants that are not involved — and the bead's own traced mechanism did
  * exactly that.
  *
- * ⚠️ **`no-candidates` deliberately does NOT say which of its two causes applied.** "The metric
+ * ⚠️ **`no-candidates` deliberately does NOT say which of its three causes applied.** "The metric
  * formed no candidate" and "the metric's own `selectExemplars` kept none" are the identical
  * observation from here — `MetricResult.exemplars` absent — because that selector returns
  * `undefined` rather than reporting what it dropped. Naming either would be a guess presented as a
  * verdict. Recovering the margin needs the metric to report its best rejected candidate, which is a
  * `MetricResult` field and eleven call sites — filed as `strides-ehr`, not done here.
+ *
+ * The third cause is not the metric's at all: `dropGraftedExemplars` (`scalePassGraft.ts`) deletes
+ * `exemplars` from `verticalOscillationCm` and `stepWidthCm` when `subjectAgreement.status` is
+ * `'diverged'`, and it is that object `planClipEvidence` plans from. So a diverged scale pass reads
+ * as `no-candidates` on two metrics whose own exemplar scoring SUCCEEDED, sending a reader into a
+ * selector that is not where the exemplars went. Unobservable on the three demo clips, which all
+ * agree, and not a regression — `all-gated-out` was wrong there too, and worse, since it asserted
+ * this layer's rules had run. But it is the same misdirection one layer over, and giving the
+ * deliberate withdrawal its own reason is the fix if it ever bites.
  *
  * `below-quality-gate` is unreachable through `selectExemplars`, which filters first — it exists
  * because `planMetricEvidence` re-asserts the gate deliberately, for an exemplar that reached a

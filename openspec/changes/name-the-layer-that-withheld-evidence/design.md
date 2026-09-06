@@ -136,3 +136,28 @@ three, which is the strongest available evidence the split is the right one:
 - `strides-hw8` (make the walk's last-resort rule quality-aware) touches
   `planExemplarWithFallback`; this change touches only `planMetricEvidence`'s return sites and the
   reason type. No collision.
+
+## D6. Three surviving "gated out" phrases in the specs — a deliberate leave, argued
+
+The new requirement says *"A single undifferentiated 'every candidate was gated out' verdict SHALL
+NOT be used for all three."* Three sentences elsewhere in `openspec/specs/results-view/spec.md`
+still carry that phrase, and none is being MODIFIED. The reasoning, per phrase:
+
+- **Two scenario sentences** — *"the metric reports evidence rather than reporting that every
+  candidate was gated out"* and *"…that all its candidates were gated out"*. Checked literally:
+  **neither names a `reason` value.** Both are English prose in the *counterfactual* half of a
+  scenario whose actual assertion is that evidence IS produced. Nothing in either is now false, and
+  neither would mislead someone implementing to it.
+- **One normative enumeration**, inside *"Evidence frames are planned purely, then extracted from a
+  detached video element"*: *"carrying the reason (the metric emitted no exemplars, every candidate
+  was gated out, the metric is not being reported at all, …)"*. This one IS normative rather than
+  counterfactual, and it is the weaker leave of the two. It is left anyway, and named here rather
+  than skipped silently.
+
+The trade in both cases: that requirement is the one CLAUDE.md records as having been **silently
+clobbered by two concurrent MODIFIED blocks on 2026-08-18**, and a MODIFIED must reproduce a whole
+requirement body to amend a subordinate clause. Risking that to reword a counterfactual, or an
+enumeration whose items are descriptions rather than literals, is the worse side of the trade.
+
+⚠️ **Whoever next MODIFIES that requirement for another reason should fold the enumeration in then**
+— the marginal cost at that point is zero, and it is the honest place for it.
