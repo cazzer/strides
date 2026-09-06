@@ -11,9 +11,15 @@ import type {
 } from '../heuristics/types'
 import {
   fuseFormHeuristicsResults,
+  fusionDisagreementCaveat,
   fusionProvenanceCaveat,
   fusionSourceIndices,
 } from './fuseHeuristics'
+
+/** Either side of `footStrikeMidfootBandRatio` (0.05) — the one band any metric currently owns. */
+const HEEL = 0.115103
+const FOREFOOT = -0.239589
+const MIDFOOT = 0.001
 
 function makeMetric<M extends MetricId>(
   metric: M,
@@ -99,6 +105,161 @@ describe('fusionProvenanceCaveat', () => {
   it('is 1-indexed for the reader even though sourceIndex is 0-based', () => {
     expect(fusionProvenanceCaveat(0, 2)).toBe('Combined from clip 1 of 2.')
     expect(fusionProvenanceCaveat(1, 2)).toBe('Combined from clip 2 of 2.')
+  })
+})
+
+describe('fusionDisagreementCaveat', () => {
+  it('names the clip and what it read, and claims no winner', () => {
+    expect(fusionDisagreementCaveat([{ clipNumber: 2, reading: 'a forefoot strike' }])).toBe(
+      'The clips disagree: clip 2 read a forefoot strike. Which reading is closer to the truth ' +
+        'is not established.',
+    )
+  })
+
+  it('lists every disagreeing clip', () => {
+    expect(
+      fusionDisagreementCaveat([
+        { clipNumber: 2, reading: 'a forefoot strike' },
+        { clipNumber: 3, reading: 'a midfoot strike' },
+      ]),
+    ).toBe(
+      'The clips disagree: clip 2 read a forefoot strike and clip 3 read a midfoot strike. ' +
+        'Which reading is closer to the truth is not established.',
+    )
+  })
+})
+
+/**
+ * The `strides-5hj` behaviour: fusion keeps its picking rule, and says out loud when the clip it
+ * did not pick would have put a different WORD on the card. Only `caveat` may move — every
+ * assertion below that touches a computed field is asserting it did NOT.
+ */
+describe('fuseFormHeuristicsResults — cross-clip disagreement', () => {
+  const footStrike = (confidence: number, value: number | null, overrides = {}) =>
+    makeMetric('footStrikePattern', confidence, { value, ...overrides })
+
+  it('names the losing clip and its reading when two clips land in different bands', () => {
+    // The measured `strides-5hj` case: both side clips at the confidence ceiling, so the tie is
+    // structurally unwinnable and the loser is invisible without this.
+    const clip0 = makeResult(0.5, { footStrikePattern: footStrike(1, HEEL) })
+    const clip1 = makeResult(0.5, { footStrikePattern: footStrike(1, FOREFOOT) })
+
+    const fused = fuseFormHeuristicsResults([clip0, clip1])
+
+    expect(fused.footStrikePattern.caveat).toBe(
+      'Combined from clip 1 of 2. The clips disagree: clip 2 read a forefoot strike. ' +
+        'Which reading is closer to the truth is not established.',
+    )
+  })
+
+  it('moves no computed field when it fires', () => {
+    const winner = footStrike(1, HEEL, { sampleSize: 5, interpolatedFraction: 0.25 })
+    const clip0 = makeResult(0.5, { footStrikePattern: winner })
+    const clip1 = makeResult(0.5, { footStrikePattern: footStrike(1, FOREFOOT) })
+
+    const fused = fuseFormHeuristicsResults([clip0, clip1])
+
+    expect(fused.footStrikePattern.value).toBe(winner.value)
+    expect(fused.footStrikePattern.confidence).toBe(winner.confidence)
+    expect(fused.footStrikePattern.viewFit).toBe(winner.viewFit)
+    expect(fused.footStrikePattern.sampleSize).toBe(winner.sampleSize)
+    expect(fused.footStrikePattern.interpolatedFraction).toBe(winner.interpolatedFraction)
+  })
+
+  it('appends after the metric’s own caveat and after provenance', () => {
+    const clip0 = makeResult(0.5, {
+      footStrikePattern: footStrike(1, HEEL, { caveat: 'Foot strike pattern is an approximation.' }),
+    })
+    const clip1 = makeResult(0.5, { footStrikePattern: footStrike(1, FOREFOOT) })
+
+    const fused = fuseFormHeuristicsResults([clip0, clip1])
+
+    expect(fused.footStrikePattern.caveat).toBe(
+      'Foot strike pattern is an approximation. Combined from clip 1 of 2. The clips disagree: ' +
+        'clip 2 read a forefoot strike. Which reading is closer to the truth is not established.',
+    )
+  })
+
+  it('stays silent when both clips land in the same band, however far apart the numbers', () => {
+    const clip0 = makeResult(0.5, { footStrikePattern: footStrike(1, 0.06) })
+    const clip1 = makeResult(0.5, { footStrikePattern: footStrike(1, 5) })
+
+    const fused = fuseFormHeuristicsResults([clip0, clip1])
+
+    expect(fused.footStrikePattern.caveat).toBe('Combined from clip 1 of 2.')
+  })
+
+  it('stays silent when only one clip resolved a value', () => {
+    const clip0 = makeResult(0.5, { footStrikePattern: footStrike(1, HEEL) })
+    const clip1 = makeResult(0.5, { footStrikePattern: footStrike(0, null) })
+
+    const fused = fuseFormHeuristicsResults([clip0, clip1])
+
+    expect(fused.footStrikePattern.caveat).toBe('Combined from clip 1 of 2.')
+  })
+
+  it('ignores a clip the panel would not render a card for at all', () => {
+    // A front-view clip's foot-strike reading is `viewFit: 'unsuitable'` — the app already
+    // declines to show it on its own, so quoting it as a contradiction would be worse than
+    // silence.
+    const clip0 = makeResult(0.5, { footStrikePattern: footStrike(1, HEEL) })
+    const clip1 = makeResult(0.5, {
+      footStrikePattern: footStrike(0.2, FOREFOOT, { viewFit: 'unsuitable' }),
+    })
+
+    const fused = fuseFormHeuristicsResults([clip0, clip1])
+
+    expect(fused.footStrikePattern.caveat).toBe('Combined from clip 1 of 2.')
+  })
+
+  it('says nothing when the winner itself is excluded', () => {
+    const clip0 = makeResult(0.5, {
+      footStrikePattern: footStrike(0.2, HEEL, { viewFit: 'unsuitable' }),
+    })
+    const clip1 = makeResult(0.5, {
+      footStrikePattern: footStrike(0.1, FOREFOOT, { viewFit: 'unsuitable' }),
+    })
+
+    const fused = fuseFormHeuristicsResults([clip0, clip1])
+
+    expect(fused.footStrikePattern.caveat).toBe('Combined from clip 1 of 2.')
+  })
+
+  it('lists each disagreeing clip across a three-clip session', () => {
+    const clip0 = makeResult(0.5, { footStrikePattern: footStrike(1, HEEL) })
+    const clip1 = makeResult(0.5, { footStrikePattern: footStrike(1, FOREFOOT) })
+    const clip2 = makeResult(0.5, { footStrikePattern: footStrike(1, MIDFOOT) })
+
+    const fused = fuseFormHeuristicsResults([clip0, clip1, clip2])
+
+    expect(fused.footStrikePattern.caveat).toBe(
+      'Combined from clip 1 of 3. The clips disagree: clip 2 read a forefoot strike and clip 3 ' +
+        'read a midfoot strike. Which reading is closer to the truth is not established.',
+    )
+  })
+
+  it('says nothing for a metric that owns no band, however far apart the clips read', () => {
+    // The measured `strides-5hj` overstriding pair: +0.512135 against -0.00809497, both at the
+    // confidence ceiling. The sign differs and the magnitudes differ by half a torso — and -0.008
+    // is indistinguishable from zero, so a sign rule would fire on noise here and would miss two
+    // same-signed readings a torso apart. No band, no claim.
+    const clip0 = makeResult(0.5, {
+      overstriding: makeMetric('overstriding', 1, { value: 0.512135 }),
+    })
+    const clip1 = makeResult(0.5, {
+      overstriding: makeMetric('overstriding', 1, { value: -0.00809497 }),
+    })
+
+    const fused = fuseFormHeuristicsResults([clip0, clip1])
+
+    expect(fused.overstriding.caveat).toBe('Combined from clip 1 of 2.')
+  })
+
+  it('says nothing on a single-clip session, which stays reference-identical', () => {
+    const solo = makeResult(0.5, { footStrikePattern: footStrike(1, FOREFOOT) })
+
+    expect(fuseFormHeuristicsResults([solo])).toBe(solo)
+    expect(fuseFormHeuristicsResults([solo]).footStrikePattern.caveat).toBeNull()
   })
 })
 
@@ -349,7 +510,11 @@ describe('fusionSourceIndices', () => {
       // the two comparators cannot have diverged without this failing.
       expect(fused[key].value).toBe(indices[key])
       // The machine-readable index and the prose caveat name the same clip, 0- vs 1-based.
-      expect(fused[key].caveat).toBe(fusionProvenanceCaveat(indices[key], clips.length))
+      // `toContain`, not `toBe`: this fixture gives each clip a different `value` for every
+      // metric, so `footStrikePattern`'s four values straddle the midfoot band and the fused
+      // caveat correctly carries a disagreement sentence after the provenance one. Nothing about
+      // provenance changed — only that it is no longer guaranteed to be the whole string.
+      expect(fused[key].caveat).toContain(fusionProvenanceCaveat(indices[key], clips.length))
     }
   })
 

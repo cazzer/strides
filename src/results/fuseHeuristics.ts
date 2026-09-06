@@ -1,4 +1,8 @@
+import { classifyFootStrike } from '../heuristics/footStrikePattern'
+import { DEFAULT_HEURISTICS_CONFIG } from '../heuristics/types'
 import type { FormHeuristicsResult, MetricId, MetricResult } from '../heuristics/types'
+import type { FootStrikeClass } from '../heuristics/footStrikePattern'
+import { metricTier } from './metricConfidence'
 
 /**
  * Appended to a fused metric's caveat naming which of the N input clips it came from —
@@ -8,6 +12,89 @@ import type { FormHeuristicsResult, MetricId, MetricResult } from '../heuristics
  */
 export function fusionProvenanceCaveat(sourceIndex: number, totalClips: number): string {
   return `Combined from clip ${sourceIndex + 1} of ${totalClips}.`
+}
+
+const FOOT_STRIKE_READINGS: Record<FootStrikeClass, string> = {
+  heel: 'a heel strike',
+  midfoot: 'a midfoot strike',
+  forefoot: 'a forefoot strike',
+}
+
+/**
+ * What a reader would take away from this clip's number, as a CATEGORY — or `null` where the
+ * metric owns no category to be read in.
+ *
+ * This is the whole basis of the disagreement check below, and the reason it is stated in
+ * categories rather than in magnitudes. Fusion picks one clip's number and shows it alone; the
+ * question "do the clips disagree enough that hiding the loser misleads the reader" needs an
+ * answer, and the obvious answer — a per-metric "materially differs by X" number — would be
+ * eleven unjustifiable constants in eleven different units. This repo has a worked example of
+ * where that ends (CLAUDE.md, "The 4K area floor cannot be re-derived": a threshold measured,
+ * found to sit inside a factor-of-2.9 squeeze, and the direction abandoned rather than tuned).
+ * So the rule is threshold-free: surface only where the losing clip would have put a DIFFERENT
+ * WORD on the card, decided by a band the metric ALREADY owns and already ships.
+ *
+ * Today exactly one metric owns such a band. `footStrikePattern` classifies its signed
+ * ankle-relative-to-knee ratio into `heel | midfoot | forefoot` through `classifyFootStrike` and
+ * a symmetric dead zone (`footStrikeMidfootBandRatio`), and `MetricsPanel.formatValue` renders
+ * that word — not the number — as the card's value. Two clips landing either side of that band
+ * genuinely tell the reader two different things.
+ *
+ * Every other `MetricId` was surveyed and yields `null`, two of them after being weighed and
+ * declined rather than for want of anything to compare:
+ *
+ * - **`stepWidth` / `stepWidthCm`** do own an interpretive boundary — `value < 0` emits their
+ *   "crossover gait" caveat — but it is a bare zero-crossing with no dead zone. A value
+ *   indistinguishable from zero would flip the reading on noise, while two same-signed values a
+ *   torso-length apart would never fire at all. A boundary with no band is not a band. (Their
+ *   card value also stays a number; the phrase is an annotation on it, not the reading itself.)
+ *   `overstriding`, `trunkLean` and `kneeDrive` are signed with no boundary at all, so the same
+ *   objection applies a fortiori.
+ * - **`cadence`** owns `isNearGridEdge`, but that is a claim about the MEASURABLE RANGE, not a
+ *   category the value is read in: two clips 60 steps/min apart can share its verdict, and two
+ *   clips a grid step apart can differ on it. It answers a different question.
+ *
+ * The remaining seven carry no value-keyed branch of any kind. A metric gains coverage here by
+ * growing a real classifier, not by having this file invent one.
+ *
+ * Reads `DEFAULT_HEURISTICS_CONFIG` for the band rather than threading the config that computed
+ * the result, matching what `MetricsPanel.formatValue` already does to render the same word — so
+ * the caveat can never name a category the card contradicts.
+ */
+function metricReading(result: MetricResult): string | null {
+  if (result.value === null) return null
+  if (result.metric === 'footStrikePattern') {
+    return FOOT_STRIKE_READINGS[
+      classifyFootStrike(result.value, DEFAULT_HEURISTICS_CONFIG.footStrikeMidfootBandRatio)
+    ]
+  }
+  return null
+}
+
+function joinWithAnd(parts: string[]): string {
+  if (parts.length <= 1) return parts.join('')
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+}
+
+/**
+ * Appended after the provenance sentence when a losing clip's own number would have been read as
+ * a different category from the one now on the card. It names WHICH clip and WHAT it read,
+ * because a reader who cannot see the other number cannot act on being told a disagreement
+ * exists — and it names no winner, because which clip is closer to the truth is not established
+ * (`strides-5hj`: the two side clips' footstrikes come from two different detectors, one of them
+ * the fallback, and there is no ground truth for this footage either way).
+ *
+ * Clip numbers are bare ("clip 2") rather than "clip 2 of 3": the provenance sentence
+ * immediately before this one has already said "of N".
+ */
+export function fusionDisagreementCaveat(
+  entries: readonly { clipNumber: number; reading: string }[],
+): string {
+  const clause = joinWithAnd(
+    entries.map((entry) => `clip ${entry.clipNumber} read ${entry.reading}`),
+  )
+  return `The clips disagree: ${clause}. Which reading is closer to the truth is not established.`
 }
 
 function pickBestWithIndex<T extends { confidence: number }>(
@@ -21,11 +108,50 @@ function pickBestWithIndex<T extends { confidence: number }>(
 }
 
 /**
+ * The disagreement sentence for one metric across N clips, or `null` where there is nothing to
+ * report. Pure, and it never looks at `confidence`: fusion has already used that to choose, and
+ * the loser being equally confident is the whole reason this exists (`strides-5hj` — the tie
+ * breaks to the lowest clip index and 1.0 is the ceiling, so an equally-confident later clip can
+ * never displace clip 1).
+ *
+ * A clip is eligible to contest only if `metricTier` would render it as a CARD — which is the
+ * app's own existing display gate, reused rather than reinvented. That excludes a clip whose
+ * value is null (nothing to disagree with) and one the camera geometry cannot support
+ * (`viewFit: 'unsuitable'`), and quoting either at the reader as a contradiction would be worse
+ * than silence: they are readings the panel itself declines to show on their own. The winner has
+ * to clear the same bar, since an excluded winner puts no number on screen to be contested.
+ */
+function disagreementCaveat(
+  candidates: readonly MetricResult[],
+  winnerIndex: number,
+): string | null {
+  const winner = candidates[winnerIndex]
+  if (metricTier(winner) === 'excluded') return null
+  const winnerReading = metricReading(winner)
+  if (winnerReading === null) return null
+
+  const entries: { clipNumber: number; reading: string }[] = []
+  for (let i = 0; i < candidates.length; i += 1) {
+    if (i === winnerIndex) continue
+    const candidate = candidates[i]
+    if (metricTier(candidate) === 'excluded') continue
+    const reading = metricReading(candidate)
+    if (reading === null || reading === winnerReading) continue
+    entries.push({ clipNumber: i + 1, reading })
+  }
+
+  return entries.length === 0 ? null : fusionDisagreementCaveat(entries)
+}
+
+/**
  * Merges one `FormHeuristicsResult` per analyzed clip into a single result, by picking — per
  * metric key — the whole winning `MetricResult` object from whichever clip reports the highest
  * `confidence` for that metric. Never a scalar-field franken-merge: `verticalOscillation`'s
  * `series`/`fit` and `verticalOscillationCm`'s `calibration` travel with the winning object for
- * free, because the whole object is spread and only `caveat` is touched. Explicit per-field
+ * free, because the whole object is spread and only `caveat` is touched — the provenance sentence,
+ * plus `disagreementCaveat`'s account of any losing clip the reader would have read differently.
+ * No computed field moves: a metric the fuse can see a disagreement on still reports the winner's
+ * `value`, `confidence`, `viewFit` and `sampleSize` exactly as it did before. Explicit per-field
  * picks, not a dynamic loop over `Object.keys` — matches this codebase's style of concretely-
  * typed code over generic patterns needing casts (see `FormHeuristicsResult`'s own field list,
  * `scalePassGraft.ts`'s explicit metric name) and makes a future new `MetricId` (e.g. #45/#46's
@@ -56,7 +182,11 @@ export function fuseFormHeuristicsResults(
     const { value, index } = pickBestWithIndex(candidates)
     return {
       ...value,
-      caveat: [value.caveat, fusionProvenanceCaveat(index, results.length)]
+      caveat: [
+        value.caveat,
+        fusionProvenanceCaveat(index, results.length),
+        disagreementCaveat(candidates, index),
+      ]
         .filter(Boolean)
         .join(' '),
     } as FormHeuristicsResult[K]
