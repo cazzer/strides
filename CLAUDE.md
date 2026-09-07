@@ -1699,9 +1699,14 @@ elapsedMs-stripped body md5 matched exactly. Nothing in `metrics.*`, `sampling.*
 `personSelection.*`, `view.*` or `evidence.*` moved — which is the point: this changes which pixels
 an image is drawn from and no number any metric was computed from.
 
-⚠️ **SEPARATE, OPEN, and it contradicts the paragraph above this one: on `park-side-landscape.mp4`
-Chromium's `currentTime` runs on the container's MEDIA clock — the edit list is NOT applied**
-(`strides-09b`, filed 2026-09-05). `video.duration` reads **3.883333** (= 233/60, the full media
+⚠️ **WITHDRAWN 2026-09-06 — the claim in the paragraph below is WRONG, the edit-list term is
+CORRECT on all four clips, and nothing contradicts the paragraph above.** It is left as written
+because its readings were honestly measured and are true; what was wrong is the frame numbering
+they were checked against. **Do not act on it — read the resolution that follows it.** Original
+report (`strides-09b`, filed 2026-09-05):
+
+*On `park-side-landscape.mp4` Chromium's `currentTime` runs on the container's MEDIA clock — the
+edit list is NOT applied.* `video.duration` reads **3.883333** (= 233/60, the full media
 duration) rather than 3.884 (the `elst` `segment_duration` ÷ 1000); and a **pure Chromium seek with
 no app involved** to `currentTime = 2.0` draws **media frame 120** at a clean unimodal PSNR peak
 (21.35 dB, runner-up 20.19) where the edit-list-applied model predicts 122. Both app footstrike
@@ -1716,6 +1721,59 @@ the table above was taken on the retired Pexels Demo 1 and on `multiperson-track
 `5da45ab…` vs `106dcee…`, both 15360/512/60 fps/233 frames), so a reading on one is not a reading on
 the other. Re-measuring the offset across the whole corpus is `strides-09b`; do not assume either
 answer.
+
+**RESOLUTION (2026-09-06, `strides-09b`, change `pin-the-evidence-seek-clock-conversion`) —
+Chromium APPLIES the edit list on every clip in this corpus, the `−media_time/timescale` term is
+correct, and it STAYS unchanged. The report above was a frame-numbering error.**
+
+**`ffmpeg -vf "select='eq(n\,N)'"` indexes CODED PICTURES, not timeline slots**, and on all four
+clips the lowest sample composition timestamp equals the `elst media_time` **exactly**:
+
+| file | md5 | timescale | `elst media_time` | min sample CTS | frames |
+|---|---|---|---|---|---|
+| `park-side-landscape.mp4` | `106dcee8…` | 15360 | 512 | **512** | 233 |
+| `park-side-portrait.mp4` | `e380759e…` | 15360 | 1024 | **1024** | 345 |
+| `park-approach.mp4` | `36207375…` | 60000 | 2002 | **2002** | 99 |
+| `multiperson-track.mp4` | `5da45ab1…` | 15360 | 512 | **512** | 233 |
+
+(⚠️ those md5s were re-checked directly on 2026-09-06; a corpus table circulating with this ticket
+had `park-side-portrait.mp4`'s and `park-approach.mp4`'s the other way round.) All four carry a
+`ctts` box; this is the ordinary **B-frame priming edit**, which cancels the first picture's
+composition offset so
+presentation starts at zero. **No picture precedes it and none is discarded** — `-ignore_editlist 1`
+yields the same 233 pictures with the same `select` indices. So ffmpeg frame `N` sits at composition
+time `(media_time + N·Δ)/timescale` and presentation time `N·Δ/timescale`. Reading `media_time` as
+"two frames trimmed" mis-numbers every picture in the file by exactly the quantity in dispute, so a
+correct conversion reads as a two-frame error in the opposite direction.
+
+Re-indexed, the report's own three readings CONFIRM the term: `currentTime = 2.0` → the edit-list
+model predicts **120** (not 122) and 120 was measured; the two app seeks predict **182** and **203**
+and those were measured. `video.duration` cannot discriminate at all — the edit segment spans the
+whole media, so `3.884` is only `3883.33 ms` rounded into the 1000 Hz movie timescale, and both
+models predict `3.883333`. And `-ignore_editlist 1` "changing nothing" is not evidence either:
+ffmpeg does shift packet PTS (first packet `0` vs `512`) and then re-bases output start time both
+ways, so `select='eq(n\,183)'` reports `pts_time 3.05` in both modes — that is frame 183's
+**presentation** time; its composition time is `3.083333`, which is what the sampler reports.
+
+**Measurement: 31 pure-Chromium seeks over all four clips** (no app, no dev server; targets chosen
+as frame-interval midpoints so the two models' predictions sit exactly two frames apart; PSNR argmax
+against ffmpeg-reconstructed candidates; at least one whole-microsecond and one non-whole-microsecond
+target per clip). **30 of 31 matched the edit-list-applied model exactly, and NOT ONE matched the
+media-clock model.** The single row that did not hit its prediction exactly is a deliberate
+frame-BOUNDARY target (`121/60`, read back as `2.016665`) which landed one frame low — the
+µs-truncation the midpoint term exists to absorb — and still not on the media-clock prediction.
+
+**Answering "by file, by container detail, or misindexed?": misindexed.** `park-side-landscape.mp4`
+and `multiperson-track.mp4` are the controlled pair — different footage and resolution, identical
+lattice — and agree on every shared target; so do the 60000-timescale clip and the variable-rate one.
+
+**`strides-5t4`'s acceptance criterion is CONFIRMED, not stale.** A pure-Chromium seek at the app's
+own two targets (`3.058333`, `3.408333`) draws frames **183** and **204**, and looking at the
+frames again: 183/204 are touchdown (sole meets ground, shadow continuous), 185/206 — what removing
+the term would draw — are **mid-stance**, with the shin already rotated over the planted foot. 5t4's
+D9 claim that "the drawn frame is two frames from the instant the metric measured" is **withdrawn:
+the residual is zero.** Full tables:
+`openspec/changes/pin-the-evidence-seek-clock-conversion/design.md`.
 
 **The extreme-role `1.5·MAD` risk fired — and only for `overstriding`.** An extreme instant's
 typicality is `|v − median| / (3·MAD)`, so clearing `MIN_EXEMPLAR_QUALITY = 0.5` needs

@@ -25,6 +25,28 @@ import { resolveSamplingRobustnessConfig } from '../results/samplingRobustnessCo
  * 59.94 fps, 0.033333 s at 60 fps) and at exactly 0 under
  * `{ sequentialSampling: { enabled: false } }`.
  *
+ * ### `media_time` is a CLOCK OFFSET, never a count of frames the edit removed (`strides-09b`)
+ *
+ * Stated because reading it the other way filed a P1 against this file, and the wrong reading is
+ * self-confirming. Every clip in this repo's corpus carries a `ctts` box and an `elst` whose
+ * `media_time` equals the **composition timestamp of the first presented picture** exactly (512 on
+ * both 15360-timescale side clips and the multi-person fixture, 1024 on the portrait clip, 2002 on
+ * `park-approach.mp4`). That is the ordinary B-frame priming edit: it cancels the reorder depth so
+ * presentation starts at zero. **No picture precedes it and none is discarded** — the file has the
+ * same frame count either way.
+ *
+ * So ffmpeg's `select='eq(n,N)'` index, which counts coded pictures, puts frame `N` at composition
+ * time `(media_time + N·Δ)/timescale` and presentation time `N·Δ/timescale`. Counting `media_time`
+ * as leading frames removed mis-numbers every picture in the file by exactly the quantity this
+ * module subtracts, so a correct conversion then reads as an error of that same size in the
+ * opposite direction. Note also that `select='eq(n,183)'` reports `pts_time 3.05` — that frame's
+ * PRESENTATION time; its composition time is `3.083333`, which is what the sampler reports.
+ *
+ * Re-verified on the whole corpus with a pure-Chromium seek probe (no app involved): 31 seeks over
+ * 4 clips, each target predicted two frames apart under "edit list applied" vs "media clock", PSNR
+ * argmax against ffmpeg-reconstructed candidates. **Not one matched the media clock.** See
+ * `openspec/changes/pin-the-evidence-seek-clock-conversion/design.md`.
+ *
  * ### Why this is derived per clip rather than configured
  *
  * There is no constant to pick. The right value is **per clip** (it is that clip's own edit list)
@@ -100,8 +122,11 @@ const cache = new WeakMap<Blob, Promise<EvidenceSeekCalibration>>()
  *   maps to no media time at all;
  * - **a non-unity rate** — the map is a scale, not a shift.
  *
- * Ordinary single-entry unity-rate trims are the shape that actually occurs on real files, and are
- * the shape all three of this repo's test clips carry.
+ * Ordinary single-entry unity-rate shifts are the shape that actually occurs on real files, and are
+ * the shape every clip in this repo's corpus carries. They are **shifts and not trims** — see the
+ * module doc; the arithmetic here is the same either way, because an edit list defines presentation
+ * time within a segment as `(sample composition time − media_time) / timescale` whether or not any
+ * sample precedes `media_time`, but the name decides whether a reader can number frames correctly.
  */
 export function editListSeekOffsetSeconds(track: ContainerVideoTrackTiming): number {
   if (track.elst.length !== 1) return 0

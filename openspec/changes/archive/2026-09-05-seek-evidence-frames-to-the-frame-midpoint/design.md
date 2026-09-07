@@ -202,6 +202,35 @@ an identical timing lattice (15360 timescale, `elst media_time` 512, 60 fps, 233
 `stretchFactor`). A reading on one is not a reading on the other, and nobody had measured
 `park-side-landscape`'s directly until now.
 
+> ⚠️ **CORRECTION, 2026-09-06 (`strides-09b`, change `pin-the-evidence-seek-clock-conversion`).**
+> **The "edit-list offset is wrong on this clip" claim above is WITHDRAWN. It is correct, on all
+> four clips.** The paragraph is left exactly as written because its two readings were honestly
+> measured and are true — `video.duration` really does read `3.883333`, and a pure Chromium seek to
+> `currentTime = 2.0` really does draw the picture `ffmpeg -vf "select='eq(n\,120)'"` produces. What
+> was wrong is the model those readings were checked against.
+>
+> `select='eq(n,N)'` indexes **coded pictures**, and on all four corpus clips the lowest sample
+> composition timestamp equals the `elst media_time` exactly (512 / 1024 / 2002 / 512) — the
+> ordinary `ctts` B-frame priming edit, which discards no picture. So ffmpeg frame `N` sits at
+> composition time `(media_time + N·Δ)/timescale`, not `N·Δ/timescale`. Under the correct indexing
+> the edit-list-applied model predicts **120**, not 122, and the reading above confirms it.
+> `video.duration` cannot discriminate at all: the edit segment spans the whole media, so `3.884` is
+> just `3883.33 ms` rounded into the 1000 Hz movie timescale.
+>
+> Re-measured with a pure-Chromium probe over the whole corpus — 31 seeks, 4 clips, each target
+> predicted two frames apart under the two models, PSNR argmax against ffmpeg-reconstructed
+> candidates — **30 of 31 matched the edit-list-applied model exactly (the 31st is a deliberate
+> frame-boundary target that landed one frame low on the known microsecond truncation), and not one
+> matched the media-clock model.**
+>
+> **Consequences for this change specifically.** Its acceptance criterion — both `footStrikePattern`
+> cards draw frames **183** and **204** — is **CONFIRMED, not stale**: the re-measurement reproduces
+> it from a pure Chromium seek at this change's own two targets, with no app involved, and looking
+> at the frames again puts touchdown at 183/204 and mid-stance at 185/206. The sentence above
+> claiming "the drawn frame after this change is two frames from the instant the metric measured,
+> not zero" is **withdrawn — the residual is zero**. Nothing else in this change is affected; the
+> midpoint term was independent of the offset by construction and still is.
+
 **`vite.config.ts` carries `port: 5177` at the top level of `defineConfig`**, which is not a valid
 option there (it belongs under `server`), is the repo's one standing `tsc` error, and does not pin
 anything — Vite ignores the unknown key, which is why the derived-port harness kept working.

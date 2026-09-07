@@ -63,7 +63,7 @@ beforeEach(() => {
 })
 
 describe('editListSeekOffsetSeconds', () => {
-  it('reads a single unity-rate trim as media_time / mediaTimescale', () => {
+  it('reads a single unity-rate shift as media_time / mediaTimescale', () => {
     // Demo 1: 2 / 25. The three test clips' measured +2-frame drift, from the container alone.
     expect(editListSeekOffsetSeconds(makeTrack())).toBeCloseTo(0.08, 10)
   })
