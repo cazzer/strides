@@ -328,3 +328,55 @@ Nothing else was added: no second constant, no clip special case, and
 `verticalOscillationMinFitR2` / `cadenceMinFitR2` are untouched. The φ search resolution (0.002) and
 the φ ceiling (0.998, where the normalized spectrum degenerates to zero) are numerics, not
 thresholds; the independent-frequency count is derived from the band and the span.
+
+### D8.5 Live verification of the null
+
+`scripts/ab-person-selection.mjs --arm 'base={}' --clips side-landscape,side-portrait,front-approach
+--trials 3 --evidence`, run three times — once per commit — each starting and identity-verifying its
+own dev server on the derived port, fresh Chromium per trial, real GPU
+(`ANGLE Metal Renderer: Apple M4 Pro`). Compared field by field over the per-trial JSON, not by
+diffing the rendered table (`strides-ef5`), and cross-checked by md5 of the elapsedMs-stripped report
+sections.
+
+**The two short clips do not move, against either reference.**
+
+| clip | vs base `14b438d` | vs pre-null `a96bffa` | md5 of report section |
+|---|---|---|---|
+| `side-landscape` | identical, all **183** fields | identical, all 183 fields | `e138354879b96882e91890514046b900` on all three commits |
+| `front-approach` | identical, all **167** fields | identical, all 167 fields | `37dec37df64d1e7e0427a2d3884112ae` on all three commits |
+
+⚠️ Neither clip could have witnessed this defect in the first place — at 1.75 s and 1.63 s neither
+span can complete a cycle at 0.15 Hz, so `observedCycles >= 1` rejects the sub-floor pass outright.
+They are a blast-radius control, not evidence about the null.
+
+**`side-portrait`: the genuine detection is untouched and the false one is gone.** Against
+`a96bffa`, **8 of 188** fields differ and every one of them is `verticalOscillationCm` evidence:
+
+| field | `a96bffa` | with the null |
+|---|---|---|
+| `evidence.clips[0].metrics.verticalOscillationCm.status` | **`planned`** (the 46.4 cm card rendered) | **`no-evidence`** |
+| …`.reason` | — | `metric-excluded` |
+| …`.exemplars[0]` (6 rows) | present | absent |
+| every `metrics.*` value and confidence | — | **identical** |
+
+Read directly off the scale-pass console line, which the A/B harness does not capture:
+`scaleCalibration.verticalOscillationCm` **46.41 cm → `null`**, `fitFailureReason`
+`below-quality-gate`, `fit` `null`. `torsoMeters` 0.4938, `medianPixelsPerMeter` 205.1 and
+`scaleCoverage` 0.931 are unchanged — the clip's real-world scale is still measured; only the
+noise fit is refused. `subjectAgreement` 270/270.
+
+And against base `14b438d`, everything §D3 claimed still holds: `overstriding` **−0.008 → +0.478**,
+`footStrikePattern` **−0.240 → +0.097**, both at `sampleSize` **13 → 4**, `verticalOscillation`
+`null` → **0.1713 @ 0.907**, `verticalRatio` `null` → **0.0299 @ 0.605**, `cadence` still `null` with
+the retiming caveat verbatim.
+
+**Negative control, `ffmpeg -itsscale 2` on the 60 fps side clip (30 fps, 2× slow, ~87 spm), driven
+through the Upload tab at base and on this commit: bit-identical on every captured field.** `cadence`
+**87.6 @ 0.9056**, non-null, and its caveat is the ordinary "wasn't perfectly steady" wording rather
+than the retiming one — the detector does not fire. `verticalOscillation` 0.156303372200495,
+`overstriding` 0.561615228403369, `footStrikePattern` 0.1037128043828595, and the scale pass's own
+`verticalOscillationCm` 7.7302638422339145 cm from an IN-BAND fit at 1.44 Hz, R² 0.8585213330501436
+— identical to base to every digit.
+
+**Reproducibility**: two independent invocations on this commit agreed on every field of all three
+clips except `elapsedMs`.
