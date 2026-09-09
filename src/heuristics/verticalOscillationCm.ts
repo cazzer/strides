@@ -2,7 +2,7 @@ import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { estimateBodyScale } from './bodyScale'
 import { resolveMidpoint } from './keypoints'
-import { fitSpectralSinusoid } from './spectralFit'
+import { fitBounceSpectrum } from './bounceSpectrum'
 import type { SpectralFitSuccess, SpectralSample } from './spectralFit'
 import { analyzeHipBounce } from './hipBounce'
 import { buildBounceCycleExemplar, resolvedSpanCenter } from './bounceInstants'
@@ -269,7 +269,7 @@ function arbitrateFailureReason(
  *
  * ## Which stage does what
  *
- * `collectScales → buildRuns → buildMetricSeries → fitSpectralSinusoid`. The pixel→metre
+ * `collectScales → buildRuns → buildMetricSeries → fitBounceSpectrum`. The pixel→metre
  * CONVERSION (`buildMetricSeries`, and the run splitting that feeds it) is unchanged and is this
  * module's one correctness constraint — see its doc comment, and the 480 cm regression test. What
  * changed is only how an amplitude is READ off the converted series: a spectral sinusoid fit
@@ -293,10 +293,19 @@ function arbitrateFailureReason(
  * `fit.frequencyHz × 60` is a free cross-check against the `cadence` metric's steps/minute: same
  * body, same rhythm, reached through a completely separate series.
  *
+ * ⚠️ **On a RETIMED clip that cross-check is unavailable, and its absence is not a disagreement.**
+ * Since `bounceSpectrum.ts` the fit can land below the human-gait floor, in which case `cadence`
+ * reports `null` on purpose — a steps/minute figure off a slow-motion clock is wrong by the
+ * slowdown factor, while this metric is a DISTANCE and is not (`cadence.ts`, "Why a sub-floor
+ * rhythm withholds this metric and only this metric"). So expect `fit.frequencyHz` to be present
+ * and sub-floor with `cadence.value === null` beside it; that pairing is the two metrics agreeing,
+ * not one of them failing.
+ *
  * ## Config
  *
  * `config` is read for the shared spectral frequency GRID
- * (`spectralFitMinFrequencyHz`/`spectralFitMaxFrequencyHz`/`spectralFitFrequencyStepHz`), so that
+ * (`spectralFitMinFrequencyHz`/`spectralFitMaxFrequencyHz`/`spectralFitFrequencyStepHz`) — and, via
+ * `fitBounceSpectrum`, for the sub-floor retry derived from it — so that
  * retuning that grid moves this calculation with it instead of letting a hardcoded copy silently
  * diverge from cadence and break the cross-check above, AND — as of #36 (D3) — for the quality
  * GATE below (`config.verticalOscillationMinFitR2`, replacing a former private `CM_MIN_FIT_R2`
@@ -356,12 +365,6 @@ function calibrate(
   // null` instead of reporting nothing at all.
   const torsoLengthPx = estimateBodyScale(frames)?.torsoLengthPx ?? null
 
-  const fitOptions = {
-    minFrequencyHz: config.spectralFitMinFrequencyHz,
-    maxFrequencyHz: config.spectralFitMaxFrequencyHz,
-    frequencyStepHz: config.spectralFitFrequencyStepHz,
-  }
-
   const contributing: FittedRun[] = []
   const refusals: RunRefusal[] = []
 
@@ -371,7 +374,11 @@ function calibrate(
     // nothing to say about why the clip yielded no amplitude.
     if (runScales === null) continue
 
-    const fit = fitSpectralSinusoid(buildMetricSeries(run, runScales), fitOptions)
+    // Through `fitBounceSpectrum`, so a retimed clip's runs reach the same verdict the pixel path
+    // reaches — see this module's "Config" section. The `subFloor` flag is deliberately dropped
+    // here: it is `cadence`'s alone to act on, and this metric is a DISTANCE, unaffected by the
+    // clock (`cadence.ts`, "Why a sub-floor rhythm withholds this metric and only this metric").
+    const { fit } = fitBounceSpectrum(buildMetricSeries(run, runScales), config)
     if (!fit.ok) {
       refusals.push({ frameCount: run.hipY.length, reason: fit.reason })
       continue

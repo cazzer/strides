@@ -552,7 +552,16 @@ export interface HeuristicsConfig {
    * Hz. Hip bounce happens twice per gait cycle — once per STEP — so 1.2 Hz corresponds to a ~72
    * steps/min shuffle (`1.2 × 60`) — comfortably below any running cadence, and low enough to
    * leave walking-speed footage detectable rather than silently forcing it onto a faster
-   * candidate. */
+   * candidate.
+   *
+   * **Since `bounceSpectrum.ts` this key is also the RETIMED / NOT-RETIMED boundary.** "Comfortably
+   * below any running cadence" is exactly the premise that makes a confident fit BELOW it evidence
+   * that the clip's clock is wrong rather than that the runner is slow, so `fitBounceSpectrum`'s
+   * sub-floor retry spans `[this / MAX_RETIMING_FACTOR, this − spectralFitFrequencyStepHz]` and
+   * reports its adoption as `HipBounceAnalysis.subFloorRhythm`. Two consequences of moving this
+   * number, neither of them local: the sub-floor grid moves with it in both directions at once, and
+   * the claim "a fit below here cannot be a human gait" — which is what licenses withholding
+   * `cadence` on such a clip — has to survive the move. */
   spectralFitMinFrequencyHz: number // 1.2
   /** Highest candidate bounce frequency, in Hz, for the shared hip-bounce spectral fit — 4.0
    * corresponds to 240 steps/min (`4.0 × 60`), above any sustained human running cadence. Capping
@@ -597,7 +606,16 @@ export interface HeuristicsConfig {
    * rather than reusing it, which was sound only as long as `verticalOscillationCm` stayed a
    * diagnostics-only calculation nothing but a dev harness ever gated on; now that it backs a
    * rendered `MetricId`, two gates on the identical amplitude would be exactly the incoherence
-   * this doc warns about. */
+   * this doc warns about.
+   *
+   * **Fourth role, since `bounceSpectrum.ts`: this key ARBITRATES between the two passes of the
+   * hip-bounce fit.** `fitBounceSpectrum` consults its sub-floor grid only when the in-band fit
+   * scores below this value, and adopts the sub-floor fit only when THAT one scores at or above it.
+   * That is a different kind of decision from the three above — not "may this number be published"
+   * but "which of two fits of one series is the one to publish or withhold" — and it deliberately
+   * reuses this key rather than adding a fifth: a separate constant could make the module prefer a
+   * fit every downstream consumer then rejects, or reject one they would all have taken. Note the
+   * n-regime caveat above applies unchanged, and the sub-floor pass inherits it. */
   verticalOscillationMinFitR2: number // 0.30
   /** Minimum sinusoid PARTIAL R² for cadence's hip-bounce fit (`hipBounce.ts`) to report a value.
    * Same quantity, same gating discipline, and the same default as `verticalOscillationMinFitR2`
@@ -615,7 +633,17 @@ export interface HeuristicsConfig {
    * hip count). A future n-invariant replacement (an F-test on the fit's 2 sinusoid degrees of
    * freedom against its residual degrees of freedom) would replace BOTH this key and
    * `verticalOscillationMinFitR2` together, not just one — deliberately not implemented here, see
-   * the `derive-cadence-from-step-frequency` change's design.md. */
+   * the `derive-cadence-from-step-frequency` change's design.md.
+   *
+   * ⚠️ **This key does NOT arbitrate the two-pass fit, and the two keys are no longer
+   * interchangeable even though they still hold the same number.** `fitBounceSpectrum`
+   * (`bounceSpectrum.ts`) reads `verticalOscillationMinFitR2` to choose between an in-band and a
+   * sub-floor fit of the same series, and that choice happens ONCE, upstream of every consumer
+   * including this one — so pointing it at this key instead would make the whole
+   * vertical-oscillation family's input depend on cadence's own publishing threshold. Keep the
+   * arbitration on the family gate and this key on cadence's own publish/withhold decision; a
+   * later change "unifying" them would silently give cadence a veto over what vertical oscillation
+   * gets to fit. */
   cadenceMinFitR2: number // 0.30
   /** Minimum complete BOUNCE CYCLE count below which confidence is penalized via the sampleSize
    * factor — one bounce cycle is one STEP, HALF a full gait cycle, not a full gait cycle itself.

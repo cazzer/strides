@@ -245,6 +245,17 @@ function selectFootstrikes(
  * The same predicate decides whether `detectFromBouncePhase` may time the footstrikes at all, which
  * is deliberate: two independently movable gates on one fit would let this module hold two opinions
  * about whether the clip has a measurable rhythm.
+ *
+ * **A SUB-FLOOR fit passes here on exactly the same terms as any other, and that is the point.**
+ * Since `bounceSpectrum.ts` the fit handed in may come from below the human-gait band, on a clip
+ * whose footage is retimed (slow-motion). Nothing in this predicate — or anywhere else in this
+ * module — needed changing for that: the fit is a fit, the phase it carries is the phase of the
+ * bounce that is actually on screen, and touchdown is still a quarter of THAT period before each
+ * fitted low point. `cadence` withholds its own number on such a clip because a rate is wrong by
+ * the slowdown factor; a TIMING within the clip's own clock is not, so the footstrikes this module
+ * emits are correct as they stand. The practical consequence is that a retimed clip stops routing
+ * to the ankle-difference fallback, which on `park-side-portrait.mp4` was reporting 13 strikes
+ * across a window that physically contains 4.
  */
 function isRhythmTrustworthy(
   fit: SpectralFitResult,
@@ -338,6 +349,14 @@ function resolveStepFrequencyHz(
  * was measured reaching it, not the phase path, because its hip fit fell below `cadenceMinFitR2` —
  * its emitted frames 25/45/67/86/100 have deltas 20/22/19/14, which no single fixed period can
  * produce.
+ *
+ * It also runs LESS often than it used to, on one specific kind of clip. RETIMED (slow-motion)
+ * footage bounces below the shipped frequency band, so before `bounceSpectrum.ts`'s sub-floor retry
+ * its hip fit could not clear any gate and every such clip landed here — where an
+ * amplitude-ranked extremum scan over a stretched signal has no period to suppress against and
+ * over-reports badly (`park-side-portrait.mp4`: 13 strikes across a window physically containing
+ * 4). Those clips now reach the phase path instead. Nothing about THIS path changed; it simply
+ * stopped being reached by a class of clip it was never suited to.
  */
 export function detectFootstrikesBetweenAnkles(
   frames: RobustPoseFrame[],

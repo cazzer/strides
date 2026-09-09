@@ -58,6 +58,31 @@ import type { ContainerTimingProbe, ContainerVideoTrackTiming } from './containe
  * proprietary slow-motion metadata track), is UNVERIFIED. Zero real iPhone slow-motion clips were
  * available to this spike. Treat a `'none'` result as "no known raw-slow-motion signature found,"
  * not as "this clip is confirmed normal-speed."
+ *
+ * ## ⚠️ This predicate structurally cannot fire on real user input, and something else now covers
+ * the motivating case
+ *
+ * The reach limit above turned out to be the whole story rather than a fixture inconvenience. **iOS
+ * BAKES the retiming in when a clip leaves Photos**: an upload from the camera roll arrives at 30
+ * nominal fps with a unity-rate edit list, `stretchFactor` ≈ 1.00003, and no capture rate recorded
+ * anywhere in the container — the same shape `-itsscale` produces, and the shape signal 1 rejects.
+ * Confirmed on all three of this repo's demo clips, one of which (`park-side-portrait.mp4`) really
+ * is ~7-8x slow motion: `TAG:encoder=Lavc… libx264`, `handler_name=Core Media Video`, zero
+ * `com.apple.quicktime` tags. The in-app recording path (`getUserMedia`, `WebcamCapture.tsx`)
+ * cannot produce slow motion at all. So `nominalFps >= 100` has nothing to match on any input this
+ * app can actually receive.
+ *
+ * The motivating case is instead covered from the CONTENT side, which is the only side that can
+ * see it: `src/heuristics/bounceSpectrum.ts` fits the hip bounce a second time on a disjoint grid
+ * below the human-gait floor, and a confident fit there IS the retiming signal — no container
+ * metadata required, and no slowdown factor recovered or needed (`cadence.ts`, "Why a sub-floor
+ * rhythm withholds this metric and only this metric").
+ *
+ * **This module is deliberately left exactly as it is**: not wired to anything, not extended, not
+ * deleted. It has no callers, and that is the honest state — the predicate is correct for the shape
+ * it targets and remains the right starting point if a real device-native slow-motion container
+ * ever turns up. Its `'none'` on a genuinely retimed clip is a true negative about CONTAINERS, not
+ * a bug to fix by loosening `minNativeFps`.
  */
 export type SlowMotionConfidence = 'high' | 'medium' | 'none'
 

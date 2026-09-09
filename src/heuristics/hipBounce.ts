@@ -2,7 +2,7 @@ import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { HeuristicsConfig } from './types'
 import { resolveMidpoint } from './keypoints'
-import { fitSpectralSinusoid } from './spectralFit'
+import { fitBounceSpectrum } from './bounceSpectrum'
 import type { SpectralFitResult, SpectralSample } from './spectralFit'
 
 /** `['left_hip', 'right_hip']` — `analyzeBounceSignal`'s default pair, and the only pair
@@ -27,8 +27,22 @@ export interface HipBounceAnalysis {
   /** `interpolatedCount / resolvedCount`. `0` when `resolvedCount` is `0` (guarded, not `0/0`). */
   interpolatedFraction: number
   /** The shared spectral fit over the resolvable hip-mid samples. Typed success/failure — see
-   * `spectralFit.ts`. */
+   * `spectralFit.ts`. Since the two-pass fit (`bounceSpectrum.ts`) this may be a fit from BELOW the
+   * human-gait band; `subFloorRhythm` is how a caller tells, and is the only way to tell without
+   * comparing `frequencyHz` against a config key. */
   fit: SpectralFitResult
+  /**
+   * `true` when `fit` came from the sub-floor retry — the clip's on-screen bounce is slower than
+   * any human gait, which means the footage is RETIMED (slow-motion) rather than that the runner is
+   * shuffling. See `bounceSpectrum.ts` for why an adopted sub-floor fit is evidence of retiming and
+   * why it needs no threshold of its own.
+   *
+   * Every metric here is factor-independent — measured AT an instant, or a ratio, or a distance —
+   * so a retimed clip's spatial numbers are correct as they stand and this flag is not a reason to
+   * withhold them. `cadence` is the sole exception and the sole reader: it reports a RATE, and a
+   * rate read off a retimed clock is wrong by exactly the factor nothing here measures.
+   */
+  subFloorRhythm: boolean
 }
 
 /**
@@ -36,8 +50,23 @@ export interface HipBounceAnalysis {
  * `verticalOscillation` and `cadence` both need done identically: resolve a bilateral-pair
  * midpoint per frame (`resolveMidpoint(...pair)`, the same tolerant midpoint policy every
  * center-of-mass proxy in this package uses), track how much of that was interpolated, and fit the
- * shared spectral sinusoid primitive (`fitSpectralSinusoid`) to the resolvable subset over the
+ * shared spectral sinusoid to the resolvable subset over the
  * `spectralFitMinFrequencyHz`/`spectralFitMaxFrequencyHz`/`spectralFitFrequencyStepHz` grid.
+ *
+ * ## The fit is TWO-PASS, and the second pass detects retimed footage
+ *
+ * The fit goes through `bounceSpectrum.ts`'s `fitBounceSpectrum` rather than straight to
+ * `fitSpectralSinusoid`. On any clip whose in-band fit clears the shared quality gate that is
+ * exactly the call this module used to make, bit for bit. Only when the in-band grid yields nothing
+ * trustworthy is a second, DISJOINT grid below the human-gait floor tried, and only if THAT clears
+ * the same gate is its fit adopted — reported as `subFloorRhythm`. A clip whose ordinary fit
+ * succeeds cannot be affected by any of it. See that module for the disjointness argument and for
+ * why no new threshold is involved.
+ *
+ * `verticalOscillationCm.calibrate` fits its own per-run metre series through the same function, so
+ * the whole vertical-oscillation family reaches the same verdict about whether a clip has a
+ * measurable rhythm — the coherence `verticalOscillationMinFitR2`'s doc argues for, extended to
+ * cover which BAND that verdict was reached in.
  *
  * `pair` defaults to `['left_hip', 'right_hip']` — cadence (`analyzeHipBounce`, below) always
  * gets that default and never varies it, since cadence stays hip-pinned regardless of vertical
@@ -95,13 +124,17 @@ export function analyzeBounceSignal(
     if (y !== null) fitSamples.push({ t: frame.timestamp, v: y })
   })
 
-  const fit = fitSpectralSinusoid(fitSamples, {
-    minFrequencyHz: config.spectralFitMinFrequencyHz,
-    maxFrequencyHz: config.spectralFitMaxFrequencyHz,
-    frequencyStepHz: config.spectralFitFrequencyStepHz,
-  })
+  const { fit, subFloor } = fitBounceSpectrum(fitSamples, config)
 
-  return { hipY, resolvedCount, interpolatedCount, frameCoverage, interpolatedFraction, fit }
+  return {
+    hipY,
+    resolvedCount,
+    interpolatedCount,
+    frameCoverage,
+    interpolatedFraction,
+    fit,
+    subFloorRhythm: subFloor,
+  }
 }
 
 /**

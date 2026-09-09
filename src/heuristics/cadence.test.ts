@@ -284,6 +284,44 @@ describe('computeCadence', () => {
   })
 })
 
+describe('computeCadence — retimed (slow-motion) footage', () => {
+  /** 26 steps/min on screen over 12 s at 30 fps: what a ~180 spm runner filmed at ~7x and played
+   * back at 30 fps looks like. `analyzeHipBounce` fits it on the sub-floor pass. */
+  const RETIMED_PARAMS = {
+    durationSec: 12,
+    fps: 30,
+    cadenceStepsPerMin: 26,
+    strideAmplitudePx: 80,
+    verticalBouncePx: 20,
+    trunkLeanDeg: 5,
+    view: 'side' as const,
+  }
+
+  it('withholds the value and names the retiming rather than the rhythm', () => {
+    const frames = generateSyntheticGait(RETIMED_PARAMS)
+    // Precondition: this really is the sub-floor path, not some unrelated fit failure — otherwise
+    // the assertions below would pass on a clip that simply could not be fitted.
+    expect(analyzeHipBounce(frames, DEFAULT_HEURISTICS_CONFIG).subFloorRhythm).toBe(true)
+
+    const result = computeCadence(frames, 'side')
+
+    expect(result.value).toBeNull()
+    expect(result.confidence).toBe(0)
+    expect(result.caveat).toMatch(/slow-motion/i)
+    // Specifically NOT the below-gate wording: the rhythm was measured cleanly here, and saying it
+    // was "too irregular to measure" would be false as well as unhelpful.
+    expect(result.caveat).not.toMatch(/too irregular/i)
+  })
+
+  it('an in-band control is untouched — a rate is still reported, with no retiming caveat', () => {
+    const result = computeCadence(generateSyntheticGait({ ...BASE_PARAMS, view: 'side' }), 'side')
+
+    expect(result.value).toBeCloseTo(BASE_PARAMS.cadenceStepsPerMin, 0)
+    expect(result.confidence).toBeGreaterThan(0.7)
+    expect(result.caveat ?? '').not.toMatch(/slow-motion/i)
+  })
+})
+
 describe('computeCadence — emits no exemplars, deliberately', () => {
   /**
    * Design D7. Cadence reads the SAME hip-bounce fit `verticalOscillation` emits a bounce pair

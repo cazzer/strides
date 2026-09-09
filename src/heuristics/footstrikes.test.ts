@@ -1210,3 +1210,62 @@ describe('detectFootstrikes — a strike whose two ankles have collapsed onto on
     ).toBe(true)
   })
 })
+
+describe('detectFootstrikes — retimed (slow-motion) footage', () => {
+  /** 26 steps/min on screen over 12 s at 30 fps — the shape `park-side-portrait.mp4` has, and the
+   * one that used to have no fittable rhythm at all, so every such clip landed on the fallback. */
+  const RETIMED_PARAMS = {
+    durationSec: 12,
+    fps: 30,
+    cadenceStepsPerMin: 26,
+    strideAmplitudePx: 80,
+    verticalBouncePx: 20,
+    trunkLeanDeg: 5,
+    view: 'side' as const,
+  }
+
+  it('a retimed clip reaches the phase path and gets one strike per step at its fitted period', () => {
+    const frames = generateSyntheticGait(RETIMED_PARAMS)
+    const { fit, subFloorRhythm } = analyzeHipBounce(frames, DEFAULT_HEURISTICS_CONFIG)
+    // Precondition: this clip is only fittable at all because of the sub-floor pass. Before it,
+    // `isRhythmTrustworthy` refused and every clip of this shape fell to the ankle detector.
+    expect(subFloorRhythm).toBe(true)
+    expect(fit.ok).toBe(true)
+    if (!fit.ok) return
+
+    const strikes = detectFootstrikes(frames, DEFAULT_HEURISTICS_CONFIG)
+
+    // `12 s × 26/60 Hz` is about 5.2 steps, and the first and last frames are ineligible.
+    expect(strikes.length).toBeGreaterThanOrEqual(4)
+    expect(strikes.length).toBeLessThanOrEqual(6)
+    for (let i = 1; i < strikes.length; i += 1) {
+      expect(strikes[i].side).not.toBe(strikes[i - 1].side)
+      // Uniformly one fitted step apart — the property the phase path has by construction and the
+      // amplitude-ranked fallback does not. Snapping to frames costs at most one frame interval.
+      expect(strikes[i].timestamp - strikes[i - 1].timestamp).toBeCloseTo(1 / fit.frequencyHz, 1)
+    }
+  })
+
+  it('the ankle fallback still runs, unchanged, on the same frames', () => {
+    // ⚠️ On THIS fixture the two paths agree on the count, and that is a limit of the fixture
+    // rather than a result: `generateSyntheticGait` emits a noiseless ankle trace, so the
+    // extremum scan has nothing spurious to latch onto. The over-reporting this change exists to
+    // remove is a property of real footage — measured live on `park-side-portrait.mp4`, where the
+    // fallback emitted 13 strikes across a window physically containing 4, and the phase path
+    // emits 4. What this asserts is the narrower thing the fixture CAN carry: the fallback is
+    // untouched and still reachable with the same arguments.
+    const frames = generateSyntheticGait(RETIMED_PARAMS)
+    const bodyScale = estimateBodyScale(frames)
+    expect(bodyScale).not.toBeNull()
+    const { fit } = analyzeHipBounce(frames, DEFAULT_HEURISTICS_CONFIG)
+
+    const fromAnkles = detectFootstrikesBetweenAnkles(
+      frames,
+      DEFAULT_HEURISTICS_CONFIG,
+      bodyScale!.torsoLengthPx,
+      fit,
+    )
+
+    expect(fromAnkles.length).toBeGreaterThan(0)
+  })
+})

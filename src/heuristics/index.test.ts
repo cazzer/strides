@@ -473,3 +473,47 @@ describe('computeFormHeuristics', () => {
     expect(result.cadence.viewFit).toBe('tolerated')
   })
 })
+
+describe('computeFormHeuristics — retimed (slow-motion) footage', () => {
+  /** 26 steps/min on screen over 12 s at 30 fps, at a CONSTANT scale so the pixel and metre paths
+   * differ only by that constant — which is what makes the frequency identity below meaningful
+   * rather than a coincidence of two similar fits. */
+  const RETIMED_PARAMS = {
+    durationSec: 12,
+    fps: 30,
+    cadenceStepsPerMin: 26,
+    strideAmplitudePx: 80,
+    verticalBouncePx: 20,
+    trunkLeanDeg: 8,
+    view: 'side' as const,
+    pixelsPerMeter: 800,
+  }
+
+  it('the whole vertical-oscillation family publishes and cadence alone is withheld', () => {
+    // The redefined tripwire, made executable. `fit.frequencyHz × 60 == cadence.value` is this
+    // repo's standing cross-check between the pixel and centimetre paths; on a retimed clip
+    // cadence is deliberately null, so what has to hold instead is that the two paths agree with
+    // EACH OTHER about the rhythm while the rate stays unreported.
+    const result = computeFormHeuristics(generateSyntheticGait(RETIMED_PARAMS))
+
+    expect(result.cadence.value).toBeNull()
+    expect(result.cadence.caveat).toMatch(/slow-motion/i)
+
+    // Every factor-independent metric reports: the clock is wrong, the geometry is not.
+    expect(result.verticalOscillation.value).not.toBeNull()
+    expect(result.verticalOscillationCm.value).not.toBeNull()
+    expect(result.trunkLean.value).not.toBeNull()
+    expect(result.overstriding.value).not.toBeNull()
+    expect(result.footStrikePattern.value).not.toBeNull()
+
+    // Both paths reached the same rhythm through completely separate series — the pixel hip-y
+    // trace and the cumulative metre series — so the family cannot disagree with itself about
+    // whether this clip has a measurable bounce.
+    const pixelFit = result.verticalOscillation.fit
+    const cmFit = result.verticalOscillationCm.calibration?.fit
+    expect(pixelFit).not.toBeNull()
+    expect(cmFit).not.toBeNull()
+    expect(cmFit!.frequencyHz).toBe(pixelFit!.frequencyHz)
+    expect(cmFit!.frequencyHz).toBeLessThan(DEFAULT_HEURISTICS_CONFIG.spectralFitMinFrequencyHz)
+  })
+})

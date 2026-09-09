@@ -2179,8 +2179,20 @@ built:
 
 Spike for GitHub #42, executed on branch `spike-slowmo-detection` (worktree
 `strides-slowmo`) — findings, a prototype, and a recommendation, not a shipped feature.
-`src/video/containerTiming.ts`, `src/video/slowMotionDetection.ts`, and their tests/fixtures
-exist on that branch only as of this writing.
+
+⚠️ **Two corrections, 2026-09-09 (`strides-b4f`), neither of which un-measures anything below.**
+(1) **"exist on that branch only" is STALE.** `src/video/containerTiming.ts` and
+`src/video/slowMotionDetection.ts` are both in `src/` on `main` today. `containerTiming.ts` has real
+callers (`evidenceSeekOffset.ts` reads the `elst` through it); **`slowMotionDetection.ts` has ZERO
+callers** and is correct-but-unreachable, for a reason this section could not have known: **iOS
+BAKES the retiming in when a clip leaves Photos**, so a camera-roll upload arrives at 30 nominal fps
+with a unity-rate `elst` and `stretchFactor` ≈ 1.00003 — confirmed on all three demo clips, one of
+which (`park-side-portrait.mp4`) really is ~7× slow motion (`TAG:encoder=Lavc… libx264`,
+`handler_name=Core Media Video`, zero `com.apple.quicktime` tags). `nominalFps >= 100` therefore has
+nothing to match on any input this app can receive. That is a true negative about CONTAINERS, not a
+bug to fix by loosening the threshold; the module is deliberately left unwired rather than deleted.
+(2) **The closing "widening the grid … rejected" parenthetical is narrower than it reads** — see the
+note appended at the end of this section.
 
 **Motivation.** This pipeline's cadence/vertical-oscillation estimators search a fixed 1.2–4.0 Hz
 bounce-frequency band (`HeuristicsConfig.spectralFitMinFrequencyHz`/`spectralFitMaxFrequencyHz`,
@@ -2345,6 +2357,57 @@ which confidence tier(s) surface it (`'high'` only, or `'medium'` too) are real 
 this spike did not make, and shipping a detection predicate with zero real-device validation
 behind a live user-facing banner deserves a decision point of its own rather than riding in on a
 spike's momentum.
+
+### What was built instead, and where it got to (2026-09-09, `strides-b4f`)
+
+⚠️ **The parenthetical above — "widening the spectral-fit search grid itself … rejected as a
+direction" — is REFUTED only for the thing it actually measured**, which is *reporting cadence off a
+widened grid*. That remains true and was re-confirmed independently: with the floor simply dropped
+to 0.30 Hz, `park-side-portrait.mp4` reports a confidently-wrong ~26 spm at R² ~0.95 (`strides-aha`).
+What it does NOT rule out is a widened grid used as a **detector** rather than as a source of a
+reported rate, which is what `openspec/changes/detect-retimed-clips-below-the-gait-floor` builds:
+`src/heuristics/bounceSpectrum.ts`'s `fitBounceSpectrum` runs today's grid first and, only on
+failure, a **disjoint** sub-floor grid `[min/8, min − step]`; adoption is reported as
+`HipBounceAnalysis.subFloorRhythm`; `cadence` alone is withheld with a caveat naming the retiming,
+because it is the only `MetricId` whose value is a RATE, while every spatial/ratio/distance metric
+publishes normally.
+
+**Measured on `park-side-portrait.mp4` (primary MoveNet pass): it works.** Pass 1 fits 1.24 Hz at
+R² **0.0231**; pass 2 fits **0.39 Hz at R² 0.7561**, `secondPeakRatio` 0.035, against a
+keyframe-derived ground truth of 0.40 Hz (contacts at ≈1.4 / 3.9 / 6.4 / 8.9 s, uniform 2.5 s).
+`detectFootstrikes` flips from the ankle fallback to the bounce-phase path, **13 strikes → 4**,
+alternating sides, uniformly 2.567 s apart, and `overstriding` goes **−0.008 → +0.478**,
+`footStrikePattern` **−0.240 → +0.097**, `verticalOscillation` `null` → **0.171**, `verticalRatio`
+`null` → **0.0299**. `side-landscape` and `front-approach` are **bit-identical outside `elapsedMs`**
+(0 fields moved, confirmed by two instruments), and an `ffmpeg -itsscale 2` real-footage negative
+control at 87 spm is bit-identical to baseline on every value.
+
+🛑 **It is NOT merged, and the reason is worth knowing before anyone tries this again: the sub-floor
+band is where RED noise lives.** A rhythmless random walk (`v[k] = v[k−1] + U(−0.5,0.5)`) is adopted
+as a "retimed rhythm" on **75–92% of 300 seeds** at this corpus's own sample counts, at a median
+`sinusoidR2` of ~0.52. `verticalOscillationMinFitR2`'s calibration is explicitly a **WHITE**-noise
+floor (its own doc: "2000-seed pure-noise floor, p95 ≈ 0.22 at n=50"), and integrated white noise is
+red noise — so the gate offers no protection in the one band the second pass searches. It bites
+hardest on `verticalOscillationCm.calibrate`, whose series is a **cumulative integral of per-frame
+deltas**, i.e. a random walk by construction: on `park-side-portrait` the background MediaPipe scale
+pass adopts **0.15 Hz at R² 0.398** and would render **46.4 cm** of vertical oscillation against a
+0.494 m torso.
+
+**No threshold on any field `SpectralFitSuccess` reports separates the two** — the genuine detection
+sits at the noise distribution's own p95 on all three: `sinusoidR2` 0.756 vs p95 0.788;
+`observedCycles` 3.81 vs p95 3.81; `secondPeakRatio` 0.0354 vs p05 0.037. Same shape of result as
+the 4K area floor: the endpoints overlap, so **do not go looking for a better number**. A fix needs a
+different KIND of discriminator — the F-test against residual degrees of freedom that
+`verticalOscillationMinFitR2`'s doc already names as the n-invariant upgrade, a red-noise null
+model, or cross-validating the two passes' independent series against each other. Filed as
+`strides-mc1`; full tables in that change's `design.md` §4, and the behaviour is pinned by a
+deliberately-failing-when-fixed test in `bounceSpectrum.test.ts`.
+
+Also established in passing: **`observedCycles >= 1` does NOT prune the low end of a widened grid to
+inertness**, which was the stated safety argument for capping the retiming factor at 8 — at 0.15 Hz
+over a 10.1 s window the winner completes 1.515 cycles and clears the rule comfortably. Exposure
+grows with clip length; the two short clips are safe only because their spans cannot complete a
+sub-floor cycle.
 
 **Risk notes.**
 - **Overlapping-caveat coordination.** The grid-edge caveat does NOT already fire on this clip

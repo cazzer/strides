@@ -29,6 +29,20 @@ const MIN_CADENCE_STEPS = 4
  */
 const FIT_QUALITY_SATURATION_R2 = 0.8
 
+/**
+ * Said when the hip bounce fitted BELOW the human-gait floor — see `bounceSpectrum.ts`, and the
+ * module doc section below for why this metric alone is withheld.
+ *
+ * Names the retiming rather than the rhythm, because "too irregular to measure" (the gate's own
+ * wording) would be actively misleading here: the rhythm was measured, cleanly, and it is the clock
+ * that cannot be trusted. It also quotes no factor and asks for no confirmation — inferring how
+ * much slower than real time the clip runs is a separate problem this does not attempt.
+ */
+const RETIMED_CAVEAT =
+  'This clip looks like slow-motion footage — the step rhythm was measured, but a steps-per-minute ' +
+  'figure would be wrong by however much the clip was slowed down. Every other measurement on this ' +
+  'clip is unaffected.'
+
 function nullResult(viewFit: MetricResult['viewFit'], caveat: string): MetricResult {
   return {
     metric: 'cadence',
@@ -121,6 +135,29 @@ function isNearGridEdge(frequencyHz: number, config: HeuristicsConfig): boolean 
  * front 0.85, ambiguous 0.6) — see `types.ts`'s comment on that table entry for why the two are no
  * longer merely similar but exactly the same, now that both fit the same input series.
  *
+ * ## Why a sub-floor rhythm withholds this metric and only this metric
+ *
+ * `hipBounce.subFloorRhythm` says the bounce fitted below the human-gait floor, which means the
+ * footage is slow-motion — retimed — rather than that the runner is shuffling
+ * (`bounceSpectrum.ts`). This metric returns `null` with `RETIMED_CAVEAT` in that case, BEFORE the
+ * quality gate below, because a sub-floor fit is a good fit: it clears every bar this function
+ * checks and would put a confident number on screen.
+ *
+ * **The asymmetry is in the units, not in anyone's judgement about accuracy.** Write `k` for the
+ * unknown slowdown factor. Cadence is the only `MetricId` whose value is a RATE, and a rate read
+ * off a clock running `k` times slow is wrong by exactly `k`. Every other metric in the panel is
+ * either measured AT an instant (`overstriding`, `footStrikePattern`, `stepWidth`, `trunkLean`,
+ * `kneeFlexion`, `kneeDrive`), a dimensionless ratio (`verticalOscillation`,
+ * `armSwingAmplitude`), or a distance (`verticalOscillationCm`, `stepWidthCm`) — none of which
+ * carries time in its units, so `k` cancels and the number is right as it stands.
+ * `verticalRatio` reads `fit.frequencyHz` only to gate a stride pair's period, where the fitted
+ * and observed periods are stretched by the same `k` and the comparison is unaffected.
+ *
+ * So correcting the FIT fixes contact timing and every spatial metric on a retimed clip with no
+ * factor required, on any device — and withholding this one metric is the whole of the price.
+ * Inferring `k` so that a cadence could be reported is deliberately out of scope; it needs an
+ * observable that scales with `k` and is not itself a cadence.
+ *
  * ## No exemplar frames, deliberately
  *
  * This metric emits no `exemplars`, and that is a decision rather than an omission. A cadence is
@@ -144,6 +181,12 @@ export function computeCadence(
 
   if (hipBounce.resolvedCount === 0) {
     return nullResult(viewFitEntry.fit, 'No resolvable hip position in this clip.')
+  }
+
+  // Before the fit is even inspected: a sub-floor fit is a GOOD fit of a bad clock, so every branch
+  // below it would happily publish a number. See the module doc section above.
+  if (hipBounce.subFloorRhythm) {
+    return nullResult(viewFitEntry.fit, RETIMED_CAVEAT)
   }
 
   const fit = hipBounce.fit
