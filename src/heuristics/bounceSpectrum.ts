@@ -16,10 +16,19 @@ import type { SpectralFitResult, SpectralSample } from './spectralFit'
  * happen below 1.2 Hz, so a fit that does means the clock is wrong" is gait policy, not
  * well-posedness, and folding it in there would silently change `armSwing.ts`, which fits a
  * different signal for a different reason. Nor can it live inline in `analyzeBounceSignal`:
- * `verticalOscillationCm.calibrate` fits its own per-run METRE series through the same grid, and a
- * rule that reached only the pixel path would let the vertical-oscillation family disagree with
- * itself about whether a clip has a measurable rhythm — the exact incoherence
- * `verticalOscillationMinFitR2`'s doc exists to prevent.
+ * `verticalOscillationCm.calibrate` fits its own per-run METRE series through the same grid, so a
+ * rule reaching only the pixel path would leave the metre path with no sub-floor rule at all — and
+ * that is precisely the path on which this defect reached a rendered card (`design.md` D4.4).
+ *
+ * ⚠️ **This does NOT buy the family a common verdict, and this doc used to claim it did.** The two
+ * consumers fit DIFFERENT series, so they can still disagree about whether a clip has a measurable
+ * rhythm — and on `park-side-portrait.mp4` they do: the pixel path adopts 0.39 Hz while the metre
+ * path adopts nothing at all. That is fail-safe rather than a defect, and the mechanism is worth
+ * naming, because it is not obvious from the adoption rule: the peak handed to the null is the
+ * argmax of RAW explained power, never of FLATTENED power, so a genuine sub-floor peak sitting
+ * under a larger raw red-noise peak is never offered to the null in the first place and the pass
+ * fails outright. What this module's position guarantees is that both consumers are governed by the
+ * same RULE, not that they reach the same answer.
  *
  * ## The two grids are disjoint, and that is the safety property
  *
@@ -102,12 +111,29 @@ import type { SpectralFitResult, SpectralSample } from './spectralFit'
  * (`slowMotionDetection.ts`).
  *
  * **What 8 misses, deliberately**: Android's 960 fps tier is 32×, and a clip retimed that far keeps
- * exactly the behaviour it has today — an honest `null` with a caveat about an unmeasurable
- * rhythm. Reaching for 32 buys those clips only on paper: it triples the sub-floor grid, and every
- * added point is another chance for noise to clear the gate on a clip that is not retimed at all.
- * The added points are also close to inert on this corpus, because `fitSpectralSinusoid` requires
- * the winning frequency to complete a full cycle inside the observed span — at 32× the floor is
- * 0.0375 Hz, which needs 26.7 s of footage, and the longest clip here is 12.2 s.
+ * exactly the behaviour it has today — an honest `null` with a caveat about an unmeasurable rhythm.
+ *
+ * **The binding constraint on 32 is SPAN, not grid density.** At 32× the floor is 0.0375 Hz, and
+ * `fitSpectralSinusoid` requires the winning frequency to complete a full cycle inside the observed
+ * span — 26.7 s of footage for one cycle, against a 12.2 s longest clip here. So the tier the wider
+ * grid is *for* stays out of reach whatever the grid says. What the extra points would actually
+ * serve is the range in between: of the six they add below 0.15 Hz, three (0.0975, 0.1175 and
+ * 0.1375 Hz) do complete a cycle inside 12.17 s and would be live rather than decorative — and they
+ * correspond to retiming factors of roughly 9–12×, which is no device tier at all.
+ *
+ * ⚠️ Two arguments this block used to make for 8 are measurably FALSE and are not to be revived.
+ * 32 does not "triple the grid": at the shipped defaults the sub-floor grid goes from **52 points to
+ * 58**, +12%. And `observedCycles >= 1` does not prune the added points to inertness — measured
+ * under `strides-mc1` (`design.md` D4.1), a 0.15 Hz winner completes 1.515 cycles over a 10.1 s
+ * window and clears that rule comfortably. The honest cost of widening is smaller than "six more
+ * chances" too: `redNoiseNull.ts` corrects for INDEPENDENT frequencies rather than grid points, and
+ * at this corpus's measured ~9.8 s span that count goes 10 → 11. One extra chance for a tier that
+ * still cannot be reached is a bad trade, which is the whole argument.
+ *
+ * ⚠️ **The declared reach to 0.15 Hz is nominal, and the bottom third of it is not usable in
+ * practice** — see "the price of the asymmetry" in `redNoiseNull.ts`. A genuine rhythm below about
+ * 0.25 Hz is mostly refused at this corpus's noise level, by design; a 150–240 spm runner filmed at
+ * 8× lands at 0.31–0.5 Hz, well clear of that.
  */
 export const MAX_RETIMING_FACTOR = 8
 

@@ -51,6 +51,24 @@ import type { SpectralBandPower } from './spectralFit'
  * grid floor — measured, 0 of 93 false adoptions landed within ±0.04 Hz of the real rhythm — so the
  * two populations are separated by the one axis the null is steep in.
  *
+ * ## The price of the asymmetry: power collapses across the bottom third of the declared reach
+ *
+ * The bar is highest exactly where the grid bottoms out, so a GENUINE rhythm down there is refused
+ * too. Measured on this suite's own red-noise fixture (280 samples / 9.77 s, 200 seeds per point),
+ * injecting a real rhythm at each frequency:
+ *
+ * | on-screen Hz | 0.16 | 0.19 | 0.23 | 0.29 | 0.39 | 0.51+ |
+ * |---|---|---|---|---|---|---|
+ * | adopted | **8.0%** | 58% | 64.5% | 95% | 100% | ~100% |
+ * | R² gate passes | 100% | 100% | 100% | 100% | 100% | 100% |
+ *
+ * So `MAX_RETIMING_FACTOR`'s declared reach to 0.15 Hz is NOMINAL: roughly 0.15–0.25 Hz is
+ * effectively unreachable for a genuine rhythm at this corpus's noise level, and the R² gate row
+ * shows the refusal is this null's doing and nothing else's. That is the conservative failure and it
+ * is accepted rather than tuned around — a 150–240 spm runner filmed at 8× lands at 0.31–0.5 Hz,
+ * inside the 95–100% band. Anyone diagnosing "why was my 8× clip not detected" should check the
+ * on-screen frequency against this table before suspecting the fit.
+ *
  * ## What this module is NOT
  *
  * Not a replacement for any caller's quality gate. It answers "is this peak distinguishable from

@@ -211,10 +211,20 @@ candidate is never formed unless the in-band band has already failed, so it is s
 incapable of displacing a winning in-band peak.
 
 **Why `MAX_RETIMING_FACTOR = 8`.** iPhone's 240 fps against a 30 fps timeline — the device class
-this is about. 32 (Android's 960 fps tier) was rejected: it triples the grid, and the architect's
-stated pruning argument for the added points — `observedCycles >= 1` — **is false on this corpus**
-(D4.1: at 0.15 Hz over 10.1 s the winner completes 1.515 cycles and clears the rule). A clip retimed
-past 8× keeps today's honest null.
+this is about. 32 (Android's 960 fps tier) was rejected, and the architect's stated pruning argument
+for the added points — `observedCycles >= 1` — **is false on this corpus** (D4.1: at 0.15 Hz over
+10.1 s the winner completes 1.515 cycles and clears the rule). A clip retimed past 8× keeps today's
+honest null.
+
+⚠️ **Correction (repair round): "it triples the grid" is measurably false and is not the reason.**
+At the shipped defaults the sub-floor grid goes from **52 points to 58** — +12%, not 3× — and the
+cost is smaller still once counted correctly, because `redNoiseNull.ts` corrects for INDEPENDENT
+frequencies rather than grid points: at the measured ~9.8 s span that count goes **10 → 11**, one
+extra chance rather than six. The real reason is **span**. At 32× the floor is 0.0375 Hz, one cycle
+of which needs 26.7 s of footage against a 12.2 s longest clip, so the 960 fps tier stays out of
+reach whatever the grid says; meanwhile three of the six added points (0.0975 / 0.1175 / 0.1375 Hz)
+DO complete a cycle inside 12.17 s and would be live, serving retiming factors of roughly 9–12× —
+no device tier at all. `bounceSpectrum.ts`'s own doc carries this corrected form.
 
 **Why no new threshold for `subFloor`.** The human-gait floor already IS
 `spectralFitMinFrequencyHz`, whose doc says 1.2 Hz sits "comfortably below any running cadence"; the
@@ -277,11 +287,30 @@ Measured: the variance-normalized form still adopted **33.7%** of random walks; 
 from the band takes that to **3.5%**. This is Mann & Lees' robust background, and here it is
 required rather than a refinement.
 
-**Why the R² condition is kept alongside.** The null answers "is this peak distinguishable from this
-series' own noise"; `verticalOscillationMinFitR2` answers "will the consumers of this fit take it".
-Dropping the second would let `fitBounceSpectrum` return a sub-floor fit every downstream metric
-then rejects — a clip reported as retimed while showing no numbers, worse than today's honest
-failure, and it would break D6's arbitration argument.
+**Why the R² condition is kept alongside — and the measured reason is stronger than the
+coherence one.** The implementation brief instructed dropping the R² test once the null was in
+place. It was kept, first on downstream-coherence grounds (the null answers "is this peak
+distinguishable from this series' own noise"; `verticalOscillationMinFitR2` answers "will the
+consumers of this fit take it", so dropping it would let `fitBounceSpectrum` return a sub-floor fit
+every downstream metric then rejects — a clip reported as retimed while showing no numbers, worse
+than today's honest failure, and it would break D6's arbitration argument).
+
+That argument is correct and it undersells the deviation. Measured through the real fit, 400 seeds
+per row, adoption rate on series with no rhythm at any frequency:
+
+| rhythmless series | R² alone | null alone | both (shipped) |
+|---|---|---|---|
+| random walk, 288 @ 30 fps | 91.5% | 4.0% | **4.0%** |
+| AR(1) φ = 0.99 | 91.3% | 4.8% | **4.8%** |
+| AR(1) φ = 0.9 | 31.8% | 6.8% | **4.3%** |
+| AR(1) φ = 0.6 | 0.0% | **10.5%** | **0.0%** |
+| AR(1) φ = 0 (white) | 0.0% | **12.8%** | **0.0%** |
+
+The two conditions cover opposite halves of the colour range. On the RED side the null does 100% of
+the discriminating and the R² gate is inert. On the WHITE/PINK side the null over-fires at 2–2.6×
+its nominal rate — the multiple-comparison excess of §D8.6 — and **the R² gate is the only thing
+holding the line**. So obeying the brief and dropping it would have taken the false-positive rate on
+low-φ series from ~0% to 10–13%, trading one noise regime for another rather than simplifying.
 
 **Why it discriminates, by construction.** The AR(1) null is HIGHER at low frequency (≈ 1/f²), so a
 peak at the grid's bottom edge faces a HIGHER bar than one a few tenths of a Hz up — and the false
@@ -380,3 +409,33 @@ than the retiming one — the detector does not fire. `verticalOscillation` 0.15
 
 **Reproducibility**: two independent invocations on this commit agreed on every field of all three
 clips except `elapsedMs`.
+
+### D8.6 Disclosed, not fixed
+
+Four things this change knowingly ships. None changes the budget; all four are recorded so the next
+reader does not have to rediscover them.
+
+- **The 5% is per SERIES, and a clip presents several.** The hip series is shared, so cadence /
+  vertical oscillation / verticalRatio / footstrikes get one chance between them — but
+  `verticalOscillationCm.calibrate` calls `fitBounceSpectrum` **once per integration run**, and the
+  background MediaPipe scale pass repeats the whole set on its own independently-sampled series. On
+  a long clip the family-wise rate is therefore materially above 5%, and that is exactly the path
+  that reached the user as 46.4 cm in D4.4.
+- **What a false adoption DOES, stated beside the rate rather than only the rate.** The clip gets
+  `RETIMED_CAVEAT` — "This clip looks like slow-motion footage" — a confident, specific and wrong
+  explanation replacing an honest "too irregular to measure"; and `isRhythmTrustworthy` passes **by
+  construction**, since R² ≥ the family gate is a precondition of adoption, so `detectFootstrikes`
+  switches to `detectFromBouncePhase` and emits phantom strikes into `overstriding`,
+  `footStrikePattern` and `stepWidth`. That is the same SHAPE of failure this change exists to fix,
+  at 1-in-20 instead of 13-in-13.
+- **The multiple-comparison excess is real and is where the residual over-firing lives.** The
+  maximum is taken over 52 CORRELATED grid points and corrected as if over the ~10 independent
+  frequencies the span resolves; how many of the 52 genuinely compete depends on the background, so
+  the excess is a function of φ (12.8% at φ = 0 down to 4.0% at φ = 1, §D8.2's table). It is NOT the
+  level estimator: the median of the flattened values is essentially unbiased, 1.382 measured against
+  the χ²₂ median of 1.386 at φ = 0, now pinned pointwise in `redNoiseNull.test.ts`.
+- **`armSwing.ts:413` still fits the shipped band directly**, so `armSwingAmplitude` stays `null` on
+  a retimed clip while every other spatial metric publishes. `bounceSpectrum.ts`'s doc explains why
+  arm swing was excluded (a different signal, fitted for a different reason), so this is a conscious
+  scope line rather than an oversight — but `strides-b4f`'s "publish every factor-independent metric
+  normally" now has exactly one exception, and this is it written down.
