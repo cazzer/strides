@@ -227,3 +227,104 @@ frequency comparison is a structural consequence of the disjoint grid.
 - **`strides-mc1`** — the red-noise adoption gap. **Blocks this change.**
 - **`strides-24s` / `strides-pr1`** are unaffected: the +0.6 s residual on this clip is the same
   systematic, scaled, and is disclosed by `overstriding`'s existing unconditional caveat.
+
+---
+
+## D8. The blocker resolved: an AR(1) red-noise null, scoped to the sub-floor adoption decision
+
+`strides-mc1`. D4 stands as measured; this section records what closed it.
+
+### D8.1 What was refuted first, so nobody re-derives it
+
+Measured under `strides-mc1` before any code was written, and recorded here because each of these
+looks like the obvious fix:
+
+- **Confining the two-pass to the pixel path is refuted.** D4.4 blames the metre series for being a
+  cumulative integral, but the primary hip-POSITION series is red too: φ 0.795–0.936, log-log slope
+  ≈ −1.5 on all three clips, against white controls at φ ≈ −0.2 / slope ≈ +0.5. Both consumers sit
+  on the random-walk control, not the white one. The colour gap between them is too small to build
+  on.
+- **An F-test does not fix it.** Against a random walk a low-frequency sinusoid genuinely explains
+  large variance, so the F statistic is large too. It fixes the gate's n-dependence, not its
+  noise-colour assumption. Removed from D4.3's candidate list.
+- **Cross-pass agreement is not a validator.** On the only genuinely retimed clip the two passes
+  disagree (primary 0.390 Hz, scale pass 0.150 Hz), so requiring agreement would reject the
+  **correct** detection along with the wrong one — the pass that fell for the noise casts the second
+  vote. It is a disagreement flag, not a validator.
+- **Measuring φ naively is confounded.** A quadratic detrend alone gives φ 0.88–0.98 on *every*
+  series, because at 60 fps a clean 2.9 Hz sinusoid by itself produces lag-1 ≈ 0.95. The rhythm has
+  to be removed before colour is measurable — which is why the shipped estimator reads colour off
+  the *spectrum*, where a peak is one point among many, rather than off a residual.
+
+### D8.2 The rule
+
+Sub-floor adoption now requires the family gate **and** a significance test against an AR(1)
+red-noise null (`src/heuristics/redNoiseNull.ts`), at a conventional 95%:
+
+1. Fit the AR(1) shape `S(f) ∝ (1 − φ²) / (1 + φ² − 2φ·cos(2πfΔt))` to the sub-floor band's own
+   periodogram, by an L1-in-log scan over φ. L1 because a genuine peak is an outlier by
+   construction and must not be allowed to help set the bar it is judged against.
+2. Divide every grid point's explained sum of squares by that shape and take the MEDIAN as the
+   background level.
+3. Adopt only if `2·ln2 · (peak/S(f*)) / median` exceeds the χ²₂ quantile at 95%, corrected for the
+   number of INDEPENDENT frequencies the span resolves (`bandwidth × span`, ≈ 10 on a 10 s clip)
+   because the peak was chosen by maximization.
+
+**Why the level is estimated from the band rather than from the theoretical normalization.** The
+textbook form ties the null to the series' TOTAL variance, and `fitSpectralSinusoid` removes a
+`c + d·t + e·t²` trend first, which guts exactly the f→0 end that dominates a red series' variance.
+Measured: the variance-normalized form still adopted **33.7%** of random walks; estimating the level
+from the band takes that to **3.5%**. This is Mann & Lees' robust background, and here it is
+required rather than a refinement.
+
+**Why the R² condition is kept alongside.** The null answers "is this peak distinguishable from this
+series' own noise"; `verticalOscillationMinFitR2` answers "will the consumers of this fit take it".
+Dropping the second would let `fitBounceSpectrum` return a sub-floor fit every downstream metric
+then rejects — a clip reported as retimed while showing no numbers, worse than today's honest
+failure, and it would break D6's arbitration argument.
+
+**Why it discriminates, by construction.** The AR(1) null is HIGHER at low frequency (≈ 1/f²), so a
+peak at the grid's bottom edge faces a HIGHER bar than one a few tenths of a Hz up — and the false
+adoptions pile at that bottom edge, while the genuine one does not. Measured at Δt = 1/30:
+
+| φ | null at 0.15 Hz | null at 0.39 Hz | ratio |
+|---|---|---|---|
+| 0.70 | 5.624 | 5.387 | 1.04 |
+| 0.80 | 8.826 | 7.941 | 1.11 |
+| 0.90 | 17.450 | 11.874 | 1.47 |
+| 0.95 | 28.363 | 11.036 | 2.57 |
+| 0.99 | 18.477 | 2.970 | **6.22** |
+
+The asymmetry is asserted directly in `redNoiseNull.test.ts`, not assumed — it is the one property
+the whole design leans on.
+
+### D8.3 Adoption rates, through the shipped `fitBounceSpectrum`, 300 seeds each
+
+| rhythmless series | before | after |
+|---|---|---|
+| random walk, 288 @ 30 fps (side-portrait metre series) | **91.7%** | **4.3%** |
+| random walk, 280 @ 30 fps (side-portrait hip series) | **92.3%** | **5.7%** |
+| random walk, 138 @ 30 fps (2× control scale pass) | **74.7%** | **3.7%** |
+| random walk, 106 @ 60 fps (side-landscape primary) | 12.3% | **0.0%** |
+| AR(1) φ = 0 (white) | 0.0% | 0.0% |
+| AR(1) φ = 0.3 | 0.0% | 0.0% |
+| AR(1) φ = 0.6 | 0.0% | 0.0% |
+| AR(1) φ = 0.9 | 33.3% | **4.0%** |
+| AR(1) φ = 0.99 | 91.0% | **6.0%** |
+
+The after column sits at the 5% the null is stated at, across the whole colour range — which is what
+a correctly calibrated significance test does, and is the reason this is not a tuned number.
+
+### D8.4 The confidence level was not tuned
+
+0.95 is the level the red-noise-significance literature states its results at (Gilman 1963; Mann &
+Lees 1996; Torrence & Compo 1998). It was fixed before the genuine detection was tested, and the
+genuine detection clears it by a factor of 3–15 rather than marginally, so no adjustment was
+available to be tempted by. The pre-registered rule was that if 95% rejected the real 0.39 Hz
+detection, that would be reported as a finding — that the signal is not separable from the clip's own
+noise — and would kill `strides-b4f`'s premise. It did not fire.
+
+Nothing else was added: no second constant, no clip special case, and
+`verticalOscillationMinFitR2` / `cadenceMinFitR2` are untouched. The φ search resolution (0.002) and
+the φ ceiling (0.998, where the normalized spectrum degenerates to zero) are numerics, not
+thresholds; the independent-frequency count is derived from the band and the span.

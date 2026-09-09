@@ -201,10 +201,34 @@ The two bands SHALL be disjoint, so that a sub-floor candidate is structurally i
 displacing a winning in-band peak: a clip whose ordinary fit clears the gate SHALL be unaffected by
 the existence of the second pass, and SHALL receive the identical fit it received before.
 
-The system SHALL adopt the second pass's fit only when it too reaches
-`verticalOscillationMinFitR2`, and SHALL otherwise return the first pass's result untouched —
-success or failure alike. Adoption SHALL be reported to callers as a single boolean on the shared
-bounce analysis, and SHALL NOT introduce a further configurable threshold: the human-gait floor is
+The system SHALL adopt the second pass's fit only when BOTH of the following hold, and SHALL
+otherwise return the first pass's result untouched — success or failure alike:
+
+1. its sinusoid partial R² reaches `verticalOscillationMinFitR2`, the same shared family gate the
+   first pass is judged by, so that an adopted fit is one the downstream metrics will also accept;
+   and
+2. its winning peak is STATISTICALLY SIGNIFICANT against an AR(1) red-noise null estimated from the
+   second pass's own band, at a conventional confidence level.
+
+The red-noise test SHALL estimate both the null's shape (its lag-1 autocorrelation) and its level
+from the band's own per-candidate explained sums of squares, using an estimator robust to the
+presence of a genuine peak; SHALL compare the peak against that null through the χ² distribution
+the null implies; and SHALL correct that comparison for the number of INDEPENDENT frequencies the
+band offers over the observed span, because the peak is selected by maximization rather than named
+in advance.
+
+A fixed partial-R² threshold SHALL NOT be the sole adoption criterion for the second pass. Its band
+is where a red-noise process concentrates its power, whereas `verticalOscillationMinFitR2`'s
+calibration is a white-noise floor, so a series with no rhythm at any frequency clears it there on
+the large majority of trials at this corpus's own sample counts — and no threshold on any field the
+fit reports separates that population from a genuine sub-floor rhythm.
+
+Neither `verticalOscillationMinFitR2` nor `cadenceMinFitR2` SHALL be changed by this rule, and the
+first pass SHALL NOT consult the red-noise null at all: a clip whose in-band fit clears the gate
+SHALL receive the identical result it received before this rule existed.
+
+Adoption SHALL be reported to callers as a single boolean on the shared bounce analysis, and SHALL
+NOT introduce a further configurable frequency threshold: the human-gait floor is
 `spectralFitMinFrequencyHz` itself, and the frequency comparison is a consequence of the disjoint
 bands rather than a separate test.
 
@@ -223,9 +247,24 @@ about whether one clip has a measurable rhythm.
 
 - **WHEN** the hip-bounce fit is computed against a clip whose on-screen bounce is slower than
   `spectralFitMinFrequencyHz` — retimed footage — and the sub-floor fit clears
-  `verticalOscillationMinFitR2`
+  `verticalOscillationMinFitR2` and is significant against the red-noise null
 - **THEN** the sub-floor fit is returned, the clip is flagged as retimed, and the returned frequency
   is strictly below `spectralFitMinFrequencyHz`
+
+#### Scenario: A rhythmless correlated series is not reported as retimed
+
+- **WHEN** the hip-bounce fit is computed against a series that has no rhythm at any frequency but
+  whose samples are temporally correlated — a random walk, or any autoregressive noise — and its
+  best sub-floor fit clears `verticalOscillationMinFitR2`
+- **THEN** the clip is not reported as retimed and the in-band result is returned untouched, because
+  the peak is not distinguishable from that series' own noise background
+
+#### Scenario: Rejection holds across the range of noise colour, not only at the extreme
+
+- **WHEN** the hip-bounce fit is computed against rhythmless series spanning the range from
+  uncorrelated to nearly perfectly correlated
+- **THEN** the proportion reported as retimed stays at or near the complement of the null's
+  confidence level across that whole range, rather than rising with correlation
 
 #### Scenario: Neither pass clears the gate and nothing changes
 

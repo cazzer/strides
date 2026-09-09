@@ -60,13 +60,24 @@ user to confirm the speed; motion-blur-versus-displacement detection; extending 
 `strides-aha`, a 0.30 Hz floor makes this clip report a confidently-wrong 26 spm and silences
 `verticalOscillationCm`'s `fit.frequencyHz × 60 == cadence.value` tripwire by making it agree.
 
-## ⚠️ Status: MEASURED, AND BLOCKED — do not archive
+6. **Sub-floor adoption is a significance test, not a threshold.** A pass-2 peak is adopted only if
+   it clears `verticalOscillationMinFitR2` (so the downstream metrics will take it) AND is
+   significant at a conventional 95% against an **AR(1) red-noise null** fitted to its own band
+   (`src/heuristics/redNoiseNull.ts`). Pass 1 never consults it, so nothing that works today can
+   move.
 
-The primary path works and is verified (see `design.md` §1–3). **A pre-registered negative control
-fired against the change**: the sub-floor pass adopts a rhythmless random walk as a "retimed rhythm"
-on **75–92%** of seeds at this corpus's own sample counts, and it does so on real footage —
-`park-side-portrait`'s background MediaPipe scale pass adopts 0.15 Hz at R² 0.398 and would render
-**46.4 cm** of vertical oscillation against a ~0.49 m torso. `design.md` §4 carries the measurement
-and shows that **no threshold on any field `SpectralFitSuccess` reports separates the genuine
-detection from noise**. The decision on how to proceed belongs to whoever owns `strides-b4f`;
-`strides-mc1` carries the blocker.
+## ⚠️ Status: the blocker is closed
+
+`design.md` §4 recorded a pre-registered negative control firing against this change: the sub-floor
+pass adopted a rhythmless random walk as a "retimed rhythm" on **75–92%** of seeds at this corpus's
+own sample counts, and did so on real footage — `park-side-portrait`'s background MediaPipe scale
+pass adopting 0.15 Hz at R² 0.398 and rendering **46.4 cm** of vertical oscillation against a
+~0.49 m torso. §4.3 showed that **no threshold on any field `SpectralFitSuccess` reports separates
+the genuine detection from noise**, so a different KIND of discriminator was needed.
+
+`strides-mc1` supplied one and `design.md` §8 carries it. Through the shipped `fitBounceSpectrum`,
+300 seeds each: the random-walk adoption rate falls **91.7% → 4.3%** at the metre series' own sample
+count, and the rate stays at the null's own 5% across a colour sweep from white to φ = 0.99 — where
+it previously climbed to 91%. The genuine 0.39 Hz detection survives with a 3–15× margin. The
+confidence level is the literature's conventional 0.95 and was **not** tuned; no second constant was
+added and neither `verticalOscillationMinFitR2` nor `cadenceMinFitR2` was touched.

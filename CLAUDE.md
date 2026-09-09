@@ -2403,6 +2403,41 @@ model, or cross-validating the two passes' independent series against each other
 `strides-mc1`; full tables in that change's `design.md` §4, and the behaviour is pinned by a
 deliberately-failing-when-fixed test in `bounceSpectrum.test.ts`.
 
+✅ **RESOLVED (`strides-mc1`, 2026-09-09) — the discriminator is an AR(1) RED-NOISE NULL, and two of
+the three candidates named above are refuted.** `src/heuristics/redNoiseNull.ts`: fit the AR(1)
+shape to the sub-floor band's OWN periodogram (robust L1-in-log scan over φ), take the median of the
+flattened values as the background level, and adopt only if the peak clears the χ²₂ quantile at a
+conventional **95%**, corrected for the number of INDEPENDENT frequencies the span resolves. Both
+conditions are required — the family gate decides "will the metrics take this fit", the null decides
+"is this peak distinguishable from this series' own noise". `verticalOscillationMinFitR2` and
+`cadenceMinFitR2` are untouched, pass 1 never consults the null, and 0.95 was fixed before the
+genuine detection was tested (which clears it by 3–15×, not marginally).
+
+Adoption rates through the shipped `fitBounceSpectrum`, 300 seeds each: random walk at 288 @ 30 fps
+**91.7% → 4.3%**, at 280 @ 30 fps **92.3% → 5.7%**, at 138 @ 30 fps **74.7% → 3.7%**, at 106 @ 60 fps
+12.3% → **0.0%**; and across a rhythmless colour sweep the rate now sits at the null's own 5% at
+every φ (0/0/0/4.0/6.0% for φ = 0/0.3/0.6/0.9/0.99, against 0/0/0/33.3/91.0% before).
+
+⚠️ **Four things measured under `strides-mc1` that should not be re-derived.** (1) **Confining the
+two-pass to the pixel path is refuted** — the primary hip-POSITION series is red too (φ 0.795–0.936,
+slope ≈ −1.5 on all three clips, against white controls at φ ≈ −0.2 / slope ≈ +0.5), so the colour
+gap between the two consumers is too small to build on. (2) **An F-test does not fix this** — against
+a random walk a low-frequency sinusoid genuinely explains large variance, so F is large too; it fixes
+n-dependence, not noise colour. (3) **Cross-pass agreement is not a validator** — on the only
+genuinely retimed clip the two passes disagree (primary 0.390 Hz, scale pass 0.150 Hz), so it would
+reject the CORRECT detection along with the wrong one. (4) **Naive φ measurement is confounded** — a
+quadratic detrend alone gives φ 0.88–0.98 on every series, because at 60 fps a clean 2.9 Hz sinusoid
+by itself produces lag-1 ≈ 0.95; the shipped estimator therefore reads colour off the SPECTRUM,
+where a peak is one point among many, never off a residual. Also: the theoretical variance-normalized
+null does NOT work here (33.7% of walks still adopted), because the fit's own `c + d·t + e·t²`
+detrend guts the f→0 power that normalization is tied to — the background has to be estimated from
+the band. Full tables: that change's `design.md` §8.
+
+⚠️ **Anything measuring this defect needs a LONG clip.** A clip shorter than 1/0.15 = **6.67 s**
+structurally cannot complete a sub-floor cycle (`observedCycles >= 1` rejects the pass), so
+`side-landscape` (1.75 s) and `front-approach` (1.63 s) are **uninformative** — a three-clip A/B
+reading only those two reads green straight through it.
+
 Also established in passing: **`observedCycles >= 1` does NOT prune the low end of a widened grid to
 inertness**, which was the stated safety argument for capping the retiming factor at 8 — at 0.15 Hz
 over a 10.1 s window the winner completes 1.515 cycles and clears the rule comfortably. Exposure

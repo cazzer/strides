@@ -66,6 +66,11 @@ import { clamp01 } from './mathUtils'
  * least one cycle inside the observed span" rule, and detection of signals with nothing to fit.
  * POLICY (how good an R² is good enough, how many cycles are enough for full confidence) lives in
  * each caller, because different metrics reading different signals warrant different thresholds.
+ *
+ * That division is why `fitSpectralSinusoidWithBandPower` exists: a caller whose policy is a
+ * SIGNIFICANCE test rather than a threshold needs the grid's whole periodogram, not just its
+ * winner, and no summary this module could invent would serve every such policy. Handing back what
+ * was computed anyway keeps the modelling decision in the caller, where the doc above puts it.
  */
 
 /** Mirrors the `{ t, v }` sample shape `extrema.ts` already uses, deliberately: the two primitives
@@ -139,6 +144,32 @@ export interface SpectralFitFailure {
 }
 
 export type SpectralFitResult = SpectralFitSuccess | SpectralFitFailure
+
+/**
+ * The whole grid search's output, not just its winner: one entry per candidate frequency the
+ * search actually solved. This IS a periodogram — `explained[g]` is the sum of squares the sinusoid
+ * pair at `frequencies[g]` removes on top of the trend — and it is exposed because a caller
+ * deciding whether a peak is real has to compare it against the BACKGROUND it stands on, which the
+ * winner's own fields cannot describe. `secondPeakRatio` is the one summary of it the fit already
+ * reports, and it answers a different question (is there a rival peak?) from the one a noise model
+ * asks (what does this band look like where there is no peak?).
+ */
+export interface SpectralBandPower {
+  /** Ascending, in the same order the grid was walked. */
+  frequencies: readonly number[]
+  /** Same index as `frequencies`: `RSS_trendOnly − RSS(f)`, clamped at 0. */
+  explained: readonly number[]
+  /** `spanSeconds / (sampleCount − 1)` — the mean interval between usable samples, which is what a
+   * discrete-time noise model needs in order to place a frequency relative to Nyquist. */
+  meanSampleIntervalSeconds: number
+}
+
+export interface SpectralFitWithBandPower {
+  fit: SpectralFitResult
+  /** Non-null exactly when `fit.ok` — a fit that failed either never reached the grid or found
+   * nothing on it worth describing. */
+  bandPower: SpectralBandPower | null
+}
 
 /**
  * Below this, the fit is not merely noisy but actively dangerous: with five free parameters, a
@@ -278,8 +309,8 @@ function failure(
   reason: SpectralFitFailureReason,
   sampleCount: number,
   spanSeconds: number,
-): SpectralFitFailure {
-  return { ok: false, reason, sampleCount, spanSeconds }
+): SpectralFitWithBandPower {
+  return { fit: { ok: false, reason, sampleCount, spanSeconds }, bandPower: null }
 }
 
 /**
@@ -296,6 +327,19 @@ export function fitSpectralSinusoid(
   samples: ReadonlyArray<SpectralSample>,
   options: SpectralFitOptions,
 ): SpectralFitResult {
+  return fitSpectralSinusoidWithBandPower(samples, options).fit
+}
+
+/**
+ * Exactly `fitSpectralSinusoid`, additionally returning the grid search's own periodogram. Same
+ * computation, same result — the arrays are built either way to score `secondPeakRatio`, so this
+ * only decides whether they are handed back. Separate entry point rather than a wider return type
+ * so that every existing caller keeps the object it already had, byte for byte.
+ */
+export function fitSpectralSinusoidWithBandPower(
+  samples: ReadonlyArray<SpectralSample>,
+  options: SpectralFitOptions,
+): SpectralFitWithBandPower {
   const usable = samples
     .filter((s) => Number.isFinite(s.t) && Number.isFinite(s.v))
     .sort((a, b) => a.t - b.t)
@@ -423,18 +467,25 @@ export function fitSpectralSinusoid(
     bestExplained > 0 ? clamp01(bestCompetitor / bestExplained) : 0
 
   return {
-    ok: true,
-    peakToPeakAmplitude,
-    frequencyHz,
-    sinusoidR2: clamp01(1 - bestFit.rss / trendOnly.rss),
-    totalR2: clamp01(1 - bestFit.rss / totalSumOfSquares),
-    secondPeakRatio,
-    sampleCount,
-    spanSeconds,
-    observedCycles,
-    // Reported, not re-derived: `a` and `b` are the same two coefficients `peakToPeakAmplitude`
-    // was formed from, read once here before they go out of scope.
-    phaseRadians: Math.atan2(b, a),
-    tMeanSeconds: tMean,
+    fit: {
+      ok: true,
+      peakToPeakAmplitude,
+      frequencyHz,
+      sinusoidR2: clamp01(1 - bestFit.rss / trendOnly.rss),
+      totalR2: clamp01(1 - bestFit.rss / totalSumOfSquares),
+      secondPeakRatio,
+      sampleCount,
+      spanSeconds,
+      observedCycles,
+      // Reported, not re-derived: `a` and `b` are the same two coefficients `peakToPeakAmplitude`
+      // was formed from, read once here before they go out of scope.
+      phaseRadians: Math.atan2(b, a),
+      tMeanSeconds: tMean,
+    },
+    bandPower: {
+      frequencies,
+      explained,
+      meanSampleIntervalSeconds: spanSeconds / (sampleCount - 1),
+    },
   }
 }

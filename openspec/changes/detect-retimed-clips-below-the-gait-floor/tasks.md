@@ -79,7 +79,34 @@
 - [x] 5.3 Live probe on all three clips plus the negative control, reading both console lines.
 - [x] 5.4 `ffmpeg -itsscale 2` negative control: user-visible output **bit-identical to baseline**,
       `cadence` 87.6 spm, detector does not fire on the primary pass.
-- [ ] 5.5 ⚠️ **BLOCKED — see `design.md` §4 and `strides-mc1`.** The sub-floor pass adopts
-      rhythmless red noise on 75–92% of seeds, and does so on real footage: `park-side-portrait`'s
-      background scale pass adopts 0.15 Hz at R² 0.398 and would render 46.4 cm of vertical
-      oscillation. This change must not merge until that is resolved.
+- [x] 5.5 ⚠️ **WAS BLOCKED — see `design.md` §4 and §8, and `strides-mc1`.** The sub-floor pass
+      adopted rhythmless red noise on 75–92% of seeds, and did so on real footage:
+      `park-side-portrait`'s background scale pass adopted 0.15 Hz at R² 0.398 and would have
+      rendered 46.4 cm of vertical oscillation. Resolved by §6 below.
+
+## 6. The red-noise null (`strides-mc1`)
+
+- [x] 6.1 New `src/heuristics/redNoiseNull.ts`: `RED_NOISE_CONFIDENCE = 0.95`,
+      `ar1NormalizedPower`, `testPeakAgainstRedNoiseNull`. The AR(1) shape is fitted to the band's
+      own periodogram by a robust L1-in-log scan, the level by the median of the flattened values,
+      and the χ²₂ quantile is corrected for the number of INDEPENDENT frequencies the span
+      resolves. Module doc carries why a variance-normalized theoretical null is not usable after a
+      quadratic detrend, and the measurement that says so (33.7% → 3.5%).
+- [x] 6.2 `spectralFit.ts`: `fitSpectralSinusoidWithBandPower` exposes the grid search's own
+      periodogram (`SpectralBandPower`), which the null needs and no reported field can supply.
+      `fitSpectralSinusoid` is a thin wrapper over it and its return object is unchanged, so no
+      existing caller sees a new field.
+- [x] 6.3 `bounceSpectrum.ts`: sub-floor adoption now requires the family gate AND the null. Pass 1
+      is untouched and never consults the null. Module doc gains "Adopting a sub-floor fit takes a
+      SIGNIFICANCE test", including why keeping the R² condition is not redundant.
+- [x] 6.4 `bounceSpectrum.test.ts`: 4.6's known-defect assertion INVERTED (not deleted) with its
+      explanation kept; the genuine 0.39 Hz detection in red noise still adopts; a colour sweep over
+      φ ∈ {0, 0.3, 0.6, 0.9, 0.99}; the 300-seed long-clip rate; in-band bit-identity swept across
+      the whole shipped band at three noise levels. Each negative control asserts its own premise —
+      that the R² gate alone would have adopted — so it cannot pass vacuously.
+- [x] 6.5 New `redNoiseNull.test.ts`: the Poisson-kernel normalization; **the low-frequency
+      asymmetry the whole design depends on**, asserted and shown to sharpen with redness; the
+      false-positive rate on a band drawn from the null; a genuine peak clearing it; the
+      independent-frequency correction; self-limiting on a degenerate band.
+- [x] 6.6 Three-clip `--evidence` A/B re-run against base and against the pre-null commit, plus the
+      `ffmpeg -itsscale 2` negative control. See `design.md` §8.

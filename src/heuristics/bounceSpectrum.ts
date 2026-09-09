@@ -1,5 +1,6 @@
 import type { HeuristicsConfig } from './types'
-import { fitSpectralSinusoid } from './spectralFit'
+import { testPeakAgainstRedNoiseNull } from './redNoiseNull'
+import { fitSpectralSinusoid, fitSpectralSinusoidWithBandPower } from './spectralFit'
 import type { SpectralFitResult, SpectralSample } from './spectralFit'
 
 /**
@@ -52,6 +53,28 @@ import type { SpectralFitResult, SpectralSample } from './spectralFit'
  * number for the same series). Using anything else would let this module prefer a fit that every
  * downstream consumer then rejects, or reject one they would all have taken.
  *
+ * ## Adopting a sub-floor fit takes a SIGNIFICANCE test, because that band is where red noise lives
+ *
+ * `verticalOscillationMinFitR2` decides pass 1 alone. It is necessary but nowhere near sufficient
+ * for pass 2, and the reason is a regime change rather than a calibration slip: integrated white
+ * noise is RED noise (~1/f²), so its power concentrates in exactly the band pass 2 searches, while
+ * that key's calibration is explicitly a WHITE-noise floor. Measured (`strides-mc1`): a rhythmless
+ * random walk clears 0.30 below the floor on **75–92%** of 300 seeds at this corpus's sample
+ * counts, and the shipped pipeline already fell for it on real footage — `park-side-portrait`'s
+ * background MediaPipe scale pass fitting 0.150 Hz at R² 0.398 against a keyframe truth of
+ * 0.40 Hz. **No threshold on any field `SpectralFitSuccess` reports separates the two**; the
+ * genuine detection sits at the noise distribution's own p95 on all three candidates. So pass 2's
+ * peak is additionally tested against an AR(1) red-noise null fitted to its own band
+ * (`redNoiseNull.ts`), at a conventional 95%.
+ *
+ * **Both conditions are required, and the R² one is not redundant.** The null answers "is this peak
+ * distinguishable from this series' own noise"; the family gate answers "will the consumers of this
+ * fit actually take it". Dropping the second would let this module return a sub-floor fit that
+ * every downstream metric then rejects, leaving a clip reported as retimed while showing no
+ * numbers — which is worse than today's honest failure, and would break the arbitration argument
+ * above. Pass 1 is untouched by any of this: a clip whose in-band fit clears the gate never reaches
+ * the null, so nothing that works today can be moved by it.
+ *
  * ## `subFloor` needs no threshold of its own
  *
  * A rhythm is reported as retimed exactly when pass 2 was consulted, cleared the gate, and was
@@ -89,22 +112,23 @@ import type { SpectralFitResult, SpectralSample } from './spectralFit'
 export const MAX_RETIMING_FACTOR = 8
 
 export interface BounceSpectrumResult {
-  /** The adopted fit: pass 1's whenever it cleared the gate, otherwise pass 2's if THAT cleared it,
-   * otherwise pass 1's result untouched (success or failure) exactly as it was before this module
-   * existed. */
+  /** The adopted fit: pass 1's whenever it cleared the gate, otherwise pass 2's if THAT cleared
+   * both the gate and the red-noise null, otherwise pass 1's result untouched (success or failure)
+   * exactly as it was before this module existed. */
   fit: SpectralFitResult
   /** `true` only when a sub-floor fit was adopted — i.e. the in-band band failed the gate, the
-   * sub-floor band cleared it, and the returned `fit` is the sub-floor one. Since the two grids are
-   * disjoint, this is equivalent to "`fit.frequencyHz` is below `spectralFitMinFrequencyHz`"
-   * without anyone having to compare two numbers. */
+   * sub-floor band cleared both the gate and the red-noise null, and the returned `fit` is the
+   * sub-floor one. Since the two grids are disjoint, this is equivalent to "`fit.frequencyHz` is
+   * below `spectralFitMinFrequencyHz`" without anyone having to compare two numbers. */
   subFloor: boolean
 }
 
 /**
  * Fits the shared bounce sinusoid over `samples`, retrying below the human-gait floor when the
- * shipped band yields nothing that clears `config.verticalOscillationMinFitR2`. See the module doc
- * for the disjointness argument, the adoption rule, and what an adopted sub-floor fit does and does
- * not license a reader to conclude.
+ * shipped band yields nothing that clears `config.verticalOscillationMinFitR2`, and adopting that
+ * retry only when its peak ALSO clears an AR(1) red-noise null fitted to its own band. See the
+ * module doc for the disjointness argument, the adoption rule, and what an adopted sub-floor fit
+ * does and does not license a reader to conclude.
  *
  * A pass-1 FAILURE (too few samples, a degenerate signal, too short a span) counts as "did not
  * clear the gate" and pass 2 runs — which costs a grid search and can never change the answer,
@@ -129,13 +153,18 @@ export function fitBounceSpectrum(
   // the maximum it was given. A configuration whose sub-floor minimum meets or exceeds this
   // maximum yields an empty band, which `fitSpectralSinusoid` reports as a failure and which is
   // therefore never adopted; no special case is needed for it.
-  const subFloorFit = fitSpectralSinusoid(samples, {
+  const { fit: subFloorFit, bandPower } = fitSpectralSinusoidWithBandPower(samples, {
     minFrequencyHz: config.spectralFitMinFrequencyHz / MAX_RETIMING_FACTOR,
     maxFrequencyHz: config.spectralFitMinFrequencyHz - config.spectralFitFrequencyStepHz,
     frequencyStepHz: config.spectralFitFrequencyStepHz,
   })
-  if (subFloorFit.ok && subFloorFit.sinusoidR2 >= gate) {
-    return { fit: subFloorFit, subFloor: true }
+  if (subFloorFit.ok && subFloorFit.sinusoidR2 >= gate && bandPower !== null) {
+    const verdict = testPeakAgainstRedNoiseNull(
+      subFloorFit.frequencyHz,
+      subFloorFit.spanSeconds,
+      bandPower,
+    )
+    if (verdict?.cleared === true) return { fit: subFloorFit, subFloor: true }
   }
 
   return { fit: inBand, subFloor: false }
