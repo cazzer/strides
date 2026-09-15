@@ -65,8 +65,11 @@ export function searchWithResultsViewMode(search: string, mode: ResultsViewMode)
  * step through every view the reader tried.
  */
 export function writeResultsViewMode(mode: ResultsViewMode): void {
-  const { pathname, search, hash } = window.location
-  const nextSearch = searchWithResultsViewMode(search, mode)
-  if (nextSearch === search) return
-  window.history.replaceState(window.history.state, '', `${pathname}${nextSearch}${hash}`)
+  const nextSearch = searchWithResultsViewMode(window.location.search, mode)
+  if (nextSearch === window.location.search) return
+  // An absolute URL, not `${pathname}${search}${hash}`: a path beginning `//` would otherwise be
+  // read as a protocol-relative URL pointing at another origin, and replaceState would throw.
+  const next = new URL(window.location.href)
+  next.search = nextSearch
+  window.history.replaceState(window.history.state, '', next.href)
 }
