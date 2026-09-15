@@ -137,12 +137,12 @@ function Provenance({ band }: { band: ReferenceBand }) {
             <strong className="guided-results__derived-label">Derived range</strong>
           </p>
           <p>
-            These bounds are arithmetic on published numbers rather than a range the source
-            publishes. {band.derivation.statement}
+            No single source prints this range as shown; it is worked out from the published
+            figures below. {band.derivation.statement}
           </p>
           {band.derivation.restsOn.length > 0 && (
             <>
-              <p>The arithmetic rests on these definitions:</p>
+              <p>What that working rests on:</p>
               <ul className="list-disc space-y-1 pl-5">
                 {band.derivation.restsOn.map((definition) => (
                   <li key={definition}>{definition}</li>
