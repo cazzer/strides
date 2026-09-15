@@ -158,9 +158,14 @@ function spokenZoneValues(zone: BandZone, band: ReferenceBand): string {
  *
  * In the spoken style throughout, because this sentence is the text alternative for the drawn
  * scale. Names a zone only by its label and its values, and the band as a whole only as "the
- * reference range" — never as "published": a derived band's bounds or labels are this app's
- * arithmetic on published numbers, and saying "published" of them would claim an authorship the
- * source never had.
+ * range shown" — never as "published" or "reference": a derived band's bounds or labels are this
+ * app's arithmetic on published numbers, and saying "published" of them would claim an authorship
+ * the source never had.
+ *
+ * A value in a gap names the two numbers the gap runs between, taken from the zones themselves.
+ * For a band that is not derived those are the source's own printed bounds, so the sentence says
+ * the source's table jumps; for a derived band they are this app's arithmetic, so it says the range
+ * shown jumps instead.
  */
 export function describeBandPosition(
   band: ReferenceBand,
@@ -175,13 +180,19 @@ export function describeBandPosition(
   switch (position.kind) {
     case 'inZone':
       return `${valueText} falls in the ${band.zones.length === 1 ? 'range' : 'zone'} labelled ${zoneRef(position.zone)}.`
-    case 'betweenZones':
-      return `${valueText} falls between the zones labelled ${zoneRef(position.lower)} and ${zoneRef(position.upper)}, in a gap the source's table leaves between them.`
+    case 'betweenZones': {
+      // Non-null by construction: a zone only ends below a value through a finite `max`, and only
+      // starts above one through a finite `min` (`endBefore`, `startAfter`).
+      const from = formatBandNumber(position.lower.max!, band.unit)
+      const to = formatBandNumber(position.upper.min!, band.unit)
+      const table = band.derivation === null ? "the source's table" : 'the range shown'
+      return `${valueText} sits in the gap between the zones labelled “${position.lower.label}” and “${position.upper.label}”; ${table} jumps from ${from} to ${to}.`
+    }
     case 'outside': {
       const envelope = referenceBandEnvelope(band)
       return envelope !== null
-        ? `${valueText} is ${position.side} the reference range (${formatBandRange(envelope.min, envelope.max, band.unit, 'spoken')}).`
-        : `${valueText} is ${position.side} the reference range, which ${position.side === 'below' ? 'starts' : 'ends'} at ${formatBandValue(position.nearestBound, band.unit, 0, 'spoken')}.`
+        ? `${valueText} is ${position.side} the range shown (${formatBandRange(envelope.min, envelope.max, band.unit, 'spoken')}).`
+        : `${valueText} is ${position.side} the range shown, which ${position.side === 'below' ? 'starts' : 'ends'} at ${formatBandValue(position.nearestBound, band.unit, 0, 'spoken')}.`
     }
   }
 }

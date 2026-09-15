@@ -3,6 +3,7 @@ import {
   formatBandNumber,
   formatBandRange,
   formatBandValue,
+  toDisplayNumber,
 } from './formatBandValue'
 import { METRIC_GUIDANCE } from './metricGuidance'
 import type { ReferenceBand } from './types'
@@ -12,6 +13,16 @@ function bandOf(metric: keyof typeof METRIC_GUIDANCE): ReferenceBand {
   if (band === null) throw new Error(`${metric} carries no band`)
   return band
 }
+
+describe('toDisplayNumber', () => {
+  it('scales exactly the two 0..1 units by 100, and leaves the others as computed', () => {
+    expect(toDisplayNumber(0.0375, 'percent')).toBeCloseTo(3.75, 12)
+    expect(toDisplayNumber(0.15, 'ratio')).toBeCloseTo(15, 12)
+    expect(toDisplayNumber(163, 'stepsPerMinute')).toBe(163)
+    expect(toDisplayNumber(6, 'centimeters')).toBe(6)
+    expect(toDisplayNumber(-2.5, 'degrees')).toBe(-2.5)
+  })
+})
 
 describe('formatBandValue', () => {
   it('formats each unit at its published precision', () => {

@@ -3,9 +3,13 @@ import {
   describeBandPosition,
   formatMeasuredBandValue,
 } from './bandPosition'
-import { formatBandNumber, formatBandRange } from './formatBandValue'
+import {
+  formatBandNumber,
+  formatBandRange,
+  toDisplayNumber,
+} from './formatBandValue'
 import { referenceBandEnvelope } from './types'
-import type { ReferenceBand } from './types'
+import type { BandZone, ReferenceBand } from './types'
 
 /**
  * # Presentational layout constants — NOT reference claims
@@ -31,13 +35,25 @@ const DOMAIN_MAX_EXTENSION_FRACTION = 1
 /** Space kept between the domain's edge and an unclamped value, in envelope-widths. */
 const VALUE_MARGIN_FRACTION = 0.05
 /**
- * Bound labels closer than this (percent of track width) never share a row. At a 280 px track a
- * four-character label (`3.05`) at 11 px needs about 10 % to clear its neighbour, whatever the
- * anchoring; `MetricScale.test.tsx` checks the pixel arithmetic on the tightest shipped case.
+ * The narrowest track bound labels are laid out for, in px. Rows are assigned by checking overlap
+ * at this width, which is sufficient for every wider track: under `anchorAt`, the space between
+ * two labels only grows as the track widens (see `staggerRows`). A 390 px viewport gives the
+ * banded card's track about 314 px.
  */
-const BOUND_LABEL_MIN_SEPARATION_PERCENT = 12
+const BOUND_LABEL_MIN_TRACK_PX = 280
+/** A deliberately generous width for one 11 px character, so an estimate errs toward a new row. */
+const BOUND_LABEL_CHAR_PX = 7
+/** Clear space kept between two labels in one row at the narrowest track, in px. */
+const BOUND_LABEL_GAP_PX = 2
 /** Height of one row of bound labels, in rem (`leading-4`). */
 const BOUND_LABEL_ROW_REM = 1
+/**
+ * A published gap no wider than this, in DISPLAYED units (1 step/min, 1 percentage point, 1 cm,
+ * 1°), prints its two bounds as one label — `163/164` — because two labels a fraction of a unit
+ * apart sit on top of each other at any track width, and restacking them into rows reads as two
+ * unrelated numbers. Both ticks still draw, and the gap between them is hatched.
+ */
+const GAP_LABEL_MERGE_MAX_DISPLAY_UNITS = 1
 
 export interface MetricScaleProps {
   /** The cited band. Every bound is in `value`'s own computed domain (see `ReferenceBand`). */
@@ -85,20 +101,77 @@ function toPercent(domain: Domain, value: number): number {
   return Math.min(100, Math.max(0, percent))
 }
 
+/** One printed label under the track: a single bound, or the two bounds of a narrow gap. */
+interface BoundLabel {
+  text: string
+  /** Where the label is anchored, in percent along the track. */
+  percent: number
+}
+
+/** Adjacent zones that leave a gap — the lower one's `max` below the upper one's `min`. */
+function gapsBetween(zones: BandZone[]): { from: number; to: number }[] {
+  const gaps: { from: number; to: number }[] = []
+  for (let i = 1; i < zones.length; i++) {
+    const from = zones[i - 1].max
+    const to = zones[i].min
+    if (from !== null && to !== null && from < to) gaps.push({ from, to })
+  }
+  return gaps
+}
+
 /**
- * Greedy row assignment for ascending label positions: each label takes the first row whose last
- * label is at least {@link BOUND_LABEL_MIN_SEPARATION_PERCENT} behind it, opening a new row when
- * none is. Spacing is checked within every row, so no two labels in one row overprint. Bounded: at
- * most one row per label.
+ * The labels printed under the track: one per distinct bound, except that the two bounds of a gap
+ * no wider than {@link GAP_LABEL_MERGE_MAX_DISPLAY_UNITS} share one label, centred on the gap.
  */
-function staggerRows(percents: number[]): number[] {
-  const lastInRow: number[] = []
-  return percents.map((percent) => {
-    let row = lastInRow.findIndex(
-      (last) => percent - last >= BOUND_LABEL_MIN_SEPARATION_PERCENT,
+function boundLabels(
+  band: ReferenceBand,
+  bounds: number[],
+  domain: Domain,
+): BoundLabel[] {
+  const narrowGaps = gapsBetween(band.zones).filter(
+    ({ from, to }) =>
+      toDisplayNumber(to, band.unit) - toDisplayNumber(from, band.unit) <=
+      GAP_LABEL_MERGE_MAX_DISPLAY_UNITS,
+  )
+  const labels: BoundLabel[] = []
+  for (let i = 0; i < bounds.length; i++) {
+    const gap = narrowGaps.find(
+      ({ from, to }) => from === bounds[i] && to === bounds[i + 1],
     )
-    if (row === -1) row = lastInRow.length
-    lastInRow[row] = percent
+    if (gap !== undefined) {
+      labels.push({
+        text: `${formatBandNumber(gap.from, band.unit)}/${formatBandNumber(gap.to, band.unit)}`,
+        percent: (toPercent(domain, gap.from) + toPercent(domain, gap.to)) / 2,
+      })
+      i++
+    } else {
+      labels.push({
+        text: formatBandNumber(bounds[i], band.unit),
+        percent: toPercent(domain, bounds[i]),
+      })
+    }
+  }
+  return labels
+}
+
+/**
+ * Greedy row assignment for labels in ascending position: each label takes the first row whose
+ * last label ends at least {@link BOUND_LABEL_GAP_PX} before it starts, opening a new row when none
+ * does. Bounded: at most one row per label.
+ *
+ * Overlap is checked at {@link BOUND_LABEL_MIN_TRACK_PX} with each label's estimated width, under
+ * `anchorAt`'s placement (left edge at `percent × (track − width)`). For labels at `p_a < p_b` the
+ * space between them is `p_b(T − w_b) − p_a(T − w_a) − w_a`, whose slope in the track width `T` is
+ * `p_b − p_a > 0` — so a pair clear at the narrowest track stays clear at every wider one.
+ */
+function staggerRows(labels: BoundLabel[]): number[] {
+  const rowEnds: number[] = []
+  return labels.map(({ text, percent }) => {
+    const width = text.length * BOUND_LABEL_CHAR_PX
+    const left = (percent / 100) * (BOUND_LABEL_MIN_TRACK_PX - width)
+    let row = rowEnds.findIndex((end) => left - end >= BOUND_LABEL_GAP_PX)
+    if (row === -1) row = rowEnds.length
+    rowEnds[row] = left + width
     return row
   })
 }
@@ -112,6 +185,13 @@ function anchorAt(percent: number) {
   return { left: `${percent}%`, transform: `translateX(-${percent}%)` }
 }
 
+/**
+ * A published gap is hatched rather than left as bare track, so it reads as "not covered by the
+ * table" instead of as a thin extra zone. Drawn in `currentColor`, so forced colours restate it by
+ * restating the text colour.
+ */
+const GAP_HATCH = 'repeating-linear-gradient(135deg, currentColor 0 1px, transparent 1px 3px)'
+
 /** Zones alternate two neutral tints: distinguishable, and with no order that could read as a grade. */
 const ZONE_TINTS = [
   'bg-neutral-300 dark:bg-neutral-600',
@@ -121,9 +201,10 @@ const ZONE_TINTS = [
 /**
  * Where one measured value sits against one cited reference band.
  *
- * Draws the band's zones on a neutral track, a tick and a printed number at every zone bound (the
- * number only — the unit is stated once, in the value label and the zone list, because
- * `153 steps/min` at every tick would overprint), and a marker at the measured value. It states the
+ * Draws the band's zones on a neutral track, a tick at every zone bound with its number printed
+ * beneath (the number only — the unit is stated once, in the value label and the zone list, because
+ * `153 steps/min` at every tick would overprint; a one-unit published gap prints its two bounds as
+ * one `163/164` label over a hatched sliver), and a marker at the measured value. It states the
  * same facts in text, because a position communicated only by pixel offset communicates nothing to
  * a screen reader. Which zone a value is in, and the words for it, come from `bandPosition.ts`, so
  * every view says the same thing. The graphic is `aria-hidden` and keeps the compact visual forms
@@ -141,8 +222,12 @@ const ZONE_TINTS = [
  * Every mark on the track is a coloured `div`, and Windows High Contrast replaces backgrounds with
  * the page colour — ticks, zones and the marker would all vanish. So the track opts out of forced
  * colour adjustment and restates each mark in system colours: `Canvas` ground, `CanvasText` border,
- * ticks and zone edges, and `Highlight` for the marker, ringed in `Canvas` so it stays distinct from
- * a tick it overlaps. The text around the track is left to the browser's own adjustment.
+ * ticks, zone edges and gap hatching, and `Highlight` for the marker, ringed in `Canvas` so it
+ * stays distinct from a tick it overlaps.
+ *
+ * The marker is black (white in dark mode), not the brand colour: brand is reserved for interactive
+ * elements, and the marker is not one. It is told apart from a tick by its width, its overhang above
+ * and below the track, and its ring. The text around the track is left to the browser's own adjustment.
  */
 export function MetricScale({ band, value, label }: MetricScaleProps) {
   // A band with no extent to draw (none ships) has no scale; its text still renders.
@@ -174,7 +259,7 @@ export function MetricScale({ band, value, label }: MetricScaleProps) {
 
       <ul
         role="list"
-        className="metric-scale__zones space-y-0.5 text-[11px] leading-snug text-neutral-700 dark:text-neutral-300"
+        className="metric-scale__zones space-y-0.5 text-xs leading-snug text-neutral-700 dark:text-neutral-300"
         aria-label={
           multiZone ? 'Reference zones, lowest value first' : 'Reference range'
         }
@@ -211,7 +296,8 @@ function MetricScaleGraphic({
 }) {
   const valuePercent = toPercent(domain, value)
   const boundPercents = bounds.map((bound) => toPercent(domain, bound))
-  const rows = staggerRows(boundPercents)
+  const labels = boundLabels(band, bounds, domain)
+  const rows = staggerRows(labels)
   const rowCount = Math.max(1, ...rows.map((row) => row + 1))
 
   return (
@@ -239,6 +325,21 @@ function MetricScaleGraphic({
             />
           )
         })}
+        {gapsBetween(band.zones).map(({ from, to }) => {
+          const left = toPercent(domain, from)
+          const right = toPercent(domain, to)
+          return (
+            <div
+              key={`gap:${from}:${to}`}
+              className="metric-scale__gap absolute inset-y-0 text-neutral-500 dark:text-neutral-400 forced-colors:text-[CanvasText]"
+              style={{
+                left: `${left}%`,
+                width: `${right - left}%`,
+                backgroundImage: GAP_HATCH,
+              }}
+            />
+          )
+        })}
         {boundPercents.map((percent, index) => (
           <div
             key={bounds[index]}
@@ -247,7 +348,7 @@ function MetricScaleGraphic({
           />
         ))}
         <div
-          className="metric-scale__marker absolute -inset-y-1.5 w-1.5 bg-brand-700 ring-1 ring-white dark:bg-brand-400 dark:ring-black forced-colors:bg-[Highlight] forced-colors:ring-[Canvas]"
+          className="metric-scale__marker absolute -inset-y-1.5 w-1.5 bg-black ring-1 ring-white dark:bg-white dark:ring-black forced-colors:bg-[Highlight] forced-colors:ring-[Canvas]"
           style={anchorAt(valuePercent)}
           data-clamped={domain.clamped ?? undefined}
         />
@@ -257,17 +358,17 @@ function MetricScaleGraphic({
         className="relative mt-1 text-[11px] leading-4 text-neutral-700 dark:text-neutral-300"
         style={{ height: `${rowCount * BOUND_LABEL_ROW_REM}rem` }}
       >
-        {boundPercents.map((percent, index) => (
+        {labels.map((label, index) => (
           <span
-            key={bounds[index]}
+            key={label.text}
             className="metric-scale__bound-label absolute whitespace-nowrap"
             style={{
-              ...anchorAt(percent),
+              ...anchorAt(label.percent),
               top: `${rows[index] * BOUND_LABEL_ROW_REM}rem`,
             }}
             data-row={rows[index]}
           >
-            {formatBandNumber(bounds[index], band.unit)}
+            {label.text}
           </span>
         ))}
       </div>

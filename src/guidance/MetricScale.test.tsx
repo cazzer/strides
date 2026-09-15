@@ -62,6 +62,40 @@ function distinctBounds(band: ReferenceBand): number[] {
   return [...new Set(all)].sort((a, b) => a - b)
 }
 
+/**
+ * A zone's label, read from the band: the labels are the data layer's copy and move with it, while
+ * these tests pin which zone is named and how the sentence around it reads.
+ */
+function zoneLabel(metric: BandedMetric, zoneIndex: number): string {
+  return bandOf(metric).zones[zoneIndex].label
+}
+
+/** The labels printed under the track: every bound, with a ≤ 1-display-unit gap's pair merged. */
+function expectedBoundLabels(band: ReferenceBand): string[] {
+  const bounds = distinctBounds(band)
+  const labels: string[] = []
+  for (let i = 0; i < bounds.length; i++) {
+    const [from, to] = [bounds[i], bounds[i + 1]]
+    const narrowGap =
+      to !== undefined &&
+      band.zones.some(
+        (zone, z) => z > 0 && band.zones[z - 1].max === from && zone.min === to,
+      ) &&
+      Number(formatBandNumber(to, band.unit)) -
+        Number(formatBandNumber(from, band.unit)) <=
+        1
+    if (narrowGap) {
+      labels.push(
+        `${formatBandNumber(from, band.unit)}/${formatBandNumber(to, band.unit)}`,
+      )
+      i++
+    } else {
+      labels.push(formatBandNumber(from, band.unit))
+    }
+  }
+  return labels
+}
+
 function renderScale(metric: BandedMetric, value: number) {
   const label = `Metric ${metric}`
   const result = render(
@@ -104,7 +138,7 @@ function one(root: Element, selector: string): HTMLElement {
 
 describe('MetricScale — every published zone boundary renders', () => {
   it.each(BANDED)(
-    '%s: a zone per published zone, a tick and a label per bound',
+    '%s: a zone per published zone, a tick per bound, and a label per bound or narrow gap',
     (metric) => {
       const band = bandOf(metric)
       const bounds = distinctBounds(band)
@@ -122,9 +156,7 @@ describe('MetricScale — every published zone boundary renders', () => {
       const labels = [
         ...container.querySelectorAll('.metric-scale__bound-label'),
       ].map((node) => node.textContent)
-      expect(labels).toEqual(
-        bounds.map((bound) => formatBandNumber(bound, band.unit)),
-      )
+      expect(labels).toEqual(expectedBoundLabels(band))
 
       // ...and the same bounds, with their unit, survive with the graphic removed.
       const text = textWithoutGraphic(figure)
@@ -144,11 +176,11 @@ describe('MetricScale — every published zone boundary renders', () => {
       (node) => node.textContent,
     )
     expect(items).toEqual([
-      'below 153 steps per minute: Below the 5th percentile',
-      '153 to 163 steps per minute: 5th–29th percentile',
-      '164 to 173 steps per minute: 30th–69th percentile',
-      '174 to 183 steps per minute: 70th–95th percentile',
-      'above 183 steps per minute: Above the 95th percentile',
+      `below 153 steps per minute: ${zoneLabel('cadence', 0)}`,
+      `153 to 163 steps per minute: ${zoneLabel('cadence', 1)}`,
+      `164 to 173 steps per minute: ${zoneLabel('cadence', 2)}`,
+      `174 to 183 steps per minute: ${zoneLabel('cadence', 3)}`,
+      `above 183 steps per minute: ${zoneLabel('cadence', 4)}`,
     ])
   })
 
@@ -158,11 +190,11 @@ describe('MetricScale — every published zone boundary renders', () => {
       (node) => node.textContent,
     )
     expect(items).toEqual([
-      "below 3.05%: Lowest 5% of values in Garmin's table",
-      '3.05 to 3.70%: 5th–30th percentile by value',
-      '3.75 to 4.30%: 31st–70th percentile by value',
-      '4.35 to 5.05%: 71st–95th percentile by value',
-      "above 5.05%: Highest 5% of values in Garmin's table",
+      `below 3.05%: ${zoneLabel('verticalRatio', 0)}`,
+      `3.05 to 3.70%: ${zoneLabel('verticalRatio', 1)}`,
+      `3.75 to 4.30%: ${zoneLabel('verticalRatio', 2)}`,
+      `4.35 to 5.05%: ${zoneLabel('verticalRatio', 3)}`,
+      `above 5.05%: ${zoneLabel('verticalRatio', 4)}`,
     ])
   })
 
@@ -214,7 +246,7 @@ describe('MetricScale — the position is available without the graphic', () => 
   it('captions the figure with the value, its unit and the containing zone for cadence at 172', () => {
     const { figure, container } = renderScale('cadence', 172)
     expect(captionOf(figure)).toBe(
-      'Metric cadence: 172 steps per minute falls in the zone labelled “30th–69th percentile” (values from 164 to 173 steps per minute).',
+      `Metric cadence: 172 steps per minute falls in the zone labelled “${zoneLabel('cadence', 2)}” (values from 164 to 173 steps per minute).`,
     )
     expect(one(container, '.metric-scale__graphic')).toHaveAttribute(
       'aria-hidden',
@@ -248,7 +280,7 @@ describe('MetricScale — the position is available without the graphic', () => 
   it('verticalRatio: 0.031 prints as 3.10% and lands in the 3.05–3.70% zone', () => {
     const { figure, container } = renderScale('verticalRatio', 0.031)
     expect(captionOf(figure)).toBe(
-      'Metric verticalRatio: 3.10% falls in the zone labelled “5th–30th percentile by value” (values from 3.05 to 3.70%).',
+      `Metric verticalRatio: 3.10% falls in the zone labelled “${zoneLabel('verticalRatio', 1)}” (values from 3.05 to 3.70%).`,
     )
     const text = figure.textContent ?? ''
     expect(text).not.toMatch(/310(\.0+)?%/)
@@ -266,21 +298,21 @@ describe('MetricScale — the position is available without the graphic', () => 
   it('a value in a gap in the source table says it falls between the two zones', () => {
     const { figure } = renderScale('verticalRatio', 0.0372)
     expect(captionOf(figure)).toBe(
-      "Metric verticalRatio: 3.72% falls between the zones labelled “5th–30th percentile by value” (values from 3.05 to 3.70%) and “31st–70th percentile by value” (values from 3.75 to 4.30%), in a gap the source's table leaves between them.",
+      `Metric verticalRatio: 3.72% sits in the gap between the zones labelled “${zoneLabel('verticalRatio', 1)}” and “${zoneLabel('verticalRatio', 2)}”; the range shown jumps from 3.70 to 3.75.`,
     )
   })
 
   it('verticalRatio above 5.05%: the zone label, the values and the position all run the same way', () => {
     const { figure } = renderScale('verticalRatio', 0.052)
     expect(captionOf(figure)).toBe(
-      "Metric verticalRatio: 5.20% falls in the zone labelled “Highest 5% of values in Garmin's table” (values above 5.05%).",
+      `Metric verticalRatio: 5.20% falls in the zone labelled “${zoneLabel('verticalRatio', 4)}” (values above 5.05%).`,
     )
   })
 
   it('a cadence in the 163→164 gap prints a decimal rather than a "164" that reads as inside 164–173', () => {
     const { figure } = renderScale('cadence', 163.5)
     expect(captionOf(figure)).toBe(
-      "Metric cadence: 163.5 steps per minute falls between the zones labelled “5th–29th percentile” (values from 153 to 163 steps per minute) and “30th–69th percentile” (values from 164 to 173 steps per minute), in a gap the source's table leaves between them.",
+      `Metric cadence: 163.5 steps per minute sits in the gap between the zones labelled “${zoneLabel('cadence', 1)}” and “${zoneLabel('cadence', 2)}”; the source's table jumps from 163 to 164.`,
     )
     expect(one(figure, '.metric-scale__value-label').textContent).toBe(
       '163.5 steps/min',
@@ -290,7 +322,7 @@ describe('MetricScale — the position is available without the graphic', () => 
   it('a value on a bound an open zone shares belongs to the closed zone, never to both', () => {
     const { figure } = renderScale('cadence', 153)
     expect(captionOf(figure)).toBe(
-      'Metric cadence: 153 steps per minute falls in the zone labelled “5th–29th percentile” (values from 153 to 163 steps per minute).',
+      `Metric cadence: 153 steps per minute falls in the zone labelled “${zoneLabel('cadence', 1)}” (values from 153 to 163 steps per minute).`,
     )
   })
 
@@ -315,7 +347,7 @@ describe('MetricScale — a value outside its band is reported, never silently c
       4.421467928439415,
     )
     expect(captionOf(figure)).toBe(
-      'Metric verticalOscillationCm: 4.4 centimetres is below the reference range (6.0 to 9.5 centimetres).',
+      'Metric verticalOscillationCm: 4.4 centimetres is below the range shown (6.0 to 9.5 centimetres).',
     )
     const marker = one(container, '.metric-scale__marker')
     expect(marker).not.toHaveAttribute('data-clamped')
@@ -333,7 +365,7 @@ describe('MetricScale — a value outside its band is reported, never silently c
     expect(marker).toHaveAttribute('data-clamped', 'below')
     expect(percentOf(marker)).toBe(0)
     expect(captionOf(figure)).toBe(
-      'Metric verticalOscillationCm: 1.0 centimetres is below the reference range (6.0 to 9.5 centimetres). It lies beyond the lower end of the drawn scale, so its marker is pinned at that end.',
+      'Metric verticalOscillationCm: 1.0 centimetres is below the range shown (6.0 to 9.5 centimetres). It lies beyond the lower end of the drawn scale, so its marker is pinned at that end.',
     )
   })
 
@@ -343,7 +375,7 @@ describe('MetricScale — a value outside its band is reported, never silently c
     expect(marker).toHaveAttribute('data-clamped', 'above')
     expect(percentOf(marker)).toBe(100)
     expect(captionOf(figure)).toBe(
-      'Metric kneeFlexion: 260.0 degrees is above the reference range (71.3 to 129.0 degrees). It lies beyond the upper end of the drawn scale, so its marker is pinned at that end.',
+      'Metric kneeFlexion: 260.0 degrees is above the range shown (71.3 to 129.0 degrees). It lies beyond the upper end of the drawn scale, so its marker is pinned at that end.',
     )
   })
 
@@ -354,9 +386,12 @@ describe('MetricScale — a value outside its band is reported, never silently c
       'above',
     )
     expect(captionOf(figure)).toBe(
-      "Metric verticalRatio: 9.00% falls in the zone labelled “Highest 5% of values in Garmin's table” (values above 5.05%). It lies beyond the upper end of the drawn scale, so its marker is pinned at that end.",
+      `Metric verticalRatio: 9.00% falls in the zone labelled “${zoneLabel('verticalRatio', 4)}” (values above 5.05%). It lies beyond the upper end of the drawn scale, so its marker is pinned at that end.`,
     )
-    expect(captionOf(figure)).not.toMatch(/\b(below|lowest|lower)\b/i)
+    // The label is the data layer's; the direction words checked are the sentence's own.
+    expect(
+      captionOf(figure).replace(zoneLabel('verticalRatio', 4), ''),
+    ).not.toMatch(/\b(below|lowest|lower)\b/i)
   })
 
   it('never leaves an unclamped marker at the edge, where it would read as clamped', () => {
@@ -380,7 +415,7 @@ describe('MetricScale — a value outside its band is reported, never silently c
       'below',
     )
     expect(captionOf(figure)).toBe(
-      'Metric cadence: 100 steps per minute falls in the zone labelled “Below the 5th percentile” (values below 153 steps per minute). It lies beyond the lower end of the drawn scale, so its marker is pinned at that end.',
+      `Metric cadence: 100 steps per minute falls in the zone labelled “${zoneLabel('cadence', 0)}” (values below 153 steps per minute). It lies beyond the lower end of the drawn scale, so its marker is pinned at that end.`,
     )
   })
 
@@ -513,32 +548,117 @@ describe('MetricScale — legibility of the marks', () => {
     )
   })
 
-  it('rings the marker so it clears 3:1 against either zone tint in both themes', () => {
-    // Unringed, brand-700 on neutral-400 is 2.38:1 and brand-400 on neutral-500 is 2.10:1. Against
-    // its own ring the marker is 6.17:1 (brand-700 on white) and 9.34:1 (brand-400 on black).
+  it('draws the marker in black/white, not the brand colour, ringed in the opposite so it clears a tick', () => {
+    // Black on either light tint (neutral-300, neutral-400) is at least 8.6:1, and white on either
+    // dark tint (neutral-600, neutral-500) at least 4.7:1. The ring keeps it distinct from a tick,
+    // which is the same black or white.
     const { container } = renderScale('cadence', 172)
-    expect(classesOf(one(container, '.metric-scale__marker'))).toEqual(
-      expect.arrayContaining(['ring-1', 'ring-white', 'dark:ring-black']),
+    const classes = classesOf(one(container, '.metric-scale__marker'))
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        'bg-black',
+        'dark:bg-white',
+        'ring-1',
+        'ring-white',
+        'dark:ring-black',
+      ]),
     )
+    expect(classes.join(' ')).not.toMatch(/brand-/)
   })
 
-  it('never overprints two bound labels in one row, at a 280 px track with a widened verticalRatio domain', () => {
-    // 0.075 widens the domain almost to its limit, which squeezes the six bounds — and the two
-    // pairs 3.70/3.75 and 4.30/4.35 sit about 1% apart — into under half the track.
+  it('hatches a published gap, and draws one hatched sliver per gap and none where zones touch', () => {
+    for (const metric of BANDED) {
+      const band = bandOf(metric)
+      const gaps = band.zones.filter(
+        (zone, z) =>
+          z > 0 &&
+          band.zones[z - 1].max !== null &&
+          zone.min !== null &&
+          band.zones[z - 1].max! < zone.min,
+      ).length
+      const { container, unmount } = renderScale(metric, SAMPLE_VALUES[metric][0])
+      const slivers = [
+        ...container.querySelectorAll<HTMLElement>('.metric-scale__gap'),
+      ]
+      expect(slivers, metric).toHaveLength(gaps)
+      for (const sliver of slivers) {
+        expect(sliver.style.backgroundImage).toMatch(/repeating-linear-gradient/)
+        expect(classesOf(sliver)).toContain('forced-colors:text-[CanvasText]')
+      }
+      unmount()
+    }
+    // cadence and verticalRatio each carry two published gaps, so the check above is not vacuous.
+    expect(
+      bandOf('cadence').zones.some(
+        (zone, z) => z > 0 && zone.min !== bandOf('cadence').zones[z - 1].max,
+      ),
+    ).toBe(true)
+  })
+
+  it('merges a one-unit gap\'s two bounds into one label, centred between their ticks', () => {
+    const { container } = renderScale('cadence', 172)
+    const ticks = [...container.querySelectorAll('.metric-scale__tick')].map(percentOf)
+    const merged = [
+      ...container.querySelectorAll<HTMLElement>('.metric-scale__bound-label'),
+    ].find((label) => label.textContent === '163/164')
+    expect(merged).toBeDefined()
+    // Ticks: 153, 163, 164, 173, 174, 183 — one each, the merge is the label's only.
+    expect(ticks).toHaveLength(6)
+    expect(percentOf(merged!)).toBeCloseTo((ticks[1] + ticks[2]) / 2, 6)
+  })
+
+  it('keeps a gap wider than one displayed unit as two labels', () => {
+    const band: ReferenceBand = {
+      ...bandOf('cadence'),
+      zones: [
+        { label: 'a', min: 150, max: 160 },
+        { label: 'b', min: 162, max: 170 },
+      ],
+    }
+    const { container } = render(<MetricScale band={band} value={165} label="Cadence" />)
+    const labels = [
+      ...container.querySelectorAll('.metric-scale__bound-label'),
+    ].map((node) => node.textContent)
+    expect(labels).toEqual(['150', '160', '162', '170'])
+    expect(container.querySelectorAll('.metric-scale__gap')).toHaveLength(1)
+  })
+
+  it('lists zones in the text-xs size, not an arbitrary 11px', () => {
+    const { container } = renderScale('cadence', 172)
+    const classes = classesOf(one(container, '.metric-scale__zones'))
+    expect(classes).toContain('text-xs')
+    expect(classes).not.toContain('text-[11px]')
+  })
+
+  it.each([
+    ['verticalRatio', 0.075],
+    ['cadence', 163.5],
+    ['cadence', 100],
+    ['cadence', 260],
+    ['kneeFlexion', 20],
+  ] as const)('never overprints two bound labels in one row, at a 280 px track — %s at %s', (metric, value) => {
+    // verticalRatio at 0.075 widens the domain almost to its limit, which squeezes the bounds —
+    // including the merged 3.70/3.75 and 4.30/4.35 labels — into under half the track.
     const TRACK_PX = 280
     // Generous for an 11 px sans-serif digit or point, so the check errs toward failing.
     const CHAR_PX = 7
-    const { container } = renderScale('verticalRatio', 0.075)
+    const { container } = renderScale(metric, value)
     const labels = [
       ...container.querySelectorAll<HTMLElement>('.metric-scale__bound-label'),
     ].map((label) => {
       const width = (label.textContent ?? '').length * CHAR_PX
       // `anchorAt`: the label's left edge sits at percent × (track − label width).
       const left = (percentOf(label) / 100) * (TRACK_PX - width)
-      return { row: Number(label.dataset.row), left, right: left + width }
+      return {
+        text: label.textContent,
+        row: Number(label.dataset.row),
+        left,
+        right: left + width,
+      }
     })
-    expect(labels).toHaveLength(6)
-    expect(Math.max(...labels.map((label) => label.row))).toBeGreaterThan(0)
+    expect(labels.map((label) => label.text)).toEqual(
+      expectedBoundLabels(bandOf(metric)),
+    )
     for (const a of labels) {
       for (const b of labels) {
         if (a === b || a.row !== b.row) continue

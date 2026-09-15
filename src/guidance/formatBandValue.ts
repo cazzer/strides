@@ -68,6 +68,16 @@ const SUFFIX: Record<BandTextStyle, Record<BandUnit, string>> = {
 }
 
 /**
+ * A computed-domain number in the display domain, unrounded: `0.0305` → `3.05` for `'percent'`.
+ *
+ * For arithmetic a renderer does on DISPLAYED magnitudes — how far apart two bounds read — and never
+ * for printing; printing goes through {@link formatBandNumber}, which also rounds.
+ */
+export function toDisplayNumber(value: number, unit: BandUnit): number {
+  return value * DISPLAY_SCALE[unit]
+}
+
+/**
  * The number alone, converted to the display domain, with no unit.
  *
  * `extraDecimals` adds precision beyond the source precision. A renderer needs it for exactly
@@ -80,7 +90,7 @@ export function formatBandNumber(
   unit: BandUnit,
   extraDecimals = 0,
 ): string {
-  const text = (value * DISPLAY_SCALE[unit]).toFixed(
+  const text = toDisplayNumber(value, unit).toFixed(
     DECIMALS[unit] + extraDecimals,
   )
   // `(-0.04).toFixed(1)` is "-0.0"; a signed zero is noise, not information.
