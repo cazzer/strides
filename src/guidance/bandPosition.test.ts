@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   bandBounds,
-  bandExtent,
   describeBandPosition,
   formatMeasuredBandValue,
   locateInBand,
@@ -51,12 +50,12 @@ describe('locateInBand — an open-ended zone is strict on its finite bound', ()
     ['cadence', 153, '5th–29th percentile'],
     ['cadence', 183, '70th–95th percentile'],
     ['cadence', 183.001, 'Above the 95th percentile'],
-    // verticalRatio: <3.05% and >5.05%, stored 0..1
-    ['verticalRatio', 0.03049, 'Above the 95th percentile'],
-    ['verticalRatio', 0.0305, '70th–95th percentile'],
-    ['verticalRatio', 0.0505, '5th–29th percentile'],
-    ['verticalRatio', 0.05051, 'Below the 5th percentile'],
-  ] as const)('%s at %d lands in exactly “%s”', (metric, value, label) => {
+    // verticalRatio: <3.05% and >5.05%, stored 0..1; labels restated in value order
+    ['verticalRatio', 0.03049, "Lowest 5% of values in Garmin's table"],
+    ['verticalRatio', 0.0305, '5th–30th percentile by value'],
+    ['verticalRatio', 0.0505, '71st–95th percentile by value'],
+    ['verticalRatio', 0.05051, "Highest 5% of values in Garmin's table"],
+  ] as const)('%s at %s lands in exactly “%s”', (metric, value, label) => {
     expect(where(locateInBand(bandOf(metric), value))).toBe(label)
   })
 
@@ -133,8 +132,11 @@ describe('locateInBand — an open-ended zone is strict on its finite bound', ()
     expect(where(locateInBand(bandOf('trunkLean'), 1.8))).toBe(
       'Full range observed across the cohort',
     )
-    expect(where(locateInBand(bandOf('kneeFlexion'), 125))).toBe(
-      'Pooled across running speeds and across two measurement conventions',
+    expect(where(locateInBand(bandOf('kneeFlexion'), 129))).toBe(
+      'Full range observed across the cohort',
+    )
+    expect(where(locateInBand(bandOf('kneeFlexion'), 71.3))).toBe(
+      'Full range observed across the cohort',
     )
   })
 })
@@ -151,10 +153,10 @@ describe('locateInBand — gaps and the outside', () => {
 
   it('verticalRatio 0.0372 falls between 3.70% and 3.75% — compared in the 0..1 domain', () => {
     expect(where(locateInBand(bandOf('verticalRatio'), 0.0372))).toBe(
-      'between 70th–95th percentile | 30th–69th percentile',
+      'between 5th–30th percentile by value | 31st–70th percentile by value',
     )
     expect(where(locateInBand(bandOf('verticalRatio'), 0.0433))).toBe(
-      'between 30th–69th percentile | 5th–29th percentile',
+      'between 31st–70th percentile by value | 71st–95th percentile by value',
     )
   })
 
@@ -163,7 +165,7 @@ describe('locateInBand — gaps and the outside', () => {
       'Below the 5th percentile',
     )
     expect(where(locateInBand(bandOf('verticalRatio'), 0.5))).toBe(
-      'Below the 5th percentile',
+      "Highest 5% of values in Garmin's table",
     )
   })
 
@@ -174,7 +176,12 @@ describe('locateInBand — gaps and the outside', () => {
     expect(locateInBand(bandOf('kneeFlexion'), 130)).toEqual({
       kind: 'outside',
       side: 'above',
-      nearestBound: 125,
+      nearestBound: 129,
+    })
+    expect(locateInBand(bandOf('kneeFlexion'), 60)).toEqual({
+      kind: 'outside',
+      side: 'below',
+      nearestBound: 71.3,
     })
     expect(locateInBand(bandOf('trunkLean'), 1.79)).toEqual({
       kind: 'outside',
@@ -184,7 +191,7 @@ describe('locateInBand — gaps and the outside', () => {
   })
 })
 
-describe('bandBounds and bandExtent', () => {
+describe('bandBounds, and the envelope the scale is drawn over', () => {
   it('lists every distinct published bound once, ascending', () => {
     expect(bandBounds(bandOf('cadence'))).toEqual([
       153, 163, 164, 173, 174, 183,
@@ -194,10 +201,17 @@ describe('bandBounds and bandExtent', () => {
     ])
   })
 
-  it.each(BANDED)('%s: extent equals referenceBandEnvelope', (metric) => {
-    expect(bandExtent(bandOf(metric))).toEqual(
-      referenceBandEnvelope(bandOf(metric)),
-    )
+  // Regression for the deleted `bandExtent`, which duplicated `referenceBandEnvelope` while that
+  // helper read edges from `min`s and `max`es separately (fixed in f050977). The scale and the
+  // "outside" sentence both take their extent from `referenceBandEnvelope` now, so pin it literally.
+  it.each([
+    ['cadence', { min: 153, max: 183 }],
+    ['verticalRatio', { min: 0.0305, max: 0.0505 }],
+    ['verticalOscillationCm', { min: 6.0, max: 9.5 }],
+    ['trunkLean', { min: 1.8, max: 21.4 }],
+    ['kneeFlexion', { min: 71.3, max: 129 }],
+  ] as const)('%s is drawn over the literal extent %o', (metric, extent) => {
+    expect(referenceBandEnvelope(bandOf(metric))).toEqual(extent)
   })
 
   it('takes both edges from every finite bound, of either kind', () => {
@@ -208,9 +222,12 @@ describe('bandBounds and bandExtent', () => {
         { label: 'high', min: 5, max: null },
       ],
     }
-    expect(bandExtent(band)).toEqual({ min: 3, max: 5 })
+    expect(referenceBandEnvelope(band)).toEqual({ min: 3, max: 5 })
     expect(
-      bandExtent({ ...band, zones: [{ label: 'all', min: null, max: null }] }),
+      referenceBandEnvelope({
+        ...band,
+        zones: [{ label: 'all', min: null, max: null }],
+      }),
     ).toBeNull()
   })
 })
@@ -236,17 +253,42 @@ describe('formatMeasuredBandValue', () => {
     expect(formatMeasuredBandValue(bandOf('cadence'), 163.5)).toBe(
       '163.5 steps/min',
     )
-    expect(formatMeasuredBandValue(bandOf('kneeFlexion'), 125.04)).toBe(
-      '125.04°',
+    expect(formatMeasuredBandValue(bandOf('kneeFlexion'), 129.04)).toBe(
+      '129.04°',
     )
     expect(formatMeasuredBandValue(bandOf('verticalRatio'), 0.03702)).toBe(
       '3.702%',
     )
   })
 
-  it('prints a value that IS a bound at published precision', () => {
+  it('prints a value that IS a bound at source precision', () => {
     expect(formatMeasuredBandValue(bandOf('cadence'), 153)).toBe(
       '153 steps/min',
+    )
+  })
+
+  it('states a value still printing as a bound at the precision cap relative to that bound', () => {
+    // At three extra digits 163.99999999 still prints "164.000", which would contradict the
+    // sentence placing it in the gap below 164. Bounded: the cap is checked once, never looped.
+    expect(formatMeasuredBandValue(bandOf('cadence'), 163.99999999)).toBe(
+      'just under 164 steps/min',
+    )
+    expect(formatMeasuredBandValue(bandOf('cadence'), 173.00000001)).toBe(
+      'just over 173 steps/min',
+    )
+    expect(
+      describeBandPosition(bandOf('cadence'), 163.99999999).startsWith(
+        'Just under 164 steps per minute falls between the zones labelled',
+      ),
+    ).toBe(true)
+  })
+
+  it('spells the unit in the spoken style', () => {
+    expect(formatMeasuredBandValue(bandOf('cadence'), 172, 'spoken')).toBe(
+      '172 steps per minute',
+    )
+    expect(formatMeasuredBandValue(bandOf('kneeFlexion'), 105, 'spoken')).toBe(
+      '105.0 degrees',
     )
   })
 })
@@ -256,45 +298,69 @@ describe('describeBandPosition', () => {
     [
       'cadence',
       172,
-      '172 steps/min falls in the zone published as “30th–69th percentile” (164–173 steps/min).',
+      '172 steps per minute falls in the zone labelled “30th–69th percentile” (values from 164 to 173 steps per minute).',
     ],
     [
       'cadence',
       153,
-      '153 steps/min falls in the zone published as “5th–29th percentile” (153–163 steps/min).',
+      '153 steps per minute falls in the zone labelled “5th–29th percentile” (values from 153 to 163 steps per minute).',
     ],
     [
       'cadence',
       140,
-      '140 steps/min falls in the zone published as “Below the 5th percentile” (below 153 steps/min).',
+      '140 steps per minute falls in the zone labelled “Below the 5th percentile” (values below 153 steps per minute).',
     ],
     [
       'cadence',
       163.5,
-      '163.5 steps/min falls between the zones published as “5th–29th percentile” (153–163 steps/min) and “30th–69th percentile” (164–173 steps/min), in a gap the published table leaves between them.',
+      "163.5 steps per minute falls between the zones labelled “5th–29th percentile” (values from 153 to 163 steps per minute) and “30th–69th percentile” (values from 164 to 173 steps per minute), in a gap the source's table leaves between them.",
     ],
     [
       'verticalRatio',
       0.031,
-      '3.10% falls in the zone published as “70th–95th percentile” (3.05–3.70%).',
+      '3.10% falls in the zone labelled “5th–30th percentile by value” (values from 3.05 to 3.70%).',
     ],
     [
       'verticalRatio',
       0.0372,
-      '3.72% falls between the zones published as “70th–95th percentile” (3.05–3.70%) and “30th–69th percentile” (3.75–4.30%), in a gap the published table leaves between them.',
+      "3.72% falls between the zones labelled “5th–30th percentile by value” (values from 3.05 to 3.70%) and “31st–70th percentile by value” (values from 3.75 to 4.30%), in a gap the source's table leaves between them.",
+    ],
+    [
+      'verticalRatio',
+      0.03,
+      "3.00% falls in the zone labelled “Lowest 5% of values in Garmin's table” (values below 3.05%).",
+    ],
+    [
+      'verticalRatio',
+      0.052,
+      "5.20% falls in the zone labelled “Highest 5% of values in Garmin's table” (values above 5.05%).",
     ],
     [
       'verticalOscillationCm',
       4.421467928439415,
-      '4.4 cm is below the published range (6.0–9.5 cm).',
+      '4.4 centimetres is below the reference range (6.0 to 9.5 centimetres).',
     ],
     [
       'trunkLean',
       10,
-      '10.0° falls in the range published as “Full range observed across the cohort” (1.8–21.4°).',
+      '10.0 degrees falls in the range labelled “Full range observed across the cohort” (values from 1.8 to 21.4 degrees).',
     ],
-    ['kneeFlexion', 130, '130.0° is above the published range (85.0–125.0°).'],
-  ] as const)('%s at %d', (metric, value, sentence) => {
+    [
+      'kneeFlexion',
+      105,
+      '105.0 degrees falls in the range labelled “Full range observed across the cohort” (values from 71.3 to 129.0 degrees).',
+    ],
+    [
+      'kneeFlexion',
+      60,
+      '60.0 degrees is below the reference range (71.3 to 129.0 degrees).',
+    ],
+    [
+      'kneeFlexion',
+      130,
+      '130.0 degrees is above the reference range (71.3 to 129.0 degrees).',
+    ],
+  ] as const)('%s at %s', (metric, value, sentence) => {
     expect(describeBandPosition(bandOf(metric), value)).toBe(sentence)
   })
 
@@ -304,8 +370,49 @@ describe('describeBandPosition', () => {
       zones: [{ label: 'open above', min: 6, max: null }],
     }
     expect(describeBandPosition(band, 4)).toBe(
-      '4.0 cm is below the published range, which starts at 6.0 cm.',
+      '4.0 centimetres is below the reference range, which starts at 6.0 centimetres.',
     )
+  })
+
+  it('never calls a band or zone "published" — a derived band was not published as such', () => {
+    for (const metric of BANDED) {
+      const band = bandOf(metric)
+      const envelope = referenceBandEnvelope(band)!
+      const width = envelope.max - envelope.min
+      for (let step = -20; step <= 40; step++) {
+        const value = envelope.min + (width * step) / 20
+        expect(describeBandPosition(band, value)).not.toMatch(/publish/i)
+      }
+    }
+    // Both derived bands, at a value in, between and outside their zones.
+    for (const [metric, values] of [
+      ['verticalRatio', [0.03, 0.0372, 0.09]],
+      ['verticalOscillationCm', [7, 4.4, 12]],
+    ] as const) {
+      expect(bandOf(metric).derivation).not.toBeNull()
+      for (const value of values) {
+        expect(describeBandPosition(bandOf(metric), value)).not.toMatch(
+          /publish/i,
+        )
+      }
+    }
+  })
+
+  it('uses " to " between numbers and spells units, never an en dash or "steps/min"', () => {
+    for (const metric of BANDED) {
+      const band = bandOf(metric)
+      const envelope = referenceBandEnvelope(band)!
+      const width = envelope.max - envelope.min
+      for (let step = -20; step <= 40; step++) {
+        const sentence = describeBandPosition(
+          band,
+          envelope.min + (width * step) / 20,
+        )
+        // Strip the quoted labels — those are the source's text (cadence's "30th–69th").
+        const own = sentence.replace(/“[^”]*”/g, '')
+        expect(own).not.toMatch(/\d–|steps\/min|°| cm\b/)
+      }
+    }
   })
 
   it('uses no grading word across a sweep of every band', () => {
@@ -313,10 +420,10 @@ describe('describeBandPosition', () => {
       /\b(good|bad|poor|optimal|ideal|excessive|healthy|target|normal|abnormal|better|worse|should|recommended)\b/i
     for (const metric of BANDED) {
       const band = bandOf(metric)
-      const extent = bandExtent(band)!
-      const width = extent.max - extent.min
+      const envelope = referenceBandEnvelope(band)!
+      const width = envelope.max - envelope.min
       for (let step = -20; step <= 40; step++) {
-        const value = extent.min + (width * step) / 20
+        const value = envelope.min + (width * step) / 20
         expect(describeBandPosition(band, value)).not.toMatch(GRADING_WORD)
       }
     }

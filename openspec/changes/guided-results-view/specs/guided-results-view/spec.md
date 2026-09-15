@@ -71,7 +71,7 @@ the edge **and** the view SHALL state in words that the value lies outside. It S
 though the value sat at the domain's extreme.
 
 This is not hypothetical: this repo's own standing regression anchor for one banded metric reads
-below that band's published lower bound, for a reason already recorded in this repo — the whole
+below that band's lower bound, for a reason already recorded in this repo — the whole
 vertical-oscillation family underfits peaky waveforms. The correct response is to show the reading
 where it falls and say so; moving the band to contain it would destroy the only property that makes
 the band worth citing.

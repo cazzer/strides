@@ -3,6 +3,8 @@ import {
   formatBandRange,
   formatBandValue,
 } from './formatBandValue'
+import type { BandTextStyle } from './formatBandValue'
+import { referenceBandEnvelope } from './types'
 import type { BandZone, ReferenceBand } from './types'
 
 /**
@@ -15,23 +17,23 @@ import type { BandZone, ReferenceBand } from './types'
  *
  * ## Which zone a value belongs to
  *
- * - **A closed zone (both bounds finite) is inclusive on both bounds**, as published: `153–163`
- *   contains 153 and 163.
- * - **An open-ended zone is STRICT on its one finite bound.** Garmin publishes `<153` and `>183`
- *   (`<3.05 %`, `>5.05 %`); they are stored as `{ min: null, max: 153 }` and
- *   `{ min: 183, max: null }`, but the published meaning is strict. So a cadence of exactly 153
+ * - **A closed zone (both bounds finite) is inclusive on both bounds**, as the source states it:
+ *   `153–163` contains 153 and 163.
+ * - **An open-ended zone is STRICT on its one finite bound.** Garmin prints `<153` and `>183`
+ *   (`<3.05 %`, `>5.05 %` once halved); they are stored as `{ min: null, max: 153 }` and
+ *   `{ min: 183, max: null }`, but the printed meaning is strict. So a cadence of exactly 153
  *   belongs to `153–163`, never to `<153`, and 183 belongs to `174–183`.
  * - Closed zones are checked first, then open ones, and the first match wins — so no value ever
  *   resolves to two zones.
- * - **A value no zone contains is either in a published gap or outside every zone.** The gaps
- *   (cadence `163→164`, `173→174`; vertical ratio `3.70→3.75 %`, `4.30→4.35 %`) are the
- *   publisher's and are real: cadence is a fitted non-integer, so 163.5 happens.
+ * - **A value no zone contains is either in a gap or outside every zone.** The gaps (cadence
+ *   `163→164`, `173→174`; vertical ratio `3.70→3.75 %`, `4.30→4.35 %`) are the source table's and are
+ *   real: cadence is a fitted non-integer, so 163.5 happens.
  */
 export type BandPosition =
   | { kind: 'inZone'; zone: BandZone; zoneIndex: number }
-  /** In a published gap: after `lower` ends and before `upper` starts. */
+  /** In a gap in the source's table: after `lower` ends and before `upper` starts. */
   | { kind: 'betweenZones'; lower: BandZone; upper: BandZone }
-  /** Past every zone on `side`; `nearestBound` is the published bound closest on that side. */
+  /** Past every zone on `side`; `nearestBound` is the band's bound closest on that side. */
   | { kind: 'outside'; side: 'below' | 'above'; nearestBound: number }
 
 function contains(zone: BandZone, value: number): boolean {
@@ -88,7 +90,7 @@ export function locateInBand(band: ReferenceBand, value: number): BandPosition {
   if (lower !== null) {
     return { kind: 'outside', side: 'above', nearestBound: lower.bound }
   }
-  throw new Error('A reference band must publish at least one zone')
+  throw new Error('A reference band must have at least one zone')
 }
 
 /** Every distinct finite bound across the band's zones, ascending. Touching zones share one. */
@@ -99,72 +101,87 @@ export function bandBounds(band: ReferenceBand): number[] {
   return [...new Set(all)].sort((a, b) => a - b)
 }
 
-/**
- * The lowest and highest finite bound the band publishes, of either kind. `null` when the band
- * publishes no finite bound at all.
- *
- * Deliberately computed here rather than read from `referenceBandEnvelope`: that helper takes its
- * lower edge only from zone minimums and its upper edge only from zone maximums, which is correct
- * for the five shipped bands but not in general. The two agree on every shipped band, and the
- * test file pins that.
- */
-export function bandExtent(
-  band: ReferenceBand,
-): { min: number; max: number } | null {
-  const bounds = bandBounds(band)
-  if (bounds.length === 0) return null
-  return { min: bounds[0], max: bounds[bounds.length - 1] }
-}
-
 /** Cap on the precision added to a value that rounds onto a bound it does not equal. */
 const MAX_EXTRA_VALUE_DECIMALS = 3
 
+/** The first bound, other than `value` itself, that prints identically to `value` at `extra`. */
+function collidingBound(
+  bounds: number[],
+  band: ReferenceBand,
+  value: number,
+  extra: number,
+): number | undefined {
+  const printed = formatBandNumber(value, band.unit, extra)
+  return bounds.find(
+    (bound) =>
+      bound !== value && formatBandNumber(bound, band.unit, extra) === printed,
+  )
+}
+
 /**
- * The measured value with its unit, at the band's published precision — plus just enough extra
- * precision that it never prints identically to a published bound it does not equal. Without that,
- * a cadence of 163.5 prints as `164`, which reads as inside `164–173` while the value is in the gap
- * before it.
+ * The measured value with its unit, at the band's source precision — plus just enough extra
+ * precision that it never prints identically to a bound it does not equal. Without that, a cadence
+ * of 163.5 prints as `164`, which reads as inside `164–173` while the value is in the gap before it.
+ *
+ * The added precision is capped at {@link MAX_EXTRA_VALUE_DECIMALS} digits. A value so close to a
+ * bound that it still prints as that bound at the cap is stated relative to the bound instead —
+ * `just under 164 steps/min` — which is true, where `164.000 steps/min` would contradict the
+ * sentence placing it in the gap below 164.
  */
 export function formatMeasuredBandValue(
   band: ReferenceBand,
   value: number,
+  style: BandTextStyle = 'visual',
 ): string {
   const bounds = bandBounds(band)
-  for (let extra = 0; extra < MAX_EXTRA_VALUE_DECIMALS; extra++) {
-    const collides = bounds.some(
-      (bound) =>
-        bound !== value &&
-        formatBandNumber(bound, band.unit, extra) ===
-          formatBandNumber(value, band.unit, extra),
-    )
-    if (!collides) return formatBandValue(value, band.unit, extra)
+  for (let extra = 0; extra <= MAX_EXTRA_VALUE_DECIMALS; extra++) {
+    if (collidingBound(bounds, band, value, extra) === undefined) {
+      return formatBandValue(value, band.unit, extra, style)
+    }
   }
-  return formatBandValue(value, band.unit, MAX_EXTRA_VALUE_DECIMALS)
+  const bound = collidingBound(bounds, band, value, MAX_EXTRA_VALUE_DECIMALS)!
+  return `${value < bound ? 'just under' : 'just over'} ${formatBandValue(bound, band.unit, 0, style)}`
+}
+
+/** `(values from 164 to 173 steps per minute)`, `(values below 153 steps per minute)`. */
+function spokenZoneValues(zone: BandZone, band: ReferenceBand): string {
+  if (zone.min === null && zone.max === null) return '(any value)'
+  const range = formatBandRange(zone.min, zone.max, band.unit, 'spoken')
+  return zone.min !== null && zone.max !== null
+    ? `(values from ${range})`
+    : `(values ${range})`
 }
 
 /**
- * One sentence stating where the value sits, e.g. `172 steps/min falls in the zone published as
- * “30th–69th percentile” (164–173 steps/min).` Names zones only by their published label and
- * bounds, and the band only as "published".
+ * One sentence stating where the value sits, e.g. `172 steps per minute falls in the zone labelled
+ * “30th–69th percentile” (values from 164 to 173 steps per minute).`
+ *
+ * In the spoken style throughout, because this sentence is the text alternative for the drawn
+ * scale. Names a zone only by its label and its values, and the band as a whole only as "the
+ * reference range" — never as "published": a derived band's bounds or labels are this app's
+ * arithmetic on published numbers, and saying "published" of them would claim an authorship the
+ * source never had.
  */
 export function describeBandPosition(
   band: ReferenceBand,
   value: number,
 ): string {
-  const valueText = formatMeasuredBandValue(band, value)
+  const measured = formatMeasuredBandValue(band, value, 'spoken')
+  // `just under 164 …` opens a sentence here, so it takes a capital; a number is unaffected.
+  const valueText = measured.charAt(0).toUpperCase() + measured.slice(1)
   const position = locateInBand(band, value)
   const zoneRef = (zone: BandZone) =>
-    `“${zone.label}” (${formatBandRange(zone.min, zone.max, band.unit)})`
+    `“${zone.label}” ${spokenZoneValues(zone, band)}`
   switch (position.kind) {
     case 'inZone':
-      return `${valueText} falls in the ${band.zones.length === 1 ? 'range' : 'zone'} published as ${zoneRef(position.zone)}.`
+      return `${valueText} falls in the ${band.zones.length === 1 ? 'range' : 'zone'} labelled ${zoneRef(position.zone)}.`
     case 'betweenZones':
-      return `${valueText} falls between the zones published as ${zoneRef(position.lower)} and ${zoneRef(position.upper)}, in a gap the published table leaves between them.`
+      return `${valueText} falls between the zones labelled ${zoneRef(position.lower)} and ${zoneRef(position.upper)}, in a gap the source's table leaves between them.`
     case 'outside': {
-      const extent = bandExtent(band)
-      return extent !== null && extent.max > extent.min
-        ? `${valueText} is ${position.side} the published range (${formatBandRange(extent.min, extent.max, band.unit)}).`
-        : `${valueText} is ${position.side} the published range, which ${position.side === 'below' ? 'starts' : 'ends'} at ${formatBandValue(position.nearestBound, band.unit)}.`
+      const envelope = referenceBandEnvelope(band)
+      return envelope !== null
+        ? `${valueText} is ${position.side} the reference range (${formatBandRange(envelope.min, envelope.max, band.unit, 'spoken')}).`
+        : `${valueText} is ${position.side} the reference range, which ${position.side === 'below' ? 'starts' : 'ends'} at ${formatBandValue(position.nearestBound, band.unit, 0, 'spoken')}.`
     }
   }
 }

@@ -54,10 +54,10 @@ Display rank is the order below and is fixed here, not left to the implementer. 
 | # | metric | unit as this app reports it | band | source | population | n |
 |---|---|---|---|---|---|---|
 | 1 | `cadence` | `stepsPerMinute` | five published percentile zones: `<153` / `153–163` / `164–173` / `174–183` / `>183` spm | Garmin fenix 7 + Forerunner 945 owner's manuals (zone table); Malisoux 2023 *Orthop J Sports Med* 11(10) (distribution) | Garmin: unstated (see D9); Malisoux: recreational runners at 9.9 km/h | Garmin: unpublished; Malisoux: **860** |
-| 2 | `verticalRatio` | `percent` (a 0..1 value rendered ×100) | **[derived]** Garmin's per-step zones **halved** to per-stride: `<3.05` / `3.05–3.70` / `3.75–4.30` / `4.35–5.05` / `>5.05` % | Garmin fenix 7 APAC manual (zone table) + Forerunner 255 manual (the definition that forces the halving); Folland 2017 *MSSE* 49(7):1412–1423 (independent corroboration) | Garmin: unstated; Folland: trained runners, 10–12 km/h | Garmin: unpublished; Folland: **97** |
-| 3 | `verticalOscillationCm` | `centimeters` | `6.0–9.5` cm (P10–P90, pooled), mean `7.7` cm (Malisoux's overall 77 ± 12 mm) | Malisoux 2023 *Orthop J Sports Med* 11(10) | recreational runners at 10 km/h | **860** |
+| 2 | `verticalRatio` | `percent` (a 0..1 value rendered ×100) | **[derived]** Garmin's per-step zones **halved** to per-stride: `<3.05` / `3.05–3.70` / `3.75–4.30` / `4.35–5.05` / `>5.05` %, with zone labels **restated in value order** (D3) | Garmin fenix 7 APAC manual (zone table) + Forerunner 255 manual (the definition that forces the halving); Folland 2017 *MSSE* 49(7):1412–1423 (independent corroboration) | Garmin: unstated; Folland: trained runners, 10–12 km/h | Garmin: unpublished; Folland: **97** |
+| 3 | `verticalOscillationCm` | `centimeters` | **[derived]** `6.0–9.5` cm: the lowest published P10 (women, 6.0) to the highest published P90 (men, 9.5) of Malisoux's sex-stratified table at 10 km/h — **not** a single published P10–P90; mean `7.7` cm (Malisoux's overall 77 ± 12 mm) | Malisoux 2023 *Orthop J Sports Med* 11(10) | recreational runners at 10 km/h | **860** |
 | 4 | `trunkLean` | `degrees` | `1.8–21.4°` observed range, mean `10.3°` | Folland 2017 *MSSE* 49(7):1412–1423 | trained runners, 10–12 km/h | **97** |
-| 5 | `kneeFlexion` | `degrees` | `85–125°` | Fukuchi 2017 *PeerJ* 5:e3298 (speed-stratified) + Hanley 2021 (cross-convention corroboration) | Fukuchi: regular runners at 2.5 / 3.5 / 4.5 m/s; Hanley: distance runners at midswing | Fukuchi: **28**; Hanley: book chapter, cohort not restated |
+| 5 | `kneeFlexion` | `degrees` | `71.3–129°` observed range of swing knee flexion, mean `94.1°` (± 11.1°) | Folland 2017 *MSSE* 49(7):1412–1423; Fukuchi 2017 *PeerJ* 5:e3298 (speed-stratified) and Hanley 2021 shown beside it as corroboration | trained runners, 10–12 km/h | **97** (Fukuchi: 28; Hanley: book chapter, cohort not restated) |
 
 **Rank 1 — `cadence`.** The strongest of the five, because two independent kinds of source agree.
 Garmin's five-zone percentile table is a manufacturer statement over an unpublished population;
@@ -82,7 +82,12 @@ country): each +1 spm associated with 5% lower bone-stress-injury risk, RR 0.95 
 between minimal and maximum vertical positions of the center of mass during a step"* — peak-to-peak,
 per step, at the COM. That is definitionally what `verticalOscillationCm` computes. Overall
 77 ± 12 mm; men 80 ± 13, women 73 ± 11. At 10 km/h, P10–P90: men 64–95 mm (P50 78), women 60–85 mm
-(P50 74). **Pooled to ship: 6.0–9.5 cm, with Malisoux's overall mean of 7.7 cm.** Heiderscheit 2011 corroborates at
+(P50 74). **Shipped: 6.0–9.5 cm [derived], with Malisoux's overall mean of 7.7 cm.** Malisoux publishes no
+P10–P90 for the whole cohort, so the band runs from the lowest of the four published bounds (women's
+P10, 6.0 cm) to the highest (men's P90, 9.5 cm): both ends are published numbers, the span between them
+is not the P10–P90 of any group Malisoux reports, and it is declared as a derivation on screen — resting
+on the two published rows — rather than labelled as one percentile range. (An earlier draft called it
+"P10–P90, pooled", which claimed a published range that does not exist.) Heiderscheit 2011 corroborates at
 8.7 ± 1.3 cm COM excursion at 2.9 m/s (falling to 7.3 cm at +10% cadence). D4 records why Garmin's
 bands are **not** used here even though they exist and would have been easier.
 
@@ -109,8 +114,26 @@ preferred end on this scale would be picking a side in a live disagreement betwe
 Teng & Powers 2014 (7.3 ± 3.6° self-selected) is **[NOT LOADED]** — JOSPT returned 403. It is
 high-confidence secondary knowledge and is **not quoted as a range** anywhere.
 
-**Rank 5 — `kneeFlexion`.** Fukuchi 2017 (n=28 regular runners) uses the same convention this app
-does — 0° is full extension — and is stratified by speed:
+**Rank 5 — `kneeFlexion`.** Folland 2017 publishes the distribution directly, in Table 2: *"Minimum
+knee extension angle during swing"*, **−94.1 ± 11.1° (min −129, max −71.3)**, n=97 trained runners,
+each averaged across 10, 11 and 12 km/h. **Shipped: 71.3–129°, the full range observed across that
+cohort, with Folland's mean of 94.1° (± 11.1°).** Folland signs flexion negative and this app signs
+it positive, so the bounds are stored with their sign flipped — a change of sign, not a conversion.
+This is the same source shape `trunkLean` already uses (rank 4): one cohort's observed range and its
+mean, quoted.
+
+Folland measures joint angles relative to **quiet standing**, not to a mathematically straight leg,
+so as with `trunkLean` there may be a small real offset against this app's convention (0° is full
+extension). It is disclosed on screen rather than corrected for, because correcting it would mean
+assuming a standing posture nobody measured.
+
+**Correction to an earlier draft.** This band previously shipped as **85–125°**, "pooled" across
+Fukuchi's three speed-stratified means, Hanley and Folland. **No source publishes that range**: it was
+interpolated between studies, which D1 forbids by name. It was replaced by the published distribution
+above, and the sources it was pooled from now stand **beside** the band as corroboration.
+
+Fukuchi 2017 (n=28 regular runners) uses the same convention this app does — 0° is full extension —
+and is stratified by speed:
 
 | speed | peak knee flexion |
 |---|---|
@@ -120,12 +143,12 @@ does — 0° is full extension — and is stratified by speed:
 
 **That is roughly +13° per 1 m/s, and it makes this the most speed-sensitive metric in the set** —
 the 2.5 and 4.5 m/s means are 2.5 SDs apart. **This app cannot measure running speed at all.** The
-band is therefore deliberately wide: it spans the speed range rather than pretending to a precision
-the input does not support, and it carries the speed caveat most prominently of the five.
+band is one cohort at 10–12 km/h, not a span chosen to cover every speed, so the speed caveat matters
+more here than anywhere and is carried most prominently of the five. All three Fukuchi means lie inside
+Folland's observed range.
 
 Corroboration across conventions: Hanley 2021 reports 55–60° *included* thigh–shank angle at
-midswing, which is **120–125°** in this app's convention; Folland 2017 reports 94.1 ± 11.1° swing
-flexion, range 71–129. **Pooled to ship: 85–125°.**
+midswing, which is **120–125°** in this app's convention — also inside it.
 
 Two honest gaps, recorded rather than smoothed: Fukuchi does not state whether its maximum is swing
 or stance, and stance peak is ~45° in comparable cohorts, so 93–119° **must** be swing — that is an
@@ -134,23 +157,36 @@ figure is attributed everywhere, is **[NOT LOADED]** and is **not cited**.
 
 ## D3 — The halving derivation for `verticalRatio`
 
-**This is the one band on the page that is arithmetic rather than a quotation, so it gets the
-longest justification and it is labelled [derived] on screen.**
+**This is the one band on the page whose every bound is arithmetic rather than a quotation, so it
+gets the longest justification and it is labelled [derived] on screen.** (`verticalOscillationCm` is
+also declared derived, for a different and smaller reason — both of its bounds are published numbers,
+but from two different published rows; see D2 rank 3.)
 
 **The claim.** Garmin's published vertical-ratio zones are **per step**. This app's `verticalRatio`
 is **per stride**. A stride is two steps. Therefore this app's value is approximately **half**
 Garmin's for the same runner, and Garmin's zones must be halved before they can be laid against it.
 
 ```
-Garmin, per step              [derived] per stride = Garmin ÷ 2
-  >95th pct  : <6.1%     ->     <3.05%
-  70–95      : 6.1–7.4%  ->     3.05–3.70%
-  30–69      : 7.5–8.6%  ->     3.75–4.30%
-  5–29       : 8.7–10.1% ->     4.35–5.05%
-  <5         : >10.1%    ->     >5.05%
+Garmin, per step              [derived] per stride = Garmin ÷ 2   label as shipped (value order)
+  >95th pct  : <6.1%     ->     <3.05%                            Lowest 5% of values in Garmin's table
+  70–95      : 6.1–7.4%  ->     3.05–3.70%                        5th–30th percentile by value
+  30–69      : 7.5–8.6%  ->     3.75–4.30%                        31st–70th percentile by value
+  5–29       : 8.7–10.1% ->     4.35–5.05%                        71st–95th percentile by value
+  <5         : >10.1%    ->     >5.05%                            Highest 5% of values in Garmin's table
 ```
 
 Every bound halves exactly to two decimal places; **no rounding was applied and none was needed.**
+
+**The zone labels are restated, not quoted, and the derivation statement says so on screen.**
+Garmin ranks vertical ratio so that a **lower** value earns a **higher** percentile: its percentile
+is a rank of performance, not of value. Printed verbatim, a 3.00% reading "falls in the
+Above-the-95th-percentile zone" — which tells the runner that low ranks higher, exactly the verdict
+D7.8 and the spec forbid. Each zone is therefore labelled by where its values sit **in value order**,
+which is **100 minus Garmin's percentile**, applied to Garmin's own integer bins: `70–95` → `5–30`,
+`30–69` → `31–70`, `5–29` → `71–95`, `>95` → lowest 5%, `<5` → highest 5%. The arithmetic is pinned
+in a test. `cadence`'s Garmin labels are **not** restated: a higher cadence is a higher Garmin
+percentile, so that table already runs in value order and is quoted verbatim — a test pins that too,
+so nobody "harmonises" the two.
 
 **Note the 0.05 gaps at 3.70→3.75 and 4.30→4.35. They are Garmin's, not ours.** Garmin publishes its
 zone table to one decimal place with non-contiguous bounds (6.1–7.4 then 7.5–8.6), and halving
@@ -192,14 +228,16 @@ cancels:
 0.052 H / 1.28 H = 4.06% per stride
 ```
 
-**4.06% lands inside the derived 30–69th band (3.75–4.30%).** Folland measured a different cohort
+**4.06% lands inside the derived middle zone (3.75–4.30%; Garmin's 30–69th, labelled 31st–70th by
+value).** Folland measured a different cohort
 with different instrumentation and published neither a vertical ratio nor a band; the agreement is
 between Garmin's percentile table halved and an independent laboratory ratio, reached with no shared
 assumption but the definition of a stride.
 
 **A third check, from this repo's own footage.** CLAUDE.md records the `side-landscape` clip's
 `verticalRatio` at **0.0310419** — 3.10% — measured on the shipped pipeline and reproduced exactly
-across trials. That lands just inside the derived **70–95th** band, on its 3.05 boundary. Not
+across trials. That lands just inside the derived **3.05–3.70%** zone (Garmin's 70–95th, labelled
+5th–30th by value), on its 3.05 boundary. Not
 proof — it is one clip of one runner — but it is the reading that would have screamed if the factor
 of two were backwards: an un-halved comparison would have put this runner off the bottom of the
 scale, better than the 95th percentile of every Garmin user, which nobody believes.
@@ -219,8 +257,8 @@ Two facts, both against Garmin's numbers *for this metric specifically*:
 
 1. **Measured device error, in the direction that matters.** Smith 2022 *PLoS ONE* 17(11):e0277810
    measured Garmin devices approximately **1.3–1.5 cm high** against a video reference — an error
-   in one direction, set against a published band (6.0–9.5 cm) only 3.5 cm wide **[derived]** end
-   to end. (An earlier draft misstated this as a fraction of the band; the published numbers are now
+   in one direction, set against a band (6.0–9.5 cm, itself **[derived]** from Malisoux's two
+   sex-stratified P10–P90 rows, D2 rank 3) only 3.5 cm wide **[derived]** end to end. (An earlier draft misstated this as a fraction of the band; the published numbers are now
    stated side by side instead of as a new percentage.)
 2. **The sensor is not at the centre of mass.** Garmin's pod sits on the chest or the waist. This
    app's `verticalOscillationCm` is a COM-proxy bounce derived from the hip midpoint. A
@@ -244,7 +282,8 @@ additive offset does not cancel in a ratio. Garmin's published vertical-ratio zo
 numerator offset, so they may sit somewhat high relative to a hip-derived measurement like this
 app's. The offset is disclosed, **not quantified as a percentage and not corrected for**. The check
 that survives it is independent of Garmin entirely: Folland 2017's laboratory figure, **4.06% per stride
-[derived]** (D3 leg (c)), lands inside the middle, 30th–69th percentile, zone.
+[derived]** (D3 leg (c)), lands inside the middle zone — Garmin's 30th–69th, labelled 31st–70th by
+value.
 
 ## D5 — The seven metrics that carry no band, each with its reason
 
@@ -374,8 +413,9 @@ render their value and their description, with no band and no research-backed re
 
 **CLAUDE.md's standing regression anchor for `verticalOscillationCm` on the `side-landscape` track
 clip is `4.421467928439415` cm — re-confirmed to every digit across at least four separate
-re-measurements, on three different commits. Malisoux's P10 is 6.0 cm. Our anchor sits ~26% below
-the bottom of the band we are shipping.**
+re-measurements, on three different commits. The band's lower bound is 6.0 cm — Malisoux's P10 for
+women, the lower of the two published P10s (men's is 6.4 cm). Our anchor sits ~26% below the bottom of
+the band we are shipping.**
 
 **This is expected, it is already explained in this repo, and the band does not move.**
 

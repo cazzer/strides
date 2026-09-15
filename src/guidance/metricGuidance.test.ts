@@ -302,16 +302,41 @@ describe('band provenance', () => {
     )
   })
 
-  it('marks exactly one band as derived, and says what the derivation rests on', () => {
+  it('marks exactly two bands as derived, and says what each derivation rests on', () => {
     const derived = bandedEntries().filter(
       ([, band]) => band.derivation !== null,
     )
-    expect(derived.map(([id]) => id)).toEqual(['verticalRatio'])
+    expect(derived.map(([id]) => id)).toEqual([
+      'verticalRatio',
+      'verticalOscillationCm',
+    ])
     const derivation = METRIC_GUIDANCE.verticalRatio.band?.derivation
     // One leg per side: Garmin's denominator is a step, this app's is a true stride. R1(ii) admits
     // the conversion only because each leg is a stated definition rather than a fitted constant.
     expect(derivation?.restsOn).toHaveLength(2)
     expect(derivation?.statement).toContain('halved')
+    // …and it discloses that the zone LABELS are restated, not quoted (design.md D3).
+    expect(derivation?.statement).toContain('value order')
+    expect(derivation?.statement).toContain('100 minus Garmin')
+  })
+
+  it("declares verticalOscillationCm's 6.0–9.5 cm as a pairing of two published rows, not one published range", () => {
+    // Malisoux publishes 10th–90th percentiles by sex only: men 64–95 mm, women 60–85 mm at
+    // 10 km/h. 6.0 is women's P10 and 9.5 is men's P90, so no single published row spans the band.
+    const band = METRIC_GUIDANCE.verticalOscillationCm.band!
+    const derivation = band.derivation
+    expect(derivation).not.toBeNull()
+    expect(derivation?.restsOn).toEqual([
+      'Malisoux et al. 2023, men at 10 km/h: 10th–90th percentile 64–95 mm, which is 6.4–9.5 cm.',
+      'Malisoux et al. 2023, women at 10 km/h: 10th–90th percentile 60–85 mm, which is 6.0–8.5 cm.',
+    ])
+    expect(derivation?.statement).toContain("women's 10th percentile, 6.0 cm")
+    expect(derivation?.statement).toContain("men's 90th percentile, 9.5 cm")
+    // The label must not claim a single published 10th–90th percentile range, or "pooled".
+    expect(band.zones.map((zone) => zone.label)).toEqual([
+      "From women's 10th percentile to men's 90th percentile, at 10 km/h",
+    ])
+    expect(band.zones[0].label).not.toMatch(/pooled|10th–90th/i)
   })
 })
 
@@ -426,6 +451,68 @@ describe('band zones', () => {
       expect(zones[0].min).toBeNull()
       expect(zones[4].max).toBeNull()
     }
+  })
+
+  it("restates verticalRatio's zone labels in value order: each percentile is 100 minus Garmin's", () => {
+    // Garmin ranks vertical ratio so that a LOWER value is a HIGHER percentile — a rank of
+    // performance, not of value — and prints its table as >95 / 70–95 / 30–69 / 5–29 / <5, in
+    // ascending order of value. Quoted verbatim, "3.00% falls in the Above-the-95th-percentile
+    // zone" tells the runner low ranks higher. The shipped labels are the value-order percentiles.
+    const GARMIN_PERCENTILES_ASCENDING_BY_VALUE: Array<[number, number]> = [
+      [96, 100], // Garmin: ">95"
+      [70, 95],
+      [30, 69],
+      [5, 29],
+      [0, 4], // Garmin: "<5"
+    ]
+    const flipped = GARMIN_PERCENTILES_ASCENDING_BY_VALUE.map(([lo, hi]) => [
+      100 - hi,
+      100 - lo,
+    ])
+    expect(flipped).toEqual([
+      [0, 4],
+      [5, 30],
+      [31, 70],
+      [71, 95],
+      [96, 100],
+    ])
+    const labels = METRIC_GUIDANCE.verticalRatio.band!.zones.map(
+      (zone) => zone.label,
+    )
+    expect(labels).toEqual([
+      "Lowest 5% of values in Garmin's table", // 0–4
+      '5th–30th percentile by value',
+      '31st–70th percentile by value',
+      '71st–95th percentile by value',
+      "Highest 5% of values in Garmin's table", // 96–100
+    ])
+    // The three closed zones' label numbers ARE the flipped ranges, digit for digit.
+    for (let i = 1; i <= 3; i++) {
+      expect(labels[i].match(/\d+/g)?.map(Number), labels[i]).toEqual(
+        flipped[i],
+      )
+    }
+    // And the labels ascend with value, like the zones they name.
+    for (const label of labels) expect(label).not.toMatch(/above|below/i)
+  })
+
+  it("keeps cadence's Garmin labels verbatim: that table already runs in value order", () => {
+    // A higher cadence is a higher Garmin percentile, so these need no restating. Do not
+    // "harmonise" them with verticalRatio's restated labels.
+    const labels = METRIC_GUIDANCE.cadence.band!.zones.map((zone) => zone.label)
+    expect(labels).toEqual([
+      'Below the 5th percentile',
+      '5th–29th percentile',
+      '30th–69th percentile',
+      '70th–95th percentile',
+      'Above the 95th percentile',
+    ])
+    const firstPercentile = labels.map((label) =>
+      Number(label.match(/\d+/)![0]),
+    )
+    expect(firstPercentile).toEqual([5, 5, 30, 70, 95])
+    expect(labels[0]).toMatch(/^Below/)
+    expect(labels[4]).toMatch(/^Above/)
   })
 
   it('leaves the publisher’s gaps open rather than closing them for tidiness', () => {
@@ -596,8 +683,8 @@ describe('referenceBandEnvelope', () => {
       max: 21.4,
     })
     expect(referenceBandEnvelope(METRIC_GUIDANCE.kneeFlexion.band!)).toEqual({
-      min: 85,
-      max: 125,
+      min: 71.3,
+      max: 129,
     })
   })
 
@@ -697,7 +784,8 @@ describe('pinned band numbers', () => {
     ],
     verticalOscillationCm: [[6.0, 9.5]],
     trunkLean: [[1.8, 21.4]],
-    kneeFlexion: [[85, 125]],
+    // Folland 2017 Table 2, minimum knee extension angle during swing, (−129, −71.3), sign flipped.
+    kneeFlexion: [[71.3, 129]],
   }
 
   const EXPECTED_CENTRAL_TENDENCY: Record<BandedMetricId, number | null> = {
@@ -705,7 +793,7 @@ describe('pinned band numbers', () => {
     verticalRatio: null,
     verticalOscillationCm: 7.7,
     trunkLean: 10.3,
-    kneeFlexion: null,
+    kneeFlexion: 94.1,
   }
 
   /** `[source, ...corroboration]` sample sizes, in order. */
@@ -714,8 +802,35 @@ describe('pinned band numbers', () => {
     verticalRatio: ['Not published', '97'],
     verticalOscillationCm: ['860', '45'],
     trunkLean: ['97'],
-    kneeFlexion: ['28', 'Book chapter; the cohort is not restated', '97'],
+    kneeFlexion: ['97', '28', 'Book chapter; the cohort is not restated'],
   }
+
+  it("sources kneeFlexion's band from Folland's published swing distribution, not a pooled span", () => {
+    const band = METRIC_GUIDANCE.kneeFlexion.band!
+    expect(band.source.url).toBe(
+      'https://pmc.ncbi.nlm.nih.gov/articles/PMC5473370',
+    )
+    expect(band.source.sampleSize).toBe('97')
+    expect(band.centralTendency?.label).toBe(
+      "Folland's mean swing knee flexion (94.1 ± 11.1°)",
+    )
+    expect(band.zones.map((zone) => zone.label)).toEqual([
+      'Full range observed across the cohort',
+    ])
+    expect(band.derivation).toBeNull()
+    // Fukuchi's three speed means and Hanley now stand beside the band, not inside it.
+    expect(band.corroboration.map((source) => source.title)).toEqual([
+      'Fukuchi, Fukuchi & Duarte 2017, PeerJ 5:e3298',
+      'Hanley 2021, "The Biomechanics of Distance Running"',
+    ])
+    expect(band.corroboration[0].population).toContain('93.5 ± 10.4°')
+    expect(band.corroboration[0].population).toContain('108.7 ± 10.7°')
+    expect(band.corroboration[0].population).toContain('119.1 ± 10.4°')
+    expect(JSON.stringify(band)).not.toMatch(/pooled|deliberately wide/i)
+    expect(band.note).toContain('93–119° must be swing')
+    expect(band.note).toContain('Novacheck 1998')
+    expect(METRIC_GUIDANCE.kneeFlexion.speedSensitivity).not.toBeNull()
+  })
 
   it('pins every zone bound of every band', () => {
     for (const [id, band] of bandedEntries()) {

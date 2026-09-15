@@ -14,11 +14,24 @@ import type { BandUnit } from './types'
  *
  * Deliberately independent of `MetricsPanel`'s private `formatValue`: that one formats a whole
  * `MetricResult` (including foot-strike classification) at the panel's precision, and a band needs
- * `'percent'` at two decimal places because that is the precision Garmin publishes its table at —
- * one decimal place would print `3.70` and `3.75` as the same `3.7 %`, erasing a published gap.
+ * `'percent'` at two decimal places because that is the precision the halved Garmin table is stated
+ * at — one decimal place would print `3.70` and `3.75` as the same `3.7 %`, erasing the source's gap.
+ *
+ * ## Two text styles: visual and spoken
+ *
+ * `'visual'` is the compact form — `164–173 steps/min` — for tick and zone labels a sighted reader
+ * scans, which are `aria-hidden` or duplicated elsewhere in text. `'spoken'` is the form for
+ * SENTENCES and anything that is the text alternative: ` to ` between numbers and units spelled out
+ * (`164 to 173 steps per minute`), because a screen reader may read an en dash as nothing at all or
+ * as "dash", and `steps/min` as "steps slash min". The percent sign is kept in both styles: every
+ * mainstream screen reader reads it as "percent", and `3.10 percent` in a visible caption would read
+ * worse than it sounds.
  */
 
-/** Digits after the decimal point for each unit, at the precision the bands are published at. */
+/** Which of the two text forms to produce. See the module doc. */
+export type BandTextStyle = 'visual' | 'spoken'
+
+/** Digits after the decimal point for each unit, at the precision the bands' sources state them at. */
 const DECIMALS: Record<BandUnit, number> = {
   stepsPerMinute: 0,
   percent: 2,
@@ -36,20 +49,29 @@ const DISPLAY_SCALE: Record<BandUnit, number> = {
   ratio: 100,
 }
 
-/** What follows the number, including any separating space. */
-const SUFFIX: Record<BandUnit, string> = {
-  stepsPerMinute: ' steps/min',
-  percent: '%',
-  centimeters: ' cm',
-  degrees: '°',
-  ratio: '% of torso length',
+/** What follows the number, including any separating space, per text style. */
+const SUFFIX: Record<BandTextStyle, Record<BandUnit, string>> = {
+  visual: {
+    stepsPerMinute: ' steps/min',
+    percent: '%',
+    centimeters: ' cm',
+    degrees: '°',
+    ratio: '% of torso length',
+  },
+  spoken: {
+    stepsPerMinute: ' steps per minute',
+    percent: '%',
+    centimeters: ' centimetres',
+    degrees: ' degrees',
+    ratio: '% of torso length',
+  },
 }
 
 /**
  * The number alone, converted to the display domain, with no unit.
  *
- * `extraDecimals` adds precision beyond the published precision. A renderer needs it for exactly
- * one reason: a measured value that rounds onto a published bound while sitting on the other side
+ * `extraDecimals` adds precision beyond the source precision. A renderer needs it for exactly
+ * one reason: a measured value that rounds onto a band's bound while sitting on the other side
  * of it (cadence `163.5` prints as `164`, which reads as inside `164–173` while the value is in the
  * gap before it).
  */
@@ -65,32 +87,37 @@ export function formatBandNumber(
   return /^-0(\.0+)?$/.test(text) ? text.slice(1) : text
 }
 
-/** A single number with its unit, e.g. `3.05%`, `172 steps/min`, `6.0 cm`. */
+/**
+ * A single number with its unit, e.g. `3.05%`, `172 steps/min`, `6.0 cm` — or, `'spoken'`,
+ * `172 steps per minute`, `6.0 centimetres`.
+ */
 export function formatBandValue(
   value: number,
   unit: BandUnit,
   extraDecimals = 0,
+  style: BandTextStyle = 'visual',
 ): string {
-  return `${formatBandNumber(value, unit, extraDecimals)}${SUFFIX[unit]}`
+  return `${formatBandNumber(value, unit, extraDecimals)}${SUFFIX[style][unit]}`
 }
 
 /**
- * One zone's published extent, with the unit stated once: `164–173 steps/min`, `below 3.05%`,
- * `above 183 steps/min`.
+ * One zone's extent, with the unit stated once: `164–173 steps/min`, `below 3.05%`,
+ * `above 183 steps/min` — or, `'spoken'`, `164 to 173 steps per minute`.
  *
  * A closed range is inclusive on both bounds; an open-ended zone is strict on its one finite bound,
- * because that is what the publisher printed (`<153`, `>183`) — see `bandPosition.ts`. The range
- * separator becomes ` to ` when the lower bound is negative, so `-2.0 to 5.0°` cannot read as a
- * hyphenated pair.
+ * because that is what the source printed (`<153`, `>183`) — see `bandPosition.ts`. The visual
+ * separator also becomes ` to ` when the lower bound is negative, so `-2.0 to 5.0°` cannot read as
+ * a hyphenated pair.
  */
 export function formatBandRange(
   min: number | null,
   max: number | null,
   unit: BandUnit,
+  style: BandTextStyle = 'visual',
 ): string {
-  const suffix = SUFFIX[unit]
+  const suffix = SUFFIX[style][unit]
   if (min !== null && max !== null) {
-    const separator = min < 0 ? ' to ' : '–'
+    const separator = style === 'spoken' || min < 0 ? ' to ' : '–'
     return `${formatBandNumber(min, unit)}${separator}${formatBandNumber(max, unit)}${suffix}`
   }
   if (max !== null) return `below ${formatBandNumber(max, unit)}${suffix}`

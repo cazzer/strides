@@ -25,8 +25,10 @@ import type { BandSource, GuidanceLink, MetricGuidance } from './types'
  * population and sample size and why a test pins the URL set as a literal.
  *
  * The permanent home of the provenance behind every number below is
- * `openspec/changes/guided-results-view/design.md` — D2 for the five bands, D3 for the one
- * derivation, D4 for why one band comes from a paper where its sibling comes from a manual, D5
+ * `openspec/changes/guided-results-view/design.md` — D2 for the five bands (and for the
+ * derived pairing behind `verticalOscillationCm`'s), D3 for the halving derivation and the
+ * value-order zone labels, D4 for why one band comes from a paper where its sibling comes from a
+ * manual, D5
  * for the seven refusals one at a time, D8 for the one place a metric's remediation deliberately
  * hangs off another metric's card, and D9 for what none of this claims.
  *
@@ -174,7 +176,7 @@ const SMITH_2022_LINK: GuidanceLink = {
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC9671438/',
   kind: 'peer-reviewed',
   summary:
-    'Measured Garmin devices reading roughly 1.3–1.5 cm high for vertical oscillation against a video reference — an error in one direction, set against a published 10th–90th percentile range of 6.0–9.5 cm.',
+    "Measured Garmin devices reading roughly 1.3–1.5 cm high for vertical oscillation against a video reference — an error in one direction, set against Malisoux's sex-stratified 10th–90th percentile ranges of 6.4–9.5 cm (men) and 6.0–8.5 cm (women).",
 }
 
 const HEIDERSCHEIT_2011_LINK: GuidanceLink = {
@@ -413,6 +415,11 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
        * `174–183`, `>183`. Note 163→164 and 173→174 leave a one-unit gap on the number line.
        * That gap is Garmin's — it prints the table in whole steps per minute — and it is NOT
        * closed here, for the same reason design.md D3 declines to close the vertical-ratio gaps.
+       *
+       * **These labels are Garmin's own, verbatim, and they already run in VALUE order**: a higher
+       * cadence is a higher Garmin percentile. Do not "harmonise" them with `verticalRatio`'s
+       * restated labels — that table needed restating only because Garmin ranks it the other way
+       * round. `metricGuidance.test.ts` pins both directions.
        */
       zones: [
         { label: 'Below the 5th percentile', min: null, max: 153 },
@@ -486,7 +493,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     captureHint: SIDE_VIEW_PREFERRED_HINT,
   },
 
-  // === Rank 2 — the one band on the page that is arithmetic rather than a quotation. ===========
+  // === Rank 2 — the one band whose every bound is arithmetic rather than a quotation. ==========
   verticalRatio: {
     metric: 'verticalRatio',
     displayRank: 2,
@@ -499,9 +506,15 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
        *
        * Two further things to read carefully before editing:
        *
-       * 1. **The percentile order runs OPPOSITE to the numeric order.** A lower vertical ratio is
-       *    a higher percentile among Garmin's users. The zones are still ordered ascending by
-       *    value, like every other band here.
+       * 1. **Garmin's percentile order runs OPPOSITE to the numeric order, and the labels below are
+       *    therefore NOT Garmin's.** Garmin ranks vertical ratio so that a lower value earns a
+       *    higher percentile — a rank of performance, not of value. Printed verbatim, a 3.00%
+       *    reading would "fall in the Above-the-95th-percentile zone", which tells the runner low
+       *    ranks higher — a verdict the spec forbids (design.md D7.8). Each label is restated in value order,
+       *    as 100 minus Garmin's percentile, and the derivation statement says so on screen.
+       *    Garmin's `>95th / 70–95th / 30–69th / 5–29th / <5th` become `lowest 5% / 5th–30th /
+       *    31st–70th / 71st–95th / highest 5%`. The zones are ordered ascending by value, like every
+       *    other band here.
        * 2. **The 0.0005 gaps at 0.0370→0.0375 and 0.0430→0.0435 are Garmin's, and are not
        *    closed.** Garmin publishes to one decimal place with non-contiguous bounds (6.1–7.4
        *    then 7.5–8.6) and halving preserves the discontinuity exactly. Inventing a boundary to
@@ -509,11 +522,24 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
        *    refuses to invent, for a purely cosmetic gain. design.md D3.
        */
       zones: [
-        { label: 'Above the 95th percentile', min: null, max: 0.0305 },
-        { label: '70th–95th percentile', min: 0.0305, max: 0.037 },
-        { label: '30th–69th percentile', min: 0.0375, max: 0.043 },
-        { label: '5th–29th percentile', min: 0.0435, max: 0.0505 },
-        { label: 'Below the 5th percentile', min: 0.0505, max: null },
+        // Garmin's label, for each: above the 95th percentile.
+        {
+          label: "Lowest 5% of values in Garmin's table",
+          min: null,
+          max: 0.0305,
+        },
+        // Garmin's: 70th–95th percentile.
+        { label: '5th–30th percentile by value', min: 0.0305, max: 0.037 },
+        // Garmin's: 30th–69th percentile.
+        { label: '31st–70th percentile by value', min: 0.0375, max: 0.043 },
+        // Garmin's: 5th–29th percentile.
+        { label: '71st–95th percentile by value', min: 0.0435, max: 0.0505 },
+        // Garmin's: below the 5th percentile.
+        {
+          label: "Highest 5% of values in Garmin's table",
+          min: 0.0505,
+          max: null,
+        },
       ],
       centralTendency: null,
       source: {
@@ -529,18 +555,18 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
           title:
             'Folland et al. 2017, Medicine & Science in Sports & Exercise 49(7):1412–1423 (derived: 0.052 H pelvis oscillation ÷ 1.28 H stride length)',
           population:
-            'Trained runners at 10–12 km/h. Height cancels between the two published terms, giving 4.06% per stride — inside the derived 30th–69th zone, reached by an entirely separate route with no shared assumption but the definition of a stride',
+            'Trained runners at 10–12 km/h. Height cancels between the two published terms, giving 4.06% per stride — inside the derived middle zone (31st–70th percentile by value), reached by an entirely separate route with no shared assumption but the definition of a stride',
         },
       ],
       derivation: {
         statement:
-          "Garmin's published vertical-ratio zones are per STEP. This app's vertical ratio is per STRIDE, and a stride is two steps — so every Garmin bound is halved before it can be laid against this app's number. Every bound halves exactly to two decimal places in percent: 6.1 → 3.05, 7.4 → 3.70, 7.5 → 3.75, 8.6 → 4.30, 8.7 → 4.35, 10.1 → 5.05. No rounding was applied and none was needed.",
+          "Garmin's published vertical-ratio zones are per STEP. This app's vertical ratio is per STRIDE, and a stride is two steps — so every Garmin bound is halved before it can be laid against this app's number. Every bound halves exactly to two decimal places in percent: 6.1 → 3.05, 7.4 → 3.70, 7.5 → 3.75, 8.6 → 4.30, 8.7 → 4.35, 10.1 → 5.05. No rounding was applied and none was needed. The zone labels are restated too, not quoted: Garmin ranks vertical ratio so that a lower value earns a higher percentile, which would label the lowest readings with the highest percentile. Each zone is labelled instead by where its values sit in value order, which is 100 minus Garmin's percentile — Garmin's above-95th becomes the lowest 5% of values, 70th–95th becomes 5th–30th, 30th–69th becomes 31st–70th, 5th–29th becomes 71st–95th, and below-5th becomes the highest 5%.",
         restsOn: [
           'Garmin\'s own manual defines its "stride length" verbatim as "the length of your stride from one footfall to the next" — one footfall to the NEXT is left-to-right or right-to-left, which is a step. Two cross-checks on Garmin\'s own published figures agree: at 10 km/h and 164 steps/min the distance per footfall is 1.02 m, a step rather than a stride; and Garmin\'s own chest-measured vertical oscillation bands divided by its vertical ratio bands imply a denominator of 109–113 cm, which is a step, not a ~200 cm stride.',
           "This app's denominator is a true stride, stated in its own source: `src/heuristics/strideLength.ts` pairs only same-side consecutive footstrikes, so every displacement it returns is a genuine full-stride one. `verticalRatio.ts` is that extractor's only consumer.",
         ],
       },
-      note: "Unlike an absolute measurement, this ratio cancels height — both of its terms scale with stature — which is its main virtue over raw vertical oscillation. It is also why a manufacturer's table can be used here where design.md D4 refuses one for the centimetre metric: a proportional sensor error largely divides out of a ratio, and does not divide out of an absolute number of centimetres. The error actually measured on Garmin's vertical-oscillation numerator is not proportional, though: devices read roughly 1.3–1.5 cm high against a video reference, which is an additive offset, and an additive offset does not cancel in a ratio. Garmin's published zones inherit that numerator offset, so they may sit somewhat high relative to a hip-derived measurement like this app's. Folland 2017's independent laboratory figure of 4.06% per stride [derived] lands inside the middle, 30th–69th percentile, zone.",
+      note: "Unlike an absolute measurement, this ratio cancels height — both of its terms scale with stature — which is its main virtue over raw vertical oscillation. It is also why a manufacturer's table can be used here where design.md D4 refuses one for the centimetre metric: a proportional sensor error largely divides out of a ratio, and does not divide out of an absolute number of centimetres. The error actually measured on Garmin's vertical-oscillation numerator is not proportional, though: devices read roughly 1.3–1.5 cm high against a video reference, which is an additive offset, and an additive offset does not cancel in a ratio. Garmin's published zones inherit that numerator offset, so they may sit somewhat high relative to a hip-derived measurement like this app's. Folland 2017's independent laboratory figure of 4.06% per stride [derived] lands inside the middle zone, the 31st–70th percentile by value.",
     },
     noBandReason: null,
     evidenceDirection: 'none-established',
@@ -569,9 +595,15 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     displayRank: 3,
     band: {
       unit: 'centimeters',
+      /**
+       * **Both bounds are published; the range between them is not.** Malisoux publishes its
+       * 10th–90th percentiles by sex, not for the cohort as a whole, so 6.0 is women's 10th and 9.5
+       * is men's 90th — which is why `derivation` is non-null and the label names both rows.
+       */
       zones: [
         {
-          label: '10th–90th percentile, pooled across men and women at 10 km/h',
+          label:
+            "From women's 10th percentile to men's 90th percentile, at 10 km/h",
           min: 6.0,
           max: 9.5,
         },
@@ -588,7 +620,14 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
             'Runners at 2.9 m/s — 8.7 ± 1.3 cm of centre-of-mass excursion, falling to 7.3 cm at a 10% higher step rate',
         },
       ],
-      derivation: null,
+      derivation: {
+        statement:
+          "Malisoux publishes 10th–90th percentile ranges for men and for women separately, not one range for the whole cohort. This band runs from the lowest of those four published bounds (women's 10th percentile, 6.0 cm) to the highest (men's 90th percentile, 9.5 cm), so it contains both published ranges. Both ends are published numbers, but the span between them is not the 10th–90th percentile range of any group Malisoux reports, and no percentile of the combined cohort is claimed.",
+        restsOn: [
+          'Malisoux et al. 2023, men at 10 km/h: 10th–90th percentile 64–95 mm, which is 6.4–9.5 cm.',
+          'Malisoux et al. 2023, women at 10 km/h: 10th–90th percentile 60–85 mm, which is 6.0–8.5 cm.',
+        ],
+      },
       // The height confound is deliberately NOT repeated here: it is a statement about the
       // metric, so it renders once, from `mandatoryNotes`. This note is for how the band was built.
       note: 'Garmin publishes vertical-oscillation bands in centimetres that are deliberately NOT used here — Garmin devices were measured reading roughly 1.3–1.5 cm high against a video reference, and their sensor sits on the chest or waist rather than at the centre of mass, which sees more travel again. Malisoux measures what this app computes: centre of mass, peak to peak, per step.',
@@ -652,29 +691,39 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     captureHint: SIDE_VIEW_REQUIRED_HINT,
   },
 
-  // === Rank 5 — the most speed-sensitive band in the set, and deliberately the widest. =========
+  // === Rank 5 — the most speed-sensitive band in the set: one cohort's observed range. ==========
   kneeFlexion: {
     metric: 'kneeFlexion',
     displayRank: 5,
     band: {
       unit: 'degrees',
+      /**
+       * Folland 2017, Table 2, "Minimum knee extension angle during swing": −94.1 ± 11.1°
+       * (min −129, max −71.3). Folland signs flexion negative; this app signs it positive, so the
+       * range is stored as 71.3–129 — a change of sign, not a conversion. An earlier draft shipped
+       * 85–125°, pooled across Fukuchi's speed means, Hanley and Folland; no source publishes that
+       * range, so it was replaced (design.md D1, D2 rank 5).
+       */
       zones: [
         {
-          label:
-            'Pooled across running speeds and across two measurement conventions',
-          min: 85,
-          max: 125,
+          label: 'Full range observed across the cohort',
+          min: 71.3,
+          max: 129,
         },
       ],
-      centralTendency: null,
-      source: {
-        title: 'Fukuchi, Fukuchi & Duarte 2017, PeerJ 5:e3298',
-        url: FUKUCHI_2017_URL,
-        population:
-          'Regular runners at 2.5, 3.5 and 4.5 m/s — 93.5 ± 10.4°, 108.7 ± 10.7° and 119.1 ± 10.4° respectively, in the same convention this app uses, where 0° is full extension',
-        sampleSize: '28',
+      centralTendency: {
+        value: 94.1,
+        label: "Folland's mean swing knee flexion (94.1 ± 11.1°)",
       },
+      source: FOLLAND_2017_SOURCE,
       corroboration: [
+        {
+          title: 'Fukuchi, Fukuchi & Duarte 2017, PeerJ 5:e3298',
+          url: FUKUCHI_2017_URL,
+          population:
+            'Regular runners at 2.5, 3.5 and 4.5 m/s — 93.5 ± 10.4°, 108.7 ± 10.7° and 119.1 ± 10.4° respectively, in the same convention this app uses, where 0° is full extension',
+          sampleSize: '28',
+        },
         {
           title: 'Hanley 2021, "The Biomechanics of Distance Running"',
           url: HANLEY_2021_URL,
@@ -682,14 +731,9 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
             "Distance runners at midswing — 55–60° of included thigh–shank angle, which is 120–125° in this app's convention",
           sampleSize: 'Book chapter; the cohort is not restated',
         },
-        {
-          ...FOLLAND_2017_SOURCE,
-          population:
-            'Trained runners at 10–12 km/h — 94.1 ± 11.1° of swing knee flexion, with a full observed range of 71–129°',
-        },
       ],
       derivation: null,
-      note: 'The band is deliberately wide because it spans a speed range rather than pretending to a precision the input does not support: the published means at 2.5 and 4.5 m/s sit about two and a half standard deviations apart, and this app cannot tell which of those a clip was filmed at. Two honest gaps go with it. Fukuchi does not state whether its maximum is a swing or a stance peak; stance peak is around 45° in comparable cohorts, so 93–119° must be swing — an inference, not the paper\'s claim. And Novacheck 1998, to which the ubiquitous "125° at midswing" figure is attributed everywhere, could not be retrieved and is not cited.',
+      note: 'This is the spread of one cohort at 10–12 km/h, not a span chosen to cover every running speed — and speed moves this measurement more than any other this app makes: the speed-stratified means beside it, at 2.5 and 4.5 m/s, sit about two and a half standard deviations apart, and this app cannot tell which speed a clip was filmed at. Folland measures each knee angle against the runner\'s own quiet standing posture rather than a fully straight leg, and reports flexion as a negative number; it is shown here as positive flexion, and the standing reference is disclosed rather than corrected for, because correcting it would mean assuming a standing posture nobody measured. Two honest gaps go with the corroboration. Fukuchi does not state whether its maximum is a swing or a stance peak; stance peak is around 45° in comparable cohorts, so 93–119° must be swing — an inference, not the paper\'s claim. And Novacheck 1998, to which the ubiquitous "125° at midswing" figure is attributed everywhere, could not be retrieved and is not cited.',
     },
     noBandReason: null,
     evidenceDirection: 'none-established',
@@ -701,7 +745,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
         'Stratified by speed, Fukuchi reports mean peak knee flexion of 93.5°, 108.7° and 119.1° at 2.5, 3.5 and 4.5 m/s — about +13° per 1 m/s, and the slowest and fastest means are about two and a half standard deviations apart.',
       betweenRunners: null,
     },
-    research: [FUKUCHI_2017_LINK, HANLEY_2021_LINK, FOLLAND_2017_LINK],
+    research: [FOLLAND_2017_LINK, FUKUCHI_2017_LINK, HANLEY_2021_LINK],
     // Nothing in the research pass reports an intervention on swing knee flexion.
     remediation: [],
     captureHint: SIDE_VIEW_REQUIRED_HINT,

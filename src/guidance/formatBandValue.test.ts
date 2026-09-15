@@ -65,6 +65,32 @@ describe('formatBandValue', () => {
 
   it('separates a range with a negative lower bound by "to", not a dash', () => {
     expect(formatBandRange(-2, 5, 'degrees')).toBe('-2.0 to 5.0°')
-    expect(formatBandRange(85, 125, 'degrees')).toBe('85.0–125.0°')
+    expect(formatBandRange(71.3, 129, 'degrees')).toBe('71.3–129.0°')
+  })
+
+  it('in the spoken style, separates by " to " and spells the unit, for sentences and text alternatives', () => {
+    expect(formatBandRange(164, 173, 'stepsPerMinute', 'spoken')).toBe(
+      '164 to 173 steps per minute',
+    )
+    expect(formatBandRange(null, 153, 'stepsPerMinute', 'spoken')).toBe(
+      'below 153 steps per minute',
+    )
+    expect(formatBandRange(0.0305, 0.037, 'percent', 'spoken')).toBe(
+      '3.05 to 3.70%',
+    )
+    expect(formatBandRange(6, 9.5, 'centimeters', 'spoken')).toBe(
+      '6.0 to 9.5 centimetres',
+    )
+    expect(formatBandValue(105, 'degrees', 0, 'spoken')).toBe('105.0 degrees')
+    expect(formatBandValue(0.1234, 'ratio', 0, 'spoken')).toBe(
+      '12.3% of torso length',
+    )
+  })
+
+  it('keeps the compact visual form by default, for aria-hidden tick and value labels', () => {
+    expect(formatBandRange(164, 173, 'stepsPerMinute')).toBe(
+      '164–173 steps/min',
+    )
+    expect(formatBandValue(6, 'centimeters')).toBe('6.0 cm')
   })
 })

@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
+import { formatMeasuredBandValue } from './bandPosition'
 import { formatBandNumber } from './formatBandValue'
 import { MetricScale } from './MetricScale'
 import { METRIC_GUIDANCE } from './metricGuidance'
@@ -30,10 +31,10 @@ function bandOf(metric: BandedMetric): ReferenceBand {
 /** For each band: a value inside, one just outside the envelope, and one far beyond it. */
 const SAMPLE_VALUES: Record<BandedMetric, number[]> = {
   cadence: [172, 163.5, 153, 100, 260],
-  verticalRatio: [0.031, 0.0372, 0.02, 0.09],
+  verticalRatio: [0.031, 0.0372, 0.02, 0.052, 0.09],
   verticalOscillationCm: [7.1, 4.421467928439415, 1, 30],
   trunkLean: [10, -3, 60],
-  kneeFlexion: [110, 130, 20, 200],
+  kneeFlexion: [105, 130, 60, 20, 260],
 }
 
 /** Transcribed rather than imported, so the formatter under test cannot supply its own oracle. */
@@ -42,6 +43,15 @@ const UNIT_TEXT: Record<ReferenceBand['unit'], string> = {
   percent: '%',
   centimeters: ' cm',
   degrees: '°',
+  ratio: '% of torso length',
+}
+
+/** The same, as a sentence spells it for a screen reader. */
+const SPOKEN_UNIT_TEXT: Record<ReferenceBand['unit'], string> = {
+  stepsPerMinute: ' steps per minute',
+  percent: '%',
+  centimeters: ' centimetres',
+  degrees: ' degrees',
   ratio: '% of torso length',
 }
 
@@ -59,6 +69,18 @@ function renderScale(metric: BandedMetric, value: number) {
   )
   const figure = screen.getByRole('figure')
   return { ...result, figure, label }
+}
+
+/**
+ * The figure's caption, which is its accessible name in every browser (HTML-AAM: a `<figure>` is
+ * named by its `<figcaption>`). Read directly rather than through `toHaveAccessibleName`, because
+ * `dom-accessibility-api` does not implement figcaption naming — and the component deliberately no
+ * longer repeats it with an `aria-labelledby` that some screen readers announce twice.
+ */
+function captionOf(figure: HTMLElement): string {
+  expect(figure).not.toHaveAttribute('aria-labelledby')
+  expect(figure).not.toHaveAttribute('aria-label')
+  return one(figure, 'figcaption').textContent ?? ''
 }
 
 /** Everything a reader who cannot see the graphic receives: the figure minus aria-hidden subtrees. */
@@ -122,12 +144,34 @@ describe('MetricScale — every published zone boundary renders', () => {
       (node) => node.textContent,
     )
     expect(items).toEqual([
-      'below 153 steps/min — Below the 5th percentile',
-      '153–163 steps/min — 5th–29th percentile',
-      '164–173 steps/min — 30th–69th percentile',
-      '174–183 steps/min — 70th–95th percentile',
-      'above 183 steps/min — Above the 95th percentile',
+      'below 153 steps per minute: Below the 5th percentile',
+      '153 to 163 steps per minute: 5th–29th percentile',
+      '164 to 173 steps per minute: 30th–69th percentile',
+      '174 to 183 steps per minute: 70th–95th percentile',
+      'above 183 steps per minute: Above the 95th percentile',
     ])
+  })
+
+  it('verticalRatio lists its zones with labels in value order, lowest value first', () => {
+    const { figure } = renderScale('verticalRatio', 0.031)
+    const items = [...figure.querySelectorAll('.metric-scale__zone-item')].map(
+      (node) => node.textContent,
+    )
+    expect(items).toEqual([
+      "below 3.05%: Lowest 5% of values in Garmin's table",
+      '3.05 to 3.70%: 5th–30th percentile by value',
+      '3.75 to 4.30%: 31st–70th percentile by value',
+      '4.35 to 5.05%: 71st–95th percentile by value',
+      "above 5.05%: Highest 5% of values in Garmin's table",
+    ])
+  })
+
+  it('keeps list semantics on the zone list, which a CSS list reset strips in Safari', () => {
+    const { figure } = renderScale('cadence', 172)
+    expect(one(figure, '.metric-scale__zones')).toHaveAttribute('role', 'list')
+    expect(screen.getByRole('list')).toHaveAccessibleName(
+      'Reference zones, lowest value first',
+    )
   })
 
   it('draws a published gap as a gap: adjacent zones that do not touch do not touch on the track', () => {
@@ -167,10 +211,10 @@ describe('MetricScale — every published zone boundary renders', () => {
 })
 
 describe('MetricScale — the position is available without the graphic', () => {
-  it('names the figure with the value, its unit and the containing zone for cadence at 172', () => {
+  it('captions the figure with the value, its unit and the containing zone for cadence at 172', () => {
     const { figure, container } = renderScale('cadence', 172)
-    expect(figure).toHaveAccessibleName(
-      'Metric cadence: 172 steps/min falls in the zone published as “30th–69th percentile” (164–173 steps/min).',
+    expect(captionOf(figure)).toBe(
+      'Metric cadence: 172 steps per minute falls in the zone labelled “30th–69th percentile” (values from 164 to 173 steps per minute).',
     )
     expect(one(container, '.metric-scale__graphic')).toHaveAttribute(
       'aria-hidden',
@@ -186,9 +230,13 @@ describe('MetricScale — the position is available without the graphic', () => 
         const text = textWithoutGraphic(figure)
         const valueLabel =
           one(figure, '.metric-scale__value-label').textContent ?? ''
+        // The graphic's label is the compact form; the text alternative carries the spoken one.
         const printedValue = valueLabel.replace(/[◂▸]/g, '').trim()
-        expect(text).toContain(printedValue)
+        expect(printedValue).toBe(formatMeasuredBandValue(band, value))
         expect(printedValue.endsWith(UNIT_TEXT[band.unit])).toBe(true)
+        const spokenValue = formatMeasuredBandValue(band, value, 'spoken')
+        expect(spokenValue.endsWith(SPOKEN_UNIT_TEXT[band.unit])).toBe(true)
+        expect(text).toContain(spokenValue)
         for (const bound of distinctBounds(band)) {
           expect(text).toContain(formatBandNumber(bound, band.unit))
         }
@@ -199,8 +247,8 @@ describe('MetricScale — the position is available without the graphic', () => 
 
   it('verticalRatio: 0.031 prints as 3.10% and lands in the 3.05–3.70% zone', () => {
     const { figure, container } = renderScale('verticalRatio', 0.031)
-    expect(figure).toHaveAccessibleName(
-      'Metric verticalRatio: 3.10% falls in the zone published as “70th–95th percentile” (3.05–3.70%).',
+    expect(captionOf(figure)).toBe(
+      'Metric verticalRatio: 3.10% falls in the zone labelled “5th–30th percentile by value” (values from 3.05 to 3.70%).',
     )
     const text = figure.textContent ?? ''
     expect(text).not.toMatch(/310(\.0+)?%/)
@@ -215,25 +263,48 @@ describe('MetricScale — the position is available without the graphic', () => 
     expect(marker).toBeLessThan(ticks[1])
   })
 
-  it('a value in a published gap says it falls between the two zones', () => {
-    renderScale('verticalRatio', 0.0372)
-    expect(screen.getByRole('figure')).toHaveAccessibleName(
-      'Metric verticalRatio: 3.72% falls between the zones published as “70th–95th percentile” (3.05–3.70%) and “30th–69th percentile” (3.75–4.30%), in a gap the published table leaves between them.',
+  it('a value in a gap in the source table says it falls between the two zones', () => {
+    const { figure } = renderScale('verticalRatio', 0.0372)
+    expect(captionOf(figure)).toBe(
+      "Metric verticalRatio: 3.72% falls between the zones labelled “5th–30th percentile by value” (values from 3.05 to 3.70%) and “31st–70th percentile by value” (values from 3.75 to 4.30%), in a gap the source's table leaves between them.",
+    )
+  })
+
+  it('verticalRatio above 5.05%: the zone label, the values and the position all run the same way', () => {
+    const { figure } = renderScale('verticalRatio', 0.052)
+    expect(captionOf(figure)).toBe(
+      "Metric verticalRatio: 5.20% falls in the zone labelled “Highest 5% of values in Garmin's table” (values above 5.05%).",
     )
   })
 
   it('a cadence in the 163→164 gap prints a decimal rather than a "164" that reads as inside 164–173', () => {
     const { figure } = renderScale('cadence', 163.5)
-    expect(figure).toHaveAccessibleName(
-      'Metric cadence: 163.5 steps/min falls between the zones published as “5th–29th percentile” (153–163 steps/min) and “30th–69th percentile” (164–173 steps/min), in a gap the published table leaves between them.',
+    expect(captionOf(figure)).toBe(
+      "Metric cadence: 163.5 steps per minute falls between the zones labelled “5th–29th percentile” (values from 153 to 163 steps per minute) and “30th–69th percentile” (values from 164 to 173 steps per minute), in a gap the source's table leaves between them.",
+    )
+    expect(one(figure, '.metric-scale__value-label').textContent).toBe(
+      '163.5 steps/min',
     )
   })
 
   it('a value on a bound an open zone shares belongs to the closed zone, never to both', () => {
     const { figure } = renderScale('cadence', 153)
-    expect(figure).toHaveAccessibleName(
-      'Metric cadence: 153 steps/min falls in the zone published as “5th–29th percentile” (153–163 steps/min).',
+    expect(captionOf(figure)).toBe(
+      'Metric cadence: 153 steps per minute falls in the zone labelled “5th–29th percentile” (values from 153 to 163 steps per minute).',
     )
+  })
+
+  it('never says "published" of a band, including the two derived ones', () => {
+    for (const metric of BANDED) {
+      for (const value of SAMPLE_VALUES[metric]) {
+        const { container, unmount } = renderScale(metric, value)
+        expect(container.textContent ?? '').not.toMatch(/publish/i)
+        for (const element of container.querySelectorAll('[aria-label]')) {
+          expect(element.getAttribute('aria-label')).not.toMatch(/publish/i)
+        }
+        unmount()
+      }
+    }
   })
 })
 
@@ -243,8 +314,8 @@ describe('MetricScale — a value outside its band is reported, never silently c
       'verticalOscillationCm',
       4.421467928439415,
     )
-    expect(figure).toHaveAccessibleName(
-      'Metric verticalOscillationCm: 4.4 cm is below the published range (6.0–9.5 cm).',
+    expect(captionOf(figure)).toBe(
+      'Metric verticalOscillationCm: 4.4 centimetres is below the reference range (6.0 to 9.5 centimetres).',
     )
     const marker = one(container, '.metric-scale__marker')
     expect(marker).not.toHaveAttribute('data-clamped')
@@ -253,7 +324,7 @@ describe('MetricScale — a value outside its band is reported, never silently c
       ...container.querySelectorAll('.metric-scale__tick'),
     ].map(percentOf)
     expect(percentOf(marker)).toBeLessThan(lowerTick)
-    expect(figure.textContent).not.toMatch(/rendered range/)
+    expect(figure.textContent).not.toMatch(/drawn scale/)
   })
 
   it('a value far below the domain pins the marker to the lower edge and says so', () => {
@@ -261,19 +332,45 @@ describe('MetricScale — a value outside its band is reported, never silently c
     const marker = one(container, '.metric-scale__marker')
     expect(marker).toHaveAttribute('data-clamped', 'below')
     expect(percentOf(marker)).toBe(0)
-    expect(figure).toHaveAccessibleName(
-      "Metric verticalOscillationCm: 1.0 cm is below the published range (6.0–9.5 cm). It is below the rendered range of this scale, so its marker is pinned to the scale's lower end.",
+    expect(captionOf(figure)).toBe(
+      'Metric verticalOscillationCm: 1.0 centimetres is below the reference range (6.0 to 9.5 centimetres). It lies beyond the lower end of the drawn scale, so its marker is pinned at that end.',
     )
   })
 
   it('a value far above the domain pins the marker to the upper edge and says so', () => {
-    const { figure, container } = renderScale('kneeFlexion', 200)
+    const { figure, container } = renderScale('kneeFlexion', 260)
     const marker = one(container, '.metric-scale__marker')
     expect(marker).toHaveAttribute('data-clamped', 'above')
     expect(percentOf(marker)).toBe(100)
-    expect(figure).toHaveAccessibleName(
-      "Metric kneeFlexion: 200.0° is above the published range (85.0–125.0°). It is above the rendered range of this scale, so its marker is pinned to the scale's upper end.",
+    expect(captionOf(figure)).toBe(
+      'Metric kneeFlexion: 260.0 degrees is above the reference range (71.3 to 129.0 degrees). It lies beyond the upper end of the drawn scale, so its marker is pinned at that end.',
     )
+  })
+
+  it('verticalRatio far above the domain: one direction throughout, no word contradicting another', () => {
+    const { figure, container } = renderScale('verticalRatio', 0.09)
+    expect(one(container, '.metric-scale__marker')).toHaveAttribute(
+      'data-clamped',
+      'above',
+    )
+    expect(captionOf(figure)).toBe(
+      "Metric verticalRatio: 9.00% falls in the zone labelled “Highest 5% of values in Garmin's table” (values above 5.05%). It lies beyond the upper end of the drawn scale, so its marker is pinned at that end.",
+    )
+    expect(captionOf(figure)).not.toMatch(/\b(below|lowest|lower)\b/i)
+  })
+
+  it('never leaves an unclamped marker at the edge, where it would read as clamped', () => {
+    // Sweeps through the padding and the extension on both sides. Before the margin applied
+    // inside the padded edge too, 10.37 cm drew at 99.9% — indistinguishable from a pinned marker.
+    for (let value = 1.5; value <= 14; value += 0.01) {
+      const { container, unmount } = renderScale('verticalOscillationCm', value)
+      const marker = one(container, '.metric-scale__marker')
+      if (!marker.hasAttribute('data-clamped')) {
+        expect(percentOf(marker), `at ${value}`).toBeGreaterThanOrEqual(1.9)
+        expect(percentOf(marker), `at ${value}`).toBeLessThanOrEqual(98.1)
+      }
+      unmount()
+    }
   })
 
   it('inside an open-ended zone but beyond the drawn track: still the zone, and still says it is clamped', () => {
@@ -282,8 +379,8 @@ describe('MetricScale — a value outside its band is reported, never silently c
       'data-clamped',
       'below',
     )
-    expect(figure).toHaveAccessibleName(
-      "Metric cadence: 100 steps/min falls in the zone published as “Below the 5th percentile” (below 153 steps/min). It is below the rendered range of this scale, so its marker is pinned to the scale's lower end.",
+    expect(captionOf(figure)).toBe(
+      'Metric cadence: 100 steps per minute falls in the zone labelled “Below the 5th percentile” (values below 153 steps per minute). It lies beyond the lower end of the drawn scale, so its marker is pinned at that end.',
     )
   })
 
@@ -376,8 +473,87 @@ describe('MetricScale — a band with no finite extent', () => {
       <MetricScale band={band} value={170} label="Cadence" />,
     )
     expect(container.querySelector('.metric-scale__graphic')).toBeNull()
-    expect(screen.getByRole('figure')).toHaveAccessibleName(
-      'Cadence: 170 steps/min falls in the range published as “Open zone” (any value).',
+    expect(captionOf(screen.getByRole('figure'))).toBe(
+      'Cadence: 170 steps per minute falls in the range labelled “Open zone” (any value).',
     )
+  })
+})
+
+describe('MetricScale — legibility of the marks', () => {
+  function classesOf(element: Element): string[] {
+    return (element.getAttribute('class') ?? '').split(/\s+/)
+  }
+
+  it('restates every mark in system colours under forced colours, so High Contrast does not erase it', () => {
+    const { container } = renderScale('cadence', 172)
+    expect(classesOf(one(container, '.metric-scale__track'))).toEqual(
+      expect.arrayContaining([
+        'forced-colors:forced-color-adjust-none',
+        'forced-colors:bg-[Canvas]',
+        'forced-colors:border-[CanvasText]',
+      ]),
+    )
+    for (const tick of container.querySelectorAll('.metric-scale__tick')) {
+      expect(classesOf(tick)).toContain('forced-colors:bg-[CanvasText]')
+    }
+    for (const zone of container.querySelectorAll('.metric-scale__zone')) {
+      expect(classesOf(zone)).toEqual(
+        expect.arrayContaining([
+          'forced-colors:bg-[Canvas]',
+          'forced-colors:border-x',
+          'forced-colors:border-[CanvasText]',
+        ]),
+      )
+    }
+    expect(classesOf(one(container, '.metric-scale__marker'))).toEqual(
+      expect.arrayContaining([
+        'forced-colors:bg-[Highlight]',
+        'forced-colors:ring-[Canvas]',
+      ]),
+    )
+  })
+
+  it('rings the marker so it clears 3:1 against either zone tint in both themes', () => {
+    // Unringed, brand-700 on neutral-400 is 2.38:1 and brand-400 on neutral-500 is 2.10:1. Against
+    // its own ring the marker is 6.17:1 (brand-700 on white) and 9.34:1 (brand-400 on black).
+    const { container } = renderScale('cadence', 172)
+    expect(classesOf(one(container, '.metric-scale__marker'))).toEqual(
+      expect.arrayContaining(['ring-1', 'ring-white', 'dark:ring-black']),
+    )
+  })
+
+  it('never overprints two bound labels in one row, at a 280 px track with a widened verticalRatio domain', () => {
+    // 0.075 widens the domain almost to its limit, which squeezes the six bounds — and the two
+    // pairs 3.70/3.75 and 4.30/4.35 sit about 1% apart — into under half the track.
+    const TRACK_PX = 280
+    // Generous for an 11 px sans-serif digit or point, so the check errs toward failing.
+    const CHAR_PX = 7
+    const { container } = renderScale('verticalRatio', 0.075)
+    const labels = [
+      ...container.querySelectorAll<HTMLElement>('.metric-scale__bound-label'),
+    ].map((label) => {
+      const width = (label.textContent ?? '').length * CHAR_PX
+      // `anchorAt`: the label's left edge sits at percent × (track − label width).
+      const left = (percentOf(label) / 100) * (TRACK_PX - width)
+      return { row: Number(label.dataset.row), left, right: left + width }
+    })
+    expect(labels).toHaveLength(6)
+    expect(Math.max(...labels.map((label) => label.row))).toBeGreaterThan(0)
+    for (const a of labels) {
+      for (const b of labels) {
+        if (a === b || a.row !== b.row) continue
+        const overlaps = a.left < b.right && b.left < a.right
+        expect(
+          overlaps,
+          `row ${a.row}: ${a.left}–${a.right} vs ${b.left}–${b.right}`,
+        ).toBe(false)
+      }
+    }
+    // The label strip is as tall as the rows it uses.
+    const rows = new Set(labels.map((label) => label.row)).size
+    const strip = container.querySelector<HTMLElement>(
+      '.metric-scale__bound-label',
+    )!.parentElement!
+    expect(strip.style.height).toBe(`${rows}rem`)
   })
 })

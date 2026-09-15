@@ -39,8 +39,9 @@ export interface BandSource {
  * One published zone of a band.
  *
  * `null` means the zone is open-ended on that side (Garmin's tables have an open zone at each
- * end). Zones are ordered ascending by value — which for `verticalRatio` runs OPPOSITE to their
- * percentile order, since a lower vertical ratio is a higher percentile among Garmin's users.
+ * end). Zones are ordered ascending by value, and so are the percentiles their labels name: Garmin
+ * ranks vertical ratio the other way round (a lower value is a higher Garmin percentile), so that
+ * band's labels are restated in value order rather than quoted — see its entry and design.md D3.
  *
  * ## Which bounds are inclusive
  *
@@ -66,9 +67,12 @@ export interface BandSource {
  */
 export interface BandZone {
   /**
-   * What the publisher calls this zone (Garmin's percentile ranges), or the range's own
-   * description where the source publishes a single range rather than a named zone table
-   * (`trunkLean`'s observed range, `kneeFlexion`'s pooled span). Never a grade, never a colour.
+   * What this zone is: the publisher's own name for it where that name already runs in value order
+   * (`cadence`'s Garmin percentiles), a value-order restatement where it does not
+   * (`verticalRatio`), or the range's own description where the source gives a single range rather
+   * than a zone table (`trunkLean`'s and `kneeFlexion`'s observed ranges,
+   * `verticalOscillationCm`'s pairing of two published percentiles). Never a grade, never a colour,
+   * and never a claim that a derived range was published as such.
    */
   label: string
   /**
@@ -84,21 +88,25 @@ export interface BandZone {
 }
 
 /**
- * How a band's bounds were reached, when they are arithmetic on published numbers rather than a
- * published range. Exactly one band ships with this non-null (`verticalRatio`), and the spec
- * requires a derived band to say on screen that it is derived.
+ * How a band was reached, when it is arithmetic on published numbers rather than a range some
+ * source published as such. Two bands ship with this non-null: `verticalRatio`, whose every bound
+ * is a published bound halved, and `verticalOscillationCm`, whose two bounds are both published but
+ * come from two different published rows. The spec requires a derived band to say on screen that
+ * it is derived.
  */
 export interface BandDerivation {
   /** The arithmetic, stated plainly enough for a reader to check it. */
   statement: string
   /**
-   * The **stated definitional identities** the derivation rests on — one entry per leg.
+   * What the derivation rests on — one entry per leg.
    *
-   * Pre-registered rule R1(ii) admits a unit conversion only where it rests on a stated
-   * definition on each side, never on a fitted constant. This field is where that is discharged,
-   * and it is why `verticalRatio`'s halving ships while the arithmetically-similar
-   * `verticalOscillation` derivation (design.md D5.2) does not: that one passes through a
-   * textbook anthropometric constant and an unstated per-step/per-stride convention.
+   * For a unit conversion these are the **stated definitional identities** on each side:
+   * pre-registered rule R1(ii) admits a conversion only where it rests on a stated definition,
+   * never on a fitted constant. This field is where that is discharged, and it is why
+   * `verticalRatio`'s halving ships while the arithmetically-similar `verticalOscillation`
+   * derivation (design.md D5.2) does not: that one passes through a textbook anthropometric
+   * constant and an unstated per-step/per-stride convention. For a band assembled from published
+   * rows (`verticalOscillationCm`), they are the rows themselves, quoted.
    */
   restsOn: string[]
 }
@@ -146,8 +154,8 @@ export interface ReferenceBand {
    */
   zones: BandZone[]
   /**
-   * A published central statistic — a mean, or the midpoint of the shipped range — where the
-   * source states one. `null` where it does not.
+   * A published central statistic — a mean — where the source states one. `null` where it does
+   * not.
    *
    * **This is a description of where a population was measured, NOT a target.** A renderer must
    * not mark it as a goal, shade toward it, or describe a value's distance from it as a deficit.
@@ -163,7 +171,7 @@ export interface ReferenceBand {
    * be retrieved and is therefore neither linked nor quoted as a range.
    */
   corroboration: BandSource[]
-  /** Non-null exactly when the bounds are arithmetic on published numbers. */
+  /** Non-null exactly when the band is arithmetic on published numbers — its bounds, or their pairing. */
   derivation: BandDerivation | null
   /**
    * A caveat about how this band itself was assembled — a zero reference that differs from this
@@ -194,9 +202,9 @@ export interface BandEnvelope {
  *
  * Derived rather than stored, so it cannot drift out of step with the zones it summarises, and
  * provided here rather than left to each renderer so that two views cannot disagree about where a
- * scale ends. **It adds nothing to the published numbers** — both edges are published bounds, and
- * every published bound lies within them. A measured value outside it is genuinely outside the
- * published range and the spec requires the view to say so in words rather than clamp it
+ * scale ends. **It adds nothing to the band's numbers** — both edges are the band's own bounds, and
+ * every bound lies within them. A measured value outside it is genuinely outside the reference
+ * range and the spec requires the view to say so in words rather than clamp it
  * silently; this repo's own regression anchor for `verticalOscillationCm` is such a value, for a
  * reason design.md D6 records and declines to accommodate.
  *
