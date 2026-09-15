@@ -6,8 +6,12 @@ import { ClipPicker } from '../video/ClipPicker'
 import { releaseClipPoster } from '../video/posterFrame'
 import { ClipSlot } from './ClipSlot'
 import type { ClipPendingLoad } from './ClipSlot'
+import { GuidedResultsView } from './GuidedResultsView'
 import type { MetricCardEvidence } from './MetricsPanel'
 import { ResultsView } from './ResultsView'
+import { ResultsViewToggle } from './ResultsViewToggle'
+import { resolveResultsViewMode, writeResultsViewMode } from './resultsViewMode'
+import type { ResultsViewMode } from './resultsViewMode'
 import { useSessionEvidence } from './useSessionEvidence'
 import type { EvidenceSection } from './useSessionEvidence'
 import {
@@ -107,6 +111,16 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   // third conjunct of every clip's loop condition (design.md D1), so two open previews would mean
   // two clips decoding at once — precisely what scoping the loop to presentation exists to stop.
   const [presentedClipId, setPresentedClipId] = useState<string | null>(null)
+  // Which results view renders. Seeded ONCE from the address (lazy initialiser, so a later render
+  // never re-reads it) and written back on every change, so a reload or a shared link lands on the
+  // same view. Classic unless the address says exactly `?view=guide` — see `resultsViewMode.ts`.
+  const [resultsViewMode, setResultsViewMode] = useState<ResultsViewMode>(() =>
+    resolveResultsViewMode(window.location.search),
+  )
+  const handleResultsViewModeChange = useCallback((mode: ResultsViewMode) => {
+    setResultsViewMode(mode)
+    writeResultsViewMode(mode)
+  }, [])
 
   const handleReport = useCallback((clipId: string, session: ClipSession) => {
     setClipStates((prev) => {
@@ -358,15 +372,40 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
           </section>
         )}
 
+        {/*
+          In the page body, not the header: the header's clip strip is `flex-1` and gives up width to
+          anything beside it, and a strip entry squeezed or scrolled out of view is a concealed clip
+          element — which costs sampled frames (`strides-kyu.13`).
+        */}
         {anyClipVideoReady && (
-          <ResultsView
-            analysis={aggregate}
-            onTryAgain={handleTryAgain}
-            onChooseDifferentVideo={handleChooseDifferentVideo}
-            evidence={evidence}
-            clipCount={clips.length}
-          />
+          <ResultsViewToggle mode={resultsViewMode} onChange={handleResultsViewModeChange} />
         )}
+
+        {/*
+          ONE view, chosen by a conditional — never both mounted with one hidden. The evidence
+          imagery is real canvas ELEMENTS and a node has one parent, so a second mounted view would
+          silently take every canvas from the first (guided-results-view design.md D7.3). The two
+          take identical props, and the swap unmounts one and mounts the other, so the canvases move
+          across rather than being lost.
+        */}
+        {anyClipVideoReady &&
+          (resultsViewMode === 'guide' ? (
+            <GuidedResultsView
+              analysis={aggregate}
+              onTryAgain={handleTryAgain}
+              onChooseDifferentVideo={handleChooseDifferentVideo}
+              evidence={evidence}
+              clipCount={clips.length}
+            />
+          ) : (
+            <ResultsView
+              analysis={aggregate}
+              onTryAgain={handleTryAgain}
+              onChooseDifferentVideo={handleChooseDifferentVideo}
+              evidence={evidence}
+              clipCount={clips.length}
+            />
+          ))}
 
         {/*
           The in-body "Add another clip" block used to mount here. It is gone, not moved:
