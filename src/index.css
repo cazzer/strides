@@ -11,6 +11,64 @@
   --color-brand-800: #8f2b06;
 }
 
+/*
+ * The reference scale's palette (`src/guidance/MetricScale.tsx`).
+ *
+ * `static`, not a plain `@theme`: two of these are read as `var(--color-scale-…)` inside an
+ * arbitrary gradient rather than through a `bg-*` utility, and a usage-pruned theme would drop
+ * exactly those and leave a transparent band with nothing failing.
+ *
+ * ## What the three zone steps mean, and what they do NOT mean
+ *
+ * A step is **how many runners the source's table puts in that zone** — the most-populated zone is
+ * the most heavily shaded one. It is a description of the measured population, restating in shade
+ * what the zone labels already state in words. It is NOT a grade, NOT a preferred end and NOT a
+ * target: most is not best, and the guided-results-view spec forbids any element that grades the
+ * runner. Hence ONE hue family (a desaturated cyan-teal) rather than two, and hence a family chosen
+ * to be as far as possible from both the forbidden set (red/green/amber/emerald/lime/orange/rose/
+ * yellow, all of which carry pass/fail semantics here) and from brand orange, which is reserved for
+ * interactive elements.
+ *
+ * ## The two contrast floors these numbers were picked against
+ *
+ * Computed, not eyeballed (declutter-guided-results-view design.md D4):
+ *
+ * | pair                              | light | dark |
+ * |-----------------------------------|-------|------|
+ * | zone-3 (most runners) vs track    | 4.61  | 4.96 |
+ * | mark (marker, seams) vs zone-3    | 3.89  | 3.66 |
+ * | mark vs zone-2                    | 9.60  | 7.09 |
+ * | mark vs zone-1                    | 14.68 | 12.16|
+ * | mark vs track (= ring vs marker)  | 17.93 | 18.16|
+ * | hatch vs track                    | 7.81  | 7.85 |
+ *
+ * The two that bind are `mark` against `zone-3` — the marker has to stay visible on the darkest
+ * zone it can land on — and `zone-3` against bare track. Both clear 3:1 in both themes. A test
+ * parses this file and recomputes every row, so a "nicer" hex that breaks a floor fails the suite.
+ *
+ * The `-dark` twins are applied as paired utilities (`bg-scale-zone-3 dark:bg-scale-zone-3-dark`),
+ * and the ordering genuinely inverts between them: on a near-black track the most-populated zone
+ * must be the BRIGHTEST. The scale's legend flips word to match.
+ */
+@theme static {
+  --color-scale-zone-1: #d4edf2;
+  --color-scale-zone-1-dark: #12343d;
+  --color-scale-zone-2: #86c8d6;
+  --color-scale-zone-2-dark: #1b5a6a;
+  --color-scale-zone-3: #1f7f99;
+  --color-scale-zone-3-dark: #2b8aa2;
+
+  /* The bare track, and the ring that keeps the marker off whatever it overlaps. */
+  --color-scale-track: #ffffff;
+  --color-scale-track-dark: #0a0a0a;
+  /* The marker, every zone seam, and the track's border — one colour, so seams inherit the floor. */
+  --color-scale-mark: #171717;
+  --color-scale-mark-dark: #f5f5f5;
+  /* The hatching over a published gap, which is neither zone nor mark. */
+  --color-scale-hatch: #525252;
+  --color-scale-hatch-dark: #a3a3a3;
+}
+
 :root {
   color-scheme: light dark;
 }

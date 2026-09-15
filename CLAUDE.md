@@ -1016,6 +1016,62 @@ would unblock a `verticalOscillation` band), `strides-8c3` (flip the default to 
 decision), `strides-7s7` (migrate the eight hand-rolled test factories onto
 `src/results/__fixtures__/metricResult.ts`).
 
+### Decluttered on user feedback (2026-09-15, `strides-pip`, change `declutter-guided-results-view`)
+
+First reader's verdict on the page above: **"significantly too verbose"**, and the grayscale scales
+**"impossible to read"**. Both were measurable — `cadence`'s card carried **332 visible words**
+(363 by the looser measure this change was scoped against, which counted `sr-only` text), and the
+two alternating neutral zone tints differ by a contrast ratio of about **1.2:1**. Eight changes,
+chosen by the user from a longer list; **the ones NOT chosen were deliberately not made** (the lower
+two groups stay visible, published gaps keep their hatching, cards keep their frames).
+
+- **A card leads with one headline**: `174 steps/min · 70th–95th percentile of Garmin's runners`.
+  `describeBandPositionBriefly` (`bandPosition.ts`) + `guidedHeadlineParts` (`formatGuidedValue.ts`).
+  A gap names both zones, merging their shared tail: `between the 5th–29th and 30th–69th
+  percentiles of …`. ⚠️ **`guidedHeadline` stays value-only** — the contents list is a three-column
+  grid and a position fragment there wraps every row.
+- **Zones are shaded by SHARE OF RUNNERS**, one hue family, three steps, darkest (light) / brightest
+  (dark) = most runners, with a legend that flips word per theme because the ordering genuinely
+  inverts. **Not a grade**: most is not best, and the spec still forbids any element that grades the
+  runner. Tokens in `src/index.css` under **`@theme static`** — two are read as `var(--color-scale-…)`
+  inside an arbitrary gradient rather than through a `bg-*` utility, and a usage-pruned `@theme`
+  drops exactly those, leaving a transparent band with nothing failing.
+  ⚠️ **`BandZone.shareOfRunners` comes from Garmin's CUT POINTS (5/30/70/95 → `[.05,.25,.40,.25,.05]`),
+  never from the restated integer labels — reading those as spans sums to 1.01.** All-or-none per
+  band; every single-range band is `null` (`verticalOscillationCm`'s own derivation says "no
+  percentile of the combined cohort is claimed"). The shading step is the share's RANK among the
+  distinct shares → `[0,1,2,1,0]`, symmetric, so the two equally-rare tails draw identically.
+  `src/guidance/scalePalette.test.ts` parses `index.css` and recomputes every contrast ratio.
+- **The scale prints three numbers**: the band's two outer bounds and the value. Every interior bound
+  is an unlabelled **seam** (`.metric-scale__seam`, renamed from `__tick`). `staggerRows`, the merged
+  `163/164` gap labels and the `BOUND_LABEL_*` constants are **gone**.
+  ⚠️ **The figcaption sentence and the zone list are now `sr-only`** — still the full text
+  alternative, carrying every bound with its unit, just not repeated visibly beside a headline that
+  says the same thing.
+- **The speed caveat is a visible `Varies with pace` tag**; the two-part caveat moved into the
+  disclosure. **Provenance is one citation line** — `Malisoux et al. 2023 · recreational runners ·
+  n = 860 · derived`, from `citationParts`/`citationText` (`guidedGroups.ts`), new field
+  `BandSource.populationShort`. ⚠️ **This narrows the archived change's D1 deliberately** (user
+  request): the attribution stays on screen, the source's own *full* population sentence moves
+  inside. **One `Try:` line per card**, `MetricGuidance.tryLine`, on four metrics only
+  (`cadence`, `verticalOscillationCm`, `verticalOscillation`, `overstriding`) — pinned by name, its
+  URL must be in that metric's own `remediation`, and every other study moved into the disclosure.
+  **No description on a banded card** (unbanded keeps it), and the three group intro paragraphs are
+  gone.
+
+**Measured on `park-side-landscape.mp4`, same clip and same measure both sides** (card
+`textContent`, `<details>` subtree and `sr-only` removed, whitespace split): `cadence` **332 → 55**,
+`trunkLean` **201 → 39**. Budget pinned at ≤ 70
+for cadence, plus a ≤ 50 budget on every banded card's own *furniture* — a mandatory note's first
+sentence is the SOURCE's sentence and its length is not the card's to spend
+(`verticalOscillationCm`'s is 51 words in one sentence).
+
+**Live-verified** on `park-side-landscape.mp4`, real GPU (`ANGLE Metal Renderer: Apple M4 Pro`),
+derived port 5262, at 390 and 1280 px in light and dark plus `forcedColors: 'active'`: bands visibly
+coloured with the most-populated zone darkest/brightest, marker distinguishable from the seams,
+hatched gaps still reading as gaps, headline one line at 1280 and wrapping to three at 390, and the
+marker still present under forced colours (where the shading is dropped and the legend hidden).
+
 ## Three metric-layer changes that moved numbers this file quotes (2026-08-29/31)
 
 Every "expected value" recorded elsewhere in this file predates at least one of these. Check a

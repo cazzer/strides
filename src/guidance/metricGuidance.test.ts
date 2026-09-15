@@ -1043,8 +1043,8 @@ describe('referenceBandEnvelope', () => {
     expect(
       referenceBandEnvelope(
         withZones([
-          { label: 'below', min: null, max: 10 },
-          { label: 'above', min: 12, max: null },
+          { label: 'below', min: null, max: 10, shareOfRunners: null },
+          { label: 'above', min: 12, max: null, shareOfRunners: null },
         ]),
       ),
     ).toEqual({ min: 10, max: 12 })
@@ -1054,9 +1054,9 @@ describe('referenceBandEnvelope', () => {
     expect(
       referenceBandEnvelope(
         withZones([
-          { label: 'below', min: null, max: 150 },
-          { label: 'middle', min: 153, max: 163 },
-          { label: 'above', min: 164, max: null },
+          { label: 'below', min: null, max: 150, shareOfRunners: null },
+          { label: 'middle', min: 153, max: 163, shareOfRunners: null },
+          { label: 'above', min: 164, max: null, shareOfRunners: null },
         ]),
       ),
     ).toEqual({ min: 150, max: 164 })
@@ -1064,24 +1064,39 @@ describe('referenceBandEnvelope', () => {
 
   it('returns a single closed zone as its own bounds', () => {
     expect(
-      referenceBandEnvelope(withZones([{ label: 'only', min: 6, max: 9.5 }])),
+      referenceBandEnvelope(
+        withZones([{ label: 'only', min: 6, max: 9.5, shareOfRunners: null }]),
+      ),
     ).toEqual({ min: 6, max: 9.5 })
   })
 
   it('returns null for a band that publishes no finite bound', () => {
     expect(
       referenceBandEnvelope(
-        withZones([{ label: 'Anything at all', min: null, max: null }]),
+        withZones([
+          {
+            label: 'Anything at all',
+            min: null,
+            max: null,
+            shareOfRunners: null,
+          },
+        ]),
       ),
     ).toBeNull()
   })
 
   it('returns null rather than a zero-width envelope', () => {
     expect(
-      referenceBandEnvelope(withZones([{ label: 'a point', min: 7, max: 7 }])),
+      referenceBandEnvelope(
+        withZones([{ label: 'a point', min: 7, max: 7, shareOfRunners: null }]),
+      ),
     ).toBeNull()
     expect(
-      referenceBandEnvelope(withZones([{ label: 'below', min: null, max: 7 }])),
+      referenceBandEnvelope(
+        withZones([
+          { label: 'below', min: null, max: 7, shareOfRunners: null },
+        ]),
+      ),
     ).toBeNull()
   })
 })
@@ -1497,5 +1512,205 @@ describe('capture hints', () => {
     expect(
       METRIC_GUIDANCE.verticalOscillationCm.captureHints.notEnoughData,
     ).toMatch(/steady side-on pass/)
+  })
+})
+
+describe('zone shares — how many runners each zone holds', () => {
+  it('publishes a share for every zone of a band or for none of them', () => {
+    for (const [id, band] of bandedEntries()) {
+      const shares = band.zones.map((zone) => zone.shareOfRunners)
+      const published = shares.filter((share) => share !== null).length
+      expect(
+        published === 0 || published === shares.length,
+        `${id}: ${published} of ${shares.length} zones carry a share`,
+      ).toBe(true)
+    }
+  })
+
+  it("sums a published band's shares to exactly 1", () => {
+    let checked = 0
+    for (const [id, band] of bandedEntries()) {
+      const shares = band.zones.map((zone) => zone.shareOfRunners)
+      if (shares.some((share) => share === null)) continue
+      checked++
+      const total = (shares as number[]).reduce((sum, share) => sum + share, 0)
+      expect(total, id).toBeCloseTo(1, 10)
+    }
+    expect(checked, 'some shipped band publishes shares').toBeGreaterThan(0)
+  })
+
+  it("derives cadence's shares from Garmin's cut points, not from its own zone labels", () => {
+    // Garmin's published cut points are the 5th, 30th, 70th and 95th percentiles; the zones are
+    // the spans between them. Transcribed here rather than read from the labels, which is exactly
+    // the mistake this pins against: reading the LABELS as spans sums to 1.01, because writing
+    // half-open intervals as inclusive integers is an artefact of English.
+    const CUT_POINTS = [0, 5, 30, 70, 95, 100]
+    const expected = CUT_POINTS.slice(1).map(
+      (cut, index) => (cut - CUT_POINTS[index]) / 100,
+    )
+    const band = METRIC_GUIDANCE.cadence.band!
+    expect(band.zones.map((zone) => zone.shareOfRunners)).toEqual(expected)
+    expect(expected.reduce((a, b) => a + b, 0)).toBe(1)
+  })
+
+  it("gives verticalRatio Garmin's same shares, its zones being that table read backwards", () => {
+    // The vertical-ratio zones are Garmin's own, restated in value order (design.md D3), so their
+    // shares are the same five numbers — and symmetric, so the reversal is not observable in them.
+    const cadence = METRIC_GUIDANCE.cadence.band!.zones.map(
+      (zone) => zone.shareOfRunners,
+    )
+    const ratio = METRIC_GUIDANCE.verticalRatio.band!.zones.map(
+      (zone) => zone.shareOfRunners,
+    )
+    expect(ratio).toEqual([...cadence].reverse())
+    expect(ratio).toEqual(cadence)
+  })
+
+  it('publishes no share for a band that is one observed range', () => {
+    for (const id of [
+      'verticalOscillationCm',
+      'trunkLean',
+      'kneeFlexion',
+    ] as const) {
+      const band = METRIC_GUIDANCE[id].band!
+      expect(band.zones, id).toHaveLength(1)
+      // verticalOscillationCm especially: its own derivation says "no percentile of the combined
+      // cohort is claimed", so a share here would contradict the statement beside it.
+      expect(band.zones[0].shareOfRunners, id).toBeNull()
+    }
+  })
+})
+
+describe('zone owner — whose zones a headline names', () => {
+  it('names the population exactly where the zone labels do not', () => {
+    for (const [id, band] of bandedEntries()) {
+      const labelsSayWhose = band.zones.every((zone) =>
+        /Garmin|Folland|Malisoux/.test(zone.label),
+      )
+      expect(band.zoneOwner === null, `${id} zoneOwner`).toBe(labelsSayWhose)
+    }
+    expect(METRIC_GUIDANCE.cadence.band!.zoneOwner).toBe("of Garmin's runners")
+  })
+
+  it('reads as a trailing phrase, so a label plus an owner is one noun phrase', () => {
+    for (const [id, band] of bandedEntries()) {
+      if (band.zoneOwner === null) continue
+      expect(band.zoneOwner, id).toMatch(/^of /)
+      expect(band.zoneOwner.length, id).toBeLessThanOrEqual(40)
+    }
+  })
+})
+
+describe('the short population, for the visible citation line', () => {
+  it('is a short noun phrase with no digits and no pace', () => {
+    for (const [id, band] of bandedEntries()) {
+      for (const source of [band.source, ...band.corroboration]) {
+        const short = source.populationShort
+        expect(short.length, `${id}: ${short}`).toBeGreaterThan(0)
+        expect(short.length, `${id}: ${short}`).toBeLessThanOrEqual(40)
+        // A digit here would be a pace, a sample size or a percentile — the line already carries
+        // the sample size, and a pace needs the full sentence around it to mean anything.
+        expect(short, `${id}: ${short}`).not.toMatch(/\d/)
+        expect(short, `${id}: ${short}`).not.toMatch(
+          /km\/h|m\/s|per km|per mile|pace|speed/i,
+        )
+        // Mid-line, so it does not open with a capital.
+        expect(short[0], `${id}: ${short}`).toBe(short[0].toLowerCase())
+      }
+    }
+  })
+
+  it("says Garmin's population is not stated, in both manuals, from one constant", () => {
+    expect(METRIC_GUIDANCE.cadence.band!.source.populationShort).toBe(
+      'population not stated',
+    )
+    expect(METRIC_GUIDANCE.verticalRatio.band!.source.populationShort).toBe(
+      METRIC_GUIDANCE.cadence.band!.source.populationShort,
+    )
+  })
+
+  it('is a compression of the full population, not a different claim', () => {
+    // Every word of the short form appears in the full sentence — except Garmin's, whose full
+    // sentence is a paragraph about the absence of a population and says "Not stated" instead.
+    for (const [id, band] of bandedEntries()) {
+      for (const source of [band.source, ...band.corroboration]) {
+        if (source.populationShort === 'population not stated') {
+          expect(source.population, id).toMatch(/^Not stated/)
+          continue
+        }
+        for (const word of source.populationShort.split(' ')) {
+          expect(source.population.toLowerCase(), `${id}: ${word}`).toContain(
+            word.toLowerCase(),
+          )
+        }
+      }
+    }
+  })
+})
+
+describe('the one studied change a card may show', () => {
+  /**
+   * Which metrics carry a Try line, named one at a time. A thirteenth line is then a deliberate
+   * act with a reviewable diff, which is the same discipline `BANDED_METRICS` applies to bands.
+   */
+  const WITH_TRY_LINE: MetricId[] = [
+    'cadence',
+    'verticalOscillationCm',
+    'verticalOscillation',
+    'overstriding',
+  ]
+
+  it('is carried by exactly the metrics named here', () => {
+    const carrying = entries()
+      .filter((entry) => entry.tryLine !== null)
+      .map((entry) => entry.metric)
+    expect(new Set(carrying)).toEqual(new Set(WITH_TRY_LINE))
+  })
+
+  it("links a study from that metric's own remediation list", () => {
+    for (const entry of entries()) {
+      if (entry.tryLine === null) continue
+      expect(
+        entry.remediation.map((link) => link.url),
+        entry.metric,
+      ).toContain(entry.tryLine.url)
+    }
+  })
+
+  it('is absent wherever the metric has no study of a change to name', () => {
+    for (const entry of entries()) {
+      if (entry.remediation.length > 0) continue
+      expect(entry.tryLine, entry.metric).toBeNull()
+    }
+    // Not vacuous: two metrics have an empty remediation list, and it is a finding in both.
+    expect(
+      entries().filter((entry) => entry.remediation.length === 0).length,
+    ).toBeGreaterThan(0)
+  })
+
+  it('states a change from the runner’s own value, with no target and no grading word', () => {
+    for (const entry of entries()) {
+      if (entry.tryLine === null) continue
+      const { text } = entry.tryLine
+      expect(text.length, entry.metric).toBeLessThanOrEqual(100)
+      // Mid-sentence: the view prefixes "Try: ".
+      expect(text[0], entry.metric).toBe(text[0].toLowerCase())
+      expect(text, entry.metric).not.toMatch(
+        /\b(should|target|aim|must|ought|ideal|optimal|correct|proper|good|bad|poor|excessive|normal|better|worse|recommended)\b/i,
+      )
+      // A percentage here is a change from a baseline, so it is always relative to "your own".
+      if (/%/.test(text)) {
+        expect(text, entry.metric).toMatch(/your own/)
+      }
+    }
+  })
+
+  it('is a compression of the linked study, not a new claim', () => {
+    // Every Try line's link carries a summary on the same card, so the line adds no source.
+    for (const entry of entries()) {
+      if (entry.tryLine === null) continue
+      const link = entry.remediation.find((l) => l.url === entry.tryLine!.url)!
+      expect(link.summary.length, entry.metric).toBeGreaterThan(0)
+    }
   })
 })

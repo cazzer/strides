@@ -1,13 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import type { MetricId } from '../heuristics/types'
-import { METRIC_GUIDANCE, guidanceInDisplayOrder } from '../guidance/metricGuidance'
-import type { BandSource, GuidanceLink, MetricGuidance } from '../guidance/types'
 import {
-  VISIBLE_REMEDIATION_LIMIT,
+  METRIC_GUIDANCE,
+  guidanceInDisplayOrder,
+} from '../guidance/metricGuidance'
+import type {
+  BandSource,
+  GuidanceLink,
+  MetricGuidance,
+} from '../guidance/types'
+import {
   WITHHELD_BAND_REASON,
   bandWithheld,
   captureHintFor,
   cardReferences,
+  citationParts,
+  citationText,
   guidedEntryId,
   guidedGroups,
   noBandReasonFor,
@@ -19,7 +27,8 @@ import {
 import type { GuidedEntry } from './guidedGroups'
 import { makeHeuristics, makeMetric } from './__fixtures__/metricResult'
 
-const ids = (entries: { metric: { metric: MetricId } }[]) => entries.map((e) => e.metric.metric)
+const ids = (entries: { metric: { metric: MetricId } }[]) =>
+  entries.map((e) => e.metric.metric)
 
 /** Every metric in display order, from the data layer — never hardcoded here, so a guidance edit
  * that moves a band or a rank moves these expectations with it. */
@@ -38,29 +47,47 @@ describe('guidedGroups — the three groups, by what can honestly be said', () =
     expect(ids(groups.unbanded)).toEqual(UNBANDED_ORDER)
     expect(groups.notMeasured).toEqual([])
     // The shipped record's shape, recorded as a sanity check on the derivation above.
-    expect([groups.banded.length, groups.unbanded.length, groups.notMeasured.length]).toEqual([
-      5, 7, 0,
-    ])
+    expect([
+      groups.banded.length,
+      groups.unbanded.length,
+      groups.notMeasured.length,
+    ]).toEqual([5, 7, 0])
   })
 
   it('accounts for all twelve metrics exactly once', () => {
     const groups = guidedGroups(makeHeuristics())
-    const all = [...groups.banded, ...groups.unbanded, ...groups.notMeasured].map(
-      (e) => e.metric.metric,
-    )
+    const all = [
+      ...groups.banded,
+      ...groups.unbanded,
+      ...groups.notMeasured,
+    ].map((e) => e.metric.metric)
     expect([...all].sort()).toEqual([...DISPLAY_ORDER].sort())
   })
 
   it('moves a metric to group 3 when its value is null, keeping rank order there', () => {
     const groups = guidedGroups(
       makeHeuristics({
-        cadence: makeMetric('cadence', { value: null, confidence: 0, caveat: 'no rhythm' }),
-        kneeDrive: makeMetric('kneeDrive', { value: null, confidence: 0, caveat: 'no knee' }),
-        trunkLean: makeMetric('trunkLean', { value: null, confidence: 0, caveat: 'no torso' }),
+        cadence: makeMetric('cadence', {
+          value: null,
+          confidence: 0,
+          caveat: 'no rhythm',
+        }),
+        kneeDrive: makeMetric('kneeDrive', {
+          value: null,
+          confidence: 0,
+          caveat: 'no knee',
+        }),
+        trunkLean: makeMetric('trunkLean', {
+          value: null,
+          confidence: 0,
+          caveat: 'no torso',
+        }),
       }),
     )
     expect(ids(groups.notMeasured)).toEqual(
-      DISPLAY_ORDER.filter((id) => ['cadence', 'kneeDrive', 'trunkLean'].includes(id)),
+      DISPLAY_ORDER.filter((id) =>
+        ['cadence', 'kneeDrive', 'trunkLean'].includes(id),
+      ),
     )
     expect(ids(groups.banded)).not.toContain('cadence')
     expect(ids(groups.unbanded)).not.toContain('kneeDrive')
@@ -68,7 +95,9 @@ describe('guidedGroups — the three groups, by what can honestly be said', () =
 
   it("moves a measured metric with an unsuitable view to group 3 — metricTier's rule, not a value check", () => {
     const groups = guidedGroups(
-      makeHeuristics({ stepWidth: makeMetric('stepWidth', { viewFit: 'unsuitable' }) }),
+      makeHeuristics({
+        stepWidth: makeMetric('stepWidth', { viewFit: 'unsuitable' }),
+      }),
     )
     expect(ids(groups.notMeasured)).toEqual(['stepWidth'])
     expect(groups.notMeasured[0].band).toBeNull()
@@ -95,9 +124,15 @@ describe('guidedGroups — rank is a property of the guidance data, never of the
     const extreme = guidedGroups(
       makeHeuristics({
         cadence: makeMetric('cadence', { value: 90, confidence: 0.71 }),
-        kneeFlexion: makeMetric('kneeFlexion', { value: 300, confidence: 0.99 }),
+        kneeFlexion: makeMetric('kneeFlexion', {
+          value: 300,
+          confidence: 0.99,
+        }),
         trunkLean: makeMetric('trunkLean', { value: -40, confidence: 0.2 }),
-        overstriding: makeMetric('overstriding', { value: 5, confidence: 0.05 }),
+        overstriding: makeMetric('overstriding', {
+          value: 5,
+          confidence: 0.05,
+        }),
       }),
     )
     const plain = guidedGroups(makeHeuristics())
@@ -129,7 +164,10 @@ describe('A band without provenance does not render', () => {
       if (original.band === null) throw new Error('expected a banded metric')
       const stripped: MetricGuidance = {
         ...original,
-        band: { ...original.band, source: { ...original.band.source, [field]: '  ' } },
+        band: {
+          ...original.band,
+          source: { ...original.band.source, [field]: '  ' },
+        },
       }
       expect(sourceHasProvenance(stripped.band?.source)).toBe(false)
       expect(renderableBand(stripped)).toBeNull()
@@ -145,7 +183,8 @@ describe('A band without provenance does not render', () => {
 
   it('every shipped band has complete provenance', () => {
     for (const guidance of Object.values(METRIC_GUIDANCE)) {
-      if (guidance.band !== null) expect(renderableBand(guidance)).toBe(guidance.band)
+      if (guidance.band !== null)
+        expect(renderableBand(guidance)).toBe(guidance.band)
     }
   })
 })
@@ -155,11 +194,24 @@ describe('A band without provenance does not render', () => {
 // ---------------------------------------------------------------------------------------------
 
 function link(url: string, shortTitle = url): GuidanceLink {
-  return { title: `${shortTitle}, full title`, shortTitle, url, kind: 'peer-reviewed', summary: `About ${url}.` }
+  return {
+    title: `${shortTitle}, full title`,
+    shortTitle,
+    url,
+    kind: 'peer-reviewed',
+    summary: `About ${url}.`,
+  }
 }
 
 function source(url: string): BandSource {
-  return { title: `${url}, full`, shortTitle: url, url, population: `Population of ${url}`, sampleSize: '10' }
+  return {
+    title: `${url}, full`,
+    shortTitle: url,
+    url,
+    population: `Population of ${url}`,
+    populationShort: `pop ${url}`,
+    sampleSize: '10',
+  }
 }
 
 /** A guidance entry for `cadence` with the given references, and a band whose source is `bandUrl`. */
@@ -171,18 +223,49 @@ function entryWith({
 }): GuidedEntry {
   const base = METRIC_GUIDANCE.cadence
   const band = { ...base.band!, source: source(bandUrl), corroboration }
-  const guidance: MetricGuidance = { ...base, band, research, remediation }
+  // The Try line names one of `remediation`'s own URLs, or is `null` where there is nothing to name.
+  const tryLine =
+    remediation.length > 0
+      ? { text: 'something studied', url: remediation[0].url }
+      : null
+  const guidance: MetricGuidance = {
+    ...base,
+    band,
+    research,
+    remediation,
+    tryLine,
+  }
   return { metric: makeMetric('cadence'), guidance, band }
 }
 
 describe('cardReferences — each URL an anchor once per card, visible first, nothing dropped', () => {
-  it('shows at most three studies of changes and defers the rest to the disclosure', () => {
-    const remediation = ['a', 'b', 'c', 'd', 'e'].map((x) => link(`https://${x}.example/`))
+  it('shows exactly one study of changes and defers every other to the disclosure', () => {
+    const remediation = ['a', 'b', 'c', 'd', 'e'].map((x) =>
+      link(`https://${x}.example/`),
+    )
     const refs = cardReferences(entryWith({ remediation }))
-    expect(refs.visibleRemediation.map((l) => l.url)).toEqual(remediation.slice(0, 3).map((l) => l.url))
-    expect(refs.moreRemediation.map((r) => r.link.url)).toEqual(remediation.slice(3).map((l) => l.url))
-    expect(refs.moreRemediation.every((r) => r.linked)).toBe(true)
-    expect(VISIBLE_REMEDIATION_LIMIT).toBe(3)
+    expect(refs.tryLink?.url).toBe(remediation[0].url)
+    // Every study is inside, the Try link among them — that is where its kind, summary and full
+    // citation reach the card — and it alone shows as text, its URL already being an anchor above.
+    expect(refs.moreRemediation.map((r) => [r.link.url, r.linked])).toEqual([
+      [remediation[0].url, false],
+      ...remediation.slice(1).map((l) => [l.url, true]),
+    ])
+    expect(refs.disclosureSourceCount).toBe(4)
+  })
+
+  it('shows no study of changes where the guidance names none', () => {
+    const remediation = [link('https://a.example/')]
+    const entry = entryWith({ remediation })
+    const refs = cardReferences({
+      ...entry,
+      guidance: { ...entry.guidance, tryLine: null },
+    })
+    expect(refs.tryLink).toBeNull()
+    // The study itself is not lost — it renders inside, as a link, since nothing claimed its URL.
+    expect(refs.moreRemediation.map((r) => [r.link.url, r.linked])).toEqual([
+      ['https://a.example/', true],
+    ])
   })
 
   it('keeps a link whose URL already rendered, as text, and skips only an exact repeat', () => {
@@ -195,34 +278,48 @@ describe('cardReferences — each URL an anchor once per card, visible first, no
         research: [
           link(band),
           link(shared),
-          { ...link(shared), summary: 'Says something the visible study does not.' },
+          {
+            ...link(shared),
+            summary: 'Says something the visible study does not.',
+          },
           link('https://r.example/'),
           link('https://r.example/'),
         ],
         remediation: [link(shared), link(band), link('https://m.example/')],
       }),
     )
-    // The band source claims its URL first, so that study waits for the disclosure; `shared` goes to the visible list.
-    expect(refs.visibleRemediation.map((l) => l.url)).toEqual([shared, 'https://m.example/'])
+    // `remediation[0]` is `shared`, which the fixture's Try line names, so that is the one visible
+    // study; the band's own URL is claimed before it, so a study sharing that URL is never visible.
+    expect(refs.tryLink?.url).toBe(shared)
     // A corroborating source keeps its fields but loses a duplicate link.
     expect(refs.corroboration.map((c) => c.linked)).toEqual([false, false])
-    // The band's own source as a research link stays, unlinked. So does a second summary for a
-    // visible study's URL. An exact repeat of a link already on the card — `shared` word for word,
-    // the second `r.example` — is all that is skipped.
-    expect(refs.research.map(({ link: l, linked }) => [l.url, l.summary, linked])).toEqual([
+    // The band's own source as a research link stays, unlinked. So do BOTH summaries for the Try
+    // link's URL: the visible Try line carries a short title and no summary, so neither is already
+    // on the card. Only an exact repeat of a link already placed — the second `r.example` — is
+    // skipped.
+    expect(
+      refs.research.map(({ link: l, linked }) => [l.url, l.summary, linked]),
+    ).toEqual([
       [band, `About ${band}.`, false],
+      [shared, `About ${shared}.`, false],
       [shared, 'Says something the visible study does not.', false],
       ['https://r.example/', 'About https://r.example/.', true],
     ])
-    // The deferred band-URL study repeats the research link above word for word.
-    expect(refs.moreRemediation).toEqual([])
-    expect(refs.disclosureSourceCount).toBe(1)
+    // Every study goes inside. `shared` and the band-URL one repeat research links placed above
+    // word for word and are skipped there; `m.example` is new and is the only one still linkable.
+    expect(refs.moreRemediation.map((r) => [r.link.url, r.linked])).toEqual([
+      ['https://m.example/', true],
+    ])
+    expect(refs.disclosureSourceCount).toBe(2)
   })
 
   it('defers a study whose URL is the band source into the disclosure, unlinked, rather than dropping it', () => {
     const band = 'https://band.example/'
-    const refs = cardReferences(entryWith({ bandUrl: band, remediation: [link(band)] }))
-    expect(refs.visibleRemediation).toEqual([])
+    const refs = cardReferences(
+      entryWith({ bandUrl: band, remediation: [link(band)] }),
+    )
+    // Named as the Try line, but its URL is the band's, already an anchor — so it shows as text.
+    expect(refs.tryLink?.url).toBe(band)
     expect(refs.moreRemediation).toEqual([{ link: link(band), linked: false }])
     expect(refs.disclosureSourceCount).toBe(0)
   })
@@ -232,13 +329,17 @@ describe('cardReferences — each URL an anchor once per card, visible first, no
     for (const entry of [...banded, ...unbanded]) {
       const refs = cardReferences(entry)
       const placed = [
-        ...refs.visibleRemediation,
         ...refs.research.map((r) => r.link),
         ...refs.moreRemediation.map((r) => r.link),
       ]
-      for (const reference of [...entry.guidance.research, ...entry.guidance.remediation]) {
+      for (const reference of [
+        ...entry.guidance.research,
+        ...entry.guidance.remediation,
+      ]) {
         expect(
-          placed.some((l) => l.url === reference.url && l.summary === reference.summary),
+          placed.some(
+            (l) => l.url === reference.url && l.summary === reference.summary,
+          ),
           `${entry.metric.metric}: ${reference.shortTitle}`,
         ).toBe(true)
       }
@@ -250,18 +351,24 @@ describe('cardReferences — each URL an anchor once per card, visible first, no
       entryWith({
         corroboration: [source('https://corroboration.example/')],
         research: [link('https://r1.example/'), link('https://r2.example/')],
-        remediation: ['w', 'x', 'y', 'z'].map((x) => link(`https://${x}.example/`)),
+        remediation: ['w', 'x', 'y', 'z'].map((x) =>
+          link(`https://${x}.example/`),
+        ),
       }),
     )
-    expect(refs.disclosureSourceCount).toBe(4)
+    // corroboration + 2 research + 3 of the 4 studies; `w` is the Try link, claimed above.
+    expect(refs.disclosureSourceCount).toBe(6)
   })
 
   it('never renders a URL twice on any shipped card', () => {
-    for (const entry of [...guidedGroups(makeHeuristics()).banded, ...guidedGroups(makeHeuristics()).unbanded]) {
+    for (const entry of [
+      ...guidedGroups(makeHeuristics()).banded,
+      ...guidedGroups(makeHeuristics()).unbanded,
+    ]) {
       const refs = cardReferences(entry)
       const urls = [
         ...(entry.band !== null ? [entry.band.source.url] : []),
-        ...refs.visibleRemediation.map((l) => l.url),
+        ...(refs.tryLink !== null ? [refs.tryLink.url] : []),
         ...refs.corroboration.filter((c) => c.linked).map((c) => c.source.url),
         ...refs.research.filter((r) => r.linked).map((r) => r.link.url),
         ...refs.moreRemediation.filter((r) => r.linked).map((r) => r.link.url),
@@ -275,11 +382,27 @@ describe('splitFirstSentence', () => {
   it.each([
     ['One. Two three. Four.', 'One.', 'Two three. Four.'],
     ['Only one sentence here.', 'Only one sentence here.', ''],
-    ['Measured 9.2 ± 4.0 cm. Then more.', 'Measured 9.2 ± 4.0 cm.', 'Then more.'],
-    ['Heiderscheit et al. 2011 found it. Then more.', 'Heiderscheit et al. 2011 found it.', 'Then more.'],
-    ['Counted by J. Daniels in 1984. Then more.', 'Counted by J. Daniels in 1984.', 'Then more.'],
+    [
+      'Measured 9.2 ± 4.0 cm. Then more.',
+      'Measured 9.2 ± 4.0 cm.',
+      'Then more.',
+    ],
+    [
+      'Heiderscheit et al. 2011 found it. Then more.',
+      'Heiderscheit et al. 2011 found it.',
+      'Then more.',
+    ],
+    [
+      'Counted by J. Daniels in 1984. Then more.',
+      'Counted by J. Daniels in 1984.',
+      'Then more.',
+    ],
     ['It said "no target." Then more.', 'It said "no target."', 'Then more.'],
-    ['Risk fell (CI 0.91–0.98). 37 studies disagreed.', 'Risk fell (CI 0.91–0.98).', '37 studies disagreed.'],
+    [
+      'Risk fell (CI 0.91–0.98). 37 studies disagreed.',
+      'Risk fell (CI 0.91–0.98).',
+      '37 studies disagreed.',
+    ],
     ['e.g. The case holds. Then more.', 'e.g. The case holds.', 'Then more.'],
     ['  Padded. Rest  ', 'Padded.', 'Rest'],
   ])('%j', (text, first, rest) => {
@@ -290,7 +413,9 @@ describe('splitFirstSentence', () => {
     for (const guidance of Object.values(METRIC_GUIDANCE)) {
       for (const note of guidance.mandatoryNotes) {
         const { first, rest } = splitFirstSentence(note)
-        expect(note.replace(/\s+/g, '')).toBe(`${first}${rest}`.replace(/\s+/g, ''))
+        expect(note.replace(/\s+/g, '')).toBe(
+          `${first}${rest}`.replace(/\s+/g, ''),
+        )
       }
     }
   })
@@ -298,15 +423,27 @@ describe('splitFirstSentence', () => {
 
 describe('noteLead', () => {
   it.each([
-    ['180 steps per minute is not a target.', '180 steps per minute is not a target.'],
+    [
+      '180 steps per minute is not a target.',
+      '180 steps per minute is not a target.',
+    ],
     ['A negative value is not a defect.', 'A negative value is not a defect.'],
-    ['About 8 in 10 distance runners are rearfoot strikers.', 'About 8 in 10 distance runners…'],
+    [
+      'About 8 in 10 distance runners are rearfoot strikers.',
+      'About 8 in 10 distance runners…',
+    ],
     [
       'There is no defensible target for trunk lean, and this range carries no preferred end.',
       'There is no defensible target for…',
     ],
-    ['One two three four five, six seven eight nine.', 'One two three four five, six…'],
-    ['One two three four five six, seven eight nine.', 'One two three four five six…'],
+    [
+      'One two three four five, six seven eight nine.',
+      'One two three four five, six…',
+    ],
+    [
+      'One two three four five six, seven eight nine.',
+      'One two three four five six…',
+    ],
   ])('%j', (first, lead) => {
     expect(noteLead(first)).toBe(lead)
   })
@@ -315,14 +452,22 @@ describe('noteLead', () => {
 describe('Not-measured and withheld-band wording', () => {
   it('chooses the camera-angle hint for an unsuitable view and the other hint otherwise', () => {
     const unsuitable = guidedGroups(
-      makeHeuristics({ stepWidth: makeMetric('stepWidth', { viewFit: 'unsuitable' }) }),
+      makeHeuristics({
+        stepWidth: makeMetric('stepWidth', { viewFit: 'unsuitable' }),
+      }),
     ).notMeasured[0]
-    expect(captureHintFor(unsuitable)).toBe(METRIC_GUIDANCE.stepWidth.captureHints.wrongAngle)
+    expect(captureHintFor(unsuitable)).toBe(
+      METRIC_GUIDANCE.stepWidth.captureHints.wrongAngle,
+    )
     const sparse = guidedGroups(
-      makeHeuristics({ stepWidth: makeMetric('stepWidth', { value: null, confidence: 0 }) }),
+      makeHeuristics({
+        stepWidth: makeMetric('stepWidth', { value: null, confidence: 0 }),
+      }),
     ).notMeasured[0]
     expect(sparse.metric.viewFit).not.toBe('unsuitable')
-    expect(captureHintFor(sparse)).toBe(METRIC_GUIDANCE.stepWidth.captureHints.notEnoughData)
+    expect(captureHintFor(sparse)).toBe(
+      METRIC_GUIDANCE.stepWidth.captureHints.notEnoughData,
+    )
   })
 
   it('gives a withheld band the neutral reason, and an unbanded metric its own', () => {
@@ -330,20 +475,79 @@ describe('Not-measured and withheld-band wording', () => {
     const original = METRIC_GUIDANCE[target]
     const groups = guidedGroups(makeHeuristics(), {
       ...METRIC_GUIDANCE,
-      [target]: { ...original, band: { ...original.band!, source: { ...original.band!.source, url: '' } } },
+      [target]: {
+        ...original,
+        band: {
+          ...original.band!,
+          source: { ...original.band!.source, url: '' },
+        },
+      },
     })
     const withheld = groups.unbanded.find((e) => e.metric.metric === target)!
     expect(bandWithheld(withheld)).toBe(true)
     expect(noBandReasonFor(withheld)).toBe(WITHHELD_BAND_REASON)
     expect(WITHHELD_BAND_REASON).not.toMatch(/no published range/i)
 
-    const genuine = groups.unbanded.find((e) => e.metric.metric === UNBANDED_ORDER[0])!
+    const genuine = groups.unbanded.find(
+      (e) => e.metric.metric === UNBANDED_ORDER[0],
+    )!
     expect(bandWithheld(genuine)).toBe(false)
-    expect(noBandReasonFor(genuine)).toBe(METRIC_GUIDANCE[UNBANDED_ORDER[0]].noBandReason)
+    expect(noBandReasonFor(genuine)).toBe(
+      METRIC_GUIDANCE[UNBANDED_ORDER[0]].noBandReason,
+    )
   })
 
   it('derives a stable, shareable element id per metric', () => {
     expect(guidedEntryId('cadence')).toBe('guided-results-cadence')
-    expect(new Set(DISPLAY_ORDER.map(guidedEntryId)).size).toBe(DISPLAY_ORDER.length)
+    expect(new Set(DISPLAY_ORDER.map(guidedEntryId)).size).toBe(
+      DISPLAY_ORDER.length,
+    )
+  })
+})
+
+describe('citationParts — the one visible attribution line', () => {
+  it('names the source, its short population and its sample size, in that order', () => {
+    const band = METRIC_GUIDANCE.verticalOscillationCm.band!
+    expect(citationParts(band.source, false)).toEqual([
+      'Malisoux et al. 2023',
+      'recreational runners',
+      'n = 860',
+    ])
+    expect(citationText(band.source, false)).toBe(
+      'Malisoux et al. 2023 · recreational runners · n = 860',
+    )
+  })
+
+  it('labels an unpublished sample size, so it cannot read as another population', () => {
+    const band = METRIC_GUIDANCE.cadence.band!
+    expect(citationText(band.source, false)).toBe(
+      'Garmin fenix 7 manual · population not stated · sample size not published',
+    )
+  })
+
+  it('says "derived" last, and only for a derived band', () => {
+    const derived = METRIC_GUIDANCE.verticalRatio.band!
+    expect(derived.derivation).not.toBeNull()
+    expect(citationParts(derived.source, true).at(-1)).toBe('derived')
+    expect(citationParts(derived.source, false)).not.toContain('derived')
+  })
+
+  it('reads as one line for every shipped band, with the derived flag matching the data', () => {
+    for (const entry of guidedGroups(makeHeuristics()).banded) {
+      const band = entry.band!
+      const text = citationText(band.source, band.derivation !== null)
+      expect(text.split(' · '), entry.metric.metric).toHaveLength(
+        band.derivation === null ? 3 : 4,
+      )
+      expect(text.includes(' · derived'), entry.metric.metric).toBe(
+        band.derivation !== null,
+      )
+      // Short enough to read as one line on a desktop card — it wraps on a phone, which is fine.
+      // The guard is against a line growing without bound, e.g. by dropping the full title in.
+      expect(
+        text.length,
+        `${entry.metric.metric}: ${text}`,
+      ).toBeLessThanOrEqual(95)
+    }
   })
 })

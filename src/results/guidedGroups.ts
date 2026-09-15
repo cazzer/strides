@@ -1,4 +1,8 @@
-import type { FormHeuristicsResult, MetricId, MetricResult } from '../heuristics/types'
+import type {
+  FormHeuristicsResult,
+  MetricId,
+  MetricResult,
+} from '../heuristics/types'
 import { METRIC_GUIDANCE } from '../guidance/metricGuidance'
 import type {
   BandSource,
@@ -48,14 +52,23 @@ function isFilled(text: string): boolean {
   return text.trim().length > 0
 }
 
-/** All four provenance fields present and non-blank — the minimum the spec requires on screen. */
-export function sourceHasProvenance(source: BandSource | null | undefined): boolean {
+/**
+ * All five provenance fields present and non-blank.
+ *
+ * `populationShort` counts because it is the population statement that actually REACHES the screen
+ * without expanding, which is what the spec's rule is about; `population` counts too, because a
+ * short form with nothing behind it is an attribution the reader cannot check.
+ */
+export function sourceHasProvenance(
+  source: BandSource | null | undefined,
+): boolean {
   return (
     source !== null &&
     source !== undefined &&
     isFilled(source.title ?? '') &&
     isFilled(source.url ?? '') &&
     isFilled(source.population ?? '') &&
+    isFilled(source.populationShort ?? '') &&
     isFilled(source.sampleSize ?? '')
   )
 }
@@ -122,9 +135,11 @@ export function notMeasuredReason(
   metric: MetricResult,
   scalePassStatus: ScalePassStatus,
 ): string {
-  const scalePassInProgress = scalePassStatus === 'pending' || scalePassStatus === 'running'
+  const scalePassInProgress =
+    scalePassStatus === 'pending' || scalePassStatus === 'running'
   const hint =
-    (metric.metric === 'verticalOscillationCm' || metric.metric === 'stepWidthCm') &&
+    (metric.metric === 'verticalOscillationCm' ||
+      metric.metric === 'stepWidthCm') &&
     metric.value === null
       ? scalePassInProgress
         ? 'Measuring real-world scale with a second look at the clip…'
@@ -177,7 +192,8 @@ export function guidedEntryId(metric: MetricId): string {
  * Abbreviations whose trailing full stop does not end a sentence: `et al.`, `e.g.`, `i.e.`, `vs.`,
  * `cf.`, `approx.`, `Fig.`, `No.`, and a single capital initial (`J. Daniels`).
  */
-const NON_TERMINAL_ABBREVIATION = /(?:\bet al|\be\.g|\bi\.e|\bvs|\bcf|\bapprox|\bFig|\bNo|\b[A-Z])\.$/
+const NON_TERMINAL_ABBREVIATION =
+  /(?:\bet al|\be\.g|\bi\.e|\bvs|\bcf|\bapprox|\bFig|\bNo|\b[A-Z])\.$/
 
 /**
  * Splits a note into its first sentence and the rest, both trimmed. A sentence ends at `.`, `!` or
@@ -186,9 +202,16 @@ const NON_TERMINAL_ABBREVIATION = /(?:\bet al|\be\.g|\bi\.e|\bvs|\bcf|\bapprox|\
  * point (`9.2`) is never followed by whitespace, so it never splits. Text with no second sentence
  * returns it whole with an empty `rest`.
  */
-export function splitFirstSentence(text: string): { first: string; rest: string } {
+export function splitFirstSentence(text: string): {
+  first: string
+  rest: string
+} {
   const boundary = /[.!?]["”’)\]]?\s+(?=["“‘(]?[A-Z0-9])/g
-  for (let match = boundary.exec(text); match !== null; match = boundary.exec(text)) {
+  for (
+    let match = boundary.exec(text);
+    match !== null;
+    match = boundary.exec(text)
+  ) {
     const end = match.index + match[0].trimEnd().length
     const candidate = text.slice(0, end)
     if (NON_TERMINAL_ABBREVIATION.test(candidate)) continue
@@ -196,9 +219,6 @@ export function splitFirstSentence(text: string): { first: string; rest: string 
   }
   return { first: text.trim(), rest: '' }
 }
-
-/** How many studies-of-changes links a card shows before the rest move into its disclosure. */
-export const VISIBLE_REMEDIATION_LIMIT = 3
 
 /** A corroborating source, and whether its URL is still unrendered on the card at that point. */
 export interface CorroborationReference {
@@ -222,28 +242,35 @@ export interface LinkReference {
  * Every outbound reference a card renders, already placed and de-duplicated.
  *
  * **Each URL is an anchor at most once per card**, in the order a reader meets them: the band's
- * source (always visible), then the first {@link VISIBLE_REMEDIATION_LIMIT} studies of changes
- * (visible), then — inside the card's disclosure — corroborating sources, research links and the
- * remaining studies of changes.
+ * source (visible, in the citation line), then the one studied change the guidance names as this
+ * card's Try line (visible), then — inside the card's disclosure — corroborating sources, research
+ * links and every study of a change, the Try link included.
  *
  * **No link is dropped for sharing a URL.** Every link's kind and summary reach the card (design.md
  * D7.11): a later mention of a URL that already rendered keeps its text and loses only the second
- * anchor. The one thing skipped is an exact repeat — same URL, kind and summary as a link already
- * placed — because every word of it is already on the card.
+ * anchor. That is how the Try link's own kind, summary and full citation reach the card — it is in
+ * `remediation`, so it comes back in `moreRemediation` with `linked: false`. The one thing skipped
+ * is an exact repeat — same URL, kind and summary as a link already placed — because every word of
+ * it is already on the card. (No shipped metric lists the same link under both `research` and
+ * `remediation`; the entries say so, and it is that rule this check enforces.)
  */
 export interface CardReferences {
-  visibleRemediation: GuidanceLink[]
+  /**
+   * The one studied change shown on screen: the `remediation` link the guidance's `tryLine` names.
+   * `null` where the guidance names none, or names a URL this metric's own `remediation` does not
+   * carry — which the guidance test rejects outright, so a `null` here is the metric having no Try
+   * line rather than a lookup failing silently.
+   */
+  tryLink: GuidanceLink | null
   corroboration: CorroborationReference[]
   research: LinkReference[]
+  /** Every study of a change, for the disclosure — the Try link among them, as text. */
   moreRemediation: LinkReference[]
   /** Distinct URLs linked inside the disclosure — the "(N sources)" count. */
   disclosureSourceCount: number
 }
 
-export function cardReferences(
-  entry: GuidedEntry,
-  visibleRemediationLimit = VISIBLE_REMEDIATION_LIMIT,
-): CardReferences {
+export function cardReferences(entry: GuidedEntry): CardReferences {
   const rendered = new Set<string>()
   const claim = (url: string): boolean => {
     if (rendered.has(url)) return false
@@ -252,20 +279,17 @@ export function cardReferences(
   }
   if (entry.band !== null) claim(entry.band.source.url)
 
-  const placed: GuidanceLink[] = []
-  const visibleRemediation: GuidanceLink[] = []
-  const deferred: GuidanceLink[] = []
-  for (const link of entry.guidance.remediation) {
-    if (visibleRemediation.length < visibleRemediationLimit && !rendered.has(link.url)) {
-      claim(link.url)
-      placed.push(link)
-      visibleRemediation.push(link)
-    } else {
-      deferred.push(link)
-    }
-  }
+  const { tryLine, remediation, research: researchLinks } = entry.guidance
+  const tryLink =
+    tryLine === null
+      ? null
+      : (remediation.find((link) => link.url === tryLine.url) ?? null)
+  // Claimed but deliberately NOT `placed`: the disclosure renders this same link again, as text,
+  // which is where its kind, summary and full citation reach the card.
+  if (tryLink !== null) claim(tryLink.url)
 
   const before = rendered.size
+  const placed: GuidanceLink[] = []
   const corroboration = (entry.band?.corroboration ?? []).map((source) => ({
     source,
     linked: claim(source.url),
@@ -274,22 +298,56 @@ export function cardReferences(
     links.flatMap((link) => {
       const repeat = placed.some(
         (other) =>
-          other.url === link.url && other.kind === link.kind && other.summary === link.summary,
+          other.url === link.url &&
+          other.kind === link.kind &&
+          other.summary === link.summary,
       )
       if (repeat) return []
       placed.push(link)
       return [{ link, linked: claim(link.url) }]
     })
-  const research = place(entry.guidance.research)
-  const moreRemediation = place(deferred)
+  const research = place(researchLinks)
+  const moreRemediation = place(remediation)
 
   return {
-    visibleRemediation,
+    tryLink,
     corroboration,
     research,
     moreRemediation,
     disclosureSourceCount: rendered.size - before,
   }
+}
+
+/**
+ * The visible citation line's fields, in order — `["Malisoux et al. 2023", "recreational runners",
+ * "n = 860"]`, or `["Garmin fenix 7 manual", "population not stated", "sample size not published",
+ * "derived"]`.
+ *
+ * Returned as parts rather than one string because the view anchors the first one and joins the
+ * rest, and {@link citationText} joins the identical parts for a test — so the two cannot disagree
+ * about what the line says.
+ *
+ * This is the whole of what the spec requires on screen without expanding: whose numbers, over
+ * roughly whom, at what size, and whether this system did arithmetic on them. The source's own full
+ * population sentence and the derivation's statement sit in the card's disclosure
+ * (declutter-guided-results-view design.md D1).
+ */
+export function citationParts(source: BandSource, derived: boolean): string[] {
+  const size = source.sampleSize.trim()
+  // A bare count reads as `n = 860`. Anything else is a sentence about the absence of one, and is
+  // labelled so it cannot be read as a population: "Not published" alone would be ambiguous on a
+  // line whose previous field is a population.
+  const sampleSize = /^\d[\d,]*$/.test(size)
+    ? `n = ${size}`
+    : `sample size ${size.charAt(0).toLowerCase()}${size.slice(1)}`
+  const parts = [source.shortTitle, source.populationShort, sampleSize]
+  if (derived) parts.push('derived')
+  return parts
+}
+
+/** {@link citationParts} as the one line it renders as. */
+export function citationText(source: BandSource, derived: boolean): string {
+  return citationParts(source, derived).join(' · ')
 }
 
 /** A first sentence this many words long or shorter is quoted whole by {@link noteLead}. */
@@ -305,5 +363,8 @@ const NOTE_LEAD_WORDS = 6
 export function noteLead(first: string): string {
   const words = first.trim().split(/\s+/).filter(Boolean)
   if (words.length <= NOTE_LEAD_WHOLE_WORDS) return words.join(' ')
-  return `${words.slice(0, NOTE_LEAD_WORDS).join(' ').replace(/[,;:—–-]+$/, '')}…`
+  return `${words
+    .slice(0, NOTE_LEAD_WORDS)
+    .join(' ')
+    .replace(/[,;:—–-]+$/, '')}…`
 }

@@ -2,7 +2,10 @@ import type { MetricResult } from '../heuristics/types'
 import { DEFAULT_HEURISTICS_CONFIG } from '../heuristics/types'
 import { classifyFootStrike } from '../heuristics/footStrikePattern'
 import type { FootStrikeClass } from '../heuristics/footStrikePattern'
-import { formatMeasuredBandValue } from '../guidance/bandPosition'
+import {
+  describeBandPositionBriefly,
+  formatMeasuredBandValue,
+} from '../guidance/bandPosition'
 import type { GuidedEntry } from './guidedGroups'
 
 /**
@@ -38,7 +41,8 @@ export function formatGuidedValue(metric: MetricResult): string {
     return `${FOOT_STRIKE_CLASS_LABELS[cls]} (proxy)`
   }
   if (metric.unit === 'degrees') return `${metric.value.toFixed(1)}°`
-  if (metric.unit === 'stepsPerMinute') return `${Math.round(metric.value)} steps/min`
+  if (metric.unit === 'stepsPerMinute')
+    return `${Math.round(metric.value)} steps/min`
   // 'percent' is a dimensionless 0..1 comparison — not a fraction of torso length, so no suffix.
   if (metric.unit === 'percent') return `${(metric.value * 100).toFixed(1)}%`
   // 'centimeters' is absolute, with no denominator: `value` is not multiplied by 100.
@@ -54,10 +58,41 @@ export function formatGuidedValue(metric: MetricResult): string {
  * entry prints exactly as the classic panel does. A not-measured entry has no headline: the view
  * never prints the value of an excluded metric, including a measured one excluded for its view.
  */
-export function guidedHeadline(entry: GuidedEntry, excluded: boolean): string | null {
+export function guidedHeadline(
+  entry: GuidedEntry,
+  excluded: boolean,
+): string | null {
   if (excluded) return null
   const { band, metric } = entry
   return band !== null && metric.value !== null
     ? formatMeasuredBandValue(band, metric.value)
     : formatGuidedValue(metric)
+}
+
+/** A card headline: the value, and where it sits — `null` position for a card with no band. */
+export interface GuidedHeadlineParts {
+  value: string
+  position: string | null
+}
+
+/**
+ * The two halves of a banded card's headline — `172 steps/min` and `30th–69th percentile of
+ * Garmin's runners` — kept apart so the view can set them at different sizes, and joined nowhere
+ * else so the two can never disagree about which is which.
+ *
+ * `position` is `null` for an entry with no band or no value: there is nothing to be positioned
+ * against. `value` is always {@link guidedHeadline}'s own answer for a non-excluded entry, so the
+ * headline and the contents list can never print a value differently.
+ *
+ * **The contents list keeps calling `guidedHeadline`, not this.** It prints one value per row in a
+ * three-column grid; a position fragment there would wrap every row.
+ */
+export function guidedHeadlineParts(entry: GuidedEntry): GuidedHeadlineParts {
+  const { band, metric } = entry
+  const value = guidedHeadline(entry, false) ?? formatGuidedValue(metric)
+  const position =
+    band !== null && metric.value !== null
+      ? describeBandPositionBriefly(band, metric.value)
+      : null
+  return { value, position }
 }

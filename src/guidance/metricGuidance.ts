@@ -91,12 +91,18 @@ const STIFFLER_JOACHIM_2020_URL =
 const GARMIN_POPULATION =
   'Not stated. Garmin says only that it "has researched many runners of all different levels"; no protocol and no peer review are published.'
 const GARMIN_SAMPLE_SIZE = 'Not published'
+/**
+ * The same non-statement as {@link GARMIN_POPULATION}, compressed for the visible citation line.
+ * One constant for both Garmin-sourced bands, because it is the same absence in both manuals.
+ */
+const GARMIN_POPULATION_SHORT = 'population not stated'
 
 const MALISOUX_2023_SOURCE: BandSource = {
   title: 'Malisoux et al. 2023, Orthopaedic Journal of Sports Medicine 11(10)',
   shortTitle: 'Malisoux et al. 2023',
   url: MALISOUX_2023_URL,
   population: 'Recreational runners at 10 km/h (6:00 per km, 9:39 per mile)',
+  populationShort: 'recreational runners',
   sampleSize: '860',
 }
 
@@ -107,6 +113,7 @@ const FOLLAND_2017_SOURCE: BandSource = {
   url: FOLLAND_2017_URL,
   population:
     'Trained runners at 10–12 km/h (6:00 to 5:00 per km, 9:39 to 8:03 per mile)',
+  populationShort: 'trained runners',
   sampleSize: '97',
 }
 
@@ -116,6 +123,7 @@ const HEIDERSCHEIT_2011_SOURCE: BandSource = {
   shortTitle: 'Heiderscheit et al. 2011',
   url: HEIDERSCHEIT_2011_URL,
   population: 'Runners at 2.9 m/s (5:45 per km, 9:15 per mile)',
+  populationShort: 'runners',
   sampleSize: '45',
 }
 
@@ -455,18 +463,50 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
        * round. `metricGuidance.test.ts` pins both directions.
        */
       zones: [
-        { label: 'Below the 5th percentile', min: null, max: 153 },
-        { label: '5th–29th percentile', min: 153, max: 163 },
-        { label: '30th–69th percentile', min: 164, max: 173 },
-        { label: '70th–95th percentile', min: 174, max: 183 },
-        { label: 'Above the 95th percentile', min: 183, max: null },
+        {
+          label: 'Below the 5th percentile',
+          min: null,
+          max: 153,
+          shareOfRunners: 0.05,
+        },
+        {
+          label: '5th–29th percentile',
+          min: 153,
+          max: 163,
+          shareOfRunners: 0.25,
+        },
+        {
+          label: '30th–69th percentile',
+          min: 164,
+          max: 173,
+          shareOfRunners: 0.4,
+        },
+        {
+          label: '70th–95th percentile',
+          min: 174,
+          max: 183,
+          shareOfRunners: 0.25,
+        },
+        {
+          label: 'Above the 95th percentile',
+          min: 183,
+          max: null,
+          shareOfRunners: 0.05,
+        },
       ],
       centralTendency: null,
+      /**
+       * Garmin's labels name a percentile and not whose, so the card's headline would read "30th–69th
+       * percentile" — a percentile of nothing. Ends the headline naming the population that was
+       * measured, as the spec requires. Compare `verticalRatio`, whose restated labels already say.
+       */
+      zoneOwner: "of Garmin's runners",
       source: {
         title: "Garmin fenix 7 owner's manual — running-dynamics zone table",
         shortTitle: 'Garmin fenix 7 manual',
         url: GARMIN_FENIX_7_ZONES_URL,
         population: GARMIN_POPULATION,
+        populationShort: GARMIN_POPULATION_SHORT,
         sampleSize: GARMIN_SAMPLE_SIZE,
       },
       corroboration: [
@@ -532,6 +572,16 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     },
     remediationIntro:
       'Raising step rate is also the most-studied way to reduce overstriding — how far the foot lands ahead of the body. The Heiderscheit and Lenhart studies below measured that directly.',
+    /**
+     * Huber & Verhoff is this metric's own first remediation link, and the clause after the dash is
+     * `remediationIntro`'s own claim compressed — both already render on this card. "5–10% above your
+     * own step rate" is the size of the change the study made, from wherever the runner is; no source
+     * in this record names a step rate to reach, and cadence's mandatory note says so at length.
+     */
+    tryLine: {
+      text: 'a metronome 5–10% above your own step rate — the most-studied way to reduce overstriding',
+      url: HUBER_2024_LINK.url,
+    },
     guidedDescription: null,
   },
 
@@ -565,35 +615,59 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
        */
       zones: [
         // Garmin's label, for each: above the 95th percentile.
-        { label: "Lowest 5% of Garmin's table", min: null, max: 0.0305 },
+        {
+          label: "Lowest 5% of Garmin's table",
+          min: null,
+          max: 0.0305,
+          shareOfRunners: 0.05,
+        },
         // Garmin's: 70th–95th percentile.
         {
           label: "5th–30th percentile of Garmin's table",
           min: 0.0305,
           max: 0.037,
+          shareOfRunners: 0.25,
         },
         // Garmin's: 30th–69th percentile.
         {
           label: "31st–70th percentile of Garmin's table",
           min: 0.0375,
           max: 0.043,
+          shareOfRunners: 0.4,
         },
         // Garmin's: 5th–29th percentile.
         {
           label: "71st–95th percentile of Garmin's table",
           min: 0.0435,
           max: 0.0505,
+          shareOfRunners: 0.25,
         },
         // Garmin's: below the 5th percentile.
-        { label: "Highest 5% of Garmin's table", min: 0.0505, max: null },
+        {
+          label: "Highest 5% of Garmin's table",
+          min: 0.0505,
+          max: null,
+          shareOfRunners: 0.05,
+        },
       ],
       centralTendency: null,
+      /**
+       * `null`, and not an oversight: every label above already ends "of Garmin's table", so an owner
+       * phrase would render "of Garmin's table of Garmin's runners".
+       *
+       * ⚠️ **The shares are Garmin's CUT POINTS (5 / 30 / 70 / 95) read in value order — NOT the
+       * spans of the restated labels above.** Reading `5th–30th`, `31st–70th`, `71st–95th` as spans
+       * sums to 1.01: writing half-open intervals as inclusive integers is an artefact of the
+       * restatement, not a property of the table. Same five numbers as `cadence`, by symmetry.
+       */
+      zoneOwner: null,
       source: {
         title:
           "Garmin fenix 7 owner's manual (APAC) — vertical ratio zone table, halved",
         shortTitle: 'Garmin fenix 7 manual (APAC)',
         url: GARMIN_FENIX_7_APAC_ZONES_URL,
         population: GARMIN_POPULATION,
+        populationShort: GARMIN_POPULATION_SHORT,
         sampleSize: GARMIN_SAMPLE_SIZE,
       },
       corroboration: [
@@ -636,6 +710,9 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: `${NOT_ENOUGH_DATA_HINT} A stride runs from one footstrike to the next footstrike of the same foot, so the clip needs several strides in a row.`,
     },
     remediationIntro: null,
+    // `null`: nothing in the record reports an intervention on the RATIO. Its one remediation link
+    // targets the numerator, and already carries `verticalOscillation`'s line.
+    tryLine: null,
     guidedDescription: null,
   },
 
@@ -656,12 +733,19 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
             "From women's 10th to men's 90th percentile in Malisoux's 860 runners, at 10 km/h (6:00 per km)",
           min: 6.0,
           max: 9.5,
+          /**
+           * `null`, and this one has to be checked rather than assumed: the derivation below says in
+           * so many words that "no percentile of the combined cohort is claimed". The span runs from
+           * women's 10th to men's 90th percentile, which is not 80% of anything.
+           */
+          shareOfRunners: null,
         },
       ],
       centralTendency: {
         value: 7.7,
         label: "Malisoux's overall average (± 1.2 cm)",
       },
+      zoneOwner: null,
       source: MALISOUX_2023_SOURCE,
       corroboration: [
         {
@@ -708,6 +792,11 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: `${NOT_ENOUGH_DATA_HINT} ${REAL_WORLD_SCALE_HINT} A steady side-on pass makes that easiest.`,
     },
     remediationIntro: null,
+    // Adams 2018's own verbatim cue, and this metric's only remediation link.
+    tryLine: {
+      text: 'cueing yourself to stay as low to the ground as possible without slouching',
+      url: ADAMS_2018_LINK.url,
+    },
     guidedDescription: null,
   },
 
@@ -717,13 +806,20 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     displayRank: 4,
     band: {
       unit: 'degrees',
+      // An observed range, not a percentile span, so there is no share to publish.
       zones: [
-        { label: "Range across Folland's 97 runners", min: 1.8, max: 21.4 },
+        {
+          label: "Range across Folland's 97 runners",
+          min: 1.8,
+          max: 21.4,
+          shareOfRunners: null,
+        },
       ],
       centralTendency: {
         value: 10.3,
         label: 'Average in this study (± 3.7°)',
       },
+      zoneOwner: null,
       source: FOLLAND_2017_SOURCE,
       // Teng & Powers 2014 (7.3 ± 3.6° self-selected) would corroborate, and is deliberately
       // absent: JOSPT returned 403 to the research pass, so it is high-confidence secondary
@@ -751,6 +847,9 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    // `null`: `evidenceDirection` is 'contested'. Four measured outcomes point in different
+    // directions at once, so any Try line here would be picking a side in a live disagreement.
+    tryLine: null,
     guidedDescription: null,
   },
 
@@ -767,13 +866,20 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
        * 85–125°, pooled across Fukuchi's speed means, Hanley and Folland; no source publishes that
        * range, so it was replaced (design.md D1, D2 rank 5).
        */
+      // An observed range, not a percentile span, so there is no share to publish.
       zones: [
-        { label: "Range across Folland's 97 runners", min: 71.3, max: 129 },
+        {
+          label: "Range across Folland's 97 runners",
+          min: 71.3,
+          max: 129,
+          shareOfRunners: null,
+        },
       ],
       centralTendency: {
         value: 94.1,
         label: 'Average in this study (± 11.1°)',
       },
+      zoneOwner: null,
       source: FOLLAND_2017_SOURCE,
       corroboration: [
         {
@@ -782,6 +888,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
           url: FUKUCHI_2017_URL,
           population:
             'Regular runners at 2.5, 3.5 and 4.5 m/s (6:40, 4:46 and 3:42 per km) — 93.5 ± 10.4°, 108.7 ± 10.7° and 119.1 ± 10.4° respectively, in the same convention this app uses, where 0° is full extension',
+          populationShort: 'regular runners',
           sampleSize: '28',
         },
         {
@@ -790,6 +897,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
           url: HANLEY_2021_URL,
           population:
             "Distance runners at midswing — 55–60° of included thigh–shank angle, which is 120–125° in this app's convention",
+          populationShort: 'distance runners',
           sampleSize: 'Book chapter; the cohort is not restated',
         },
       ],
@@ -814,6 +922,8 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    // `null`: `remediation` is empty — no intervention literature on swing knee flexion surfaced.
+    tryLine: null,
     guidedDescription: null,
   },
 
@@ -845,6 +955,17 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    /**
+     * Heiderscheit 2011 measured this metric's own geometry directly — foot-to-centre-of-mass fell
+     * from 9.2 cm to 7.0 cm at a 10% higher step rate — which is the second mandatory note above,
+     * compressed. Stated as a change from the runner's own step rate, because that is what was
+     * measured; the absolute centimetres are deliberately not quoted, since the two published
+     * measurements of this geometry disagree by about 3.4× (first mandatory note).
+     */
+    tryLine: {
+      text: "a step rate 10% above your own, which brought the foot's landing closer to the body",
+      url: HEIDERSCHEIT_2011_LINK.url,
+    },
     guidedDescription:
       'How far your foot lands ahead of your hips at footstrike, relative to your torso length.',
   },
@@ -867,6 +988,11 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    // The same cue as `verticalOscillationCm`: the same measurement in a different unit.
+    tryLine: {
+      text: 'cueing yourself to stay as low to the ground as possible without slouching',
+      url: ADAMS_2018_LINK.url,
+    },
     guidedDescription: null,
   },
 
@@ -904,6 +1030,8 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    // `null`: contested, and the injury link is modelling-only in uninjured runners.
+    tryLine: null,
     guidedDescription: null,
   },
 
@@ -937,6 +1065,8 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: `${NOT_ENOUGH_DATA_HINT} ${REAL_WORLD_SCALE_HINT}`,
     },
     remediationIntro: null,
+    // `null`: contested, and the injury link is modelling-only in uninjured runners.
+    tryLine: null,
     guidedDescription: null,
   },
 
@@ -963,6 +1093,9 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    // `null`, and this emptiness is the finding rather than an omission: `remediation` is empty
+    // because the best available systematic review rates the injury link as low evidence.
+    tryLine: null,
     guidedDescription:
       'Whether your foot tends to land heel-, midfoot- or forefoot-first.',
   },
@@ -983,6 +1116,8 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    // `null`: nothing surfaced for this metric at all.
+    tryLine: null,
     guidedDescription: null,
   },
 
@@ -1003,6 +1138,8 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    // `null`: nothing surfaced for this metric at all.
+    tryLine: null,
     guidedDescription: null,
   },
 }
