@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PoseDetector } from '../pose/detector'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
@@ -36,6 +36,8 @@ vi.mock('../video/posterFrame', async (importOriginal) => ({
 }))
 
 import type { ClipPoster } from '../video/posterFrame'
+import type { EvidenceFramePlan } from './evidenceFrames'
+import type { SessionEvidenceState } from './useSessionEvidence'
 import { MultiClipVideoSession } from './MultiClipVideoSession'
 
 function makeFakeDetector(): PoseDetector {
@@ -714,5 +716,220 @@ describe('MultiClipVideoSession', () => {
     expect(callOrder.indexOf('clip1-primary-stop')).toBeLessThan(
       callOrder.indexOf('other-sample-start'),
     )
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// Results view mode: `?view=guide` and the toggle (strides-kgi.6)
+// ---------------------------------------------------------------------------------------------
+
+// A PASSTHROUGH spy — hoisted like every `vi.mock`, so it is in place for the whole file, and it
+// calls the real hook unless a test below overrides it. Every case above therefore still runs the
+// real `useSessionEvidence`. It exists because jsdom decodes no video, so the real extraction never
+// produces a canvas; the canvas-identity case below needs one, and `afterEach` puts the real
+// implementation back.
+vi.mock('./useSessionEvidence', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./useSessionEvidence')>()
+  return { ...actual, useSessionEvidence: vi.fn(actual.useSessionEvidence) }
+})
+
+describe('MultiClipVideoSession — results view mode', () => {
+  let originalHref: string
+
+  beforeEach(() => {
+    originalHref = window.location.href
+  })
+
+  afterEach(async () => {
+    window.history.replaceState(null, '', originalHref)
+    const actual = await vi.importActual<typeof import('./useSessionEvidence')>(
+      './useSessionEvidence',
+    )
+    const hook = vi.mocked((await import('./useSessionEvidence')).useSessionEvidence)
+    hook.mockImplementation(actual.useSessionEvidence)
+  })
+
+  /** Every results view's root, classic or guided — both render this section. */
+  function resultsRoots(): Element[] {
+    return Array.from(document.querySelectorAll('section[aria-label="Analysis results"]'))
+  }
+
+  /**
+   * Which view is mounted, asserting on the way that it is EXACTLY one: one results root, and
+   * exactly one of the classic panel / the guided root. Called after every step rather than once,
+   * because "never both" is the invariant (design.md D7.3), not "eventually one".
+   */
+  function mountedView(): 'classic' | 'guide' {
+    expect(resultsRoots()).toHaveLength(1)
+    const classic = document.querySelectorAll('.metrics-panel').length
+    const guided = document.querySelectorAll('.guided-results').length
+    expect(classic + guided).toBe(1)
+    return guided === 1 ? 'guide' : 'classic'
+  }
+
+  function toggleButton(name: 'Classic' | 'Guided'): HTMLElement {
+    return within(screen.getByRole('group', { name: /results view/i })).getByRole('button', {
+      name,
+    })
+  }
+
+  async function loadOneReadyClip() {
+    render(<MultiClipVideoSession detector={makeFakeDetector()} />)
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
+  }
+
+  it('renders no toggle before a clip is ready', async () => {
+    render(<MultiClipVideoSession detector={makeFakeDetector()} />)
+    expect(screen.queryByRole('group', { name: /results view/i })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run.mp4', { type: 'video/mp4' }))
+    // Loading, not loaded: still the picker, still no toggle and no results view.
+    expect(canonicalVideos()).toHaveLength(1)
+    expect(screen.queryByRole('group', { name: /results view/i })).toBeNull()
+    expect(resultsRoots()).toHaveLength(0)
+
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() =>
+      expect(screen.getByRole('group', { name: /results view/i })).toBeInTheDocument(),
+    )
+  })
+
+  it('defaults to the classic view with no view param, and leaves the address untouched', async () => {
+    window.history.replaceState(null, '', '/strides/?clip=demo#top')
+    await loadOneReadyClip()
+
+    expect(mountedView()).toBe('classic')
+    expect(document.querySelector('.guided-results__group')).toBeNull()
+    expect(toggleButton('Classic')).toHaveAttribute('aria-pressed', 'true')
+    expect(toggleButton('Guided')).toHaveAttribute('aria-pressed', 'false')
+    expect(window.location.search).toBe('?clip=demo')
+    expect(window.location.hash).toBe('#top')
+  })
+
+  it.each(['?view=classic', '?view=GUIDE', '?view=nonsense', '?view=guide&view=classic'])(
+    'renders the classic view for %s',
+    async (search) => {
+      window.history.replaceState(null, '', `/strides/${search}`)
+      await loadOneReadyClip()
+      expect(mountedView()).toBe('classic')
+    },
+  )
+
+  it('is seeded with the guided view from ?view=guide', async () => {
+    window.history.replaceState(null, '', '/strides/?view=guide')
+    await loadOneReadyClip()
+
+    expect(mountedView()).toBe('guide')
+    expect(document.querySelector('.guided-results__group')).not.toBeNull()
+    expect(toggleButton('Guided')).toHaveAttribute('aria-pressed', 'true')
+    expect(toggleButton('Classic')).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('reads the address once, at mount — a later change to it does not switch the view', async () => {
+    render(<MultiClipVideoSession detector={makeFakeDetector()} />)
+    window.history.replaceState(null, '', '/strides/?view=guide')
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
+
+    expect(mountedView()).toBe('classic')
+  })
+
+  it('places the toggle in the page body, immediately above the results view — never in the header', async () => {
+    await loadOneReadyClip()
+
+    const group = screen.getByRole('group', { name: /results view/i })
+    expect(screen.getByRole('main')).toContainElement(group)
+    expect(screen.getByRole('banner')).not.toContainElement(group)
+    const toggleRoot = group.closest('.results-view-toggle')
+    expect(toggleRoot).not.toBeNull()
+    expect(toggleRoot!.nextElementSibling).toBe(resultsRoots()[0])
+  })
+
+  it('toggles between the views, mounting exactly one each way, and writes the address', async () => {
+    window.history.replaceState(null, '', '/strides/?clip=demo#top')
+    await loadOneReadyClip()
+    expect(mountedView()).toBe('classic')
+
+    const guided = toggleButton('Guided')
+    guided.focus()
+    fireEvent.click(guided)
+
+    expect(mountedView()).toBe('guide')
+    expect(document.querySelector('.guided-results__group')).not.toBeNull()
+    expect(window.location.search).toBe('?clip=demo&view=guide')
+    expect(window.location.hash).toBe('#top')
+    expect(window.location.pathname).toBe('/strides/')
+    // The reader stays on the control they just used; the swap happened below it.
+    expect(document.activeElement).toBe(guided)
+    expect(guided).toHaveAttribute('aria-pressed', 'true')
+
+    const classic = toggleButton('Classic')
+    classic.focus()
+    fireEvent.click(classic)
+
+    expect(mountedView()).toBe('classic')
+    expect(document.querySelector('.guided-results__group')).toBeNull()
+    // Classic strips `view` entirely, so the default address is exactly what it was.
+    expect(window.location.search).toBe('?clip=demo')
+    expect(window.location.hash).toBe('#top')
+    expect(document.activeElement).toBe(classic)
+
+    // And back again, to show the toggle is not one-shot.
+    fireEvent.click(toggleButton('Guided'))
+    expect(mountedView()).toBe('guide')
+    expect(window.location.search).toBe('?clip=demo&view=guide')
+  })
+
+  it('moves the SAME evidence canvas between the views on every toggle, never losing it', async () => {
+    const plan: EvidenceFramePlan = {
+      metric: 'trunkLean',
+      kind: 'footStrike',
+      quality: 0.8,
+      label: 'Torso at the widest lean',
+      side: 'left',
+      base: { timestamp: 0.4, opacity: 1, keypoints: [], outwardSign: null, side: null },
+      ghost: null,
+      crop: { x: 0, y: 0, side: 200 },
+      travelDirection: 1,
+      demotion: null,
+      cropGrowth: null,
+      focusOffset: null,
+    }
+    const canvas = document.createElement('canvas')
+    // One stable object, as the real hook returns between changes — a fresh one per render would
+    // hand both views a new evidence identity on every render.
+    const settled: SessionEvidenceState = {
+      status: 'settled',
+      sections: [{ metric: 'trunkLean', clipIndex: 0, items: [{ plan, canvas }] }],
+    }
+    vi.mocked((await import('./useSessionEvidence')).useSessionEvidence).mockImplementation(
+      () => settled,
+    )
+
+    await loadOneReadyClip()
+
+    expect(mountedView()).toBe('classic')
+    expect(document.body).toContainElement(canvas)
+    expect(canvas.closest('.metrics-panel')).not.toBeNull()
+
+    fireEvent.click(toggleButton('Guided'))
+    expect(mountedView()).toBe('guide')
+    expect(document.body).toContainElement(canvas)
+    expect(canvas.closest('.guided-results')).not.toBeNull()
+    // Identity, not a lookalike: the one node the extractor produced is what the guided view shows.
+    expect(document.querySelector('.guided-results .evidence-image > canvas')).toBe(canvas)
+
+    fireEvent.click(toggleButton('Classic'))
+    expect(mountedView()).toBe('classic')
+    expect(document.body).toContainElement(canvas)
+    expect(canvas.closest('.metrics-panel')).not.toBeNull()
+    expect(document.querySelector('.metrics-panel .evidence-image > canvas')).toBe(canvas)
   })
 })
