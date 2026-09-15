@@ -11,6 +11,7 @@ import {
   guidedEntryId,
   guidedGroups,
   noBandReasonFor,
+  noteLead,
   renderableBand,
   sourceHasProvenance,
   splitFirstSentence,
@@ -174,32 +175,74 @@ function entryWith({
   return { metric: makeMetric('cadence'), guidance, band }
 }
 
-describe('cardReferences — each URL once per card, visible first', () => {
+describe('cardReferences — each URL an anchor once per card, visible first, nothing dropped', () => {
   it('shows at most three studies of changes and defers the rest to the disclosure', () => {
     const remediation = ['a', 'b', 'c', 'd', 'e'].map((x) => link(`https://${x}.example/`))
     const refs = cardReferences(entryWith({ remediation }))
     expect(refs.visibleRemediation.map((l) => l.url)).toEqual(remediation.slice(0, 3).map((l) => l.url))
-    expect(refs.moreRemediation.map((l) => l.url)).toEqual(remediation.slice(3).map((l) => l.url))
+    expect(refs.moreRemediation.map((r) => r.link.url)).toEqual(remediation.slice(3).map((l) => l.url))
+    expect(refs.moreRemediation.every((r) => r.linked)).toBe(true)
     expect(VISIBLE_REMEDIATION_LIMIT).toBe(3)
   })
 
-  it('drops a link whose URL already rendered — the band source, a visible study, or an earlier link', () => {
+  it('keeps a link whose URL already rendered, as text, and skips only an exact repeat', () => {
     const shared = 'https://shared.example/'
+    const band = 'https://band.example/'
     const refs = cardReferences(
       entryWith({
-        bandUrl: 'https://band.example/',
-        corroboration: [source(shared), source('https://band.example/')],
-        research: [link('https://band.example/'), link(shared), link('https://r.example/'), link('https://r.example/')],
-        remediation: [link(shared), link('https://band.example/'), link('https://m.example/')],
+        bandUrl: band,
+        corroboration: [source(shared), source(band)],
+        research: [
+          link(band),
+          link(shared),
+          { ...link(shared), summary: 'Says something the visible study does not.' },
+          link('https://r.example/'),
+          link('https://r.example/'),
+        ],
+        remediation: [link(shared), link(band), link('https://m.example/')],
       }),
     )
-    // The band source claims its URL first, so remediation skips it; `shared` goes to the visible list.
+    // The band source claims its URL first, so that study waits for the disclosure; `shared` goes to the visible list.
     expect(refs.visibleRemediation.map((l) => l.url)).toEqual([shared, 'https://m.example/'])
     // A corroborating source keeps its fields but loses a duplicate link.
     expect(refs.corroboration.map((c) => c.linked)).toEqual([false, false])
-    expect(refs.research.map((l) => l.url)).toEqual(['https://r.example/'])
+    // The band's own source as a research link stays, unlinked. So does a second summary for a
+    // visible study's URL. An exact repeat of a link already on the card — `shared` word for word,
+    // the second `r.example` — is all that is skipped.
+    expect(refs.research.map(({ link: l, linked }) => [l.url, l.summary, linked])).toEqual([
+      [band, `About ${band}.`, false],
+      [shared, 'Says something the visible study does not.', false],
+      ['https://r.example/', 'About https://r.example/.', true],
+    ])
+    // The deferred band-URL study repeats the research link above word for word.
     expect(refs.moreRemediation).toEqual([])
     expect(refs.disclosureSourceCount).toBe(1)
+  })
+
+  it('defers a study whose URL is the band source into the disclosure, unlinked, rather than dropping it', () => {
+    const band = 'https://band.example/'
+    const refs = cardReferences(entryWith({ bandUrl: band, remediation: [link(band)] }))
+    expect(refs.visibleRemediation).toEqual([])
+    expect(refs.moreRemediation).toEqual([{ link: link(band), linked: false }])
+    expect(refs.disclosureSourceCount).toBe(0)
+  })
+
+  it("places every shipped link's summary somewhere on its card", () => {
+    const { banded, unbanded } = guidedGroups(makeHeuristics())
+    for (const entry of [...banded, ...unbanded]) {
+      const refs = cardReferences(entry)
+      const placed = [
+        ...refs.visibleRemediation,
+        ...refs.research.map((r) => r.link),
+        ...refs.moreRemediation.map((r) => r.link),
+      ]
+      for (const reference of [...entry.guidance.research, ...entry.guidance.remediation]) {
+        expect(
+          placed.some((l) => l.url === reference.url && l.summary === reference.summary),
+          `${entry.metric.metric}: ${reference.shortTitle}`,
+        ).toBe(true)
+      }
+    }
   })
 
   it('counts every distinct URL linked inside the disclosure', () => {
@@ -220,8 +263,8 @@ describe('cardReferences — each URL once per card, visible first', () => {
         ...(entry.band !== null ? [entry.band.source.url] : []),
         ...refs.visibleRemediation.map((l) => l.url),
         ...refs.corroboration.filter((c) => c.linked).map((c) => c.source.url),
-        ...refs.research.map((l) => l.url),
-        ...refs.moreRemediation.map((l) => l.url),
+        ...refs.research.filter((r) => r.linked).map((r) => r.link.url),
+        ...refs.moreRemediation.filter((r) => r.linked).map((r) => r.link.url),
       ]
       expect(new Set(urls).size, entry.metric.metric).toBe(urls.length)
     }
@@ -250,6 +293,22 @@ describe('splitFirstSentence', () => {
         expect(note.replace(/\s+/g, '')).toBe(`${first}${rest}`.replace(/\s+/g, ''))
       }
     }
+  })
+})
+
+describe('noteLead', () => {
+  it.each([
+    ['180 steps per minute is not a target.', '180 steps per minute is not a target.'],
+    ['A negative value is not a defect.', 'A negative value is not a defect.'],
+    ['About 8 in 10 distance runners are rearfoot strikers.', 'About 8 in 10 distance runners…'],
+    [
+      'There is no defensible target for trunk lean, and this range carries no preferred end.',
+      'There is no defensible target for…',
+    ],
+    ['One two three four five, six seven eight nine.', 'One two three four five, six…'],
+    ['One two three four five six, seven eight nine.', 'One two three four five six…'],
+  ])('%j', (first, lead) => {
+    expect(noteLead(first)).toBe(lead)
   })
 })
 

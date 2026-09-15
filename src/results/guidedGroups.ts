@@ -207,20 +207,35 @@ export interface CorroborationReference {
   linked: boolean
 }
 
+/** A research or studies-of-changes link inside the disclosure, and whether it is still unlinked. */
+export interface LinkReference {
+  link: GuidanceLink
+  /**
+   * `false` when the same URL already rendered as a link higher on the card — typically a research
+   * link that is also the band's source or a corroborating source. Its title then shows as text,
+   * and its kind and summary still render: they say something the other mention of that URL does not.
+   */
+  linked: boolean
+}
+
 /**
  * Every outbound reference a card renders, already placed and de-duplicated.
  *
- * **Each URL renders at most once per card**, in the order a reader meets them: the band's source
- * (always visible), then the first {@link VISIBLE_REMEDIATION_LIMIT} studies of changes (visible),
- * then — inside the card's disclosure — corroborating sources, research links and the remaining
- * studies of changes. A link whose URL already rendered is dropped; a corroborating source keeps its
- * population and sample size and loses only the duplicate link.
+ * **Each URL is an anchor at most once per card**, in the order a reader meets them: the band's
+ * source (always visible), then the first {@link VISIBLE_REMEDIATION_LIMIT} studies of changes
+ * (visible), then — inside the card's disclosure — corroborating sources, research links and the
+ * remaining studies of changes.
+ *
+ * **No link is dropped for sharing a URL.** Every link's kind and summary reach the card (design.md
+ * D7.11): a later mention of a URL that already rendered keeps its text and loses only the second
+ * anchor. The one thing skipped is an exact repeat — same URL, kind and summary as a link already
+ * placed — because every word of it is already on the card.
  */
 export interface CardReferences {
   visibleRemediation: GuidanceLink[]
   corroboration: CorroborationReference[]
-  research: GuidanceLink[]
-  moreRemediation: GuidanceLink[]
+  research: LinkReference[]
+  moreRemediation: LinkReference[]
   /** Distinct URLs linked inside the disclosure — the "(N sources)" count. */
   disclosureSourceCount: number
 }
@@ -237,12 +252,13 @@ export function cardReferences(
   }
   if (entry.band !== null) claim(entry.band.source.url)
 
-  const remediation = entry.guidance.remediation.filter((link) => !rendered.has(link.url))
+  const placed: GuidanceLink[] = []
   const visibleRemediation: GuidanceLink[] = []
   const deferred: GuidanceLink[] = []
-  for (const link of remediation) {
+  for (const link of entry.guidance.remediation) {
     if (visibleRemediation.length < visibleRemediationLimit && !rendered.has(link.url)) {
       claim(link.url)
+      placed.push(link)
       visibleRemediation.push(link)
     } else {
       deferred.push(link)
@@ -254,8 +270,18 @@ export function cardReferences(
     source,
     linked: claim(source.url),
   }))
-  const research = entry.guidance.research.filter((link) => claim(link.url))
-  const moreRemediation = deferred.filter((link) => claim(link.url))
+  const place = (links: readonly GuidanceLink[]): LinkReference[] =>
+    links.flatMap((link) => {
+      const repeat = placed.some(
+        (other) =>
+          other.url === link.url && other.kind === link.kind && other.summary === link.summary,
+      )
+      if (repeat) return []
+      placed.push(link)
+      return [{ link, linked: claim(link.url) }]
+    })
+  const research = place(entry.guidance.research)
+  const moreRemediation = place(deferred)
 
   return {
     visibleRemediation,
@@ -264,4 +290,20 @@ export function cardReferences(
     moreRemediation,
     disclosureSourceCount: rendered.size - before,
   }
+}
+
+/** A first sentence this many words long or shorter is quoted whole by {@link noteLead}. */
+const NOTE_LEAD_WHOLE_WORDS = 8
+/** How many words {@link noteLead} keeps of a longer first sentence. */
+const NOTE_LEAD_WORDS = 6
+
+/**
+ * The first few words of a note, to label where its continuation picks up: the whole first sentence
+ * when it is short ("180 steps per minute is not a target."), otherwise its first words and an
+ * ellipsis ("About 8 in 10 distance runners…").
+ */
+export function noteLead(first: string): string {
+  const words = first.trim().split(/\s+/).filter(Boolean)
+  if (words.length <= NOTE_LEAD_WHOLE_WORDS) return words.join(' ')
+  return `${words.slice(0, NOTE_LEAD_WORDS).join(' ').replace(/[,;:—–-]+$/, '')}…`
 }

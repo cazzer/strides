@@ -298,7 +298,7 @@ describe('MetricScale — the position is available without the graphic', () => 
   it('a value in a gap in the source table says it falls between the two zones', () => {
     const { figure } = renderScale('verticalRatio', 0.0372)
     expect(captionOf(figure)).toBe(
-      `Metric verticalRatio: 3.72% sits in the gap between the zones labelled “${zoneLabel('verticalRatio', 1)}” and “${zoneLabel('verticalRatio', 2)}”; the range shown jumps from 3.70 to 3.75.`,
+      `Metric verticalRatio: 3.72% sits in the gap between the zones labelled “${zoneLabel('verticalRatio', 1)}” and “${zoneLabel('verticalRatio', 2)}”; the range shown jumps from 3.70% to 3.75%.`,
     )
   })
 
@@ -312,7 +312,7 @@ describe('MetricScale — the position is available without the graphic', () => 
   it('a cadence in the 163→164 gap prints a decimal rather than a "164" that reads as inside 164–173', () => {
     const { figure } = renderScale('cadence', 163.5)
     expect(captionOf(figure)).toBe(
-      `Metric cadence: 163.5 steps per minute sits in the gap between the zones labelled “${zoneLabel('cadence', 1)}” and “${zoneLabel('cadence', 2)}”; the source's table jumps from 163 to 164.`,
+      `Metric cadence: 163.5 steps per minute sits in the gap between the zones labelled “${zoneLabel('cadence', 1)}” and “${zoneLabel('cadence', 2)}”; the source's table jumps from 163 steps per minute to 164 steps per minute.`,
     )
     expect(one(figure, '.metric-scale__value-label').textContent).toBe(
       '163.5 steps/min',

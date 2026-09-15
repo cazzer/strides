@@ -312,7 +312,7 @@ describe('describeBandPosition', () => {
     [
       'cadence',
       163.5,
-      `163.5 steps per minute sits in the gap between the zones labelled ${quoted('cadence', 1)} and ${quoted('cadence', 2)}; the source's table jumps from 163 to 164.`,
+      `163.5 steps per minute sits in the gap between the zones labelled ${quoted('cadence', 1)} and ${quoted('cadence', 2)}; the source's table jumps from 163 steps per minute to 164 steps per minute.`,
     ],
     [
       'verticalRatio',
@@ -322,7 +322,7 @@ describe('describeBandPosition', () => {
     [
       'verticalRatio',
       0.0372,
-      `3.72% sits in the gap between the zones labelled ${quoted('verticalRatio', 1)} and ${quoted('verticalRatio', 2)}; the range shown jumps from 3.70 to 3.75.`,
+      `3.72% sits in the gap between the zones labelled ${quoted('verticalRatio', 1)} and ${quoted('verticalRatio', 2)}; the range shown jumps from 3.70% to 3.75%.`,
     ],
     [
       'verticalRatio',
@@ -373,11 +373,11 @@ describe('describeBandPosition', () => {
       ],
     }
     expect(describeBandPosition(gapped, 22)).toBe(
-      "22 steps per minute sits in the gap between the zones labelled “first” and “second”; the source's table jumps from 20 to 25.",
+      "22 steps per minute sits in the gap between the zones labelled “first” and “second”; the source's table jumps from 20 steps per minute to 25 steps per minute.",
     )
     const derived = { ...gapped, derivation: { statement: 'Halved.', restsOn: [] } }
     expect(describeBandPosition(derived, 22)).toBe(
-      '22 steps per minute sits in the gap between the zones labelled “first” and “second”; the range shown jumps from 20 to 25.',
+      '22 steps per minute sits in the gap between the zones labelled “first” and “second”; the range shown jumps from 20 steps per minute to 25 steps per minute.',
     )
   })
 

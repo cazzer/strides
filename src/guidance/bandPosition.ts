@@ -162,10 +162,11 @@ function spokenZoneValues(zone: BandZone, band: ReferenceBand): string {
  * app's arithmetic on published numbers, and saying "published" of them would claim an authorship
  * the source never had.
  *
- * A value in a gap names the two numbers the gap runs between, taken from the zones themselves.
- * For a band that is not derived those are the source's own printed bounds, so the sentence says
- * the source's table jumps; for a derived band they are this app's arithmetic, so it says the range
- * shown jumps instead.
+ * A value in a gap names the two numbers the gap runs between, taken from the zones themselves and
+ * each stated with its unit ("from 3.70% to 3.75%"): a bare "3.70 to 3.75" after "3.72%" leaves the
+ * reader to guess the two are the same kind of number. For a band that is not derived those are the
+ * source's own printed bounds, so the sentence says the source's table jumps; for a derived band
+ * they are this app's arithmetic, so it says the range shown jumps instead.
  */
 export function describeBandPosition(
   band: ReferenceBand,
@@ -183,8 +184,8 @@ export function describeBandPosition(
     case 'betweenZones': {
       // Non-null by construction: a zone only ends below a value through a finite `max`, and only
       // starts above one through a finite `min` (`endBefore`, `startAfter`).
-      const from = formatBandNumber(position.lower.max!, band.unit)
-      const to = formatBandNumber(position.upper.min!, band.unit)
+      const from = formatBandValue(position.lower.max!, band.unit, 0, 'spoken')
+      const to = formatBandValue(position.upper.min!, band.unit, 0, 'spoken')
       const table = band.derivation === null ? "the source's table" : 'the range shown'
       return `${valueText} sits in the gap between the zones labelled “${position.lower.label}” and “${position.upper.label}”; ${table} jumps from ${from} to ${to}.`
     }

@@ -576,10 +576,16 @@ measurement" (spec) is about values, confidences, caveats, tiers and imagery, an
   confidence label when caveated, the description, the metric's own caveat, the scale (or the
   no-band reason), the band's provenance — source, population, sample size, and a derived band's
   statement, which the spec requires on screen without a click — the speed caveat, the first
-  sentence of each mandatory note, and the first few remediation studies with `remediationIntro`
-  above them. Behind one disclosure per card: what a derivation rests on, the band's assembly note,
-  the central statistic, corroborating sources, the research links, the remaining remediation
-  studies and the rest of each mandatory note. The classic panel has no such disclosure. Because
+  sentence of each mandatory note, marked "(continued below)" where the note goes on, and the first
+  few remediation studies under "Research on changing this", with `remediationIntro` above them,
+  each a short-title link over one line of its kind and summary. Behind one disclosure per card:
+  what a derivation rests on, the band's assembly note, the central statistic, corroborating
+  sources, the research links, the visible studies' full citations, the remaining remediation
+  studies and the rest of each mandatory note, labelled with that note's opening words; the
+  disclosure's summary says whether notes and research are inside and counts the distinct links.
+  No link is dropped for sharing a URL with one already on the card: it keeps its title as text,
+  its kind and its summary, and loses only the second anchor, so every summary reaches the card
+  (D7.11). The classic panel has no such disclosure. Because
   the first sentence of a mandatory note is what stays visible, each note's first sentence is
   written to stand on its own ("180 steps per minute is not a target.", "A negative value is not a
   defect."), and cadence's remediation list puts the two studies its intro names inside the visible

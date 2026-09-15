@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GuidedMeasurements, GuidedResultsView } from './GuidedResultsView'
 import { GuidedMetricCard } from './GuidedMetricCard'
 import { MetricsPanel } from './MetricsPanel'
@@ -12,6 +12,7 @@ import {
   cardReferences,
   guidedEntryId,
   guidedGroups,
+  noteLead,
   splitFirstSentence,
 } from './guidedGroups'
 import type { GuidedEntry } from './guidedGroups'
@@ -23,7 +24,7 @@ import type { FormHeuristicsResult, MetricId } from '../heuristics/types'
 import { METRIC_GUIDANCE, guidanceInDisplayOrder } from '../guidance/metricGuidance'
 import { formatMeasuredBandValue } from '../guidance/bandPosition'
 import { formatBandValue } from '../guidance/formatBandValue'
-import type { BandSource, GuidanceLink, MetricGuidance } from '../guidance/types'
+import type { BandSource, GuidanceLink, GuidanceLinkKind, MetricGuidance } from '../guidance/types'
 import {
   makeHeuristics,
   makeMetric,
@@ -227,6 +228,19 @@ function guidanceUrls(): Set<string> {
   return urls
 }
 
+/**
+ * What each link kind reads as on the card. Restated rather than imported — `GuidedMetricCard`'s
+ * table is private — so a relabelled kind has to be relabelled here too, on purpose.
+ */
+const KIND_LABELS: Record<GuidanceLinkKind, string> = {
+  'peer-reviewed': 'Peer-reviewed',
+  'peer-reviewed-author-copy': "Peer-reviewed, author's copy",
+  manufacturer: 'Manufacturer documentation',
+  'trade-publication': 'Trade publication',
+  handout: 'Practitioner handout',
+  'book-chapter': 'Book chapter',
+}
+
 // ---------------------------------------------------------------------------------------------
 // The page shell
 // ---------------------------------------------------------------------------------------------
@@ -329,9 +343,32 @@ describe('GuidedResultsView — shell controls mirror ResultsView', () => {
 // ---------------------------------------------------------------------------------------------
 
 describe('The contents list names every measurement and reaches it, even inside a closed group', () => {
+  // `GuidedResultsView` remembers, per page session, which fragment it already revealed. A fresh
+  // module per test is a fresh page session, so no test here inherits another's.
+  let FreshView: typeof GuidedResultsView
+  type ScrollIntoView = (arg?: boolean | ScrollIntoViewOptions) => void
+  let scrollIntoView: ReturnType<typeof vi.fn<ScrollIntoView>>
+  beforeEach(async () => {
+    vi.resetModules()
+    FreshView = (await import('./GuidedResultsView')).GuidedResultsView
+    // jsdom has no scrollIntoView; the view calls it optionally, so a stub makes it observable.
+    scrollIntoView = vi.fn<ScrollIntoView>()
+    HTMLElement.prototype.scrollIntoView = scrollIntoView
+  })
   afterEach(() => {
     window.history.replaceState(null, '', window.location.pathname)
+    delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView
+    vi.restoreAllMocks()
   })
+
+  function renderView(analysis: VideoAnalysisState) {
+    const props = { onTryAgain: vi.fn(), onChooseDifferentVideo: vi.fn() }
+    const utils = render(<FreshView analysis={analysis} {...props} />)
+    return {
+      ...utils,
+      rerenderWith: (next: VideoAnalysisState) => utils.rerender(<FreshView analysis={next} {...props} />),
+    }
+  }
 
   function contents(): HTMLElement {
     return screen.getByRole('navigation', { name: 'Measurements on this page' })
@@ -397,6 +434,26 @@ describe('The contents list names every measurement and reaches it, even inside 
     expect(details.open).toBe(true)
   })
 
+  it('moves focus to the card a contents-list link names', () => {
+    const { container } = renderView(readyAnalysis(withUnmeasured(['kneeDrive'])))
+    const target = UNBANDED[0].metric
+    fireEvent.click(within(contents()).getByRole('link', { name: new RegExp(METRIC_LABELS[target]) }))
+    expect(document.activeElement).toBe(container.querySelector(`#${guidedEntryId(target)}`))
+
+    const notMeasured = container.querySelector<HTMLAnchorElement>(`a[href="#${guidedEntryId('kneeDrive')}"]`)!
+    fireEvent.click(notMeasured)
+    expect(document.activeElement).toBe(container.querySelector(`#${guidedEntryId('kneeDrive')}`))
+  })
+
+  it('leaves this page alone on a modified click, which opens a new tab', () => {
+    const { container } = renderView(readyAnalysis())
+    const target = UNBANDED[0].metric
+    const anchor = within(contents()).getByRole('link', { name: new RegExp(METRIC_LABELS[target]) })
+    fireEvent.click(anchor, { metaKey: true })
+    expect(groupDetails(container, 'unbanded')!.open).toBe(false)
+    expect(document.activeElement).toBe(document.body)
+  })
+
   it('opens the group when the address changes to a card inside it', () => {
     const { container } = renderView(readyAnalysis(withUnmeasured(['kneeDrive'])))
     const details = groupDetails(container, 'not-measured')!
@@ -409,18 +466,52 @@ describe('The contents list names every measurement and reaches it, even inside 
     expect(document.activeElement).toBe(container.querySelector(`#${guidedEntryId('kneeDrive')}`))
   })
 
-  it('opens the group on mount when the page loads with a card in the address', () => {
-    window.history.replaceState(null, '', `#${guidedEntryId(UNBANDED[1].metric)}`)
+  it('opens the group on mount when the page loads with a card in the address, and scrolls without taking focus', () => {
+    // Stands in for the view toggle, which sits outside this component and may hold focus.
+    const toggle = document.body.appendChild(document.createElement('button'))
+    toggle.focus()
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    const id = guidedEntryId(UNBANDED[1].metric)
+    window.history.replaceState(null, '', `#${id}`)
     const { container } = renderView(readyAnalysis())
     expect(groupDetails(container, 'unbanded')!.open).toBe(true)
     expect(groupDetails(container, 'not-measured')).toBeNull()
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    expect(scrollIntoView.mock.contexts[0]).toBe(container.querySelector(`#${id}`))
+    expect(focus).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(toggle)
+    toggle.remove()
+  })
+
+  it('does not scroll or take focus again when the view remounts with a fragment it already revealed', () => {
+    const id = guidedEntryId(UNBANDED[1].metric)
+    window.history.replaceState(null, '', `#${id}`)
+    const { rerenderWith, unmount } = renderView(readyAnalysis())
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+
+    // An added clip: the analysis leaves ready and comes back, remounting the measurements.
+    rerenderWith(makeAnalysis({ phase: 'processing' }))
+    rerenderWith(readyAnalysis())
+    // Toggling back from the classic view: a whole new mount, with the hash the toggle kept.
+    unmount()
+    renderView(readyAnalysis())
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    expect(focus).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(document.body)
   })
 
   it('ignores a fragment that names nothing in the view', () => {
+    const toggle = document.body.appendChild(document.createElement('button'))
+    toggle.focus()
     window.history.replaceState(null, '', '#somewhere-else')
     const { container } = renderView(readyAnalysis(withUnmeasured(['kneeDrive'])))
     expect(groupDetails(container, 'unbanded')!.open).toBe(false)
     expect(groupDetails(container, 'not-measured')!.open).toBe(false)
+    expect(scrollIntoView).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(toggle)
+    toggle.remove()
   })
 })
 
@@ -761,22 +852,41 @@ describe('Group 1 cards — scale, headline value and notes', () => {
     )
   })
 
-  it('shows the first sentence of every mandatory note on the card, and the rest in its disclosure', () => {
+  it('shows the first sentence of every mandatory note on the card, says when it continues, and labels the rest', () => {
     renderView(readyAnalysis())
     let continued = 0
     for (const guidance of guidanceInDisplayOrder()) {
       const article = card(METRIC_LABELS[guidance.metric])
       const visible = Array.from(article.querySelectorAll('.guided-results__notes [role="note"]'))
       expect(visible).toHaveLength(guidance.mandatoryNotes.length)
+      const rests = Array.from(disclosure(article)?.querySelectorAll('.guided-results__note-rest') ?? [])
+      const continues = (note: string) => splitFirstSentence(note).rest.length > 0
+      const restsBefore = (index: number) => guidance.mandatoryNotes.slice(0, index).filter(continues).length
       guidance.mandatoryNotes.forEach((note, index) => {
         const { first, rest } = splitFirstSentence(note)
-        expect(visible[index].textContent).toBe(first)
+        const cue = visible[index].querySelector('.guided-results__note-continues')
+        expect(visible[index].firstChild?.textContent).toBe(first)
         expect(visibleInCard(visible[index])).toBe(true)
-        if (rest.length > 0) {
-          continued++
-          expect(disclosure(article)?.querySelector('.guided-results__notes-more')).toHaveTextContent(rest)
+        if (rest.length === 0) {
+          expect(visible[index].textContent).toBe(first)
+          expect(cue).toBeNull()
+          return
         }
+        // Visibly "(continued below)"; to a screen reader, which disclosure it continues in.
+        expect(cue).toHaveTextContent(/^\(continued below\)$/)
+        expect(cue).toHaveAttribute('aria-hidden', 'true')
+        const summary = disclosure(article)!.querySelector('summary')!.textContent
+        expect(visible[index].querySelector('.sr-only')).toHaveTextContent(`(continued under “${summary}”)`)
+        // In the same order as the notes above, each labelled by the note it continues.
+        const continuation = rests[restsBefore(index)]
+        expect(continuation, `${guidance.metric} note ${index}`).toBeDefined()
+        expect(continuation.querySelector('.guided-results__note-rest-label')?.textContent).toBe(
+          `Continued — “${noteLead(first)}”`,
+        )
+        expect(continuation).toHaveTextContent(rest)
+        continued++
       })
+      expect(rests).toHaveLength(guidance.mandatoryNotes.filter(continues).length)
     }
     expect(continued, 'some shipped note runs past one sentence').toBeGreaterThan(0)
   })
@@ -850,30 +960,67 @@ describe('Group 1 cards — scale, headline value and notes', () => {
 })
 
 describe("A card's disclosure holds the rest, and counts its sources", () => {
-  it('summarises a banded card as how the range was built plus its source count', () => {
+  it('summarises every shipped card by what its disclosure holds, counting the distinct links inside', () => {
     renderView(readyAnalysis())
     let counted = 0
-    for (const guidance of BANDED) {
-      const article = card(METRIC_LABELS[guidance.metric])
-      const entry = guidedGroups(makeHeuristics()).banded.find((e) => e.metric.metric === guidance.metric)!
+    let withNotes = 0
+    const { banded, unbanded } = guidedGroups(makeHeuristics())
+    for (const entry of [...banded, ...unbanded]) {
+      const article = card(METRIC_LABELS[entry.metric.metric])
       const n = cardReferences(entry).disclosureSourceCount
-      const summary = disclosure(article)?.querySelector('summary')
-      if (n === 0) {
-        expect(summary ?? null).toSatisfy(
-          (node: Element | null) => node === null || node.textContent === 'How this range was built',
-        )
-      } else {
+      const summary = disclosure(article)?.querySelector('summary')?.textContent ?? null
+      const linked = new Set(
+        Array.from(disclosure(article)?.querySelectorAll('a') ?? []).map((a) => a.getAttribute('href')),
+      )
+      expect(linked.size, entry.metric.metric).toBe(n)
+      if (n > 0) {
         counted++
-        expect(summary).toHaveTextContent(
-          `How this range was built, and the research (${n} ${n === 1 ? 'source' : 'sources'})`,
-        )
-        const linked = new Set(
-          Array.from(disclosure(article)!.querySelectorAll('a')).map((a) => a.getAttribute('href')),
-        )
-        expect(linked.size).toBe(n)
+        expect(summary, entry.metric.metric).toMatch(new RegExp(`\\(${n} ${n === 1 ? 'source' : 'sources'}\\)$`))
+      } else {
+        expect(summary ?? '', entry.metric.metric).not.toMatch(/source/)
       }
+      if (entry.band !== null) expect(summary, entry.metric.metric).toMatch(/^How this range was built/)
+      const continues = entry.guidance.mandatoryNotes.some((note) => splitFirstSentence(note).rest.length > 0)
+      if (continues) withNotes++
+      expect(/\bnotes\b|^Notes/.test(summary ?? ''), entry.metric.metric).toBe(continues)
     }
-    expect(counted, 'some shipped band has research behind its disclosure').toBeGreaterThan(0)
+    expect(counted, 'some shipped card has research behind its disclosure').toBeGreaterThan(0)
+    expect(withNotes, 'some shipped card continues a note in its disclosure').toBeGreaterThan(0)
+  })
+
+  it.each([
+    ['banded, notes and research', true, true, true, 'How this range was built, notes, and research (1 source)'],
+    ['banded, notes only', true, true, false, 'How this range was built, and notes'],
+    ['banded, research only', true, false, true, 'How this range was built, and the research (1 source)'],
+    ['unbanded, notes and research', false, true, true, 'Notes and research (1 source)'],
+    ['unbanded, notes only', false, true, false, 'Notes, continued'],
+    ['unbanded, research only', false, false, true, 'The research (1 source)'],
+  ] as const)('names a %s disclosure "%s"', (_name, banded, notes, research, expected) => {
+    const references = {
+      mandatoryNotes: notes ? ['First sentence here. And a second one.'] : [],
+      research: research ? [link('https://research-only.example/')] : [],
+      remediation: [],
+    }
+    const entry = banded
+      ? cadenceEntry({
+          ...references,
+          band: { ...METRIC_GUIDANCE.cadence.band!, source: source('https://band-only.example/'), corroboration: [] },
+        })
+      : kneeDriveEntry(references)
+    render(<GuidedMetricCard entry={entry} clipCount={1} />)
+    expect(document.querySelector('details summary')?.textContent).toBe(expected)
+  })
+
+  it('mentions the research, uncounted, when every source inside is already linked above', () => {
+    const shared = 'https://already-linked.example/'
+    const entry = cadenceEntry({
+      band: { ...METRIC_GUIDANCE.cadence.band!, source: source(shared), corroboration: [] },
+      research: [link(shared)],
+      remediation: [],
+      mandatoryNotes: [],
+    })
+    render(<GuidedMetricCard entry={entry} clipCount={1} />)
+    expect(document.querySelector('details summary')?.textContent).toBe('How this range was built, and the research')
   })
 
   it('summarises a banded card with no linked sources inside as just how the range was built', () => {
@@ -922,12 +1069,12 @@ describe("A card's disclosure holds the rest, and counts its sources", () => {
   })
 
   it('renders no disclosure on a card with nothing more to say', () => {
+    // A visible study whose full title is its short title leaves no citation to hold back.
+    const only = link('https://only.example/', { title: 'Only 2020', shortTitle: 'Only 2020' })
     render(
-      <GuidedMetricCard
-        entry={kneeDriveEntry({ mandatoryNotes: [], research: [], remediation: [link('https://only.example/')] })}
-        clipCount={1}
-      />,
+      <GuidedMetricCard entry={kneeDriveEntry({ mandatoryNotes: [], research: [], remediation: [only] })} clipCount={1} />,
     )
+    expect(document.querySelector('.guided-results__links--remediation')).toHaveTextContent(only.summary)
     expect(document.querySelector('details')).toBeNull()
   })
 })
@@ -1073,22 +1220,32 @@ describe('Banding controls whether a scale renders, not whether the metric rende
   })
 })
 
-describe('What runners have tried in studies', () => {
-  const four = ['a', 'b', 'c', 'd'].map((x) => link(`https://${x}.example/`))
+describe('Research on changing this', () => {
+  const four = ['a', 'b', 'c', 'd'].map((x, index) =>
+    link(`https://${x}.example/`, index === 1 ? { kind: 'trade-publication' } : {}),
+  )
 
-  it('shows up to three studies visibly, as short-title links with the full title and no summary', () => {
+  it('shows up to three studies visibly, each as a short-title link over one line of kind and summary', () => {
     render(<GuidedMetricCard entry={kneeDriveEntry({ remediation: four, research: [] })} clipCount={1} />)
     const visible = document.querySelector('.guided-results__links--remediation') as HTMLElement
     expect(visibleInCard(visible)).toBe(true)
-    expect(within(visible).getByRole('heading', { name: 'What runners have tried in studies' })).toBeInTheDocument()
+    expect(within(visible).getByRole('heading', { name: 'Research on changing this' })).toBeInTheDocument()
     const anchors = within(visible).getAllByRole('link')
     expect(anchors.map((a) => a.getAttribute('href'))).toEqual(four.slice(0, 3).map((l) => l.url))
     four.slice(0, 3).forEach((reference, index) => {
       expect(anchors[index]).toHaveTextContent(reference.shortTitle)
-      expect(anchors[index].closest('li')).toHaveTextContent(reference.title)
-      expect(visible).not.toHaveTextContent(reference.summary)
+      const line = anchors[index].closest('li')!.querySelector('.guided-results__kind-summary')
+      expect(line?.textContent).toBe(`${KIND_LABELS[reference.kind]} — ${reference.summary}`)
+      expect(line?.className).toContain('text-xs')
+      // The full citation waits in the disclosure, as text: the link is already above.
+      expect(visible).not.toHaveTextContent(reference.title)
+      const citations = document.querySelector('details .guided-results__study-citations') as HTMLElement
+      expect(citations).toHaveTextContent(reference.title)
+      expect(within(citations).queryByRole('link')).toBeNull()
     })
+    expect(visible).toHaveTextContent('Trade publication — ')
     const more = document.querySelector('details .guided-results__links--remediation-more') as HTMLElement
+    expect(within(more).getByRole('heading', { name: 'More research on changing this' })).toBeInTheDocument()
     expect(within(more).getByRole('link')).toHaveAttribute('href', four[3].url)
     expect(more).toHaveTextContent(four[3].summary)
   })
@@ -1142,6 +1299,46 @@ describe('What runners have tried in studies', () => {
     expect(container.querySelector('.guided-results__corroboration')).toHaveTextContent(
       `Population measured at ${shared}`,
     )
+    // The research link sharing the band's URL keeps its title as text, its kind and its summary.
+    const research = container.querySelector('.guided-results__links--research') as HTMLElement
+    const unlinked = research.querySelector('.guided-results__unlinked-title')!
+    expect(unlinked).toHaveTextContent(link(shared).shortTitle)
+    expect(unlinked.closest('li')).toHaveTextContent(link(shared).summary)
+    expect(unlinked.closest('li')).toHaveTextContent(KIND_LABELS[link(shared).kind])
+  })
+
+  it.each(
+    guidanceInDisplayOrder()
+      .filter((g) => g.research.length + g.remediation.length > 0)
+      .map((g) => [g.metric, g] as const),
+  )("puts every link's kind, summary and full title somewhere in the %s card", (_id, guidance) => {
+    renderView(readyAnalysis())
+    const article = card(METRIC_LABELS[guidance.metric])
+    const summaries = Array.from(article.querySelectorAll('.guided-results__link-summary'))
+    for (const reference of [...guidance.research, ...guidance.remediation]) {
+      // Found by its summary, so the kind is checked beside THIS link rather than anywhere on the card.
+      const summary = summaries.find((node) => node.textContent === reference.summary)
+      expect(summary, `${reference.shortTitle}: summary`).toBeDefined()
+      const item = summary!.closest('li')!
+      expect(item.querySelector('.guided-results__link-kind')?.textContent, reference.shortTitle).toBe(
+        KIND_LABELS[reference.kind],
+      )
+      expect(article, `${reference.shortTitle}: title`).toHaveTextContent(reference.title)
+    }
+    // …and each URL is still an anchor at most once on the card.
+    const hrefs = Array.from(article.querySelectorAll('a')).map((a) => a.getAttribute('href'))
+    expect(new Set(hrefs).size).toBe(hrefs.length)
+  })
+
+  it('checks every measured metric that has links, so the walk above is not vacuous', () => {
+    const withLinks = guidanceInDisplayOrder().filter((g) => g.research.length + g.remediation.length > 0)
+    expect(withLinks.length).toBeGreaterThanOrEqual(10)
+    const sharesBandUrl = withLinks.some(
+      (g) =>
+        g.band !== null &&
+        g.research.some((l) => [g.band!.source, ...g.band!.corroboration].some((s) => s.url === l.url)),
+    )
+    expect(sharesBandUrl, 'some research link shares its URL with a band source').toBe(true)
   })
 
   it('never renders a URL twice on any shipped card', () => {
@@ -1318,17 +1515,24 @@ describe('Every outbound reference is from a verified set and opens safely', () 
     for (const url of guidanceUrls()) expect(rendered.has(url), url).toBe(true)
   })
 
-  it('gives every research link its short title, full title and summary', () => {
+  it('gives every research link its short title, full title, kind and summary — linked or not', () => {
     renderView(readyAnalysis())
     const research = card('Cadence').querySelector('.guided-results__links--research') as HTMLElement
-    const anchors = within(research).getAllByRole('link')
-    expect(anchors.length).toBeGreaterThan(0)
-    for (const anchor of anchors) {
-      const reference = METRIC_GUIDANCE.cadence.research.find((l) => l.url === anchor.getAttribute('href'))!
-      expect(anchor).toHaveTextContent(reference.shortTitle)
-      expect(anchor.closest('li')).toHaveTextContent(reference.title)
-      expect(anchor.closest('li')).toHaveTextContent(reference.summary)
-    }
+    const items = within(research).getAllByRole('listitem')
+    expect(items).toHaveLength(METRIC_GUIDANCE.cadence.research.length)
+    METRIC_GUIDANCE.cadence.research.forEach((reference, index) => {
+      const item = items[index]
+      expect(item).toHaveTextContent(reference.shortTitle)
+      expect(item).toHaveTextContent(reference.title)
+      expect(item).toHaveTextContent(KIND_LABELS[reference.kind])
+      expect(item).toHaveTextContent(reference.summary)
+      const anchor = within(item).queryByRole('link')
+      const band = METRIC_GUIDANCE.cadence.band!
+      const elsewhere = [band.source, ...band.corroboration].some((s) => s.url === reference.url)
+      // A URL the band's provenance already links is text here, never a second anchor.
+      expect(anchor === null, reference.shortTitle).toBe(elsewhere)
+      if (anchor !== null) expect(anchor).toHaveTextContent(reference.shortTitle)
+    })
   })
 })
 
@@ -1471,7 +1675,11 @@ describe('A band states where the runner sits, never where they should be', () =
     // Split sentences are vetted with their notes, so strip both halves too.
     const vetted = guidanceStrings(METRIC_GUIDANCE)
     const halves = Object.values(METRIC_GUIDANCE).flatMap((g) =>
-      g.mandatoryNotes.flatMap((note) => Object.values(splitFirstSentence(note))),
+      g.mandatoryNotes.flatMap((note) => {
+        const { first, rest } = splitFirstSentence(note)
+        // A continuation's label quotes the note's own opening words.
+        return [first, rest, noteLead(first)]
+      }),
     )
     const strip = [...vetted, ...halves].filter(Boolean).sort((a, b) => b.length - a.length)
     const authored = texts.map((text) => strip.reduce((t, s) => t.split(s).join('\n'), text))

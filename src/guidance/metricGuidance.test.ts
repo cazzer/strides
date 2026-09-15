@@ -714,7 +714,7 @@ describe('no implementation detail or jargon leaks into the rendered copy', () =
    * units string a reader cannot parse, or an all-caps word used for emphasis.
    */
   const LEAKS =
-    /src\/|\.tsx?\b|design\.md|\bD\d\b|\bship(s|ped)?\b|\[derived|\bp = |\bGRADE\b|\bRRIs?\b|\bASIS\b|\bFST\b|\bCI\b|this repo|Nm·s/
+    /src\/|\.tsx?\b|design\.md|\bD\d+\b|\bship(s|ped)?\b|\[derived|\bp\s*[<=>]|\bGRADE\b|\bRRIs?\b|\bASIS\b|\bFST\b|\bCI\b|this repo|Nm·s/
 
   /**
    * An all-caps word is emphasis or an unexplained acronym, and neither belongs in copy a runner
@@ -756,6 +756,9 @@ describe('no implementation detail or jargon leaks into the rendered copy', () =
       'this band ships because',
       '4.06% [derived]',
       'no relationship (p = .074)',
+      'a difference (p<0.05)',
+      'not significant (p > .05)',
+      'design decision D10 says',
       '(CI 0.91–0.98)',
       'with GRADE applied',
       'between FST and RRIs',

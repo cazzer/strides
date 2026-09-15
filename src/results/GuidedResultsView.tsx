@@ -150,6 +150,20 @@ function openAncestors(target: Element): boolean {
   return opened
 }
 
+/**
+ * The fragment this page session has already revealed — on a mount or a hash change (a contents-list
+ * click causes one, unless it names the fragment already in the address, which is handled already).
+ *
+ * The guided measurements mount again every time an analysis reaches ready (adding a clip) and every
+ * time the view is toggled back from classic, and the toggle keeps the hash. Revealing the hash on
+ * each of those mounts would scroll the page back to a card the reader left long ago. So a mount
+ * reveals a fragment only the first time the page session sees it, and never moves focus: focus
+ * moves only when the reader asks for a card, by a hash change or a contents-list click.
+ *
+ * Module scope, because the component's own state dies with the very remount this has to survive.
+ */
+let handledHash: string | null = null
+
 /** The element a fragment names, if it is inside `root`. */
 function fragmentTarget(root: HTMLElement | null, hash: string): HTMLElement | null {
   if (root === null || hash.length <= 1) return null
@@ -170,10 +184,17 @@ function Contents({
 }) {
   // Runs before the browser follows the link, so the target is already visible when it scrolls.
   // A click on a link to the CURRENT hash fires no hashchange, which is why this is not left to
-  // the listener in `GuidedMeasurements`.
+  // the listener in `GuidedMeasurements`. A modified click opens a new tab and leaves this page be.
   const reveal = (event: MouseEvent<HTMLAnchorElement>, id: string) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      return
+    }
     const target = event.currentTarget.ownerDocument.getElementById(id)
-    if (target !== null) openAncestors(target)
+    if (target === null) return
+    openAncestors(target)
+    // The reader asked for this card, so focus follows. `preventScroll`: the link's own navigation
+    // scrolls, and its hashchange records the fragment as handled.
+    target.focus({ preventScroll: true })
   }
   return (
     <nav
@@ -231,7 +252,8 @@ export interface GuidedMeasurementsProps {
  * heading outline reads group → measurement. The two collapsed groups put a `<details>` under that
  * heading whose summary names every measurement inside, so nothing is findable only by opening it.
  * A link from the contents list — or any navigation to a card's fragment, on load or later —
- * opens the `<details>` holding its target.
+ * opens the `<details>` holding its target. Focus moves to the card only when the reader asked for
+ * it (a contents-list click or a hash change), never on mount — see `handledHash`.
  */
 export function GuidedMeasurements({
   heuristics,
@@ -249,17 +271,26 @@ export function GuidedMeasurements({
   const evidenceByMetric = new Map(evidence.map((entry) => [entry.metric, entry]))
 
   useEffect(() => {
-    const revealHash = (scrollAlways: boolean) => {
-      const target = fragmentTarget(rootRef.current, window.location.hash)
-      if (target === null) return
-      // The browser already scrolled to a visible target; one it could not see needs doing here.
-      if (openAncestors(target) || scrollAlways) {
-        target.scrollIntoView?.({ block: 'start' })
-        target.focus({ preventScroll: true })
-      }
+    // On mount: a fragment this page session has not revealed yet — typically a shared link, whose
+    // card did not exist when the browser tried to scroll to it — is opened and scrolled to. Focus
+    // stays where it is: nobody asked for it on this mount, and the reader may be on the toggle.
+    const hash = window.location.hash
+    const target = fragmentTarget(rootRef.current, hash)
+    if (target !== null && hash !== handledHash) {
+      handledHash = hash
+      openAncestors(target)
+      target.scrollIntoView?.({ block: 'start' })
     }
-    revealHash(true)
-    const onHashChange = () => revealHash(false)
+    // A hash change is the reader asking for a card. The browser already scrolled to a visible
+    // target; one it could not see needs doing here.
+    const onHashChange = () => {
+      const current = window.location.hash
+      const next = fragmentTarget(rootRef.current, current)
+      if (next === null) return
+      handledHash = current
+      if (openAncestors(next)) next.scrollIntoView?.({ block: 'start' })
+      next.focus({ preventScroll: true })
+    }
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
   }, [])
