@@ -11,10 +11,6 @@ import { METRIC_LABELS } from './metricConfidence'
  * here rather than in the component that went away. The card is the only caller today.
  */
 
-function formatSeconds(seconds: number): string {
-  return `${seconds.toFixed(2)} s`
-}
-
 /**
  * What a demoted image says about the pair it came from — one sentence per reason, and the
  * `Record` is TOTAL on purpose: adding an `EvidenceDemotion` member without a sentence here is a
@@ -37,12 +33,19 @@ const DEMOTION_SENTENCES: Record<EvidenceDemotion, string> = {
 }
 
 /**
- * The caption a reader actually needs: what the picture shows, and when in the clip it happened.
+ * The caption a reader actually needs: what the picture shows, in the metric's own words.
  *
  * `plan.label` is the metric's own words for the instant (it already names the side where the
  * measurement has one), so the caption never re-derives what a metric measured from its id — and
  * never restates the card's own number, which the honesty requirement forbids: what is drawn is a
  * per-instant measurement, not the aggregate the card reports.
+ *
+ * It names no clip time. Each shape used to end on one — `0.20 s and 0.60 s into the clip`, or
+ * `A single frame, 0.40 s into the clip` — which a reader cannot act on, because the card carries
+ * no player, no timeline and no seek affordance. The instants are still reported to full precision
+ * on the dev-only `[evidence-coverage]` line, which is where a harness reads them from. The
+ * single-frame clause went with the timestamp it was hosting; the shape statement it doubled as
+ * survives in `altFor`, which is read with none of the card around it.
  *
  * A ghosted pair gets no sentence disclaiming that it is one runner rather than two people. Every
  * paired label this repo emits already says one instant is *ghosted against* another, which names a
@@ -52,17 +55,8 @@ const DEMOTION_SENTENCES: Record<EvidenceDemotion, string> = {
  */
 export function captionFor(plan: EvidenceFramePlan): string {
   const parts = [`${plan.label}.`]
-  if (plan.ghost !== null) {
-    parts.push(
-      `${formatSeconds(plan.base.timestamp)} and ${formatSeconds(plan.ghost.timestamp)} into the clip.`,
-    )
-  } else if (plan.demotion !== null) {
-    parts.push(
-      DEMOTION_SENTENCES[plan.demotion],
-      `${formatSeconds(plan.base.timestamp)} into the clip.`,
-    )
-  } else {
-    parts.push(`A single frame, ${formatSeconds(plan.base.timestamp)} into the clip.`)
+  if (plan.demotion !== null) {
+    parts.push(DEMOTION_SENTENCES[plan.demotion])
   }
   return parts.join(' ')
 }

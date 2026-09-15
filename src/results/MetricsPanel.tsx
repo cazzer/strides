@@ -29,6 +29,16 @@ export interface MetricCardEvidence {
   /** Index into the session's clips — the clip `fusionSourceIndices` says won this metric. */
   clipIndex: number
   items: readonly ExtractedEvidenceFrame[]
+  /**
+   * Set while this metric's imagery is planned but still being decoded, in which case `items` is
+   * empty and the card shows a placeholder in the thumbnail's place instead of the pictures.
+   *
+   * It exists because the two states it separates look identical without it. Extraction runs for
+   * several seconds after "Analysis complete", and runs again when the second look at the clip
+   * grafts its centimetre metrics, so a card that will have a picture and a card that never will
+   * both render as the same absence for that whole window.
+   */
+  pending?: boolean
 }
 
 export interface MetricsPanelProps {
@@ -154,6 +164,32 @@ function CardEvidence({
   clipCount: number
 }) {
   const provenance = provenanceFor(evidence.clipIndex, clipCount)
+  if (evidence.pending === true) {
+    return (
+      <div
+        className="metrics-panel__evidence space-y-2 @lg/card:w-2/5 @lg/card:shrink-0"
+        aria-busy="true"
+      >
+        {/* Same `w-36` square the real thumbnail occupies, so the picture lands where the
+            placeholder stood rather than shoving the card's prose around when it arrives. The
+            pulse is the idiom the clip strip already uses for "working"; it is not the only
+            signal, because motion alone excludes a reader who has it turned off — the sentence
+            below says the same thing in words, and `aria-busy` says it to the accessibility tree.
+
+            The sentence is deliberately NOT a live region. Every pending card would carry its own,
+            and a first extraction has seven of them on this corpus — a screen reader would announce
+            the identical sentence seven times for one event. It is read on traversal instead, which
+            is where a reader encounters the card it is about. */}
+        <div
+          className="metrics-panel__evidence-placeholder w-36 max-w-full aspect-square animate-pulse bg-neutral-200 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700"
+          aria-hidden="true"
+        />
+        <p className="metrics-panel__evidence-pending font-sans text-[11px] leading-snug text-neutral-600 dark:text-neutral-400">
+          Preparing the frames this was measured from…
+        </p>
+      </div>
+    )
+  }
   return (
     <div className="metrics-panel__evidence space-y-2 @lg/card:w-2/5 @lg/card:shrink-0">
       {/* A metric has one image or two (`MAX_EXEMPLARS_PER_METRIC`), listed one per row rather

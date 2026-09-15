@@ -6,6 +6,7 @@ import { ClipPicker } from '../video/ClipPicker'
 import { releaseClipPoster } from '../video/posterFrame'
 import { ClipSlot } from './ClipSlot'
 import type { ClipPendingLoad } from './ClipSlot'
+import type { MetricCardEvidence } from './MetricsPanel'
 import { ResultsView } from './ResultsView'
 import { useSessionEvidence } from './useSessionEvidence'
 import type { EvidenceSection } from './useSessionEvidence'
@@ -208,7 +209,24 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   // pass produced, so a re-extraction — which the scale-pass graft triggers on every default run —
   // leaves the imagery on screen instead of blanking every card for the length of a decode
   // (`strides-3ui`). Only `idle` means "nothing has been produced for this session".
-  const evidence = evidenceState.status === 'idle' ? NO_EVIDENCE : evidenceState.sections
+  //
+  // A metric the run has planned but not yet decoded rides along as a PENDING entry, so its card
+  // says "being prepared" rather than showing the same empty space a metric with no picture at all
+  // shows. `MetricsPanel` keys these by metric, so the concatenation order is immaterial.
+  const evidence: readonly MetricCardEvidence[] =
+    evidenceState.status === 'idle'
+      ? NO_EVIDENCE
+      : evidenceState.status === 'settled'
+        ? evidenceState.sections
+        : [
+            ...evidenceState.sections,
+            ...evidenceState.pending.map((metric) => ({
+              metric,
+              clipIndex: sourceIndices?.[metric] ?? 0,
+              items: [],
+              pending: true as const,
+            })),
+          ]
 
   const handleTryAgain = useCallback(() => {
     const errored = clips.find((c) => c.analysis.phase === 'error')

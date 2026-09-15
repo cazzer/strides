@@ -763,6 +763,69 @@ function evidenceFor(
   return { metric, clipIndex, items: plans.map(extracted) }
 }
 
+describe('MetricsPanel — evidence still being decoded', () => {
+  it('shows a placeholder and says so, rather than the same blank a metric with no picture shows', () => {
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidence={[{ metric: 'trunkLean', clipIndex: 0, items: [], pending: true }]}
+      />,
+    )
+
+    const card = screen.getByRole('article', { name: 'Trunk lean' })
+    expect(within(card).getByText(/preparing the frames this was measured from/i)).toBeInTheDocument()
+    expect(card.querySelector('.metrics-panel__evidence')).toHaveAttribute('aria-busy', 'true')
+    expect(card.querySelector('.metrics-panel__evidence-placeholder')).not.toBeNull()
+    // Nothing is claimed to be shown: no canvas, no figure, no caption under an empty box.
+    expect(card.querySelector('canvas')).toBeNull()
+    expect(card.querySelector('figure')).toBeNull()
+  })
+
+  it('does not make each pending card its own live region', () => {
+    // A first extraction has every planned metric pending at once -- seven cards on this corpus.
+    // Seven live regions carrying one identical sentence is seven announcements of one event.
+    const { container } = render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidence={[
+          { metric: 'trunkLean', clipIndex: 0, items: [], pending: true },
+          { metric: 'kneeFlexion', clipIndex: 0, items: [], pending: true },
+        ]}
+      />,
+    )
+
+    expect(container.querySelectorAll('.metrics-panel__evidence-placeholder')).toHaveLength(2)
+    expect(container.querySelectorAll('.metrics-panel__evidence-pending[role]')).toHaveLength(0)
+  })
+
+  it('leaves every other card exactly as it was', () => {
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidence={[{ metric: 'trunkLean', clipIndex: 0, items: [], pending: true }]}
+      />,
+    )
+
+    const other = screen.getByRole('article', { name: 'Cadence' })
+    expect(other.querySelector('.metrics-panel__evidence')).toBeNull()
+    expect(other.querySelector('.metrics-panel__evidence-placeholder')).toBeNull()
+  })
+
+  it('shows the imagery, not a placeholder, once the items arrive', () => {
+    render(
+      <MetricsPanel
+        heuristics={makeHighConfidenceResult()}
+        evidence={[evidenceFor('trunkLean')]}
+      />,
+    )
+
+    const card = screen.getByRole('article', { name: 'Trunk lean' })
+    expect(card.querySelector('.metrics-panel__evidence-placeholder')).toBeNull()
+    expect(within(card).queryByText(/preparing the frames/i)).toBeNull()
+    expect(card.querySelector('canvas')).not.toBeNull()
+  })
+})
+
 describe('MetricsPanel — evidence inside the card', () => {
   it('renders no imagery anywhere when the prop is omitted, which is every call site without an analysed session', () => {
     const { container } = render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
@@ -924,7 +987,7 @@ describe('MetricsPanel — evidence inside the card', () => {
     expect(document.querySelector('[download]')).toBeNull()
   })
 
-  it('captions a ghosted image with its label and timestamps and no two-people disclaimer', () => {
+  it('captions a ghosted image with its label alone — no clip time, no two-people disclaimer', () => {
     render(
       <MetricsPanel
         heuristics={makeHighConfidenceResult()}
@@ -943,7 +1006,9 @@ describe('MetricsPanel — evidence inside the card', () => {
     )
     const card = screen.getByRole('article', { name: 'Trunk lean' })
     const caption = within(card).getByText(/ghosted against the most upright frame/i)
-    expect(caption).toHaveTextContent('0.20 s and 0.60 s into the clip')
+    expect(caption).toHaveTextContent('Most forward trunk lean, ghosted against the most upright frame.')
+    expect(caption).not.toHaveTextContent(/\d+\.\d+ s/)
+    expect(caption).not.toHaveTextContent('into the clip')
     expect(caption).not.toHaveTextContent('not two people')
     expect(caption).not.toHaveTextContent(/same runner/i)
     expect(

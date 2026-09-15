@@ -53,10 +53,15 @@ export interface EvidenceSection {
  *
  * `idle` is the only state with no sections, and it means what it says: nothing has been produced
  * for this session, or everything that was has been invalidated.
+ *
+ * `pending` names the metrics this run's plan says WILL have imagery and that have none on screen
+ * yet — every planned metric on a first extraction, and on a re-extraction only the ones the graft
+ * newly planned. It is what lets a card distinguish "still decoding" from "this metric has no
+ * picture", which are otherwise the same empty space for the several seconds a decode takes.
  */
 export type SessionEvidenceState =
   | { status: 'idle' }
-  | { status: 'extracting'; sections: EvidenceSection[] }
+  | { status: 'extracting'; sections: EvidenceSection[]; pending: MetricId[] }
   | { status: 'settled'; sections: EvidenceSection[] }
 
 const IDLE_STATE: SessionEvidenceState = { status: 'idle' }
@@ -256,6 +261,27 @@ function settledPlan(evidence: ClipEvidence): ClipEvidencePlan {
  * Each metric is read from ITS OWN winning clip (`sourceIndices`), never from whichever clip is on
  * screen — the fused winner legitimately comes from a different clip than its neighbours.
  */
+/**
+ * The metrics this run's plans say will produce pixels, read from each metric's own winning clip —
+ * the same selection `buildSections` makes, one step earlier, off the plan instead of the result.
+ *
+ * Off the PLAN rather than the eventual evidence on purpose: a placeholder has to go up before the
+ * decoder opens, and the plan is the only statement of intent that exists at that moment.
+ */
+function plannedMetrics(
+  plans: ClipEvidencePlan[],
+  sourceIndices: Record<MetricId, number>,
+): MetricId[] {
+  const first = plans[0]
+  if (first === undefined) return []
+  const metrics: MetricId[] = []
+  for (const metric of Object.keys(first) as MetricId[]) {
+    const entry = plans[sourceIndices[metric] ?? 0]?.[metric]
+    if (entry !== undefined && entry.status === 'planned') metrics.push(metric)
+  }
+  return metrics
+}
+
 function buildSections(
   evidenceByClip: ClipEvidence[],
   sourceIndices: Record<MetricId, number>,
@@ -289,6 +315,7 @@ function startRun(
   sourceIndices: Record<MetricId, number>,
 ): {
   batch: ClipEvidenceInput[]
+  planned: MetricId[]
   finish: (extracted: ClipEvidence[]) => SessionEvidenceState
 } {
   for (const key of [...cache.keys()]) {
@@ -333,7 +360,7 @@ function startRun(
     return { status: 'settled', sections: buildSections(evidenceByClip, sourceIndices) }
   }
 
-  return { batch, finish }
+  return { batch, planned: plannedMetrics(plans, sourceIndices), finish }
 }
 
 /**
@@ -403,7 +430,16 @@ export function useSessionEvidence(
         ? IDLE_STATE
         : run.batch.length === 0
           ? run.finish([])
-          : { status: 'extracting', sections: carried },
+          : {
+              status: 'extracting',
+              sections: carried,
+              // Only what has nothing on screen. A metric whose previous image was carried
+              // forward keeps showing it; putting a placeholder over a picture that is already
+              // correct would be a downgrade, not a progress report.
+              pending: run.planned.filter(
+                (metric) => !carried.some((section) => section.metric === metric),
+              ),
+            },
     )
 
     if (run !== null && run.batch.length > 0) {

@@ -150,6 +150,43 @@ describe('useSessionEvidence', () => {
     )
   })
 
+  it('names every planned metric as pending on a first extraction', () => {
+    plansByHeuristics.set('primary', planWithQuality(0.5))
+
+    const { result } = renderHook(
+      ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+      { initialProps: { clips: [makeClip('c1', 'primary', new Blob(['a']))] } },
+    )
+
+    // Nothing is on screen yet, so the one planned metric is the one a card should be told is
+    // coming. Without this a card that will have a picture is indistinguishable from one that
+    // never will, for the whole length of the decode.
+    expect(result.current.status).toBe('extracting')
+    expect(result.current.status === 'extracting' && result.current.pending).toEqual(['cadence'])
+  })
+
+  it('does not report a metric as pending while its previous image is still on screen', async () => {
+    const blob = new Blob(['a'])
+    plansByHeuristics.set('primary', planWithQuality(0.5))
+    plansByHeuristics.set('grafted', planWithQuality(0.9))
+
+    const { result, rerender } = renderHook(
+      ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+      { initialProps: { clips: [makeClip('c1', 'primary', blob)] } },
+    )
+    await act(async () => {
+      pending.shift()?.([evidenceWithCanvas({} as HTMLCanvasElement)])
+    })
+    await waitFor(() => expect(result.current.status).toBe('settled'))
+
+    rerender({ clips: [makeClip('c1', 'grafted', blob)] })
+
+    // The re-extraction carries the old image forward, so covering it with a placeholder would
+    // replace a correct picture with a spinner.
+    expect(result.current.status).toBe('extracting')
+    expect(result.current.status === 'extracting' && result.current.pending).toEqual([])
+  })
+
   it('does not carry sections forward when the clip set changes', async () => {
     const blob = new Blob(['a'])
     plansByHeuristics.set('primary', planWithQuality(0.5))
@@ -172,6 +209,9 @@ describe('useSessionEvidence', () => {
 
     expect(result.current.status).toBe('extracting')
     expect(result.current.status === 'extracting' && result.current.sections).toEqual([])
+    // Nothing carried means everything planned is pending, so the cards say "being prepared"
+    // rather than going blank for the length of the re-decode.
+    expect(result.current.status === 'extracting' && result.current.pending).toEqual(['cadence'])
   })
 
   it('re-extracts when the source blob changes even though the plan is identical', async () => {

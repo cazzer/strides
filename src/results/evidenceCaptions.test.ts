@@ -77,7 +77,7 @@ describe('altFor', () => {
 })
 
 describe('captionFor', () => {
-  it('gives both timestamps for a blend and never disclaims that it is one runner', () => {
+  it('is the label alone for a blend, and never disclaims that it is one runner', () => {
     const caption = captionFor(
       framePlan('trunkLean', {
         side: undefined,
@@ -87,11 +87,37 @@ describe('captionFor', () => {
       }),
     )
 
-    expect(caption).toContain('0.20 s and 0.60 s into the clip')
+    expect(caption).toBe('Most forward trunk lean, ghosted against the most upright frame.')
     // The label already says one instant is *ghosted against* another, which names a single subject
     // at two moments; the spec forbids a second sentence restating it.
     expect(caption).not.toMatch(/not two people/i)
     expect(caption).not.toMatch(/same runner/i)
+  })
+
+  it('names no clip time, whatever shape the image is', () => {
+    // The clause a reader cannot act on: the card carries no player, no timeline and no seek
+    // affordance, so a clip time names a position in a clip nobody is scrubbing. The instants
+    // themselves are unchanged on the plan and still reported on the dev-only coverage line.
+    const shapes = [
+      framePlan('trunkLean', { base: instant(0.2), ghost: instant(0.6, 0.35) }),
+      framePlan('kneeFlexion', { ghost: null, demotion: 'collapsed-pair' }),
+      framePlan('footStrikePattern'),
+    ]
+
+    for (const caption of shapes.map(captionFor)) {
+      expect(caption).not.toMatch(/\d+\.\d+ s/)
+      expect(caption).not.toMatch(/into the clip/i)
+    }
+  })
+
+  it('does not narrate the shape of an undemoted single frame', () => {
+    // `A single frame, …` existed to host the single-instant timestamp. Standing alone under the
+    // picture it describes, it says an image is one image. The statement survives where it is not
+    // recoverable from context -- `altFor`, asserted above.
+    const caption = captionFor(framePlan('footStrikePattern'))
+
+    expect(caption).toBe('heel-like footstrike, left foot.')
+    expect(caption).not.toMatch(/single frame/i)
   })
 
   it('says why a demoted pair shows one frame, rather than silently showing one', () => {
