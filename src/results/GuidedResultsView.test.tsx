@@ -8,6 +8,7 @@ import { captionFor } from './evidenceCaptions'
 import { formatGuidedValue } from './formatGuidedValue'
 import { guidedGroups } from './guidedGroups'
 import { METRIC_LABELS } from './metricConfidence'
+import { METRIC_DESCRIPTIONS } from './metricDescriptions'
 import type { ScalePassStatus, VideoAnalysisState } from './types'
 import type { ExtractedEvidenceFrame } from '../video/extractFrames'
 import type { FormHeuristicsResult, MetricId } from '../heuristics/types'
@@ -550,6 +551,15 @@ describe('Banding controls whether a scale renders, not whether the metric rende
       renderView(readyAnalysis())
       const reason = card(METRIC_LABELS[guidance.metric]).querySelector('.guided-results__no-band')
       expect(reason).toHaveTextContent(guidance.noBandReason!)
+    },
+  )
+
+  it.each(guidanceInDisplayOrder().map((g) => [g.metric] as const))(
+    'An unbanded metric renders its value, its description and its links — every measured card carries the shared description, %s',
+    (id) => {
+      renderView(readyAnalysis())
+      const description = card(METRIC_LABELS[id]).querySelector('.guided-results__description')
+      expect(description).toHaveTextContent(METRIC_DESCRIPTIONS[id])
     },
   )
 

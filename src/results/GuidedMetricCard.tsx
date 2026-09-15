@@ -19,6 +19,7 @@ import {
   METRIC_LABELS,
   metricTier,
 } from './metricConfidence'
+import { METRIC_DESCRIPTIONS } from './metricDescriptions'
 import type { MetricCardEvidence } from './MetricsPanel'
 
 /**
@@ -300,6 +301,9 @@ export function GuidedMetricCard({ entry, evidence, clipCount }: GuidedMetricCar
       <div className="space-y-1">
         <h3 className="font-display text-lg font-bold tracking-tight">{label}</h3>
         <p className="guided-results__value font-display text-2xl font-bold">{valueText}</p>
+        <p className={`guided-results__description ${BODY}`}>
+          {METRIC_DESCRIPTIONS[metric.metric]}
+        </p>
         {tier === 'caveated' && (
           <p className="guided-results__confidence font-sans text-sm">
             <strong>{confidenceLabel(metric)}</strong>
