@@ -93,6 +93,7 @@ const GARMIN_SAMPLE_SIZE = 'Not published'
 
 const MALISOUX_2023_SOURCE: BandSource = {
   title: 'Malisoux et al. 2023, Orthopaedic Journal of Sports Medicine 11(10)',
+  shortTitle: 'Malisoux et al. 2023',
   url: MALISOUX_2023_URL,
   population: 'Recreational runners at 10 km/h',
   sampleSize: '860',
@@ -101,6 +102,7 @@ const MALISOUX_2023_SOURCE: BandSource = {
 const FOLLAND_2017_SOURCE: BandSource = {
   title:
     'Folland et al. 2017, Medicine & Science in Sports & Exercise 49(7):1412–1423',
+  shortTitle: 'Folland et al. 2017',
   url: FOLLAND_2017_URL,
   population: 'Trained runners at 10–12 km/h',
   sampleSize: '97',
@@ -109,6 +111,7 @@ const FOLLAND_2017_SOURCE: BandSource = {
 const HEIDERSCHEIT_2011_SOURCE: BandSource = {
   title:
     'Heiderscheit et al. 2011, "Effects of Step Rate Manipulation on Joint Mechanics during Running", Medicine & Science in Sports & Exercise',
+  shortTitle: 'Heiderscheit et al. 2011',
   url: HEIDERSCHEIT_2011_URL,
   population: 'Runners at 2.9 m/s',
   sampleSize: '45',
@@ -116,6 +119,7 @@ const HEIDERSCHEIT_2011_SOURCE: BandSource = {
 
 const GARMIN_FENIX_7_LINK: GuidanceLink = {
   title: "Garmin fenix 7 owner's manual — running-dynamics zones",
+  shortTitle: 'Garmin fenix 7 manual',
   url: GARMIN_FENIX_7_ZONES_URL,
   kind: 'manufacturer',
   summary:
@@ -124,6 +128,7 @@ const GARMIN_FENIX_7_LINK: GuidanceLink = {
 
 const GARMIN_FENIX_7_APAC_LINK: GuidanceLink = {
   title: "Garmin fenix 7 owner's manual (APAC) — vertical ratio zones",
+  shortTitle: 'Garmin fenix 7 manual (APAC)',
   url: GARMIN_FENIX_7_APAC_ZONES_URL,
   kind: 'manufacturer',
   summary:
@@ -132,6 +137,7 @@ const GARMIN_FENIX_7_APAC_LINK: GuidanceLink = {
 
 const GARMIN_FORERUNNER_255_LINK: GuidanceLink = {
   title: "Garmin Forerunner 255 owner's manual — running dynamics",
+  shortTitle: 'Garmin Forerunner 255 manual',
   url: GARMIN_FORERUNNER_255_URL,
   kind: 'manufacturer',
   summary:
@@ -140,6 +146,7 @@ const GARMIN_FORERUNNER_255_LINK: GuidanceLink = {
 
 const MALISOUX_2023_LINK: GuidanceLink = {
   title: 'Malisoux et al. 2023, Orthopaedic Journal of Sports Medicine 11(10)',
+  shortTitle: 'Malisoux et al. 2023',
   url: MALISOUX_2023_URL,
   kind: 'peer-reviewed',
   summary:
@@ -149,6 +156,7 @@ const MALISOUX_2023_LINK: GuidanceLink = {
 const FOLLAND_2017_LINK: GuidanceLink = {
   title:
     'Folland et al. 2017, Medicine & Science in Sports & Exercise 49(7):1412–1423',
+  shortTitle: 'Folland et al. 2017',
   url: FOLLAND_2017_URL,
   kind: 'peer-reviewed',
   summary:
@@ -157,6 +165,7 @@ const FOLLAND_2017_LINK: GuidanceLink = {
 
 const SCHUBERT_2014_LINK: GuidanceLink = {
   title: 'Schubert, Kempf & Heiderscheit 2014, Sports Health 6(3):210–217',
+  shortTitle: 'Schubert et al. 2014',
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC4000471/',
   kind: 'peer-reviewed',
   summary:
@@ -165,6 +174,7 @@ const SCHUBERT_2014_LINK: GuidanceLink = {
 
 const ANDERSON_2022_LINK: GuidanceLink = {
   title: 'Anderson et al. 2022, Sports Medicine — Open 8:112',
+  shortTitle: 'Anderson et al. 2022',
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC9441414/',
   kind: 'peer-reviewed',
   summary:
@@ -173,6 +183,7 @@ const ANDERSON_2022_LINK: GuidanceLink = {
 
 const SMITH_2022_LINK: GuidanceLink = {
   title: 'Smith et al. 2022, PLoS ONE 17(11):e0277810',
+  shortTitle: 'Smith et al. 2022',
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC9671438/',
   kind: 'peer-reviewed',
   summary:
@@ -182,6 +193,7 @@ const SMITH_2022_LINK: GuidanceLink = {
 const HEIDERSCHEIT_2011_LINK: GuidanceLink = {
   title:
     'Heiderscheit et al. 2011, "Effects of Step Rate Manipulation on Joint Mechanics during Running", Medicine & Science in Sports & Exercise',
+  shortTitle: 'Heiderscheit et al. 2011',
   url: HEIDERSCHEIT_2011_URL,
   kind: 'peer-reviewed',
   summary:
@@ -191,6 +203,7 @@ const HEIDERSCHEIT_2011_LINK: GuidanceLink = {
 const LENHART_2014_LINK: GuidanceLink = {
   title:
     'Lenhart, Thelen, Wille, Chumanov & Heiderscheit 2014, "Increasing Running Step Rate Reduces Patellofemoral Joint Forces", Medicine & Science in Sports & Exercise',
+  shortTitle: 'Lenhart et al. 2014',
   url: 'https://uwnmbl.engr.wisc.edu/pubs/msse14_lenhart.pdf',
   kind: 'peer-reviewed-author-copy',
   summary:
@@ -200,6 +213,7 @@ const LENHART_2014_LINK: GuidanceLink = {
 const GAUDETTE_2022_LINK: GuidanceLink = {
   title:
     'Gaudette, Heiderscheit, Hollander, Tenforde et al. 2022, "Clinical Application of Gait Retraining in the Injured Runner", Journal of Clinical Medicine',
+  shortTitle: 'Gaudette et al. 2022',
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC9655004/',
   kind: 'peer-reviewed',
   summary:
@@ -209,6 +223,7 @@ const GAUDETTE_2022_LINK: GuidanceLink = {
 const HUBER_2024_LINK: GuidanceLink = {
   title:
     'Huber & Verhoff 2024, "A One Session Gait Retraining Protocol with Metronome Augmentation Increases Cadence in Novice and Recreational Runners", IJSPT',
+  shortTitle: 'Huber & Verhoff 2024',
   url: 'https://ijspt.scholasticahq.com/article/90909-a-one-session-gait-retraining-protocol-with-metronome-augmentation-increases-cadence-in-novice-and-recreational-runners',
   kind: 'peer-reviewed',
   summary:
@@ -218,6 +233,7 @@ const HUBER_2024_LINK: GuidanceLink = {
 const DAVIS_2020_LINK: GuidanceLink = {
   title:
     'Davis, Tenforde, Neal, Roper & Willy 2020, "Gait Retraining as an Intervention for Patellofemoral Pain", Current Reviews in Musculoskeletal Medicine',
+  shortTitle: 'Davis et al. 2020',
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC7083994/',
   kind: 'peer-reviewed',
   summary:
@@ -227,6 +243,7 @@ const DAVIS_2020_LINK: GuidanceLink = {
 const PETRI_2026_LINK: GuidanceLink = {
   title:
     'Petri et al. 2026, "Gait Retraining for Patellofemoral Pain in Runners: An Umbrella Review", Sports Medicine — Open',
+  shortTitle: 'Petri et al. 2026',
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC13269574/',
   kind: 'peer-reviewed',
   summary:
@@ -236,6 +253,7 @@ const PETRI_2026_LINK: GuidanceLink = {
 const ADAMS_2018_LINK: GuidanceLink = {
   title:
     'Adams, Pozzi, Willy, Carrol & Zeni 2018, "Altering Cadence or Vertical Oscillation During Running: Effects on Running Related Injury Factors", IJSPT',
+  shortTitle: 'Adams et al. 2018',
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC6088121/',
   kind: 'peer-reviewed',
   summary:
@@ -245,6 +263,7 @@ const ADAMS_2018_LINK: GuidanceLink = {
 const MOORE_2016_LINK: GuidanceLink = {
   title:
     'Moore 2016, "Is There an Economical Running Technique?", Sports Medicine',
+  shortTitle: 'Moore 2016',
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC4887549/',
   kind: 'peer-reviewed',
   summary:
@@ -254,6 +273,7 @@ const MOORE_2016_LINK: GuidanceLink = {
 const VELOCITY_PROJECT_LINK: GuidanceLink = {
   title:
     'The Velocity Project (UW–Madison Family Medicine), "Contributors to Track and Field Running-Related Injury"',
+  shortTitle: 'The Velocity Project',
   url: 'https://velocityproject.fammed.wisc.edu/wp-content/uploads/sites/2347/2025/05/Running-Injury-Risk-Reduction-Infographic.pdf',
   kind: 'handout',
   summary:
@@ -263,6 +283,7 @@ const VELOCITY_PROJECT_LINK: GuidanceLink = {
 const BRAUN_2024_LINK: GuidanceLink = {
   title:
     'Braun, Mai, Willwacher et al. 2024, "Managing lower extremity loading in distance running by altering sagittal plane trunk leaning", Journal of Sport and Health Science 14:100985',
+  shortTitle: 'Braun et al. 2024',
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC11809138/',
   kind: 'peer-reviewed',
   summary:
@@ -272,6 +293,7 @@ const BRAUN_2024_LINK: GuidanceLink = {
 const CARSON_2024_LINK: GuidanceLink = {
   title:
     'Carson, Aslan & Ortega 2024, "The effect of forward postural lean on running economy, kinematics, and muscle activation", PLOS ONE',
+  shortTitle: 'Carson et al. 2024',
   url: 'https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0302249',
   kind: 'peer-reviewed',
   summary:
@@ -281,6 +303,7 @@ const CARSON_2024_LINK: GuidanceLink = {
 const TENG_POWERS_2016_LINK: GuidanceLink = {
   title:
     'Teng & Powers 2016, "Hip-Extensor Strength, Trunk Posture, and Use of the Knee-Extensor Muscles During Running", Journal of Athletic Training',
+  shortTitle: 'Teng & Powers 2016',
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC5317187/',
   kind: 'peer-reviewed',
   summary:
@@ -289,6 +312,7 @@ const TENG_POWERS_2016_LINK: GuidanceLink = {
 
 const FUKUCHI_2017_LINK: GuidanceLink = {
   title: 'Fukuchi, Fukuchi & Duarte 2017, PeerJ 5:e3298',
+  shortTitle: 'Fukuchi et al. 2017',
   url: FUKUCHI_2017_URL,
   kind: 'peer-reviewed',
   summary:
@@ -297,6 +321,7 @@ const FUKUCHI_2017_LINK: GuidanceLink = {
 
 const HANLEY_2021_LINK: GuidanceLink = {
   title: 'Hanley 2021, "The Biomechanics of Distance Running"',
+  shortTitle: 'Hanley 2021',
   url: HANLEY_2021_URL,
   // A book chapter, not a journal article. The URL is an institutional repository's copy of the
   // accepted manuscript — a fact about the link, so it lives in the summary, not in the title.
@@ -308,6 +333,7 @@ const HANLEY_2021_LINK: GuidanceLink = {
 const LIEBERMAN_2015_LINK: GuidanceLink = {
   title:
     'Lieberman et al. 2015, Journal of Experimental Biology 218(21):3406–3414',
+  shortTitle: 'Lieberman et al. 2015',
   url: 'https://journals.biologists.com/jeb/article/218/21/3406/14416/',
   kind: 'peer-reviewed',
   summary:
@@ -317,6 +343,7 @@ const LIEBERMAN_2015_LINK: GuidanceLink = {
 const SOUZA_2016_LINK: GuidanceLink = {
   title:
     'Souza 2016, "An Evidence-Based Videotaped Running Biomechanics Analysis"',
+  shortTitle: 'Souza 2016',
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC4714754/',
   kind: 'peer-reviewed',
   summary:
@@ -326,6 +353,7 @@ const SOUZA_2016_LINK: GuidanceLink = {
 const STIFFLER_JOACHIM_2020_LINK: GuidanceLink = {
   title:
     'Stiffler-Joachim et al. 2020, Journal of Athletic Training 55(12):1300–1306',
+  shortTitle: 'Stiffler-Joachim et al. 2020',
   url: STIFFLER_JOACHIM_2020_URL,
   kind: 'peer-reviewed',
   summary:
@@ -335,6 +363,7 @@ const STIFFLER_JOACHIM_2020_LINK: GuidanceLink = {
 const WANG_2024_LINK: GuidanceLink = {
   title:
     'Wang, Mei, Jiang, Hollander, Van den Berghe, Fernandez & Gu 2024, "The Biomechanical Influence of Step Width on Typical Locomotor Activities: A Systematic Review", Sports Medicine — Open',
+  shortTitle: 'Wang et al. 2024',
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC11283446/',
   kind: 'peer-reviewed',
   summary:
@@ -344,6 +373,7 @@ const WANG_2024_LINK: GuidanceLink = {
 const MEARDON_MILLER_2013_LINK: GuidanceLink = {
   title:
     'Meardon & Miller 2013, "A new approach to iliotibial band syndrome in runners", Lower Extremity Review',
+  shortTitle: 'Meardon & Miller 2013',
   url: 'https://lermagazine.com/article/a-new-approach-to-iliotibial-band-syndrome-in-runners',
   kind: 'trade-publication',
   summary:
@@ -353,6 +383,7 @@ const MEARDON_MILLER_2013_LINK: GuidanceLink = {
 const LASHIEN_2024_LINK: GuidanceLink = {
   title:
     'Lashien, Abdelnaeem & Gomaa 2024, "Effect of hip abductors training on pelvic drop and knee valgus in runners with medial tibial stress syndrome", Journal of Orthopaedic Surgery and Research',
+  shortTitle: 'Lashien et al. 2024',
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC11520670/',
   kind: 'peer-reviewed',
   summary:
@@ -361,6 +392,7 @@ const LASHIEN_2024_LINK: GuidanceLink = {
 
 const BOVALINO_2021_LINK: GuidanceLink = {
   title: 'Bovalino & Kingsley 2021, Sports Medicine — Open 7:82',
+  shortTitle: 'Bovalino & Kingsley 2021',
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC8581084/',
   kind: 'peer-reviewed',
   summary:
@@ -370,6 +402,7 @@ const BOVALINO_2021_LINK: GuidanceLink = {
 const BURKE_2021_LINK: GuidanceLink = {
   title:
     'Burke et al. 2021, "Risk Factors for Injuries in Runners: A Systematic Review of Foot Strike Technique", Orthopaedic Journal of Sports Medicine 9(9)',
+  shortTitle: 'Burke et al. 2021',
   url: 'https://doras.dcu.ie/28875/1/burke-et-al-2021-risk-factors-for-injuries-in-runners-a-systematic-review-of-foot-strike-technique-and-its.pdf',
   kind: 'peer-reviewed-author-copy',
   summary:
@@ -377,27 +410,34 @@ const BURKE_2021_LINK: GuidanceLink = {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Capture hints. Grouped by the camera angle each metric's `viewFitTable` row demands
-// (`src/heuristics/types.ts`, `DEFAULT_VIEW_FIT_TABLE`), because that table — not this file — is
-// what actually decides whether a metric survives on a given clip. Every one is about CAPTURE.
+// Capture hints, one per cause.
+//
+// `wrongAngle` is the hint for a metric excluded because the camera angle cannot support it — its
+// `viewFit` is 'unsuitable' — and each one is written against that metric's row in
+// `DEFAULT_VIEW_FIT_TABLE` (`src/heuristics/types.ts`), because that table, not this file, decides
+// whether a metric survives on a given clip. `notEnoughData` is the hint for every other cause.
+// Every hint is about CAPTURE, never about how the runner runs.
 // ---------------------------------------------------------------------------------------------
 
-const SIDE_VIEW_REQUIRED_HINT =
-  "Film side-on, with the camera square to the runner's line of travel. This measurement reads the fore-and-aft plane, which collapses to nothing when the camera looks down it — a front or rear clip cannot produce it at any quality."
+const SIDE_ON_SQUARE = "Film side-on, with the camera square to the runner's line of travel."
 
-const SIDE_VIEW_PREFERRED_HINT =
-  "Film side-on if you can — this reads most reliably square to the runner's line of travel, though a front or rear clip still works at reduced confidence. Keep the runner in frame for a few seconds of steady running: the rhythm is fitted to the hip bounce, and a short clip may not contain enough bounce cycles to measure."
+const FRONT_OR_REAR_SQUARE =
+  'Film from directly in front of or behind the runner, square to their line of travel.'
 
-const FRONT_VIEW_REQUIRED_HINT =
-  'Film from directly in front of or behind the runner, square to their line of travel. This measurement reads side-to-side placement, which a side-on camera looks straight along and cannot see.'
+/**
+ * `wrongAngle` for the three metrics no camera angle rules out (no row in the view-fit table is
+ * 'unsuitable'). The guided view never shows it today, because those metrics are never excluded
+ * for their angle — but it is still a true sentence, and a sentence that is never shown must not
+ * be wrong in case that changes.
+ */
+const NO_ANGLE_RULED_OUT_HINT =
+  "No camera angle rules this measurement out. Filmed from the side, square to the runner's line of travel, it reads most reliably, and a clip filmed from in front or behind still works at reduced confidence."
+
+const NOT_ENOUGH_DATA_HINT =
+  'Record several seconds of steady running, with the whole body in frame the whole time.'
 
 const REAL_WORLD_SCALE_HINT =
-  'It also needs the background real-world-scale pass to succeed, so keep the whole body in frame.'
-
-// Appended only where the metric also accepts a side-on clip: for `stepWidthCm`, which needs a
-// front or rear camera, advising a side-on pass would contradict the angle the metric requires.
-const SIDE_ON_SCALE_HINT =
-  'A steady side-on pass gives the most reliable scale calibration.'
+  "It also needs the app to work out the runner's real size from the video, which is most reliable with the whole body in frame."
 
 // ---------------------------------------------------------------------------------------------
 // The record.
@@ -431,6 +471,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       centralTendency: null,
       source: {
         title: "Garmin fenix 7 owner's manual — running-dynamics zone table",
+        shortTitle: 'Garmin fenix 7 manual',
         url: GARMIN_FENIX_7_ZONES_URL,
         population: GARMIN_POPULATION,
         sampleSize: GARMIN_SAMPLE_SIZE,
@@ -490,7 +531,13 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       LENHART_2014_LINK,
       GAUDETTE_2022_LINK,
     ],
-    captureHint: SIDE_VIEW_PREFERRED_HINT,
+    captureHints: {
+      wrongAngle: NO_ANGLE_RULED_OUT_HINT,
+      notEnoughData: NOT_ENOUGH_DATA_HINT,
+    },
+    remediationIntro:
+      'Raising step rate is also the most-studied way to reduce overstriding — how far the foot lands ahead of the body. The Heiderscheit and Lenhart studies below measured that directly.',
+    guidedDescription: null,
   },
 
   // === Rank 2 — the one band whose every bound is arithmetic rather than a quotation. ==========
@@ -545,6 +592,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       source: {
         title:
           "Garmin fenix 7 owner's manual (APAC) — vertical ratio zone table, halved",
+        shortTitle: 'Garmin fenix 7 manual (APAC)',
         url: GARMIN_FENIX_7_APAC_ZONES_URL,
         population: GARMIN_POPULATION,
         sampleSize: GARMIN_SAMPLE_SIZE,
@@ -586,7 +634,12 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     // Nothing in the research pass reports an intervention on vertical ratio itself. Adams 2018
     // is linked because it targets this ratio's NUMERATOR — the bounce — and its summary says so.
     remediation: [ADAMS_2018_LINK],
-    captureHint: `${SIDE_VIEW_REQUIRED_HINT} It also needs at least two footstrikes of the SAME foot to measure a stride, so film several consecutive strides rather than a single step.`,
+    captureHints: {
+      wrongAngle: `${SIDE_ON_SQUARE} This ratio divides by stride length, and a stride seen from in front, from behind or at an angle looks shorter than it is, which would make the ratio read high.`,
+      notEnoughData: `${NOT_ENOUGH_DATA_HINT} A stride runs from one footstrike to the next footstrike of the same foot, so the clip needs several strides in a row.`,
+    },
+    remediationIntro: null,
+    guidedDescription: null,
   },
 
   // === Rank 3 — a paper rather than a manual, for the reason design.md D4 records. =============
@@ -652,7 +705,12 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       MOORE_2016_LINK,
     ],
     remediation: [ADAMS_2018_LINK, MOORE_2016_LINK, VELOCITY_PROJECT_LINK],
-    captureHint: `${SIDE_VIEW_PREFERRED_HINT} ${REAL_WORLD_SCALE_HINT} ${SIDE_ON_SCALE_HINT}`,
+    captureHints: {
+      wrongAngle: NO_ANGLE_RULED_OUT_HINT,
+      notEnoughData: `${NOT_ENOUGH_DATA_HINT} ${REAL_WORLD_SCALE_HINT} A steady side-on pass gives the most reliable size estimate.`,
+    },
+    remediationIntro: null,
+    guidedDescription: null,
   },
 
   // === Rank 4 — a spread with no preferred end, because four outcomes disagree. ================
@@ -688,7 +746,12 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     speedSensitivity: null,
     research: [FOLLAND_2017_LINK, BRAUN_2024_LINK, CARSON_2024_LINK],
     remediation: [BRAUN_2024_LINK, TENG_POWERS_2016_LINK, CARSON_2024_LINK],
-    captureHint: SIDE_VIEW_REQUIRED_HINT,
+    captureHints: {
+      wrongAngle: `${SIDE_ON_SQUARE} Leaning forward or back shows only from the side; from in front, from behind or at an angle it barely changes the picture.`,
+      notEnoughData: NOT_ENOUGH_DATA_HINT,
+    },
+    remediationIntro: null,
+    guidedDescription: null,
   },
 
   // === Rank 5 — the most speed-sensitive band in the set: one cohort's observed range. ==========
@@ -719,6 +782,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       corroboration: [
         {
           title: 'Fukuchi, Fukuchi & Duarte 2017, PeerJ 5:e3298',
+          shortTitle: 'Fukuchi et al. 2017',
           url: FUKUCHI_2017_URL,
           population:
             'Regular runners at 2.5, 3.5 and 4.5 m/s — 93.5 ± 10.4°, 108.7 ± 10.7° and 119.1 ± 10.4° respectively, in the same convention this app uses, where 0° is full extension',
@@ -726,6 +790,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
         },
         {
           title: 'Hanley 2021, "The Biomechanics of Distance Running"',
+          shortTitle: 'Hanley 2021',
           url: HANLEY_2021_URL,
           population:
             "Distance runners at midswing — 55–60° of included thigh–shank angle, which is 120–125° in this app's convention",
@@ -748,7 +813,12 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     research: [FOLLAND_2017_LINK, FUKUCHI_2017_LINK, HANLEY_2021_LINK],
     // Nothing in the research pass reports an intervention on swing knee flexion.
     remediation: [],
-    captureHint: SIDE_VIEW_REQUIRED_HINT,
+    captureHints: {
+      wrongAngle: `${SIDE_ON_SQUARE} The knee bends forward and back, so from in front, from behind or at an angle the bend is hidden or looks smaller than it is.`,
+      notEnoughData: NOT_ENOUGH_DATA_HINT,
+    },
+    remediationIntro: null,
+    guidedDescription: null,
   },
 
   // === Ranks 6–12: no band. Each renders its value, its description, its caveats and its =======
@@ -772,7 +842,13 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       LENHART_2014_LINK,
       GAUDETTE_2022_LINK,
     ],
-    captureHint: SIDE_VIEW_REQUIRED_HINT,
+    captureHints: {
+      wrongAngle: `${SIDE_ON_SQUARE} How far the foot lands ahead of the hips is a forward distance, which a camera in front of or behind the runner looks straight along and cannot see.`,
+      notEnoughData: NOT_ENOUGH_DATA_HINT,
+    },
+    remediationIntro: null,
+    guidedDescription:
+      'How far your foot lands ahead of your hips at footstrike, relative to your torso length.',
   },
 
   verticalOscillation: {
@@ -788,7 +864,12 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     speedSensitivity: null,
     research: [FOLLAND_2017_LINK, MALISOUX_2023_LINK, MOORE_2016_LINK],
     remediation: [ADAMS_2018_LINK, MOORE_2016_LINK, VELOCITY_PROJECT_LINK],
-    captureHint: SIDE_VIEW_PREFERRED_HINT,
+    captureHints: {
+      wrongAngle: NO_ANGLE_RULED_OUT_HINT,
+      notEnoughData: NOT_ENOUGH_DATA_HINT,
+    },
+    remediationIntro: null,
+    guidedDescription: null,
   },
 
   // `stepWidth` and `stepWidthCm` are deliberately parallel entries with the same reasoning and
@@ -818,7 +899,12 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     },
     research: [STIFFLER_JOACHIM_2020_LINK, WANG_2024_LINK],
     remediation: [WANG_2024_LINK, MEARDON_MILLER_2013_LINK, LASHIEN_2024_LINK],
-    captureHint: FRONT_VIEW_REQUIRED_HINT,
+    captureHints: {
+      wrongAngle: `${FRONT_OR_REAR_SQUARE} Where each foot lands relative to the body's midline is a side-to-side distance, which a side-on camera looks straight along and cannot see.`,
+      notEnoughData: NOT_ENOUGH_DATA_HINT,
+    },
+    remediationIntro: null,
+    guidedDescription: null,
   },
 
   stepWidthCm: {
@@ -844,7 +930,12 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     },
     research: [STIFFLER_JOACHIM_2020_LINK, WANG_2024_LINK],
     remediation: [WANG_2024_LINK, MEARDON_MILLER_2013_LINK, LASHIEN_2024_LINK],
-    captureHint: `${FRONT_VIEW_REQUIRED_HINT} ${REAL_WORLD_SCALE_HINT}`,
+    captureHints: {
+      wrongAngle: `${FRONT_OR_REAR_SQUARE} Where each foot lands relative to the body's midline is a side-to-side distance, which a side-on camera looks straight along and cannot see.`,
+      notEnoughData: `${NOT_ENOUGH_DATA_HINT} ${REAL_WORLD_SCALE_HINT}`,
+    },
+    remediationIntro: null,
+    guidedDescription: null,
   },
 
   footStrikePattern: {
@@ -865,7 +956,12 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     // TOWARD. Offering a retraining protocol here would assert exactly what the best available
     // systematic review declines to.
     remediation: [],
-    captureHint: SIDE_VIEW_REQUIRED_HINT,
+    captureHints: {
+      wrongAngle: `${SIDE_ON_SQUARE} This is read from where the ankle sits relative to the knee as the foot lands, which shows only from the side.`,
+      notEnoughData: NOT_ENOUGH_DATA_HINT,
+    },
+    remediationIntro: null,
+    guidedDescription: 'Whether your foot tends to land heel-, midfoot- or forefoot-first.',
   },
 
   kneeDrive: {
@@ -879,7 +975,12 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     speedSensitivity: null,
     research: [],
     remediation: [],
-    captureHint: SIDE_VIEW_REQUIRED_HINT,
+    captureHints: {
+      wrongAngle: `${SIDE_ON_SQUARE} How high the thigh lifts is a forward-and-up angle, which looks smaller than it is from in front, from behind or at an angle.`,
+      notEnoughData: NOT_ENOUGH_DATA_HINT,
+    },
+    remediationIntro: null,
+    guidedDescription: null,
   },
 
   armSwingAmplitude: {
@@ -893,7 +994,13 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     speedSensitivity: null,
     research: [],
     remediation: [],
-    captureHint: FRONT_VIEW_REQUIRED_HINT,
+    captureHints: {
+      wrongAngle:
+        'Film from directly in front of or behind the runner. From the side, the far arm is hidden behind the body, so only one arm\'s swing can be seen.',
+      notEnoughData: NOT_ENOUGH_DATA_HINT,
+    },
+    remediationIntro: null,
+    guidedDescription: null,
   },
 }
 

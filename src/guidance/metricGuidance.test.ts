@@ -374,6 +374,45 @@ describe('every URL is verified and https', () => {
     expect(hanley?.title).not.toMatch(/manuscript/i)
   })
 
+  it('gives every link and every source a short title of at most 30 characters', () => {
+    for (const entry of entries()) {
+      const cited = [
+        ...(entry.band ? [entry.band.source, ...entry.band.corroboration] : []),
+        ...entry.research,
+        ...entry.remediation,
+      ]
+      for (const item of cited) {
+        expect(item.shortTitle.length, `${entry.metric}: ${item.title}`).toBeGreaterThan(0)
+        expect(
+          item.shortTitle.length,
+          `${entry.metric}: ${item.shortTitle}`,
+        ).toBeLessThanOrEqual(30)
+      }
+    }
+  })
+
+  it('names the same source with the same short title everywhere, and starts from its first author', () => {
+    const shortTitleByUrl = new Map<string, string>()
+    for (const entry of entries()) {
+      const cited = [
+        ...(entry.band ? [entry.band.source, ...entry.band.corroboration] : []),
+        ...entry.research,
+        ...entry.remediation,
+      ]
+      for (const item of cited) {
+        const seen = shortTitleByUrl.get(item.url)
+        if (seen !== undefined)
+          expect(item.shortTitle, `${entry.metric}: ${item.url}`).toBe(seen)
+        shortTitleByUrl.set(item.url, item.shortTitle)
+        // "Malisoux et al. 2023" abbreviates "Malisoux et al. 2023, …"; "Garmin fenix 7 manual"
+        // abbreviates "Garmin fenix 7 owner's manual …". The first word must be the title's.
+        expect(item.title.split(/[\s,]/)[0], item.shortTitle).toBe(
+          item.shortTitle.split(/[\s,]/)[0],
+        )
+      }
+    }
+  })
+
   it('gives every link a title and a summary', () => {
     for (const entry of entries()) {
       for (const link of [...entry.research, ...entry.remediation]) {
@@ -1037,71 +1076,130 @@ describe('remediation', () => {
 })
 
 describe('capture hints', () => {
-  it('gives every metric one', () => {
-    for (const entry of entries()) {
-      expect(entry.captureHint.length, entry.metric).toBeGreaterThan(40)
+  /** Every (metric, hint) pair, so each assertion below names the metric and the cause. */
+  function allHints(): Array<[string, string]> {
+    return entries().flatMap((entry) => [
+      [`${entry.metric}.wrongAngle`, entry.captureHints.wrongAngle],
+      [`${entry.metric}.notEnoughData`, entry.captureHints.notEnoughData],
+    ])
+  }
+
+  it('gives every metric both hints', () => {
+    for (const [path, hint] of allHints()) {
+      expect(hint.length, path).toBeGreaterThan(40)
     }
   })
 
   it('talks about filming, never about how the runner runs', () => {
+    for (const [path, hint] of allHints()) {
+      expect(hint, path).toMatch(/\b(film|record)/i)
+    }
+  })
+
+  it('keeps camera-angle advice out of the not-enough-data hint', () => {
+    // That hint is shown when the angle was fine and something else ran short. Telling the reader
+    // to change the angle there sends them to re-film for the wrong reason.
     for (const entry of entries()) {
-      expect(entry.captureHint, entry.metric).toMatch(/film/i)
+      expect(entry.captureHints.notEnoughData, entry.metric).not.toMatch(
+        /in front of or behind|square to/i,
+      )
     }
   })
 
-  it('asks for the camera angle each metric actually needs', () => {
-    // Cross-checked against `DEFAULT_VIEW_FIT_TABLE`, which is what really decides whether a
-    // metric survives on a clip: a hint that asked for the wrong angle would send a reader away to
-    // re-film a clip that still could not be measured.
-    for (const entry of entries()) {
-      const row = DEFAULT_VIEW_FIT_TABLE[entry.metric]
-      if (row.front.fit === 'primary') {
-        expect(entry.captureHint, entry.metric).toMatch(
-          /in front of or behind/i,
-        )
-      } else {
-        expect(entry.captureHint, entry.metric).toMatch(/side-on/i)
-      }
-    }
-  })
-
-  /**
-   * The table encodes a second distinction for side-primary metrics, and the hint has to carry it:
-   * a front view is `'unsuitable'` for some (the hint must say a front clip cannot produce the
-   * measurement at all) and only `'tolerated'` for others (the hint must say a front clip still
-   * works at reduced confidence). Telling a reader a front clip is hopeless when it merely costs
-   * confidence — or the reverse — sends them to re-film for the wrong reason.
-   */
-  const SIDE_REQUIRED = /cannot produce it at any quality/
-  const SIDE_PREFERRED = /still works at reduced confidence/
-
-  it('says side-on is REQUIRED exactly where a front view is unsuitable, and PREFERRED where it is tolerated', () => {
-    for (const entry of entries()) {
-      const row = DEFAULT_VIEW_FIT_TABLE[entry.metric]
-      if (row.side.fit !== 'primary') continue
-      if (row.front.fit === 'unsuitable') {
-        expect(entry.captureHint, entry.metric).toMatch(SIDE_REQUIRED)
-        expect(entry.captureHint, entry.metric).not.toMatch(SIDE_PREFERRED)
-      } else {
-        expect(row.front.fit, entry.metric).toBe('tolerated')
-        expect(entry.captureHint, entry.metric).toMatch(SIDE_PREFERRED)
-        expect(entry.captureHint, entry.metric).not.toMatch(SIDE_REQUIRED)
-      }
-    }
-  })
-
-  it('pins trunkLean and kneeFlexion as side-view REQUIRED, not merely preferred', () => {
-    for (const id of ['trunkLean', 'kneeFlexion'] as const) {
-      expect(DEFAULT_VIEW_FIT_TABLE[id].front.fit, id).toBe('unsuitable')
-      expect(METRIC_GUIDANCE[id].captureHint, id).toMatch(SIDE_REQUIRED)
-      expect(METRIC_GUIDANCE[id].captureHint, id).not.toMatch(SIDE_PREFERRED)
-    }
-  })
-
-  it('never advises a side-on scale pass on a metric that needs a front or rear camera', () => {
-    expect(METRIC_GUIDANCE.stepWidthCm.captureHint).not.toMatch(/side-on pass/i)
-    expect(METRIC_GUIDANCE.verticalOscillationCm.captureHint).toMatch(
-      /steady side-on pass/,
+  /** Whether any view makes this metric 'unsuitable' — the only way `wrongAngle` is ever shown. */
+  function hasUnsuitableView(id: MetricId): boolean {
+    const row = DEFAULT_VIEW_FIT_TABLE[id]
+    return [row.side, row.front, row.ambiguous].some(
+      (cell) => cell.fit === 'unsuitable',
     )
+  }
+
+  const ASKS_FOR_SIDE_ON = /^Film side-on/
+  const ASKS_FOR_FRONT_OR_REAR = /^Film from directly in front of or behind/
+  const NO_ANGLE_RULED_OUT = /still works at reduced confidence/
+
+  it('asks for side-on exactly where a front view is unsuitable, and front-or-rear exactly where a side view is', () => {
+    // Cross-checked against `DEFAULT_VIEW_FIT_TABLE`, in both directions: a hint that asked for the
+    // wrong angle would send a reader away to re-film a clip that still could not be measured.
+    for (const entry of entries()) {
+      const row = DEFAULT_VIEW_FIT_TABLE[entry.metric]
+      const hint = entry.captureHints.wrongAngle
+      if (row.front.fit === 'unsuitable') {
+        expect(row.side.fit, entry.metric).toBe('primary')
+        expect(hint, entry.metric).toMatch(ASKS_FOR_SIDE_ON)
+      } else {
+        expect(hint, entry.metric).not.toMatch(ASKS_FOR_SIDE_ON)
+      }
+      if (row.side.fit === 'unsuitable') {
+        expect(row.front.fit, entry.metric).toBe('primary')
+        expect(hint, entry.metric).toMatch(ASKS_FOR_FRONT_OR_REAR)
+      } else {
+        expect(hint, entry.metric).not.toMatch(ASKS_FOR_FRONT_OR_REAR)
+      }
+    }
+  })
+
+  it('says no angle rules the metric out exactly where no view is unsuitable', () => {
+    for (const entry of entries()) {
+      const hint = entry.captureHints.wrongAngle
+      if (hasUnsuitableView(entry.metric)) {
+        expect(hint, entry.metric).not.toMatch(NO_ANGLE_RULED_OUT)
+      } else {
+        expect(hint, entry.metric).toMatch(NO_ANGLE_RULED_OUT)
+      }
+    }
+  })
+
+  it('pins which metrics get which angle hint, by name', () => {
+    const byKind = (pattern: RegExp) =>
+      entries()
+        .filter((entry) => pattern.test(entry.captureHints.wrongAngle))
+        .map((entry) => entry.metric)
+        .sort()
+    expect(byKind(ASKS_FOR_SIDE_ON)).toEqual(
+      [
+        'footStrikePattern',
+        'kneeDrive',
+        'kneeFlexion',
+        'overstriding',
+        'trunkLean',
+        'verticalRatio',
+      ].sort(),
+    )
+    expect(byKind(ASKS_FOR_FRONT_OR_REAR)).toEqual(
+      ['armSwingAmplitude', 'stepWidth', 'stepWidthCm'].sort(),
+    )
+    expect(byKind(NO_ANGLE_RULED_OUT)).toEqual(
+      ['cadence', 'verticalOscillation', 'verticalOscillationCm'].sort(),
+    )
+  })
+
+  it('explains arm swing by the far arm being hidden, not by side-to-side placement', () => {
+    expect(METRIC_GUIDANCE.armSwingAmplitude.captureHints.wrongAngle).toBe(
+      "Film from directly in front of or behind the runner. From the side, the far arm is hidden behind the body, so only one arm's swing can be seen.",
+    )
+  })
+
+  it('names the real-size requirement on exactly the two centimetre metrics', () => {
+    for (const entry of entries()) {
+      const needsScale =
+        entry.metric === 'verticalOscillationCm' ||
+        entry.metric === 'stepWidthCm'
+      expect(
+        entry.captureHints.notEnoughData.includes(
+          "work out the runner's real size",
+        ),
+        entry.metric,
+      ).toBe(needsScale)
+    }
+  })
+
+  it('never advises a side-on pass on a metric that needs a front or rear camera', () => {
+    expect(METRIC_GUIDANCE.stepWidthCm.captureHints.notEnoughData).not.toMatch(
+      /side-on/i,
+    )
+    expect(
+      METRIC_GUIDANCE.verticalOscillationCm.captureHints.notEnoughData,
+    ).toMatch(/steady side-on pass/)
   })
 })

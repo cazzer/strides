@@ -21,6 +21,12 @@ export type BandUnit = MetricResult['unit']
 export interface BandSource {
   /** Author, year and where it was published — enough to find it without following the link. */
   title: string
+  /**
+   * The citation as a reader says it aloud — "Malisoux et al. 2023", "Garmin fenix 7 manual" — at
+   * most about 30 characters, for places the full `title` would not fit (a scale's attribution
+   * line, a link label). Never a replacement for `title` where the spec requires the full one.
+   */
+  shortTitle: string
   /** Verified https URL. Every URL in this module is pinned as a literal in the test file. */
   url: string
   /** Who was measured, and under what conditions. Renders verbatim. */
@@ -289,6 +295,8 @@ export type GuidanceLinkKind =
 export interface GuidanceLink {
   /** Author, year, title and venue. */
   title: string
+  /** The citation as a reader says it aloud, at most about 30 characters. See `BandSource.shortTitle`. */
+  shortTitle: string
   /** Verified https URL. */
   url: string
   kind: GuidanceLinkKind
@@ -379,12 +387,25 @@ export interface MetricGuidance {
    */
   remediation: GuidanceLink[]
   /**
-   * What to film differently to measure this metric, for the collapsed not-measured group.
+   * What to film differently to measure this metric, for the collapsed not-measured group — one
+   * hint per CAUSE, because the fix for a camera angle that cannot see the measurement is a
+   * different instruction from the fix for a clip that was too short.
    *
-   * **About capture only** — camera angle, clip length, keeping the runner at a constant
-   * distance. Never a suggestion that the runner change how they run: a metric this clip could
-   * not measure is a fact about the clip, and turning it into advice about the runner would be
-   * asserting something the app did not measure.
+   * **About capture only** — camera angle, clip length, keeping the whole body in frame. Never a
+   * suggestion that the runner change how they run: a metric this clip could not measure is a fact
+   * about the clip, and turning it into advice about the runner would be asserting something the
+   * app did not measure.
    */
-  captureHint: string
+  captureHints: {
+    /** Shown when the metric was excluded because the camera angle can't support it (viewFit === 'unsuitable'). */
+    wrongAngle: string
+    /** Shown for every other not-measured cause: too few strides/cycles, detection gaps, no real-world scale. */
+    notEnoughData: string
+  }
+  /** One plain sentence the guided view renders above this metric's remediation links. null for most. */
+  remediationIntro: string | null
+  /** Guided-view-only replacement for the shared METRIC_DESCRIPTIONS entry (src/results/metricDescriptions.ts),
+   * used where the shared copy reads badly in a page about published ranges. null = use the shared one.
+   * The shared descriptions are the classic view's copy and are NOT edited. */
+  guidedDescription: string | null
 }
