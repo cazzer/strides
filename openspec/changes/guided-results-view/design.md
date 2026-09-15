@@ -3,7 +3,10 @@
 **Status of this document.** The reference bands below were fixed by a research pass that ran
 **before** this change was scoped, and every number in them came off a page a researcher actually
 loaded. Items marked **[derived]** are arithmetic on published numbers, not a published statistic,
-and are labelled as such everywhere they appear — on screen as well as here. Items the research pass
+and are labelled as such everywhere they appear — on screen as well as here. The bracketed tag is this
+document's shorthand only: on screen the same fact is said in words ("worked out as 4.06% per
+stride", "our arithmetic from the two papers' figures", a derivation statement), because a runner
+cannot be expected to read a bracket convention (D7.11). Items the research pass
 could not load (HTTP 403) are named where they would otherwise have been cited, and are **not** used
 as ranges.
 
@@ -86,8 +89,10 @@ per step, at the COM. That is definitionally what `verticalOscillationCm` comput
 P10–P90 for the whole cohort, so the band runs from the lowest of the four published bounds (women's
 P10, 6.0 cm) to the highest (men's P90, 9.5 cm): both ends are published numbers, the span between them
 is not the P10–P90 of any group Malisoux reports, and it is declared as a derivation on screen — resting
-on the two published rows — rather than labelled as one percentile range. (An earlier draft called it
-"P10–P90, pooled", which claimed a published range that does not exist.) Heiderscheit 2011 corroborates at
+on the two published rows — rather than labelled as one percentile range. Its zone label names the
+people rather than a range to aim for: *"From women's 10th to men's 90th percentile in Malisoux's 860
+runners, at 10 km/h (6:00 per km)"*, and the mean renders as *"Malisoux's overall average (± 1.2 cm)"*.
+(An earlier draft called it "P10–P90, pooled", which claimed a published range that does not exist.) Heiderscheit 2011 corroborates at
 8.7 ± 1.3 cm COM excursion at 2.9 m/s (falling to 7.3 cm at +10% cadence). D4 records why Garmin's
 bands are **not** used here even though they exist and would have been easier.
 
@@ -111,6 +116,11 @@ Braun's own recommendation is that trunk lean be altered *"only to an extent tha
 from the individual's self-selected trunk angle"* — i.e. **no target angle**. A UI that put a
 preferred end on this scale would be picking a side in a live disagreement between four outcomes.
 
+On screen the single zone is labelled *"Range across Folland's 97 runners"* and the mean *"Average in
+this study (± 3.7°)"* — both name the people measured, and neither reads as a range to aim for.
+Braun 2024, Carson 2024 and Teng & Powers 2016 are this metric's remediation links, and Folland alone
+its research link: a URL is never listed under both headings on one card (D7.11).
+
 Teng & Powers 2014 (7.3 ± 3.6° self-selected) is **[NOT LOADED]** — JOSPT returned 403. It is
 high-confidence secondary knowledge and is **not quoted as a range** anywhere.
 
@@ -120,7 +130,8 @@ each averaged across 10, 11 and 12 km/h. **Shipped: 71.3–129°, the full range
 cohort, with Folland's mean of 94.1° (± 11.1°).** Folland signs flexion negative and this app signs
 it positive, so the bounds are stored with their sign flipped — a change of sign, not a conversion.
 This is the same source shape `trunkLean` already uses (rank 4): one cohort's observed range and its
-mean, quoted.
+mean, quoted — and the same labels, *"Range across Folland's 97 runners"* and *"Average in this study
+(± 11.1°)"*.
 
 Folland measures joint angles relative to **quiet standing**, not to a mathematically straight leg,
 so as with `trunkLean` there may be a small real offset against this app's convention (0° is full
@@ -168,11 +179,11 @@ Garmin's for the same runner, and Garmin's zones must be halved before they can 
 
 ```
 Garmin, per step              [derived] per stride = Garmin ÷ 2   label as shipped (value order)
-  >95th pct  : <6.1%     ->     <3.05%                            Lowest 5% of values in Garmin's table
-  70–95      : 6.1–7.4%  ->     3.05–3.70%                        5th–30th percentile by value
-  30–69      : 7.5–8.6%  ->     3.75–4.30%                        31st–70th percentile by value
-  5–29       : 8.7–10.1% ->     4.35–5.05%                        71st–95th percentile by value
-  <5         : >10.1%    ->     >5.05%                            Highest 5% of values in Garmin's table
+  >95th pct  : <6.1%     ->     <3.05%                            Lowest 5% of Garmin's table
+  70–95      : 6.1–7.4%  ->     3.05–3.70%                        5th–30th percentile of Garmin's table
+  30–69      : 7.5–8.6%  ->     3.75–4.30%                        31st–70th percentile of Garmin's table
+  5–29       : 8.7–10.1% ->     4.35–5.05%                        71st–95th percentile of Garmin's table
+  <5         : >10.1%    ->     >5.05%                            Highest 5% of Garmin's table
 ```
 
 Every bound halves exactly to two decimal places; **no rounding was applied and none was needed.**
@@ -183,8 +194,9 @@ is a rank of performance, not of value. Printed verbatim, a 3.00% reading "falls
 Above-the-95th-percentile zone" — which tells the runner that low ranks higher, exactly the verdict
 D7.8 and the spec forbid. Each zone is therefore labelled by where its values sit **in value order**,
 which is **100 minus Garmin's percentile**, applied to Garmin's own integer bins: `70–95` → `5–30`,
-`30–69` → `31–70`, `5–29` → `71–95`, `>95` → lowest 5%, `<5` → highest 5%. The arithmetic is pinned
-in a test. `cadence`'s Garmin labels are **not** restated: a higher cadence is a higher Garmin
+`30–69` → `31–70`, `5–29` → `71–95`, `>95` → lowest 5%, `<5` → highest 5%. Every label ends *"of
+Garmin's table"*, so each one names whose table the percentile belongs to rather than reading as a
+standing of the runner's own. The arithmetic is pinned in a test. `cadence`'s Garmin labels are **not** restated: a higher cadence is a higher Garmin
 percentile, so that table already runs in value order and is quoted verbatim — a test pins that too,
 so nobody "harmonises" the two.
 
@@ -218,6 +230,10 @@ half a stride. Two independent cross-checks on Garmin's own published figures ag
 per-stride displacement. So the two denominators differ by exactly the factor of two the halving
 applies. **The derivation rests on a definition on each side, not on a fit.**
 
+On screen this leg is stated without the file name, which means nothing to a runner: *"This app
+measures a full stride: it pairs each footstrike only with the next footstrike of the same foot, so
+every stride it measures is two steps long."* This document keeps the file reference as the record.
+
 ### Leg (c) — two independent corroborations land where the derivation predicts
 
 **[derived] Folland 2017, an entirely separate route.** Folland reports both terms height-normalised
@@ -228,8 +244,10 @@ cancels:
 0.052 H / 1.28 H = 4.06% per stride
 ```
 
-**4.06% lands inside the derived middle zone (3.75–4.30%; Garmin's 30–69th, labelled 31st–70th by
-value).** Folland measured a different cohort
+**4.06% lands inside the derived middle zone (3.75–4.30%; Garmin's 30–69th, labelled 31st–70th
+percentile of Garmin's table).** On screen the corroboration carries Folland's own title, and the
+arithmetic moves into its population line — *"4.06% per stride, calculated from the paper's pelvis
+bounce (5.2% of height) and stride length (128% of height)"*. Folland measured a different cohort
 with different instrumentation and published neither a vertical ratio nor a band; the agreement is
 between Garmin's percentile table halved and an independent laboratory ratio, reached with no shared
 assumption but the definition of a stride.
@@ -237,7 +255,7 @@ assumption but the definition of a stride.
 **A third check, from this repo's own footage.** CLAUDE.md records the `side-landscape` clip's
 `verticalRatio` at **0.0310419** — 3.10% — measured on the shipped pipeline and reproduced exactly
 across trials. That lands just inside the derived **3.05–3.70%** zone (Garmin's 70–95th, labelled
-5th–30th by value), on its 3.05 boundary. Not
+5th–30th percentile of Garmin's table), on its 3.05 boundary. Not
 proof — it is one clip of one runner — but it is the reading that would have screamed if the factor
 of two were backwards: an un-halved comparison would have put this runner off the bottom of the
 scale, better than the 95th percentile of every Garmin user, which nobody believes.
@@ -282,8 +300,9 @@ additive offset does not cancel in a ratio. Garmin's published vertical-ratio zo
 numerator offset, so they may sit somewhat high relative to a hip-derived measurement like this
 app's. The offset is disclosed, **not quantified as a percentage and not corrected for**. The check
 that survives it is independent of Garmin entirely: Folland 2017's laboratory figure, **4.06% per stride
-[derived]** (D3 leg (c)), lands inside the middle zone — Garmin's 30th–69th, labelled 31st–70th by
-value.
+[derived]** (D3 leg (c)), lands inside the middle zone — Garmin's 30th–69th, labelled 31st–70th
+percentile of Garmin's table. On screen the note says *"where this page declines to use Garmin's
+table for the centimetre measurement"* rather than citing this section by number.
 
 ## D5 — The seven metrics that carry no band, each with its reason
 
@@ -329,6 +348,12 @@ below is the external confirmation of it.
   range across cadence conditions**, not a mean overstride. It is not a band and must not be quoted
   as one.
 
+**Links.** Heiderscheit 2011 measured what raising step rate does to this geometry, so it is one of
+this card's remediation links (with Lenhart 2014 and Gaudette 2022) and not also a research link;
+Lieberman 2015 and Souza 2016 are the research links. The on-screen description is the guided view's
+own (D7.10 (d)): the shared one calls this metric "a proxy for braking-force risk", which reads as a
+verdict on a page about published ranges.
+
 **The only defensible statement about `overstriding` is relative, and it ships as one:** Heiderscheit
 2011 showed a +10% step rate moved foot-to-COM from 9.2 cm to 7.0 cm — a **24% reduction**. That is
 a within-runner change under an intervention, not a population range, and it is exactly the shape of
@@ -355,6 +380,12 @@ assumed constant and an unstated convention, and "our own footage lands inside i
 only if the band was not built to contain it. **Its two siblings carry bands instead**, which is why
 the vertical-oscillation family is not left silent. This is the top candidate for a follow-up if
 anyone resolves Folland's convention.
+
+The reason renders in plain words, without the constant's name, the height notation or this
+section's number: *"A range could be calculated for this measurement, but it isn't shown. It would
+divide a published pelvis-bounce figure by a textbook estimate of torso length rather than a measured
+one, and the published figure doesn't say whether it is per step or per stride — either uncertainty
+changes the answer. The centimetre and ratio versions above do have published ranges."*
 
 ### 3 and 4. `stepWidth` and `stepWidthCm` — crossover is NORMAL at speed, and the injury link rests on a documented citation error
 
@@ -384,6 +415,11 @@ anyone resolves Folland's convention.
 
 **Neither of these metrics may render anything that treats a negative value as a defect.**
 
+On screen, ASIS width is "pelvis width", the p-value and confidence interval are dropped, the
+Arellano & Kram figure reads *"about 1.8 cm in this app's convention (half of Arellano & Kram's
+foot-to-foot figure)"*, and Wang 2024 is a research link only — it reviews what step width does to
+the body, not how to change it — leaving Meardon & Miller 2013 and Lashien 2024 as remediation.
+
 ### 5. `footStrikePattern` — prevalence only, and no valence
 
 Bovalino & Kingsley 2021 *Sports Med Open* 7:82, meta-analysis: rearfoot **79%** (CI 0.70–0.86)
@@ -397,6 +433,11 @@ quality."* Only 1 of 7 studies using continuous measures found a significant rel
 
 Mechanistically the difference is a **redistribution, not an improvement**: rearfoot raises
 patellofemoral load and vertical loading rate, forefoot raises Achilles and soleus load.
+
+On screen Burke is paraphrased rather than quoted, because the quotation is built from the paper's
+own abbreviations ("FST", "RRIs") and a grading-system name no runner knows: *"the evidence linking
+foot-strike pattern to running injuries was rated low, and the studies behind it very low
+quality"*. The guided description drops the shared one's method note (D7.10 (d)).
 
 **So this metric reports its classification plus the prevalence fact — "about 8 in 10 distance
 runners are rearfoot strikers" — and attaches no valence whatsoever.** A UI presenting forefoot as
@@ -454,10 +495,16 @@ stylistic are marked.
 `anyClipVideoReady`. That is the only branch this feature needs. The guided view is a **sibling**
 component taking the identical prop shape, so the two are interchangeable at that one call site.
 
-**D7.2 — `ResultsView.tsx` and `MetricsPanel.tsx` are not edited. At all.** The existing capability's
-requirements, the existing unit suite and the existing e2e spec all keep passing untouched, and the
-classic view stays the default. A guidance page that had to modify the page it sits beside would be
-carrying risk it does not need to carry.
+**D7.2 — `ResultsView.tsx` and `MetricsPanel.tsx` are not edited — with one exception.** The existing
+capability's requirements, the existing unit suite and the existing e2e spec all keep passing
+untouched, and the classic view stays the default. A guidance page that had to modify the page it
+sits beside would be carrying risk it does not need to carry.
+
+**The one exception** (commit `fd3d1f7`, `strides-kgi.5`): `METRIC_DESCRIPTIONS` moved verbatim out
+of `MetricsPanel.tsx` into `src/results/metricDescriptions.ts`, so that both views read one copy of
+the twelve descriptions instead of two tables that would drift the first time someone edited one.
+`MetricsPanel` renders identical DOM, and its own unit suite passing untouched is the proof. The
+guided view overrides that copy for two metrics without editing it (D7.10 (d)).
 
 **D7.3 — Exactly one view mounts at a time. FORCED, not stylistic.** `useSessionEvidence` hands out
 real `HTMLCanvasElement` nodes and `EvidenceCanvas` mounts them with `host.replaceChildren(canvas)`.
@@ -481,6 +528,18 @@ harness pointed at `?view=guide` works today.
 banded and measured (expanded, ranked, scale + links); measured with no band (collapsed, links, **no
 scale**); not measured on this clip (collapsed, reason + capture hint).
 
+**The capture hint is chosen by cause, not by metric.** Each guidance entry carries two:
+`captureHints.wrongAngle`, shown when the metric was excluded because the camera angle cannot
+support it (`viewFit === 'unsuitable'`), and `captureHints.notEnoughData`, shown for every other
+cause — too few strides or bounce cycles, detection gaps, no real-world scale. The earlier single
+hint was keyed per metric, so a front-view clip that was merely too short got told to film
+side-on. Each `wrongAngle` is written against that metric's row in `DEFAULT_VIEW_FIT_TABLE` and a
+test pins it both ways (side-on exactly where a front view is unsuitable, front-or-rear exactly
+where a side view is). `armSwingAmplitude`'s names the real reason a side view fails — the far arm
+is hidden behind the body — where the old shared hint wrongly said it "reads side-to-side
+placement". The three metrics no angle rules out (`cadence`, `verticalOscillation`,
+`verticalOscillationCm`) still carry a true `wrongAngle`, which the view never has cause to show.
+
 **D7.7 — No invented thresholds.** D1, in one line, restated here because it is an architectural
 constraint and not only an editorial one: the guidance record is allowed to hold a band only where a
 citation exists to hang on it, and the type system should make an uncited band unrepresentable.
@@ -491,6 +550,62 @@ labelled with source and population. Never a pass/fail, a grade, or a colour tha
 **D7.9 — New directory `src/guidance/`**, parallel to `heuristics/`, `results/`, `video/`, `pose/`.
 Pure data and pure functions plus their tests; the one React file in it (`MetricScale`) consumes only
 `src/guidance/types.ts` and imports nothing from `src/results/`.
+
+**D7.10 — Where the guided view presents a metric differently from the classic panel.** "Changes no
+measurement" (spec) is about values, confidences, caveats, tiers and imagery, and it holds. The
+*presentation* differs in five recorded places, each deliberate:
+
+- **(a) A banded headline prints at the band's precision.** `verticalRatio` reads "4.00%" where the
+  classic panel reads "4.0%"; `cadence` reads "163.5 steps/min" where the classic panel reads "164".
+  Rounded to the classic precision, a headline could sit on a bound the scale beside it says the
+  value does not reach — 163.5 is in the gap between Garmin's `153–163` and `164–173`, and "164"
+  would print it inside a zone the marker is outside of.
+- **(b) A normal-tier guided card carries no "High confidence" label.** Only a caveated card carries
+  a confidence label. On a page that already ranks by evidence, a label on every trustworthy card is
+  noise, and its absence is the unmarked case.
+- **(c) The vertical-oscillation chart is not shown in the guided view.** The guided card is about
+  where a value sits against published ranges; the chart remains in the classic view.
+- **(d) `guidedDescription` overrides the shared description where the shared copy reads badly on a
+  page about published ranges** — `overstriding` (the shared copy says "a proxy for braking-force
+  risk" and "this pipeline") and `footStrikePattern` (the shared copy's method note). `null` means
+  the shared `METRIC_DESCRIPTIONS` entry renders. The shared copy is the classic view's and is not
+  edited (D7.2).
+- **(e) Per-card disclosure hides secondary research content.** Always visible: the value, a
+  confidence label when caveated, the description, the metric's own caveat, the scale (or the
+  no-band reason), the band's provenance — source, population, sample size, and a derived band's
+  statement, which the spec requires on screen without a click — the speed caveat, the first
+  sentence of each mandatory note, and the first few remediation studies with `remediationIntro`
+  above them. Behind one disclosure per card: what a derivation rests on, the band's assembly note,
+  the central statistic, corroborating sources, the research links, the remaining remediation
+  studies and the rest of each mandatory note. The classic panel has no such disclosure. Because
+  the first sentence of a mandatory note is what stays visible, each note's first sentence is
+  written to stand on its own ("180 steps per minute is not a target.", "A negative value is not a
+  defect."), and cadence's remediation list puts the two studies its intro names inside the visible
+  few.
+
+**D7.11 — Every string in the guidance record is runner-facing copy.** Titles, labels, notes,
+reasons, summaries and hints all reach the screen, so none of them may carry implementation or
+research-shorthand leakage: no source path or file name, no reference to this document or its
+decision numbers, no "ship", no bracketed "[derived]" tag, no p-value, no "CI", "GRADE", "FST",
+"RRIs" or "ASIS", no unit string like "Nm·s/kg/1000 m", and no all-caps emphasis. A test walks every
+string and fails on those patterns; cited titles alone keep their own capitalisation. Three further
+rules ride with it:
+
+- **Zone and central-tendency labels name the people measured, never a target** — "Range across
+  Folland's 97 runners", "…percentile of Garmin's table", "Malisoux's overall average". A
+  central-tendency label is a short noun with its spread in brackets; the view prints
+  `{label}: {value}`, so the label never repeats the value.
+- **A speed's first mention carries a runner's pace** — 10 km/h is 6:00 per km (9:39 per mile);
+  2.68 → 3.83 m/s is 6:13 → 4:21 per km (10:00 → 7:00 per mile); 2.9 m/s is 5:45 per km;
+  2.5 / 3.5 / 4.5 m/s are 6:40 / 4:46 / 3:42 per km. Each is unit arithmetic, not a new number, and a
+  test recomputes every stated pace from the speed beside it to the second. The within-runner and
+  between-runner sentences carry no "Within one runner" / "Between runners" prefix, because the view
+  labels the two halves.
+- **A URL appears at most once across one metric's research and remediation lists**, under
+  remediation when the source measured a change and under research otherwise. The Velocity Project
+  handout is removed from every remediation list and from the verified URL set: its own summary said
+  it names a ">166 steps/min" target the primary literature does not support, and a link this page
+  has to warn against is not one it should offer.
 
 ## D8 — The one content decision worth naming: overstriding's answer lives on the cadence card
 
@@ -509,6 +624,15 @@ So the headline "what do I do about overstriding" answer surfaces at the **top**
 attached to a metric that **does** carry a band, while `overstriding` itself stays honestly banded-
 less lower down. The reader gets the actionable answer without the page inventing a threshold to
 justify showing it.
+
+**The bridge is said in words, not left to the link list.** A reader scanning cadence's remediation
+links for "overstriding" found nothing that named it, so the connection was undiscoverable. Each
+guidance entry now carries an optional `remediationIntro`, one plain sentence the view renders above
+that metric's remediation links; `cadence` is the only one set: *"Raising step rate is also the
+most-studied way to reduce overstriding — how far the foot lands ahead of the body. The Heiderscheit
+and Lenhart studies below measured that directly."* The list is ordered so the sentence lands next to
+what it names — Huber 2024 (the self-administered protocol) first, then Heiderscheit 2011 and Lenhart
+2014, then Petri 2026, Davis 2020 and Gaudette 2022.
 
 **Every link on the page is one of a verified set.** Each URL in the research digests was loaded and
 returned HTTP 200 at the time of writing; a unit test pins the allowed set as a literal so an

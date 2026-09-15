@@ -178,11 +178,29 @@ they are missing need a side view unless the page tells them.
 The suggestion SHALL be about capture — camera angle, clip length, keeping the runner at a constant
 distance — and SHALL NOT suggest that the runner change how they run.
 
+The suggestion SHALL match the cause of the exclusion, not merely the metric. A metric can be
+excluded because the camera angle cannot support it, or because the clip gave too little to measure
+— too few strides, gaps in detection, no real-world scale — and those need different advice: telling
+a reader whose clip was simply too short to move the camera sends them to re-film for the wrong
+reason. Each metric therefore carries one suggestion for a camera-angle exclusion and one for every
+other cause, and the view SHALL render the one that matches.
+
 #### Scenario: An excluded metric names its reason and a capture hint
 
 - **WHEN** a metric is excluded from the results for this analysis
 - **THEN** it renders in a collapsed group, naming why it was excluded and giving a concrete
   suggestion for capturing a clip that would measure it
+
+#### Scenario: A camera-angle exclusion gets a camera-angle suggestion
+
+- **WHEN** a metric is excluded because the camera angle of this clip cannot support it
+- **THEN** its capture suggestion names the camera angle that would measure it
+
+#### Scenario: Any other exclusion gets a suggestion for that cause
+
+- **WHEN** a metric is excluded for a reason other than the camera angle
+- **THEN** its capture suggestion addresses that cause — clip length, keeping the whole body in
+  frame, or the real-world scale — rather than the camera-angle suggestion
 
 #### Scenario: The excluded group is collapsed, not omitted
 
