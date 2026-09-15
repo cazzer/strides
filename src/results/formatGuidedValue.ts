@@ -2,6 +2,8 @@ import type { MetricResult } from '../heuristics/types'
 import { DEFAULT_HEURISTICS_CONFIG } from '../heuristics/types'
 import { classifyFootStrike } from '../heuristics/footStrikePattern'
 import type { FootStrikeClass } from '../heuristics/footStrikePattern'
+import { formatMeasuredBandValue } from '../guidance/bandPosition'
+import type { GuidedEntry } from './guidedGroups'
 
 /**
  * The guided view's text for a metric's value, for every card that has NO scale beside it.
@@ -42,4 +44,20 @@ export function formatGuidedValue(metric: MetricResult): string {
   // 'centimeters' is absolute, with no denominator: `value` is not multiplied by 100.
   if (metric.unit === 'centimeters') return `${metric.value.toFixed(1)} cm`
   return `${(metric.value * 100).toFixed(1)}% of torso length`
+}
+
+/**
+ * The headline value a guided card prints, and the value the contents list repeats beside its
+ * link — one function, so the two can never disagree.
+ *
+ * A banded entry prints at its band's precision (`formatMeasuredBandValue`, see above); every other
+ * entry prints exactly as the classic panel does. A not-measured entry has no headline: the view
+ * never prints the value of an excluded metric, including a measured one excluded for its view.
+ */
+export function guidedHeadline(entry: GuidedEntry, excluded: boolean): string | null {
+  if (excluded) return null
+  const { band, metric } = entry
+  return band !== null && metric.value !== null
+    ? formatMeasuredBandValue(band, metric.value)
+    : formatGuidedValue(metric)
 }

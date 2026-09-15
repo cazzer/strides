@@ -1,5 +1,5 @@
+import { useId } from 'react'
 import { MetricScale } from '../guidance/MetricScale'
-import { formatMeasuredBandValue } from '../guidance/bandPosition'
 import { formatBandValue } from '../guidance/formatBandValue'
 import type {
   BandSource,
@@ -11,8 +11,14 @@ import type {
 import type { MetricResult } from '../heuristics/types'
 import { EvidenceCanvas } from './EvidenceCanvas'
 import { altFor, captionFor, provenanceFor } from './evidenceCaptions'
-import { formatGuidedValue } from './formatGuidedValue'
-import type { GuidedEntry } from './guidedGroups'
+import { guidedHeadline } from './formatGuidedValue'
+import {
+  cardReferences,
+  guidedEntryId,
+  noBandReasonFor,
+  splitFirstSentence,
+} from './guidedGroups'
+import type { CorroborationReference, GuidedEntry } from './guidedGroups'
 import {
   HIGH_CONFIDENCE_THRESHOLD,
   LOW_CONFIDENCE_THRESHOLD,
@@ -29,10 +35,24 @@ import type { MetricCardEvidence } from './MetricsPanel'
  * or from `METRIC_GUIDANCE` (band, provenance, notes, links). The only copy authored here is
  * structural — headings, field names, "opens in a new tab" — and none of it grades the runner:
  * a band is where a measured group of runners fell, never where this runner ought to be.
+ *
+ * ## What is on screen, and what waits behind the card's one disclosure
+ *
+ * Always visible, in reading order: the label, the value, a confidence label when caveated, the
+ * description, the metric's own caveat; then the scale (or, unbanded, why there is none) with the
+ * evidence thumbnail beside it; then the band's provenance — source, population, sample size, and
+ * a derived band's label and statement — which the spec requires on screen without a click; then
+ * the speed caveat, the FIRST sentence of each mandatory note, and up to three studies of changes.
+ *
+ * Behind one `<details>`: what a derivation rests on, the band's own note, the population's
+ * reported central statistic, corroborating sources, the research links with their summaries, the
+ * remaining studies of changes, and the rest of each mandatory note. Every URL renders at most once
+ * per card (`cardReferences`).
  */
 
 const BODY = 'font-sans text-sm text-neutral-700 dark:text-neutral-300'
 const MUTED = 'font-sans text-sm text-neutral-600 dark:text-neutral-400'
+const SECONDARY = 'font-sans text-xs text-neutral-600 dark:text-neutral-400'
 const SUBHEADING =
   'font-display text-sm font-bold uppercase tracking-wide text-black dark:text-white'
 const FOCUS =
@@ -63,7 +83,11 @@ function formatSampleSize(sampleSize: string): string {
   return /^\d[\d,]*$/.test(sampleSize.trim()) ? `n = ${sampleSize.trim()}` : sampleSize
 }
 
-function ExternalLink({ url, title }: { url: string; title: string }) {
+function plural(count: number, singular: string): string {
+  return `${count} ${count === 1 ? singular : `${singular}s`}`
+}
+
+function ExternalLink({ url, children }: { url: string; children: string }) {
   return (
     <a
       href={url}
@@ -71,12 +95,19 @@ function ExternalLink({ url, title }: { url: string; title: string }) {
       rel="noopener noreferrer"
       className={`font-semibold text-black underline decoration-1 underline-offset-2 hover:decoration-2 dark:text-white ${FOCUS}`}
     >
-      {title}
+      {children}
       <span className="sr-only"> (opens in a new tab)</span>
     </a>
   )
 }
 
+/** The full citation under a short link text — omitted when the two are the same words. */
+function FullTitle({ reference }: { reference: { title: string; shortTitle: string } }) {
+  if (reference.title.trim() === reference.shortTitle.trim()) return null
+  return <span className={`guided-results__full-title block ${SECONDARY}`}>{reference.title}</span>
+}
+
+/** A list of links inside the disclosure, each with its full title, kind and summary. */
 function LinkList({
   heading,
   links,
@@ -84,7 +115,7 @@ function LinkList({
 }: {
   heading: string
   links: readonly GuidanceLink[]
-  variant: 'research' | 'remediation'
+  variant: 'research' | 'remediation-more'
 }) {
   if (links.length === 0) return null
   return (
@@ -92,13 +123,12 @@ function LinkList({
       <h4 className={SUBHEADING}>{heading}</h4>
       <ul className="space-y-3">
         {links.map((link, index) => (
-          <li key={`${link.url}-${index}`} className="space-y-0.5">
+          <li key={`${index}:${link.url}`} className="space-y-0.5">
             <p className={BODY}>
-              <ExternalLink url={link.url} title={link.title} />
+              <ExternalLink url={link.url}>{link.shortTitle}</ExternalLink>
+              <FullTitle reference={link} />
             </p>
-            <p className="font-sans text-xs text-neutral-600 dark:text-neutral-400">
-              {LINK_KIND_LABELS[link.kind]}
-            </p>
+            <p className={SECONDARY}>{LINK_KIND_LABELS[link.kind]}</p>
             <p className={BODY}>{link.summary}</p>
           </li>
         ))}
@@ -107,15 +137,21 @@ function LinkList({
   )
 }
 
-function SourceFields({ source }: { source: BandSource }) {
+/** Source, population and sample size. The source links only when its URL is not already on the card. */
+function SourceFields({ source, linked = true }: { source: BandSource; linked?: boolean }) {
   return (
-    <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
+    <dl className="grid grid-cols-1 gap-x-3 gap-y-1 sm:grid-cols-[max-content_1fr]">
       <dt className="font-semibold">Source</dt>
-      <dd>
-        <ExternalLink url={source.url} title={source.title} />
+      <dd className="mb-1 sm:mb-0">
+        {linked ? (
+          <ExternalLink url={source.url}>{source.shortTitle}</ExternalLink>
+        ) : (
+          <span className="font-semibold">{source.shortTitle}</span>
+        )}
+        <FullTitle reference={source} />
       </dd>
       <dt className="font-semibold">Population</dt>
-      <dd>{source.population}</dd>
+      <dd className="mb-1 sm:mb-0">{source.population}</dd>
       <dt className="font-semibold">Sample size</dt>
       <dd>{formatSampleSize(source.sampleSize)}</dd>
     </dl>
@@ -125,54 +161,19 @@ function SourceFields({ source }: { source: BandSource }) {
 /**
  * The band's provenance, on screen and never behind a disclosure: a band with its citation
  * stripped off is indistinguishable from a number the app invented (spec, "A reference band renders
- * only with its provenance on screen").
+ * only with its provenance on screen"). A derived band says so here, visibly, with its statement.
  */
 function Provenance({ band }: { band: ReferenceBand }) {
   return (
     <div className={`guided-results__provenance space-y-3 ${BODY}`}>
       <h4 className={SUBHEADING}>Where this range comes from</h4>
-      {band.derivation !== null && (
-        <div className="guided-results__derivation space-y-1">
-          <p>
-            <strong className="guided-results__derived-label">Derived range</strong>
-          </p>
-          <p>
-            No single source prints this range as shown; it is worked out from the published
-            figures below. {band.derivation.statement}
-          </p>
-          {band.derivation.restsOn.length > 0 && (
-            <>
-              <p>What that working rests on:</p>
-              <ul className="list-disc space-y-1 pl-5">
-                {band.derivation.restsOn.map((definition) => (
-                  <li key={definition}>{definition}</li>
-                ))}
-              </ul>
-            </>
-          )}
-        </div>
-      )}
       <SourceFields source={band.source} />
-      {band.centralTendency !== null && (
-        <p className="guided-results__central-tendency">
-          Reported for this population — {band.centralTendency.label}:{' '}
-          {formatBandValue(band.centralTendency.value, band.unit)}
+      {band.derivation !== null && (
+        <p className="guided-results__derivation">
+          <strong className="guided-results__derived-label">Derived range</strong>
+          {': '}
+          {band.derivation.statement}
         </p>
-      )}
-      {band.note !== null && <p className="guided-results__band-note">{band.note}</p>}
-      {band.corroboration.length > 0 && (
-        <div className="guided-results__corroboration space-y-2">
-          <p className="font-semibold">
-            Other published measurements, shown beside this range rather than merged into it
-          </p>
-          <ul className="space-y-3">
-            {band.corroboration.map((source, index) => (
-              <li key={`${source.url}-${index}`}>
-                <SourceFields source={source} />
-              </li>
-            ))}
-          </ul>
-        </div>
       )}
     </div>
   )
@@ -194,20 +195,20 @@ function SpeedNote({ speed }: { speed: SpeedSensitivity }) {
         {speed.summary}
       </p>
       {(speed.withinRunner !== null || speed.betweenRunners !== null) && (
-        <dl className="space-y-1">
+        <ul className="space-y-1">
           {speed.withinRunner !== null && (
-            <div>
-              <dt className="font-semibold">Within one runner, as their pace changes</dt>
-              <dd>{speed.withinRunner}</dd>
-            </div>
+            <li className="guided-results__speed-within">
+              <span className="font-semibold">As one runner speeds up: </span>
+              {speed.withinRunner}
+            </li>
           )}
           {speed.betweenRunners !== null && (
-            <div>
-              <dt className="font-semibold">Between runners, each at their own pace</dt>
-              <dd>{speed.betweenRunners}</dd>
-            </div>
+            <li className="guided-results__speed-between">
+              <span className="font-semibold">Across different runners: </span>
+              {speed.betweenRunners}
+            </li>
           )}
-        </dl>
+        </ul>
       )}
     </div>
   )
@@ -247,7 +248,7 @@ function CardEvidence({
     <div className="guided-results__evidence space-y-2">
       <ul className="space-y-3">
         {evidence.items.map((item, index) => (
-          <li key={`${item.plan.base.timestamp}-${index}`}>
+          <li key={`${index}:${item.plan.base.timestamp}`}>
             <figure className="space-y-1">
               <div className="w-36 max-w-full">
                 <EvidenceCanvas canvas={item.canvas} alt={altFor(item.plan)} />
@@ -268,11 +269,33 @@ function CardEvidence({
   )
 }
 
+function CorroborationList({ references }: { references: CorroborationReference[] }) {
+  if (references.length === 0) return null
+  return (
+    <div className="guided-results__corroboration space-y-2">
+      <h4 className={SUBHEADING}>Other measurements beside this range</h4>
+      <ul className="space-y-3">
+        {references.map(({ source, linked }, index) => (
+          <li key={`${index}:${source.url}`}>
+            <SourceFields source={source} linked={linked} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 export interface GuidedMetricCardProps {
   /** A `banded` or `unbanded` entry from `guidedGroups` — never a not-measured one. */
   entry: GuidedEntry
   evidence?: MetricCardEvidence
   clipCount: number
+  /**
+   * `'framed'` (default) draws the card's own 2 px frame. `'divided'` separates it from the card
+   * above with a top rule only — for cards inside a group that is already framed, where a frame
+   * per card would nest three borders deep on a phone.
+   */
+  variant?: 'framed' | 'divided'
 }
 
 /**
@@ -281,34 +304,70 @@ export interface GuidedMetricCardProps {
  * speed caveat, mandatory notes, evidence, research and remediation links — renders either way:
  * a band controls whether a SCALE renders, not whether the metric does (design.md D7.6).
  */
-export function GuidedMetricCard({ entry, evidence, clipCount }: GuidedMetricCardProps) {
+export function GuidedMetricCard({
+  entry,
+  evidence,
+  clipCount,
+  variant = 'framed',
+}: GuidedMetricCardProps) {
+  const headingId = useId()
   const { metric, guidance, band } = entry
   const label = METRIC_LABELS[metric.metric]
   const tier = metricTier(metric)
   const value = metric.value
   const scaled = band !== null && value !== null
-  // A banded headline is printed at the band's own precision, so it can never read as sitting on a
-  // published bound the scale beneath it says it does not sit on.
-  const valueText = scaled ? formatMeasuredBandValue(band, value) : formatGuidedValue(metric)
+  const valueText = guidedHeadline(entry, false)
+  const references = cardReferences(entry)
+  const notes = guidance.mandatoryNotes.map(splitFirstSentence)
+  const notesRest = notes.filter((note) => note.rest.length > 0)
+
+  const showsRemediation =
+    guidance.remediationIntro !== null || references.visibleRemediation.length > 0
+  const hasDisclosure =
+    (scaled &&
+      ((band.derivation?.restsOn.length ?? 0) > 0 ||
+        band.note !== null ||
+        band.centralTendency !== null)) ||
+    references.corroboration.length > 0 ||
+    references.research.length > 0 ||
+    references.moreRemediation.length > 0 ||
+    notesRest.length > 0
+  const sourceCount = references.disclosureSourceCount
+  const disclosureSummary = scaled
+    ? sourceCount > 0
+      ? `How this range was built, and the research (${plural(sourceCount, 'source')})`
+      : 'How this range was built'
+    : sourceCount > 0
+      ? `The research (${plural(sourceCount, 'source')})`
+      : 'More on this measurement'
+
+  const frame =
+    variant === 'framed'
+      ? 'border-2 border-black p-5 dark:border-white'
+      : 'border-t-2 border-black pt-5 dark:border-white'
 
   return (
     <article
-      className="guided-results__card space-y-4 border-2 border-black p-5 dark:border-white"
-      aria-label={label}
+      id={guidedEntryId(metric.metric)}
+      tabIndex={-1}
+      className={`guided-results__card scroll-mt-4 space-y-4 ${frame} ${FOCUS}`}
+      aria-labelledby={headingId}
       data-metric={metric.metric}
       data-tier={tier}
     >
       <div className="space-y-1">
-        <h3 className="font-display text-lg font-bold tracking-tight">{label}</h3>
+        <h3 id={headingId} className="font-display text-lg font-bold tracking-tight">
+          {label}
+        </h3>
         <p className="guided-results__value font-display text-2xl font-bold">{valueText}</p>
-        <p className={`guided-results__description ${BODY}`}>
-          {METRIC_DESCRIPTIONS[metric.metric]}
-        </p>
         {tier === 'caveated' && (
           <p className="guided-results__confidence font-sans text-sm">
             <strong>{confidenceLabel(metric)}</strong>
           </p>
         )}
+        <p className={`guided-results__description ${BODY}`}>
+          {guidance.guidedDescription ?? METRIC_DESCRIPTIONS[metric.metric]}
+        </p>
       </div>
 
       {metric.caveat !== null && (
@@ -317,44 +376,99 @@ export function GuidedMetricCard({ entry, evidence, clipCount }: GuidedMetricCar
         </p>
       )}
 
-      {evidence !== undefined && <CardEvidence evidence={evidence} clipCount={clipCount} />}
-
-      {scaled ? (
-        <>
-          <div className="guided-results__scale space-y-2">
-            <h4 className={SUBHEADING}>Where this reading sits</h4>
-            <MetricScale band={band} value={value} label={label} />
-          </div>
-          <Provenance band={band} />
-        </>
-      ) : (
-        <div className={`guided-results__no-band space-y-1 ${BODY}`}>
-          <h4 className={SUBHEADING}>Why no reference range is shown</h4>
-          <p>
-            {guidance.noBandReason ??
-              'The range on record for this measurement is missing its source, population or sample size, so it is not shown.'}
-          </p>
+      <div
+        className={`guided-results__reading grid gap-4 ${evidence !== undefined ? 'sm:grid-cols-[1fr_9rem] sm:items-start' : ''}`}
+      >
+        <div className="min-w-0">
+          {scaled ? (
+            <div className="guided-results__scale">
+              <MetricScale band={band} value={value} label={label} />
+            </div>
+          ) : (
+            <p className={`guided-results__no-band ${BODY}`}>{noBandReasonFor(entry)}</p>
+          )}
         </div>
-      )}
+        {evidence !== undefined && <CardEvidence evidence={evidence} clipCount={clipCount} />}
+      </div>
+
+      {scaled && <Provenance band={band} />}
 
       {guidance.speedSensitivity !== null && <SpeedNote speed={guidance.speedSensitivity} />}
 
-      {guidance.mandatoryNotes.length > 0 && (
+      {notes.length > 0 && (
         <div className={`guided-results__notes space-y-2 ${BODY}`}>
-          {guidance.mandatoryNotes.map((note) => (
-            <p key={note} role="note">
-              {note}
+          {notes.map((note, index) => (
+            <p key={`${index}:${note.first}`} role="note">
+              {note.first}
             </p>
           ))}
         </div>
       )}
 
-      <LinkList heading="What the research says" links={guidance.research} variant="research" />
-      <LinkList
-        heading="Changes that have been studied"
-        links={guidance.remediation}
-        variant="remediation"
-      />
+      {showsRemediation && (
+        <div className={`guided-results__links guided-results__links--remediation space-y-2 ${BODY}`}>
+          <h4 className={SUBHEADING}>What runners have tried in studies</h4>
+          {guidance.remediationIntro !== null && (
+            <p className="guided-results__remediation-intro">{guidance.remediationIntro}</p>
+          )}
+          {references.visibleRemediation.length > 0 && (
+            <ul className="space-y-2">
+              {references.visibleRemediation.map((link, index) => (
+                <li key={`${index}:${link.url}`}>
+                  <ExternalLink url={link.url}>{link.shortTitle}</ExternalLink>
+                  <FullTitle reference={link} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {hasDisclosure && (
+        <details className="guided-results__more border-t border-neutral-300 pt-3 dark:border-neutral-700">
+          <summary
+            className={`guided-results__more-summary cursor-pointer font-sans text-sm font-semibold text-black dark:text-white ${FOCUS}`}
+          >
+            {disclosureSummary}
+          </summary>
+          <div className={`mt-3 space-y-4 ${BODY}`}>
+            {scaled && band.derivation !== null && band.derivation.restsOn.length > 0 && (
+              <div className="guided-results__derivation-rests-on space-y-2">
+                <h4 className={SUBHEADING}>What the derived range rests on</h4>
+                <ul className="list-disc space-y-1 pl-5">
+                  {band.derivation.restsOn.map((definition, index) => (
+                    <li key={`${index}:${definition}`}>{definition}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {scaled && band.note !== null && (
+              <p className="guided-results__band-note">{band.note}</p>
+            )}
+            {scaled && band.centralTendency !== null && (
+              <p className="guided-results__central-tendency">
+                {band.centralTendency.label}:{' '}
+                {formatBandValue(band.centralTendency.value, band.unit)}
+              </p>
+            )}
+            <CorroborationList references={references.corroboration} />
+            <LinkList heading="What the research says" links={references.research} variant="research" />
+            <LinkList
+              heading="More that runners have tried in studies"
+              links={references.moreRemediation}
+              variant="remediation-more"
+            />
+            {notesRest.length > 0 && (
+              <div className="guided-results__notes-more space-y-2">
+                <h4 className={SUBHEADING}>The notes above, continued</h4>
+                {notesRest.map((note, index) => (
+                  <p key={`${index}:${note.first}`}>{note.rest}</p>
+                ))}
+              </div>
+            )}
+          </div>
+        </details>
+      )}
     </article>
   )
 }

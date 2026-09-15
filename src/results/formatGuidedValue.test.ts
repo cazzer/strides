@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { formatGuidedValue } from './formatGuidedValue'
-import { makeMetric } from './__fixtures__/metricResult'
+import { formatMeasuredBandValue } from '../guidance/bandPosition'
+import { formatGuidedValue, guidedHeadline } from './formatGuidedValue'
+import { guidedGroups } from './guidedGroups'
+import { makeHeuristics, makeMetric } from './__fixtures__/metricResult'
 
 /**
  * Every expectation below is an input/output pair `MetricsPanel.test.tsx` already renders through
@@ -51,5 +53,30 @@ describe('formatGuidedValue — matches MetricsPanel formatValue', () => {
 
   it("says 'Not available' for a null value, as MetricsPanel's formatter does", () => {
     expect(formatGuidedValue(makeMetric('kneeDrive', { value: null }))).toBe('Not available')
+  })
+})
+
+describe('guidedHeadline — one value for the card headline and the contents list', () => {
+  it("prints a banded entry at its band's precision, so 163.5 is not rounded onto a bound", () => {
+    const [entry] = guidedGroups(
+      makeHeuristics({ cadence: makeMetric('cadence', { value: 163.5 }) }),
+    ).banded
+    expect(entry.metric.metric).toBe('cadence')
+    expect(guidedHeadline(entry, false)).toBe(formatMeasuredBandValue(entry.band!, 163.5))
+    expect(guidedHeadline(entry, false)).not.toBe(formatGuidedValue(entry.metric))
+  })
+
+  it('prints an unbanded entry exactly as the classic panel does', () => {
+    for (const entry of guidedGroups(makeHeuristics()).unbanded) {
+      expect(guidedHeadline(entry, false)).toBe(formatGuidedValue(entry.metric))
+    }
+  })
+
+  it('prints nothing for an excluded entry, even one that carries a measured value', () => {
+    const [entry] = guidedGroups(
+      makeHeuristics({ stepWidth: makeMetric('stepWidth', { value: 0.2, viewFit: 'unsuitable' }) }),
+    ).notMeasured
+    expect(entry.metric.value).toBe(0.2)
+    expect(guidedHeadline(entry, true)).toBeNull()
   })
 })

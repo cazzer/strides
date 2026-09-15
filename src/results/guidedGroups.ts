@@ -1,6 +1,11 @@
 import type { FormHeuristicsResult, MetricId, MetricResult } from '../heuristics/types'
 import { METRIC_GUIDANCE } from '../guidance/metricGuidance'
-import type { BandSource, MetricGuidance, ReferenceBand } from '../guidance/types'
+import type {
+  BandSource,
+  GuidanceLink,
+  MetricGuidance,
+  ReferenceBand,
+} from '../guidance/types'
 import { metricTier } from './metricConfidence'
 import type { ScalePassStatus } from './types'
 
@@ -128,4 +133,135 @@ export function notMeasuredReason(
           : undefined
       : undefined
   return hint ?? metric.caveat ?? 'Not measurable for this clip.'
+}
+
+/**
+ * The reason shown for a measured metric whose guidance HAS a band that was withheld because its
+ * provenance is incomplete (see `renderableBand`). Deliberately says nothing about the literature:
+ * "no published range exists" would be false of a metric that has one.
+ */
+export const WITHHELD_BAND_REASON =
+  "A range exists for this measurement but its source details are incomplete, so it isn't shown."
+
+/** True for a measured entry that sits without a scale only because its band's provenance failed. */
+export function bandWithheld(entry: GuidedEntry): boolean {
+  return entry.band === null && entry.guidance.band !== null
+}
+
+/** Why a measured, unscaled entry has no scale: the guidance's own reason, or the neutral one. */
+export function noBandReasonFor(entry: GuidedEntry): string {
+  if (bandWithheld(entry)) return WITHHELD_BAND_REASON
+  return entry.guidance.noBandReason ?? WITHHELD_BAND_REASON
+}
+
+/**
+ * The capture hint for a not-measured entry, chosen by CAUSE: an unsuitable camera angle gets the
+ * angle advice, anything else (too little usable data, a failed scale pass) gets the other.
+ */
+export function captureHintFor(entry: GuidedEntry): string {
+  return entry.metric.viewFit === 'unsuitable'
+    ? entry.guidance.captureHints.wrongAngle
+    : entry.guidance.captureHints.notEnoughData
+}
+
+/**
+ * The element id a card or not-measured entry carries, and the fragment the contents list links
+ * to. Plain and deterministic rather than `useId`, so a `#guided-results-cadence` link can be
+ * shared. Only one results view is ever mounted, so the ids cannot collide with a sibling view.
+ */
+export function guidedEntryId(metric: MetricId): string {
+  return `guided-results-${metric}`
+}
+
+/**
+ * Abbreviations whose trailing full stop does not end a sentence: `et al.`, `e.g.`, `i.e.`, `vs.`,
+ * `cf.`, `approx.`, `Fig.`, `No.`, and a single capital initial (`J. Daniels`).
+ */
+const NON_TERMINAL_ABBREVIATION = /(?:\bet al|\be\.g|\bi\.e|\bvs|\bcf|\bapprox|\bFig|\bNo|\b[A-Z])\.$/
+
+/**
+ * Splits a note into its first sentence and the rest, both trimmed. A sentence ends at `.`, `!` or
+ * `?` (optionally followed by a closing quote or bracket) followed by whitespace and then a capital
+ * letter, a digit or an opening quote — and not after one of the abbreviations above. A decimal
+ * point (`9.2`) is never followed by whitespace, so it never splits. Text with no second sentence
+ * returns it whole with an empty `rest`.
+ */
+export function splitFirstSentence(text: string): { first: string; rest: string } {
+  const boundary = /[.!?]["”’)\]]?\s+(?=["“‘(]?[A-Z0-9])/g
+  for (let match = boundary.exec(text); match !== null; match = boundary.exec(text)) {
+    const end = match.index + match[0].trimEnd().length
+    const candidate = text.slice(0, end)
+    if (NON_TERMINAL_ABBREVIATION.test(candidate)) continue
+    return { first: candidate.trim(), rest: text.slice(end).trim() }
+  }
+  return { first: text.trim(), rest: '' }
+}
+
+/** How many studies-of-changes links a card shows before the rest move into its disclosure. */
+export const VISIBLE_REMEDIATION_LIMIT = 3
+
+/** A corroborating source, and whether its URL is still unrendered on the card at that point. */
+export interface CorroborationReference {
+  source: BandSource
+  /** `false` when the same URL already rendered higher on the card: shown as text, not a link. */
+  linked: boolean
+}
+
+/**
+ * Every outbound reference a card renders, already placed and de-duplicated.
+ *
+ * **Each URL renders at most once per card**, in the order a reader meets them: the band's source
+ * (always visible), then the first {@link VISIBLE_REMEDIATION_LIMIT} studies of changes (visible),
+ * then — inside the card's disclosure — corroborating sources, research links and the remaining
+ * studies of changes. A link whose URL already rendered is dropped; a corroborating source keeps its
+ * population and sample size and loses only the duplicate link.
+ */
+export interface CardReferences {
+  visibleRemediation: GuidanceLink[]
+  corroboration: CorroborationReference[]
+  research: GuidanceLink[]
+  moreRemediation: GuidanceLink[]
+  /** Distinct URLs linked inside the disclosure — the "(N sources)" count. */
+  disclosureSourceCount: number
+}
+
+export function cardReferences(
+  entry: GuidedEntry,
+  visibleRemediationLimit = VISIBLE_REMEDIATION_LIMIT,
+): CardReferences {
+  const rendered = new Set<string>()
+  const claim = (url: string): boolean => {
+    if (rendered.has(url)) return false
+    rendered.add(url)
+    return true
+  }
+  if (entry.band !== null) claim(entry.band.source.url)
+
+  const remediation = entry.guidance.remediation.filter((link) => !rendered.has(link.url))
+  const visibleRemediation: GuidanceLink[] = []
+  const deferred: GuidanceLink[] = []
+  for (const link of remediation) {
+    if (visibleRemediation.length < visibleRemediationLimit && !rendered.has(link.url)) {
+      claim(link.url)
+      visibleRemediation.push(link)
+    } else {
+      deferred.push(link)
+    }
+  }
+
+  const before = rendered.size
+  const corroboration = (entry.band?.corroboration ?? []).map((source) => ({
+    source,
+    linked: claim(source.url),
+  }))
+  const research = entry.guidance.research.filter((link) => claim(link.url))
+  const moreRemediation = deferred.filter((link) => claim(link.url))
+
+  return {
+    visibleRemediation,
+    corroboration,
+    research,
+    moreRemediation,
+    disclosureSourceCount: rendered.size - before,
+  }
 }
