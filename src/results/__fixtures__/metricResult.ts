@@ -27,8 +27,14 @@ import type {
  * 30 fps, of a runner at 180 steps/min (a 3 Hz bounce, so nine bounce cycles), whose torso is
  * 200 px and half a metre. Every default below is derived from that one picture rather than chosen
  * per metric, so the vertical-oscillation family agrees with itself and with `cadence` the way a
- * real run does: 0.1 torso lengths of bounce is 20 px, is 5 cm at 400 px/m, and the fits behind
- * both report `frequencyHz × 60 === 180`. Every `sampleSize` clears its producing module's minimum
+ * real run does: 0.15 torso lengths of bounce is 30 px, is 7.5 cm at 400 px/m, and the fits behind
+ * both report `frequencyHz × 60 === 180`.
+ *
+ * **The defaults also sit inside the published reference bands** (`src/guidance/metricGuidance.ts`)
+ * wherever one exists, so a guided-view test reaching for the default renders an unremarkable
+ * in-band reading rather than an edge case it did not ask for: 180 steps/min, a 7.5 cm bounce, a
+ * 4.0% vertical ratio, 5° of trunk lean and 110° of knee flexion each fall inside their band. A test
+ * about a value outside a band states that value. Every `sampleSize` clears its producing module's minimum
  * (`MIN_TRUNK_LEAN_SAMPLE_SIZE = 10` being the highest), so no default describes a result
  * production would have marked down for thin data.
  *
@@ -61,13 +67,13 @@ interface MetricDefaults {
  * hand-rolled fixtures used.
  */
 const METRIC_DEFAULTS: Record<MetricId, MetricDefaults> = {
-  // 20 px of bounce on a 200 px torso; nine bounce cycles over the 3 s span.
-  verticalOscillation: { unit: 'ratio', value: 0.1, sampleSize: 9, caveat: null },
-  // Dimensionless bounce / stride length. `sampleSize` counts same-side stride PAIRS, not bounces
-  // (`MIN_STRIDE_PAIRS = 3`).
-  verticalRatio: { unit: 'percent', value: 0.05, sampleSize: 7, caveat: null },
-  // The same 20 px bounce at 400 px/m. Must agree with `makeCalibration`'s amplitude.
-  verticalOscillationCm: { unit: 'centimeters', value: 5, sampleSize: 9, caveat: null },
+  // 30 px of bounce on a 200 px torso; nine bounce cycles over the 3 s span.
+  verticalOscillation: { unit: 'ratio', value: 0.15, sampleSize: 9, caveat: null },
+  // Dimensionless bounce / stride length, 0..1 (rendered ×100). The 30 px bounce over a 750 px
+  // (1.875 m) stride. `sampleSize` counts same-side stride PAIRS, not bounces (`MIN_STRIDE_PAIRS = 3`).
+  verticalRatio: { unit: 'percent', value: 0.04, sampleSize: 7, caveat: null },
+  // The same 30 px bounce at 400 px/m. Must agree with `makeCalibration`'s amplitude.
+  verticalOscillationCm: { unit: 'centimeters', value: 7.5, sampleSize: 9, caveat: null },
   // One lean reading per resolvable frame.
   trunkLean: { unit: 'degrees', value: 5, sampleSize: 91, caveat: null },
   // `overstriding.ts` discloses its sampling-instant lag on EVERY non-null value, so a null caveat
@@ -91,8 +97,13 @@ const METRIC_DEFAULTS: Record<MetricId, MetricDefaults> = {
     sampleSize: 9,
     caveat: 'Fixture caveat: foot strike pattern is always an approximation.',
   },
-  stepWidth: { unit: 'percent', value: 0.15, sampleSize: 9, caveat: null },
-  stepWidthCm: { unit: 'centimeters', value: 8, sampleSize: 9, caveat: null },
+  // The same foot placement in two units, so the pair agrees with itself: `stepWidth` is the
+  // ankle's offset from hip-mid as a fraction of hip width (`stepWidth.ts`), `stepWidthCm` the same
+  // offset in centimetres (`stepWidthCm.ts`), so their quotient IS the hip width — 1.5 cm ÷ 0.05 =
+  // a 30 cm hip-keypoint width, 120 px at the default 400 px/m. 1.5 cm sits among the small positive
+  // typical values design.md D5.3/4 quotes for scale (not a band).
+  stepWidth: { unit: 'percent', value: 0.05, sampleSize: 9, caveat: null },
+  stepWidthCm: { unit: 'centimeters', value: 1.5, sampleSize: 9, caveat: null },
   kneeDrive: { unit: 'degrees', value: 45, sampleSize: 8, caveat: null },
   // Arm swing runs at STRIDE frequency (1.5 Hz), half the bounce rate: 4.5 cycles, floored.
   armSwingAmplitude: { unit: 'ratio', value: 0.25, sampleSize: 4, caveat: null },
@@ -106,6 +117,7 @@ const FRAME_RATE = 30
 const SPAN_SECONDS = 3
 const SAMPLE_COUNT = SPAN_SECONDS * FRAME_RATE + 1
 const OBSERVED_CYCLES = SPAN_SECONDS * BOUNCE_FREQUENCY_HZ
+const TORSO_PX = 200
 
 /**
  * A plain `MetricResult` for `metric`, `'normal'` tier by default.
@@ -171,7 +183,7 @@ export function makeVerticalOscillation(
     fit: {
       frequencyHz: BOUNCE_FREQUENCY_HZ,
       // `value` × the default clip's 200 px torso.
-      peakToPeakAmplitudePx: 20,
+      peakToPeakAmplitudePx: value * TORSO_PX,
       sinusoidR2: 0.6,
       totalR2: 0.65,
       secondPeakRatio: 0.3,

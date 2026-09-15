@@ -8,6 +8,8 @@ import {
   makeView,
 } from './metricResult'
 import { METRIC_LABELS, metricTier } from '../metricConfidence'
+import { METRIC_GUIDANCE } from '../../guidance/metricGuidance'
+import { referenceBandEnvelope } from '../../guidance/types'
 import type { FormHeuristicsResult, MetricId, MetricResult } from '../../heuristics/types'
 
 /**
@@ -68,6 +70,31 @@ describe('makeMetric', () => {
     // Absent, never an empty array — the valid "nothing cleared the quality gate" state.
     expect('exemplars' in metric).toBe(false)
   })
+
+  it('pins the defaults that describe a plausible clip', () => {
+    // Stated as literals so a default moving is a visible diff. The vertical-oscillation family
+    // and the step-width pair each agree with themselves — see the fixture's docstring.
+    expect(makeMetric('verticalOscillation').value).toBe(0.15)
+    expect(makeMetric('verticalOscillationCm').value).toBe(7.5)
+    expect(makeMetric('verticalRatio').value).toBe(0.04)
+    expect(makeMetric('stepWidth').value).toBe(0.05)
+    expect(makeMetric('stepWidthCm').value).toBe(1.5)
+    // stepWidthCm ÷ stepWidth is the hip width the pair implies: 30 cm.
+    expect(makeMetric('stepWidthCm').value! / makeMetric('stepWidth').value!).toBeCloseTo(30, 10)
+  })
+
+  it.each(['cadence', 'verticalRatio', 'verticalOscillationCm', 'trunkLean', 'kneeFlexion'] as const)(
+    '%s defaults to a value inside its published reference band',
+    (id) => {
+      const band = METRIC_GUIDANCE[id].band
+      expect(band).not.toBeNull()
+      const envelope = band ? referenceBandEnvelope(band) : null
+      expect(envelope).not.toBeNull()
+      const value = makeMetric(id).value!
+      expect(value).toBeGreaterThanOrEqual(envelope!.min)
+      expect(value).toBeLessThanOrEqual(envelope!.max)
+    },
+  )
 
   it.each(['footStrikePattern', 'overstriding'] as const)(
     '%s carries a non-null caveat by default, as production always does for a measured value',
@@ -151,7 +178,7 @@ describe('makeVerticalOscillationCm', () => {
   })
 
   it('agrees with the pixel-space bounce through the calibration scale', () => {
-    // 0.1 torso lengths × a 0.5 m torso = 5 cm. The same bounce, reached two ways.
+    // 0.15 torso lengths × a 0.5 m torso = 7.5 cm. The same bounce, reached two ways.
     const cm = makeVerticalOscillationCm()
     const metresPerTorso = cm.calibration!.torsoMeters!
     expect(makeVerticalOscillation().value! * metresPerTorso * 100).toBeCloseTo(cm.value!, 10)

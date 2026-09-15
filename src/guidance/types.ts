@@ -38,10 +38,20 @@ export interface BandSource {
 /**
  * One published zone of a band.
  *
- * `min`/`max` are **inclusive** bounds as published, and `null` means the zone is open-ended on
- * that side (Garmin's tables have an open zone at each end). Zones are ordered ascending by
- * value — which for `verticalRatio` runs OPPOSITE to their percentile order, since a lower
- * vertical ratio is a higher percentile among Garmin's users.
+ * `null` means the zone is open-ended on that side (Garmin's tables have an open zone at each
+ * end). Zones are ordered ascending by value — which for `verticalRatio` runs OPPOSITE to their
+ * percentile order, since a lower vertical ratio is a higher percentile among Garmin's users.
+ *
+ * ## Which bounds are inclusive
+ *
+ * - **A CLOSED zone — both bounds finite — is inclusive on both bounds**, as published: `153–163`
+ *   contains 153 and 163.
+ * - **An OPEN-ENDED zone's single finite bound is EXCLUSIVE.** Garmin publishes those zones as
+ *   `<153` and `>183`, and `<3.05%` and `>5.05%`, which are strict inequalities. They are stored
+ *   as `{ min: null, max: 153 }` and `{ min: 183, max: null }`, and the stored number means what
+ *   the publisher's `<`/`>` means: a cadence of exactly 153 belongs to `153–163`, never to `<153`.
+ *
+ * So a value on a shared bound belongs to exactly one zone — the closed one.
  *
  * **Adjacent zones may touch OR leave a gap, and both occur in the shipped data.** The gaps are
  * the publisher's — Garmin prints its tables to a fixed number of decimal places with
@@ -49,13 +59,27 @@ export interface BandSource {
  * transcribed as published and **not closed**. Inventing a boundary to make a table tile cleanly
  * would be inventing exactly the kind of number design.md D1 forbids, for a purely cosmetic gain.
  * See design.md D3.
+ *
+ * **A value inside a published gap belongs to NO zone**, and is described as lying between the
+ * two zones either side of it — never rounded into one of them. The gaps are real positions, not
+ * rounding artefacts: cadence is a fitted non-integer, so 163.5 steps/min happens.
  */
 export interface BandZone {
-  /** What the publisher calls this zone. Percentile ranges only — never a grade, never a colour. */
+  /**
+   * What the publisher calls this zone (Garmin's percentile ranges), or the range's own
+   * description where the source publishes a single range rather than a named zone table
+   * (`trunkLean`'s observed range, `kneeFlexion`'s pooled span). Never a grade, never a colour.
+   */
   label: string
-  /** Inclusive lower bound in the metric's own value domain; `null` = open-ended below. */
+  /**
+   * Lower bound in the metric's own value domain; `null` = open-ended below. Inclusive when `max`
+   * is also finite, exclusive when `max` is `null` (see the zone-inclusivity rule above).
+   */
   min: number | null
-  /** Inclusive upper bound in the metric's own value domain; `null` = open-ended above. */
+  /**
+   * Upper bound in the metric's own value domain; `null` = open-ended above. Inclusive when `min`
+   * is also finite, exclusive when `min` is `null` (see the zone-inclusivity rule above).
+   */
   max: number | null
 }
 
@@ -159,31 +183,37 @@ export interface BandEnvelope {
 }
 
 /**
- * The extent a scale for this band has to cover: the lowest finite `min` and the highest finite
- * `max` across its zones, in the metric's own value domain.
+ * The extent a scale for this band has to cover: the lowest and the highest finite bound the band
+ * publishes, in the metric's own value domain.
+ *
+ * **Every finite bound counts, from either field.** A finite `max` can be the lowest number a band
+ * publishes (Garmin's `<153` is `{ min: null, max: 153 }`), and a finite `min` can be the highest
+ * (`>183`), so taking the lower edge only from `min`s and the upper edge only from `max`es would
+ * be wrong in general — `[{ null, 10 }, { 12, null }]` has no finite `min` below 12 at all, yet
+ * publishes 10.
  *
  * Derived rather than stored, so it cannot drift out of step with the zones it summarises, and
  * provided here rather than left to each renderer so that two views cannot disagree about where a
- * scale ends. **It adds nothing to the published numbers** — it is their envelope and no wider. A
- * measured value outside it is genuinely outside the published range and the spec requires the
- * view to say so in words rather than clamp it silently; this repo's own regression anchor for
- * `verticalOscillationCm` is such a value, for a reason design.md D6 records and declines to
- * accommodate.
+ * scale ends. **It adds nothing to the published numbers** — both edges are published bounds, and
+ * every published bound lies within them. A measured value outside it is genuinely outside the
+ * published range and the spec requires the view to say so in words rather than clamp it
+ * silently; this repo's own regression anchor for `verticalOscillationCm` is such a value, for a
+ * reason design.md D6 records and declines to accommodate.
  *
- * `null` where a band is open-ended on both sides of one edge and therefore has no finite extent
- * there — no shipped band is, and the test pins that.
+ * `null` where there is no extent to draw: the band publishes no finite bound at all, or its
+ * finite bounds are all one number, which would be a zero-width scale. No shipped band is either,
+ * and the test pins that.
  */
 export function referenceBandEnvelope(
   band: ReferenceBand,
 ): BandEnvelope | null {
-  const mins = band.zones
-    .map((zone) => zone.min)
+  const bounds = band.zones
+    .flatMap((zone) => [zone.min, zone.max])
     .filter((value) => value !== null)
-  const maxes = band.zones
-    .map((zone) => zone.max)
-    .filter((value) => value !== null)
-  if (mins.length === 0 || maxes.length === 0) return null
-  return { min: Math.min(...mins), max: Math.max(...maxes) }
+  if (bounds.length === 0) return null
+  const min = Math.min(...bounds)
+  const max = Math.max(...bounds)
+  return max > min ? { min, max } : null
 }
 
 /**
@@ -233,6 +263,11 @@ export type GuidanceLinkKind =
   /** A practitioner handout adapted from a consensus statement. The weakest kind of source that
    *  ships here, and the one place it is used says so. */
   | 'handout'
+  /** A chapter in a book, not a journal article — so it is not labelled peer-reviewed, which
+   *  would claim a review process nobody here verified. The one shipped (Hanley 2021) is linked
+   *  at an institutional repository's copy of the accepted manuscript, which its link summary
+   *  says rather than its title. */
+  | 'book-chapter'
 
 /**
  * An outbound reference.

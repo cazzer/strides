@@ -35,9 +35,9 @@ import type { BandSource, GuidanceLink, MetricGuidance } from './types'
  * 1. **The bands are not targets.** Each is a description of where some population of runners was
  *    measured to be. None is a recommendation, a goal, or a healthy range.
  * 2. **This app cannot measure running speed, and speed moves four of the five banded metrics** —
- *    `kneeFlexion` most of all, at roughly +13° per 1 m/s. A speed-blind app reads a jogger as
- *    worse than a fast runner with identical form, on at least two of these scales. See
- *    `speedSensitivity` on each entry.
+ *    `kneeFlexion` most of all, at roughly +13° per 1 m/s. A speed-blind app reads a jogger
+ *    differently from a fast runner with identical form, on at least two of these scales — lower
+ *    on knee flexion, higher on vertical ratio. See `speedSensitivity` on each entry.
  * 3. **It does not claim any band is correct for an individual.** Every one is confounded by
  *    something the app cannot see — height, pelvis width, terrain, footwear, fatigue.
  * 4. **It does not claim the seven unbanded metrics are unimportant**, only that no citable range
@@ -92,7 +92,7 @@ const GARMIN_SAMPLE_SIZE = 'Not published'
 const MALISOUX_2023_SOURCE: BandSource = {
   title: 'Malisoux et al. 2023, Orthopaedic Journal of Sports Medicine 11(10)',
   url: MALISOUX_2023_URL,
-  population: 'Recreational runners on a treadmill at 10 km/h',
+  population: 'Recreational runners at 10 km/h',
   sampleSize: '860',
 }
 
@@ -108,7 +108,7 @@ const HEIDERSCHEIT_2011_SOURCE: BandSource = {
   title:
     'Heiderscheit et al. 2011, "Effects of Step Rate Manipulation on Joint Mechanics during Running", Medicine & Science in Sports & Exercise',
   url: HEIDERSCHEIT_2011_URL,
-  population: 'Healthy recreational runners at 2.9 m/s',
+  population: 'Runners at 2.9 m/s',
   sampleSize: '45',
 }
 
@@ -174,7 +174,7 @@ const SMITH_2022_LINK: GuidanceLink = {
   url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC9671438/',
   kind: 'peer-reviewed',
   summary:
-    'Measured Garmin devices reading roughly 1.3–1.5 cm high for vertical oscillation against a video reference — a fifth of the whole published range, in one direction.',
+    'Measured Garmin devices reading roughly 1.3–1.5 cm high for vertical oscillation against a video reference — an error in one direction, set against a published 10th–90th percentile range of 6.0–9.5 cm.',
 }
 
 const HEIDERSCHEIT_2011_LINK: GuidanceLink = {
@@ -294,12 +294,13 @@ const FUKUCHI_2017_LINK: GuidanceLink = {
 }
 
 const HANLEY_2021_LINK: GuidanceLink = {
-  title:
-    'Hanley 2021, "The Biomechanics of Distance Running" (accepted manuscript)',
+  title: 'Hanley 2021, "The Biomechanics of Distance Running"',
   url: HANLEY_2021_URL,
-  kind: 'peer-reviewed-author-copy',
+  // A book chapter, not a journal article. The URL is an institutional repository's copy of the
+  // accepted manuscript — a fact about the link, so it lives in the summary, not in the title.
+  kind: 'book-chapter',
   summary:
-    "Reports 55–60° of included thigh–shank angle at midswing for distance runners, which is 120–125° in this app's convention.",
+    "A book chapter reporting 55–60° of included thigh–shank angle at midswing for distance runners, which is 120–125° in this app's convention. Linked at an institutional repository's copy of the accepted manuscript.",
 }
 
 const LIEBERMAN_2015_LINK: GuidanceLink = {
@@ -308,7 +309,7 @@ const LIEBERMAN_2015_LINK: GuidanceLink = {
   url: 'https://journals.biologists.com/jeb/article/218/21/3406/14416/',
   kind: 'peer-reviewed',
   summary:
-    'Measured ankle-to-hip horizontal distance at contact as 0.31 ± 0.08 m at 75 strides/min — one of the two published measurements of this geometry, and 3.4× the other one.',
+    'Measured ankle-to-hip horizontal distance at contact as 0.31 ± 0.08 m at 75 strides/min — one of the two published measurements of this geometry, and about 3.4× the other one [derived].',
 }
 
 const SOUZA_2016_LINK: GuidanceLink = {
@@ -383,13 +384,18 @@ const SIDE_VIEW_REQUIRED_HINT =
   "Film side-on, with the camera square to the runner's line of travel. This measurement reads the fore-and-aft plane, which collapses to nothing when the camera looks down it — a front or rear clip cannot produce it at any quality."
 
 const SIDE_VIEW_PREFERRED_HINT =
-  "Film side-on if you can — this reads best square to the runner's line of travel, though a front or rear clip still works at reduced confidence. Keep the runner in frame for a few seconds of steady running: the rhythm is fitted to the hip bounce and needs at least three complete bounce cycles before it will report."
+  "Film side-on if you can — this reads most reliably square to the runner's line of travel, though a front or rear clip still works at reduced confidence. Keep the runner in frame for a few seconds of steady running: the rhythm is fitted to the hip bounce, and a short clip may not contain enough bounce cycles to measure."
 
 const FRONT_VIEW_REQUIRED_HINT =
   'Film from directly in front of or behind the runner, square to their line of travel. This measurement reads side-to-side placement, which a side-on camera looks straight along and cannot see.'
 
 const REAL_WORLD_SCALE_HINT =
-  'It also needs the background real-world-scale pass to succeed, so keep the whole body in frame and the runner at a roughly constant distance from the camera; a clip where the runner grows or shrinks across the frame gives the scale pass nothing stable to calibrate against.'
+  'It also needs the background real-world-scale pass to succeed, so keep the whole body in frame.'
+
+// Appended only where the metric also accepts a side-on clip: for `stepWidthCm`, which needs a
+// front or rear camera, advising a side-on pass would contradict the angle the metric requires.
+const SIDE_ON_SCALE_HINT =
+  'A steady side-on pass gives the most reliable scale calibration.'
 
 // ---------------------------------------------------------------------------------------------
 // The record.
@@ -417,8 +423,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       ],
       centralTendency: null,
       source: {
-        title:
-          "Garmin fenix 7 / Forerunner 945 owner's manuals — running-dynamics zone table",
+        title: "Garmin fenix 7 owner's manual — running-dynamics zone table",
         url: GARMIN_FENIX_7_ZONES_URL,
         population: GARMIN_POPULATION,
         sampleSize: GARMIN_SAMPLE_SIZE,
@@ -535,14 +540,14 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
           "This app's denominator is a true stride, stated in its own source: `src/heuristics/strideLength.ts` pairs only same-side consecutive footstrikes, so every displacement it returns is a genuine full-stride one. `verticalRatio.ts` is that extractor's only consumer.",
         ],
       },
-      note: "Unlike an absolute measurement, this ratio cancels height — both of its terms scale with stature — which is its main virtue over raw vertical oscillation. It is also why a manufacturer's table can be used here where design.md D4 refuses one for the centimetre metric: a proportional sensor error divides out of a ratio, and does not divide out of an absolute number of centimetres.",
+      note: "Unlike an absolute measurement, this ratio cancels height — both of its terms scale with stature — which is its main virtue over raw vertical oscillation. It is also why a manufacturer's table can be used here where design.md D4 refuses one for the centimetre metric: a proportional sensor error largely divides out of a ratio, and does not divide out of an absolute number of centimetres. The error actually measured on Garmin's vertical-oscillation numerator is not proportional, though: devices read roughly 1.3–1.5 cm high against a video reference, which is an additive offset, and an additive offset does not cancel in a ratio. Garmin's published zones inherit that numerator offset, so they may sit somewhat high relative to a hip-derived measurement like this app's. Folland 2017's independent laboratory figure of 4.06% per stride [derived] lands inside the middle, 30th–69th percentile, zone.",
     },
     noBandReason: null,
     evidenceDirection: 'none-established',
     mandatoryNotes: [],
     speedSensitivity: {
       summary:
-        'This app cannot measure how fast you were running, and vertical ratio falls as pace rises — so a clip filmed at a jog reads worse than the same form filmed faster.',
+        'This app cannot measure how fast you were running, and vertical ratio falls as pace rises — so a clip filmed at a jog reads higher than the same form filmed faster.',
       withinRunner:
         'Stride length climbs steeply with speed while vertical oscillation does not, so the ratio between them falls as a runner speeds up.',
       betweenRunners: null,
@@ -573,19 +578,20 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       ],
       centralTendency: {
         value: 7.7,
-        label:
-          "Midpoint of the pooled range, and Malisoux's overall mean (77 ± 12 mm)",
+        label: "Malisoux's overall mean (77 ± 12 mm)",
       },
       source: MALISOUX_2023_SOURCE,
       corroboration: [
         {
           ...HEIDERSCHEIT_2011_SOURCE,
           population:
-            'Healthy recreational runners at 2.9 m/s — 8.7 ± 1.3 cm of centre-of-mass excursion, falling to 7.3 cm at a 10% higher step rate',
+            'Runners at 2.9 m/s — 8.7 ± 1.3 cm of centre-of-mass excursion, falling to 7.3 cm at a 10% higher step rate',
         },
       ],
       derivation: null,
-      note: 'Two things this band cannot escape. It is an ABSOLUTE measurement in centimetres, with no denominator, so it penalises tall runners: a taller body bounces further for the same proportional movement, and this range does not adjust for that. And Garmin publishes vertical-oscillation bands in centimetres that are deliberately NOT used here — Garmin devices were measured reading roughly 1.3–1.5 cm high against a video reference, and their sensor sits on the chest or waist rather than at the centre of mass, which sees more travel again. Malisoux measures what this app computes: centre of mass, peak to peak, per step.',
+      // The height confound is deliberately NOT repeated here: it is a statement about the
+      // metric, so it renders once, from `mandatoryNotes`. This note is for how the band was built.
+      note: 'Garmin publishes vertical-oscillation bands in centimetres that are deliberately NOT used here — Garmin devices were measured reading roughly 1.3–1.5 cm high against a video reference, and their sensor sits on the chest or waist rather than at the centre of mass, which sees more travel again. Malisoux measures what this app computes: centre of mass, peak to peak, per step.',
     },
     noBandReason: null,
     evidenceDirection: 'association-without-target',
@@ -607,7 +613,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       MOORE_2016_LINK,
     ],
     remediation: [ADAMS_2018_LINK, MOORE_2016_LINK, VELOCITY_PROJECT_LINK],
-    captureHint: `${SIDE_VIEW_PREFERRED_HINT} ${REAL_WORLD_SCALE_HINT}`,
+    captureHint: `${SIDE_VIEW_PREFERRED_HINT} ${REAL_WORLD_SCALE_HINT} ${SIDE_ON_SCALE_HINT}`,
   },
 
   // === Rank 4 — a spread with no preferred end, because four outcomes disagree. ================
@@ -692,7 +698,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       summary:
         'This app cannot measure how fast you were running, and this is the most speed-sensitive measurement it makes — roughly 13° more knee flexion for every extra 1 m/s.',
       withinRunner:
-        'The same runners measured at 2.5, 3.5 and 4.5 m/s flexed 93.5°, 108.7° and 119.1° — about +13° per 1 m/s, and the slowest and fastest means are about two and a half standard deviations apart.',
+        'Stratified by speed, Fukuchi reports mean peak knee flexion of 93.5°, 108.7° and 119.1° at 2.5, 3.5 and 4.5 m/s — about +13° per 1 m/s, and the slowest and fastest means are about two and a half standard deviations apart.',
       betweenRunners: null,
     },
     research: [FUKUCHI_2017_LINK, HANLEY_2021_LINK, FOLLAND_2017_LINK],
@@ -712,7 +718,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       'No published study normalises foot-to-hip horizontal distance by TORSO LENGTH, which is the unit this app reports it in — a targeted search for that combination returned nothing relevant. And there is no threshold in any other unit either: the most recent review states plainly that "there is currently no consensus on what qualifies as excessive overstriding", and the clinical 2D protocol that uses exactly this app\'s landmarks is explicitly a yes/no judgement with no units and no cutoff. Halving the gap between the two published measurements to manufacture a range would be picking a number and calling it research.',
     evidenceDirection: 'association-without-target',
     mandatoryNotes: [
-      'The two published absolute measurements of this same geometry disagree by 3.4×: 9.2 ± 4.0 cm of centre-of-mass-to-heel distance at contact in one study, against 0.31 ± 0.08 m of ankle-to-hip distance in the other — roughly 0.18 against 0.62 torso lengths. Neither paper defines its computation precisely enough to reconcile them, so neither is offered here as a reference point.',
+      'The two published absolute measurements of this same geometry disagree: Heiderscheit 2011 measured 9.2 ± 4.0 cm from centre of mass to heel at initial contact, and Lieberman 2015 measured the ankle 0.31 ± 0.08 m ahead of the hip — about 3.4× apart [derived]. Neither paper defines its computation precisely enough to reconcile them, so neither is offered here as a reference point.',
       'The only defensible statement about overstriding is a relative one, and this is it: raising step rate by 10% was measured moving foot-to-centre-of-mass distance from 9.2 cm to 7.0 cm, a 24% reduction. That is a change within one runner under an intervention, not a range a population falls in — which is why the intervention links for this metric also appear on the cadence card.',
     ],
     speedSensitivity: null,
@@ -755,14 +761,16 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     mandatoryNotes: [
       'A negative value is not a defect. Crossover is normal at speed: in 166 Division-I athletes, "On average, males demonstrated crossover at 4.47 m/s (6:00-minute mile), whereas females did not demonstrate crossover at any speed", and the authors note that a negative base of gait at fast speeds "may be normal in a healthy population".',
       'The link between a narrow step width and injury is modelling-only, in uninjured runners; no prospective study was found, and the two primary crossover papers could not be retrieved and are therefore not cited. One retrospective study points the other way entirely — runners who had sprained an ankle ran 1.5 ± 0.7 cm WIDER. The widely-repeated claim that narrow step width causes tibial stress fractures rests on a documented citation error: the study it cites (1065 Royal Marines) never measured step width at all, and its actual predictors were bimalleolar width, BMI, peak heel pressure and tibial rotation. An ankle DIMENSION has been conflated with a gait VARIABLE downstream.',
+      'Pelvis width matters and height does not: −0.31 cm per extra 1 cm of ASIS width, with height explicitly unrelated (p = .857).',
     ],
     speedSensitivity: {
       summary:
         'This app cannot measure how fast you were running, and the speed effect on step width is as large as the whole measurement.',
       withinRunner:
         'Against a 2.68 m/s reference, base of gait shifted −0.353 cm at 2.95 m/s and −1.442 cm at 4.47 m/s. A fixed threshold in a speed-blind app would label fast runners as crossing over purely for being fast.',
-      betweenRunners:
-        'Pelvis width matters and height does not: −0.31 cm per extra 1 cm of ASIS width, with height explicitly unrelated (p = .857).',
+      // No between-runner SPEED statement surfaced for step width. The pelvis-width finding that
+      // used to sit here is about body dimensions, not speed, so it is a mandatory note instead.
+      betweenRunners: null,
     },
     research: [STIFFLER_JOACHIM_2020_LINK, WANG_2024_LINK],
     remediation: [WANG_2024_LINK, MEARDON_MILLER_2013_LINK, LASHIEN_2024_LINK],
@@ -774,19 +782,21 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     displayRank: 9,
     band: null,
     noBandReason:
-      'The literature carries three incompatible definitions of step width, differing by about 2× and by sign, and only one of them — "base of gait" — matches the sign convention this app uses; even that one samples at midstance where this app samples at footstrike. No published target range in centimetres exists; it was searched for specifically. For scale rather than as a band, two figures: a foot-to-foot measurement of 3.61 ± 2.56 cm (about 1.8 cm in this app\'s convention), and a model intercept of 1.358 cm (CI 0.968–1.747). The "normal step width is 8–10 cm" figure in wide circulation traces to a non-peer-reviewed page and describes walking, not running.',
+      'The literature carries three incompatible definitions of step width, differing by about 2× and by sign, and only one of them — "base of gait" — matches the sign convention this app uses; even that one samples at midstance where this app samples at footstrike. No published target range in centimetres exists; it was searched for specifically. For scale rather than as a band, two figures: a foot-to-foot measurement of 3.61 ± 2.56 cm, which is about 1.8 cm in this app\'s convention [derived: half of Arellano & Kram\'s 3.61 cm foot-to-foot], and a model intercept of 1.358 cm (CI 0.968–1.747). The "normal step width is 8–10 cm" figure in wide circulation traces to a non-peer-reviewed page and describes walking, not running.',
     evidenceDirection: 'contested',
     mandatoryNotes: [
       'A negative value is not a defect. Crossover is normal at speed: in 166 Division-I athletes, "On average, males demonstrated crossover at 4.47 m/s (6:00-minute mile), whereas females did not demonstrate crossover at any speed", and the authors note that a negative base of gait at fast speeds "may be normal in a healthy population".',
       'The link between a narrow step width and injury is modelling-only, in uninjured runners; no prospective study was found, and the two primary crossover papers could not be retrieved and are therefore not cited. One retrospective study points the other way entirely — runners who had sprained an ankle ran 1.5 ± 0.7 cm WIDER. The widely-repeated claim that narrow step width causes tibial stress fractures rests on a documented citation error: the study it cites (1065 Royal Marines) never measured step width at all, and its actual predictors were bimalleolar width, BMI, peak heel pressure and tibial rotation. An ankle DIMENSION has been conflated with a gait VARIABLE downstream.',
+      'Pelvis width matters and height does not: −0.31 cm per extra 1 cm of ASIS width, with height explicitly unrelated (p = .857).',
     ],
     speedSensitivity: {
       summary:
         'This app cannot measure how fast you were running, and the speed effect on step width is as large as the whole measurement.',
       withinRunner:
         'Against a 2.68 m/s reference, base of gait shifted −0.353 cm at 2.95 m/s and −1.442 cm at 4.47 m/s. A fixed centimetre threshold in a speed-blind app would label fast runners as crossing over purely for being fast.',
-      betweenRunners:
-        'Pelvis width matters and height does not: −0.31 cm per extra 1 cm of ASIS width, with height explicitly unrelated (p = .857).',
+      // No between-runner SPEED statement surfaced for step width. The pelvis-width finding that
+      // used to sit here is about body dimensions, not speed, so it is a mandatory note instead.
+      betweenRunners: null,
     },
     research: [STIFFLER_JOACHIM_2020_LINK, WANG_2024_LINK],
     remediation: [WANG_2024_LINK, MEARDON_MILLER_2013_LINK, LASHIEN_2024_LINK],

@@ -53,6 +53,14 @@ const EXPECTED_BANDED: Record<MetricId, boolean> = {
   armSwingAmplitude: false,
 }
 
+/** The five metrics design.md D2 bands, as a type, so a pinned-literal table must name all five. */
+type BandedMetricId =
+  | 'cadence'
+  | 'verticalRatio'
+  | 'verticalOscillationCm'
+  | 'trunkLean'
+  | 'kneeFlexion'
+
 /** design.md D2 fixes this order and fixes it by evidence strength, not by metric interest. */
 const EXPECTED_BANDED_RANKS: Array<[MetricId, number]> = [
   ['cadence', 1],
@@ -333,6 +341,14 @@ describe('every URL is verified and https', () => {
     }
   })
 
+  it('labels the Hanley 2021 book chapter as one, and keeps link facts out of its title', () => {
+    const hanley = METRIC_GUIDANCE.kneeFlexion.research.find((link) =>
+      link.title.startsWith('Hanley 2021'),
+    )
+    expect(hanley?.kind).toBe('book-chapter')
+    expect(hanley?.title).not.toMatch(/manuscript/i)
+  })
+
   it('gives every link a title and a summary', () => {
     for (const entry of entries()) {
       for (const link of [...entry.research, ...entry.remediation]) {
@@ -429,30 +445,138 @@ describe('band zones', () => {
     expect(cadence[2].max).toBe(173)
     expect(cadence[3].min).toBe(174)
   })
+})
 
-  it('carries no grading word in any zone or central-tendency label', () => {
-    // A band has no preferred end (design.md D7.8 and the spec's "never a verdict" requirement).
-    // Zone labels are where that would erode first — "Good", "Needs work" — so they are held to
-    // percentile and range wording only.
-    const grading =
-      /\b(good|bad|poor|better|worse|best|worst|optimal|ideal|excessive|target|goal)\b/i
-    for (const [id, band] of bandedEntries()) {
-      for (const zone of band.zones) {
-        expect(
-          grading.test(zone.label),
-          `${id} zone label: ${zone.label}`,
-        ).toBe(false)
-      }
-      if (band.centralTendency) {
-        const label = band.centralTendency.label
-        expect(grading.test(label), `${id} central label: ${label}`).toBe(false)
-      }
+/**
+ * Every string reachable from `value`, with the path it was reached by — so a failure names the
+ * field rather than just the text.
+ */
+function stringsIn(value: unknown, path: string): Array<[string, string]> {
+  if (typeof value === 'string') return [[path, value]]
+  if (Array.isArray(value))
+    return value.flatMap((item, index) => stringsIn(item, `${path}[${index}]`))
+  if (value !== null && typeof value === 'object')
+    return Object.entries(value).flatMap(([key, item]) =>
+      stringsIn(item, `${path}.${key}`),
+    )
+  return []
+}
+
+describe('no grading word anywhere in the guidance record', () => {
+  /**
+   * A band has no preferred end (design.md D7.8, D10 R2 and the spec's "never a verdict"
+   * requirement), and neither does anything said around one. This walks EVERY string reachable
+   * from `METRIC_GUIDANCE` — labels, notes, reasons, summaries, hints, titles, even enum literals —
+   * because a grading word erodes the rule wherever it lands, not only in a zone label.
+   *
+   * Word-boundary and case-insensitive, so `worsened` and `normalises` do not trip it while
+   * `Worse` and `NORMAL` do.
+   */
+  const GRADING_WORDS =
+    /\b(good|bad|poor|better|worse|best|worst|optimal|ideal|excessive|healthy|unhealthy|target|goal|should|correct|incorrect|normal|abnormal)\b/i
+
+  /**
+   * The only exemptions, each an EXACT phrase, each with the reason it is not a verdict on the
+   * runner. The list is never widened by dropping a word from `GRADING_WORDS`; a new legitimate
+   * use gets its own exact phrase here, and a cited paper's title that happens to contain one of
+   * these words — a title is a quotation — is exempted by its exact title text, not by field.
+   * No title in the record trips the list today.
+   */
+  const EXEMPT_PHRASES: Array<{ phrase: string; why: string }> = [
+    {
+      phrase: 'association-without-target',
+      why: 'An `EvidenceDirection` literal whose whole meaning is that there is NO target.',
+    },
+    {
+      phrase: '180 steps per minute is not a target',
+      why: 'design.md D2 requires this negation on screen, in bold.',
+    },
+    {
+      phrase: 'an association with no target attached',
+      why: 'A negation: design.md D2 rank 1, "an association without a target".',
+    },
+    {
+      phrase: 'There is no defensible target for trunk lean',
+      why: 'A negation: design.md D2 rank 4, "no target angle".',
+    },
+    {
+      phrase: 'no target angle at all',
+      why: 'A negation, paraphrasing Braun 2024 exactly as design.md D2 rank 4 does.',
+    },
+    {
+      phrase: 'No published target range',
+      why: 'A negation: design.md D5.3/4, "No published target range in centimetres exists".',
+    },
+    {
+      phrase: 'names a step-rate target',
+      why: 'Warns that a linked handout names a target the primary literature does not support.',
+    },
+    {
+      phrase: 'correlated with better running performance',
+      why: "Folland 2017's own words about a performance outcome, quoted in design.md D2 rank 4.",
+    },
+    {
+      phrase:
+        '"there is currently no consensus on what qualifies as excessive overstriding"',
+      why: 'A verbatim quotation of Baker 2024, and a statement that no threshold exists.',
+    },
+    {
+      phrase: '"normal step width is 8–10 cm"',
+      why: 'Quotes a claim in circulation in order to say it is unsourced and about walking.',
+    },
+    {
+      phrase: 'Crossover is normal at speed',
+      why: "Stiffler-Joachim's finding that a negative value is NOT a defect (design.md D5.3/4).",
+    },
+    {
+      phrase: '"may be normal in a healthy population"',
+      why: 'A verbatim quotation of Stiffler-Joachim 2020.',
+    },
+  ]
+
+  const allStrings = stringsIn(METRIC_GUIDANCE, 'METRIC_GUIDANCE')
+
+  it('walks a record that genuinely contains strings to check', () => {
+    // Guards the walker itself: a walk that returned nothing would pass every assertion below.
+    expect(allStrings.length).toBeGreaterThan(200)
+  })
+
+  it('carries none of the grading words outside the exact exempt phrases', () => {
+    const offenders: string[] = []
+    for (const [path, text] of allStrings) {
+      const stripped = EXEMPT_PHRASES.reduce(
+        (remaining, { phrase }) => remaining.split(phrase).join(' '),
+        text,
+      )
+      const match = GRADING_WORDS.exec(stripped)
+      if (match) offenders.push(`${path}: "${match[0]}" in ${text}`)
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('has no stale exemption — every exempt phrase still occurs somewhere', () => {
+    for (const { phrase } of EXEMPT_PHRASES) {
+      expect(
+        allStrings.some(([, text]) => text.includes(phrase)),
+        `exempt phrase no longer used: ${phrase}`,
+      ).toBe(true)
+    }
+  })
+
+  it('exempts only phrases that would otherwise trip the list', () => {
+    for (const { phrase } of EXEMPT_PHRASES) {
+      expect(GRADING_WORDS.test(phrase), phrase).toBe(true)
     }
   })
 })
 
 describe('referenceBandEnvelope', () => {
-  it('returns the finite extent of every shipped band', () => {
+  /** A band to vary only the zones of. Everything but `zones` is irrelevant to the envelope. */
+  function withZones(zones: ReferenceBand['zones']): ReferenceBand {
+    return { ...METRIC_GUIDANCE.cadence.band!, zones }
+  }
+
+  it('returns exactly these envelopes for the five shipped bands', () => {
     expect(referenceBandEnvelope(METRIC_GUIDANCE.cadence.band!)).toEqual({
       min: 153,
       max: 183,
@@ -477,26 +601,159 @@ describe('referenceBandEnvelope', () => {
     })
   })
 
-  it('adds nothing to the published numbers — the envelope is a bound of them', () => {
+  it('contains every finite bound of every shipped band', () => {
     for (const [id, band] of bandedEntries()) {
       const envelope = referenceBandEnvelope(band)
       expect(envelope, id).not.toBeNull()
       if (!envelope) continue
       for (const zone of band.zones) {
-        if (zone.min !== null)
-          expect(zone.min).toBeGreaterThanOrEqual(envelope.min)
-        if (zone.max !== null)
-          expect(zone.max).toBeLessThanOrEqual(envelope.max)
+        for (const bound of [zone.min, zone.max]) {
+          if (bound === null) continue
+          expect(bound, `${id} ${zone.label}`).toBeGreaterThanOrEqual(
+            envelope.min,
+          )
+          expect(bound, `${id} ${zone.label}`).toBeLessThanOrEqual(envelope.max)
+        }
       }
     }
   })
 
-  it('returns null for a band with no finite bound on one side', () => {
-    const openEnded: ReferenceBand = {
-      ...METRIC_GUIDANCE.cadence.band!,
-      zones: [{ label: 'Anything at all', min: null, max: null }],
+  it('takes its lower edge from a finite max and its upper edge from a finite min when those are the extremes', () => {
+    // Two open-ended zones and nothing else: the only finite `min` is 12 and the only finite
+    // `max` is 10. Reading edges from `min`s and `max`es separately would return {12, 10}.
+    expect(
+      referenceBandEnvelope(
+        withZones([
+          { label: 'below', min: null, max: 10 },
+          { label: 'above', min: 12, max: null },
+        ]),
+      ),
+    ).toEqual({ min: 10, max: 12 })
+  })
+
+  it('spans a gapped table from its lowest to its highest published bound', () => {
+    expect(
+      referenceBandEnvelope(
+        withZones([
+          { label: 'below', min: null, max: 150 },
+          { label: 'middle', min: 153, max: 163 },
+          { label: 'above', min: 164, max: null },
+        ]),
+      ),
+    ).toEqual({ min: 150, max: 164 })
+  })
+
+  it('returns a single closed zone as its own bounds', () => {
+    expect(
+      referenceBandEnvelope(withZones([{ label: 'only', min: 6, max: 9.5 }])),
+    ).toEqual({ min: 6, max: 9.5 })
+  })
+
+  it('returns null for a band that publishes no finite bound', () => {
+    expect(
+      referenceBandEnvelope(
+        withZones([{ label: 'Anything at all', min: null, max: null }]),
+      ),
+    ).toBeNull()
+  })
+
+  it('returns null rather than a zero-width envelope', () => {
+    expect(
+      referenceBandEnvelope(withZones([{ label: 'a point', min: 7, max: 7 }])),
+    ).toBeNull()
+    expect(
+      referenceBandEnvelope(withZones([{ label: 'below', min: null, max: 7 }])),
+    ).toBeNull()
+  })
+})
+
+/**
+ * Every published number in the five bands, transcribed from design.md D2/D3 as literals.
+ *
+ * The domain and ordering tests above would stay green through a plausible-looking typo — a
+ * cadence bound of 158 instead of 153, a Malisoux n of 680 instead of 860 — because a wrong
+ * published number is still a number in range. These are the only assertions that would catch
+ * one, so they name every bound, every central statistic and every sample size individually.
+ */
+describe('pinned band numbers', () => {
+  const EXPECTED_ZONE_BOUNDS: Record<
+    BandedMetricId,
+    Array<[number | null, number | null]>
+  > = {
+    cadence: [
+      [null, 153],
+      [153, 163],
+      [164, 173],
+      [174, 183],
+      [183, null],
+    ],
+    // design.md D3, halved: <3.05 / 3.05–3.70 / 3.75–4.30 / 4.35–5.05 / >5.05 %, stored 0..1.
+    verticalRatio: [
+      [null, 0.0305],
+      [0.0305, 0.037],
+      [0.0375, 0.043],
+      [0.0435, 0.0505],
+      [0.0505, null],
+    ],
+    verticalOscillationCm: [[6.0, 9.5]],
+    trunkLean: [[1.8, 21.4]],
+    kneeFlexion: [[85, 125]],
+  }
+
+  const EXPECTED_CENTRAL_TENDENCY: Record<BandedMetricId, number | null> = {
+    cadence: null,
+    verticalRatio: null,
+    verticalOscillationCm: 7.7,
+    trunkLean: 10.3,
+    kneeFlexion: null,
+  }
+
+  /** `[source, ...corroboration]` sample sizes, in order. */
+  const EXPECTED_SAMPLE_SIZES: Record<BandedMetricId, string[]> = {
+    cadence: ['Not published', '860', '97'],
+    verticalRatio: ['Not published', '97'],
+    verticalOscillationCm: ['860', '45'],
+    trunkLean: ['97'],
+    kneeFlexion: ['28', 'Book chapter; the cohort is not restated', '97'],
+  }
+
+  it('pins every zone bound of every band', () => {
+    for (const [id, band] of bandedEntries()) {
+      expect(
+        band.zones.map((zone) => [zone.min, zone.max]),
+        id,
+      ).toEqual(EXPECTED_ZONE_BOUNDS[id as BandedMetricId])
     }
-    expect(referenceBandEnvelope(openEnded)).toBeNull()
+  })
+
+  it('pins every central-tendency value', () => {
+    for (const [id, band] of bandedEntries()) {
+      expect(band.centralTendency?.value ?? null, id).toBe(
+        EXPECTED_CENTRAL_TENDENCY[id as BandedMetricId],
+      )
+    }
+  })
+
+  it('pins every source and corroboration sample size', () => {
+    for (const [id, band] of bandedEntries()) {
+      expect(
+        [band.source, ...band.corroboration].map((source) => source.sampleSize),
+        id,
+      ).toEqual(EXPECTED_SAMPLE_SIZES[id as BandedMetricId])
+    }
+  })
+
+  it('puts every central-tendency value inside its own band envelope', () => {
+    for (const [id, band] of bandedEntries()) {
+      if (band.centralTendency === null) continue
+      const envelope = referenceBandEnvelope(band)
+      expect(envelope, id).not.toBeNull()
+      if (!envelope) continue
+      expect(band.centralTendency.value, id).toBeGreaterThanOrEqual(
+        envelope.min,
+      )
+      expect(band.centralTendency.value, id).toBeLessThanOrEqual(envelope.max)
+    }
   })
 })
 
@@ -537,6 +794,16 @@ describe('mandatory notes', () => {
     // relative one.
     expect(notes).toContain('3.4')
     expect(notes).toContain('24%')
+    // In the two papers' own published units, with the ratio labelled as arithmetic. A torso-length
+    // conversion would rest on an assumed torso constant, so none renders.
+    expect(notes).toContain('about 3.4× apart [derived]')
+    expect(notes).not.toMatch(/torso length/i)
+  })
+
+  it('labels the derived step-width figure as derived, on screen', () => {
+    expect(METRIC_GUIDANCE.stepWidthCm.noBandReason).toContain(
+      "about 1.8 cm in this app's convention [derived: half of Arellano & Kram's 3.61 cm foot-to-foot]",
+    )
   })
 
   it('carries the note design.md D5 requires on both step-width metrics', () => {
@@ -587,6 +854,18 @@ describe('speed sensitivity', () => {
     // research pass. The spec requires the caveat NOT to render where nothing was established, so
     // that it keeps meaning something on the four where something was.
     expect(METRIC_GUIDANCE.trunkLean.speedSensitivity).toBeNull()
+  })
+
+  it('keeps a non-speed statement out of the speed slot on both step-width metrics', () => {
+    // Pelvis width is a body dimension, not a speed effect. It renders as a mandatory note.
+    for (const id of ['stepWidth', 'stepWidthCm'] as const) {
+      const speed = METRIC_GUIDANCE[id].speedSensitivity
+      expect(speed?.betweenRunners, id).toBeNull()
+      expect(JSON.stringify(speed), id).not.toMatch(/pelvis|ASIS/i)
+      expect(METRIC_GUIDANCE[id].mandatoryNotes.join(' '), id).toContain(
+        'ASIS width',
+      )
+    }
   })
 
   it('separates the within-runner claim from the between-runner one on cadence', () => {
@@ -669,5 +948,45 @@ describe('capture hints', () => {
         expect(entry.captureHint, entry.metric).toMatch(/side-on/i)
       }
     }
+  })
+
+  /**
+   * The table encodes a second distinction for side-primary metrics, and the hint has to carry it:
+   * a front view is `'unsuitable'` for some (the hint must say a front clip cannot produce the
+   * measurement at all) and only `'tolerated'` for others (the hint must say a front clip still
+   * works at reduced confidence). Telling a reader a front clip is hopeless when it merely costs
+   * confidence — or the reverse — sends them to re-film for the wrong reason.
+   */
+  const SIDE_REQUIRED = /cannot produce it at any quality/
+  const SIDE_PREFERRED = /still works at reduced confidence/
+
+  it('says side-on is REQUIRED exactly where a front view is unsuitable, and PREFERRED where it is tolerated', () => {
+    for (const entry of entries()) {
+      const row = DEFAULT_VIEW_FIT_TABLE[entry.metric]
+      if (row.side.fit !== 'primary') continue
+      if (row.front.fit === 'unsuitable') {
+        expect(entry.captureHint, entry.metric).toMatch(SIDE_REQUIRED)
+        expect(entry.captureHint, entry.metric).not.toMatch(SIDE_PREFERRED)
+      } else {
+        expect(row.front.fit, entry.metric).toBe('tolerated')
+        expect(entry.captureHint, entry.metric).toMatch(SIDE_PREFERRED)
+        expect(entry.captureHint, entry.metric).not.toMatch(SIDE_REQUIRED)
+      }
+    }
+  })
+
+  it('pins trunkLean and kneeFlexion as side-view REQUIRED, not merely preferred', () => {
+    for (const id of ['trunkLean', 'kneeFlexion'] as const) {
+      expect(DEFAULT_VIEW_FIT_TABLE[id].front.fit, id).toBe('unsuitable')
+      expect(METRIC_GUIDANCE[id].captureHint, id).toMatch(SIDE_REQUIRED)
+      expect(METRIC_GUIDANCE[id].captureHint, id).not.toMatch(SIDE_PREFERRED)
+    }
+  })
+
+  it('never advises a side-on scale pass on a metric that needs a front or rear camera', () => {
+    expect(METRIC_GUIDANCE.stepWidthCm.captureHint).not.toMatch(/side-on pass/i)
+    expect(METRIC_GUIDANCE.verticalOscillationCm.captureHint).toMatch(
+      /steady side-on pass/,
+    )
   })
 })

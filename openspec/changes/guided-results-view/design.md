@@ -218,8 +218,10 @@ from a manual.**
 Two facts, both against Garmin's numbers *for this metric specifically*:
 
 1. **Measured device error, in the direction that matters.** Smith 2022 *PLoS ONE* 17(11):e0277810
-   measured Garmin devices approximately **1.3–1.5 cm high** against a video reference. That is a
-   fifth of the entire 6.0–9.5 cm band, in one direction.
+   measured Garmin devices approximately **1.3–1.5 cm high** against a video reference — an error
+   in one direction, set against a published band (6.0–9.5 cm) only 3.5 cm wide **[derived]** end
+   to end. (An earlier draft misstated this as a fraction of the band; the published numbers are now
+   stated side by side instead of as a new percentage.)
 2. **The sensor is not at the centre of mass.** Garmin's pod sits on the chest or the waist. This
    app's `verticalOscillationCm` is a COM-proxy bounce derived from the hip midpoint. A
    chest-mounted sensor sees more vertical travel than the COM does, which is the same direction as
@@ -231,10 +233,18 @@ contrast, is the one this app implements — COM, peak-to-peak, per step — mea
 and published with percentiles. It is used instead.
 
 **Note what this does *not* imply for D3.** `verticalRatio` still uses Garmin's zones, halved,
-because a **ratio cancels the offset a fixed centimetre band cannot**: both of Garmin's terms are
-measured by the same misplaced sensor, so a proportional error in the numerator largely divides out.
-That asymmetry is the reason one metric can use a manufacturer's table and its sibling cannot, and
-it is worth stating plainly because the two decisions look inconsistent until you look at the units.
+because a **ratio cancels what a fixed centimetre band cannot**: both of Garmin's terms are measured
+by the same misplaced sensor, so a *proportional* error in the numerator largely divides out. That
+asymmetry is the reason one metric can use a manufacturer's table and its sibling cannot, and it is
+worth stating plainly because the two decisions look inconsistent until you look at the units.
+
+**But the error Smith 2022 actually measured is not proportional, and this must be said on screen.**
+Garmin's vertical-oscillation numerator reads ~1.3–1.5 cm high — an **additive** offset, and an
+additive offset does not cancel in a ratio. Garmin's published vertical-ratio zones inherit that
+numerator offset, so they may sit somewhat high relative to a hip-derived measurement like this
+app's. The offset is disclosed, **not quantified as a percentage and not corrected for**. The check
+that survives it is independent of Garmin entirely: Folland 2017's laboratory figure, **4.06% per stride
+[derived]** (D3 leg (c)), lands inside the middle, 30th–69th percentile, zone.
 
 ## D5 — The seven metrics that carry no band, each with its reason
 
@@ -260,12 +270,18 @@ below is the external confirmation of it.
   protocol uses **exactly this app's landmarks** — a vertical line up from the lateral malleolus
   against the pelvis — and is explicitly **dichotomous, with no units and no cutoff**. The closest
   thing in the literature to our measurement declines to put a number on it.
-- **The two published absolute measurements of the same geometry disagree by 3.4×:**
+- **The two published absolute measurements of the same geometry disagree by about 3.4×
+  [derived]** (0.31 m ÷ 9.2 cm):
 
-  | source | published figure | **[derived]** in torso lengths |
-  |---|---|---|
-  | Heiderscheit 2011 | 9.2 ± 4.0 cm (COM-to-heel at initial contact, 2.9 m/s) | ~**0.18** |
-  | Lieberman 2015 *JEB* 218(21):3406–3414 | 0.31 ± 0.08 m (ankle-to-hip, 75 strides/min) | ~**0.62** |
+  | source | published figure |
+  |---|---|
+  | Heiderscheit 2011 | 9.2 ± 4.0 cm (COM to heel at initial contact, 2.9 m/s) |
+  | Lieberman 2015 *JEB* 218(21):3406–3414 | 0.31 ± 0.08 m (ankle ahead of hip, 75 strides/min) |
+
+  **The disagreement is stated in the papers' own published units, and only there.** An earlier
+  draft also converted both to torso lengths (~0.18 and ~0.62); that conversion rests on an assumed
+  torso-length constant — the same kind of unresolved step D5.2 refuses — whereas the 3.4× ratio
+  needs no constant at all, so the torso figures are withdrawn rather than rendered.
 
   **Neither paper defines its computation precisely enough to reconcile them.** Halving the gap to
   get a band would be picking a number and calling it research.
@@ -476,8 +492,9 @@ Stated flatly, because each of these is a claim a reader could reasonably think 
    correlated with speed between runners — step *length* is; and VO between runners at preferred
    speed p=.074). `trunkLean` is the one of the five with no speed caveat, because the research
    pass found no speed dependence stated for it — that is an absence of evidence, not evidence of
-   absence. **A speed-blind app reads a jogger as worse than a fast runner with identical form**, on
-   at least two of these scales. That caveat renders on screen; it is not confined to this document.
+   absence. **A speed-blind app reads a jogger differently from a fast runner with identical form**,
+   on at least two of these scales — lower on `kneeFlexion`, higher on `verticalRatio` — and the
+   on-screen wording says which way ("reads higher"), never "worse". That caveat renders on screen; it is not confined to this document.
 3. **Garmin's percentile methodology is not published.** Garmin states only that *"Garmin has
    researched many runners of all different levels."* No sample size, no population, no protocol, no
    peer review. Two of the five bands (`cadence`'s zone table and `verticalRatio`'s, before halving)
