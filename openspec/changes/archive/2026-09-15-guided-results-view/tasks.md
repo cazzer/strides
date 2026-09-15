@@ -90,34 +90,34 @@ re-derived.
 
 ## 7. Live verification (`strides-kgi.7`)
 
-- [ ] 7.1 Per CLAUDE.md's harness: real GPU (`--headless=new --enable-gpu --ignore-gpu-blocklist`,
+- [x] 7.1 Per CLAUDE.md's harness: real GPU (`--headless=new --enable-gpu --ignore-gpu-blocklist`,
       renderer asserted not SwiftShader), the **derived** dev-server port, one clip per upload.
-- [ ] 7.2 All three bundled demo clips at `?view=guide`: page reaches "Analysis complete."; Group 1
+- [x] 7.2 All three bundled demo clips at `?view=guide`: page reaches "Analysis complete."; Group 1
       shows a scale with visible citation text per banded metric that resolved; Groups 2 and 3 are
       present, collapsed, and expand; evidence thumbnails appear.
-- [ ] 7.3 Toggle guide → classic → guide loses no imagery.
-- [ ] 7.4 Default unaffected: with no `?view=` the classic page is unchanged and `npm run test:e2e`
+- [x] 7.3 Toggle guide → classic → guide loses no imagery.
+- [x] 7.4 Default unaffected: with no `?view=` the classic page is unchanged and `npm run test:e2e`
       passes.
-- [ ] 7.5 Screenshot per clip per group, and a per-clip report of which group each metric landed in.
+- [x] 7.5 Screenshot per clip per group, and a per-clip report of which group each metric landed in.
       Expected and not a regression: `side-portrait` resolves no vertical-oscillation family and no
       `cadence` (bead `strides-aha`), so its Group 1 is nearly empty (R5).
 
 ## 8. Close out (`strides-kgi.8`)
 
-- [ ] 8.1 `openspec validate guided-results-view --strict` once more against the implemented code.
-- [ ] 8.2 Tick every item above.
-- [ ] 8.3 `openspec archive guided-results-view --yes`; diff `openspec/specs/` before and after and
+- [x] 8.1 `openspec validate guided-results-view --strict` once more against the implemented code.
+- [x] 8.2 Tick every item above.
+- [x] 8.3 `openspec archive guided-results-view --yes`; diff `openspec/specs/` before and after and
       check the requirement count — the archive step matches deltas by name and silently drops what
       it cannot match.
-- [ ] 8.4 A short CLAUDE.md section: where the guided view lives, `?view=guide`, which five metrics
+- [x] 8.4 A short CLAUDE.md section: where the guided view lives, `?view=guide`, which five metrics
       carry bands and which seven deliberately do not, and the one-line reason.
-- [ ] 8.5 File the deferred follow-ups as beads: resolving Folland's per-stride/per-step convention
+- [x] 8.5 File the deferred follow-ups as beads: resolving Folland's per-stride/per-step convention
       would unblock a `verticalOscillation` (% torso) band (D5.2); whether to flip the default from
       classic to guide; migrating the eight hand-rolled `makeMetric` helpers onto the shared factory.
 
 ## 9. Gates
 
-- [ ] 9.1 `npx tsc -b`, `npm run lint`, `npm test` — the existing suite green and untouched.
-- [ ] 9.2 Zero edits to `ResultsView.tsx`, `MetricsPanel.tsx`, `src/heuristics/`, `src/pose/`,
+- [x] 9.1 `npx tsc -b`, `npm run lint`, `npm test` — the existing suite green and untouched.
+- [x] 9.2 Zero edits to `ResultsView.tsx`, `MetricsPanel.tsx`, `src/heuristics/`, `src/pose/`,
       `src/video/` (R4) — except the one recorded in D7.2: `METRIC_DESCRIPTIONS` moved verbatim
       into `src/results/metricDescriptions.ts` (`fd3d1f7`), with identical DOM.

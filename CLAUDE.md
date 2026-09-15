@@ -951,6 +951,71 @@ a product decision inside it — today's full-width cards are why inline evidenc
 description on a desktop, which is the behaviour the evidence epic was asked for. **Left open
 deliberately; do not "fix" it as a typo.**
 
+## The guided results view — `?view=guide` (2026-09-15, epic `strides-kgi`)
+
+**A second, opt-in results page** that sets each metric against a published reference band where
+one can be cited. **Classic stays the default**: `resolveResultsViewMode` selects guide only for
+exactly one `?view=guide`; absent, unknown, `GUIDE` or a repeated param all resolve classic. Spec:
+`openspec/specs/guided-results-view/spec.md`; full provenance, derivations and refusals:
+`openspec/changes/archive/2026-09-15-guided-results-view/design.md`.
+
+- **Where:** `src/guidance/` (`METRIC_GUIDANCE` in `metricGuidance.ts`, `MetricScale.tsx`,
+  `bandPosition.ts`, `formatBandValue.ts`, `types.ts`); `src/results/GuidedResultsView.tsx`,
+  `GuidedMetricCard.tsx`, `guidedGroups.ts` (pure three-group partition; group 3 is
+  `metricTier === 'excluded'`), `formatGuidedValue.ts`; `resultsViewMode.ts` +
+  `ResultsViewToggle.tsx` (`history.replaceState`, no router). The only wiring is one conditional in
+  `MultiClipVideoSession.tsx`. `ResultsView.tsx` is untouched; `MetricsPanel.tsx` lost only
+  `METRIC_DESCRIPTIONS`, moved verbatim to `metricDescriptions.ts` (`fd3d1f7`).
+- **The governing rule: a band is cited or it does not ship.** No band is invented, pooled across
+  studies, fitted to this repo's footage or tuned. **Five banded**: `cadence`, `verticalRatio`,
+  `verticalOscillationCm`, `trunkLean`, `kneeFlexion`. **Seven deliberately not**: `overstriding`
+  (nothing is normalised by torso length, no threshold exists in any unit, and the two published
+  absolute figures disagree 3.4× — `strides-yg8` reached the same refusal), `verticalOscillation`,
+  `stepWidth`, `stepWidthCm`, `footStrikePattern`, `kneeDrive`, `armSwingAmplitude` — reasons in
+  design.md D5. An unbanded metric still renders its value and links, collapsed; banding decides
+  whether a *scale* renders, never whether the metric does. **Do not add a band without a citation
+  that states it** — `metricGuidance.test.ts` names the seven unbanded entries so adding one is a
+  visible change.
+
+⚠️ **Band bounds are stored in `MetricResult.value`'s domain, not the displayed one**:
+`verticalRatio` 3.05% is stored as `0.0305`.
+
+⚠️ **Three bands are not a straight transcription — do not "correct" them back.**
+`verticalRatio`'s Garmin zones are **HALVED** (Garmin's "stride" is a step; this app's is a true
+stride — D3) and relabelled in **value order**, because Garmin's percentile is a performance rank
+that gives the lowest readings the highest percentile. `verticalOscillationCm`'s `6.0–9.5` cm is a
+**derived union** of Malisoux 2023's sex-stratified P10/P90 (women's P10 to men's P90), not one
+published range, and deliberately not Garmin (D4). `kneeFlexion` is Folland 2017's observed
+**71.3–129°**; an earlier pooled `85–125°` was **withdrawn** because no source publishes it.
+
+⚠️ **Exactly one results view is mounted at a time.** Evidence imagery is real canvas elements and
+a node has one parent, so a second mounted view silently steals every canvas. `useSessionEvidence`
+stays in `MultiClipVideoSession` and reaches both views as a prop; **the guided view must never call
+it**. Toggling unmounts one view and mounts the other, and the canvases move across.
+
+⚠️ **Both views must render `role="status"` starting "Analysis complete."** — the e2e suite and
+`scripts/ab-person-selection.mjs` wait on that text, so either view can be driven.
+
+**Driving it:** load `/strides/?view=guide` on the derived port. Hooks: `.guided-results`,
+`.guided-results__group` (`--banded` / `--unbanded` / `--not-measured`; the last two are
+`<details>`, collapsed), `nav[aria-label="Measurements on this page"]`, `.metric-scale`. The A/B
+harness never passes `?view=`, reads the classic default, and is unaffected.
+
+**Live-verified 2026-09-15 (`strides-kgi.7`)** on all three demo clips, real GPU, one upload per
+clip: every clip reaches "Analysis complete." at `?view=guide`, banded metrics render a scale with
+citation text, the collapsed groups expand, and evidence survives guide → classic → guide. On
+`park-side-portrait.mp4`, `verticalRatio` now **resolves** (post-`strides-b4f`,
+so read the harness section's "no vertical-oscillation family" note as pre-b4f), while `cadence`
+(withheld as retimed) and `verticalOscillationCm` land in "Not measured on this clip".
+
+**Open follow-ups:** `strides-31k` (a retimed clip's cadence gets the generic capture hint),
+`strides-ryi` ("a second look … added N more metrics" counts excluded metrics; pre-existing in
+classic), `strides-366` (no error boundary — a crash takes the toggle down with it), `strides-xyc`
+("this pipeline" in runner-facing copy), `strides-n12` (Folland's per-step/per-stride convention
+would unblock a `verticalOscillation` band), `strides-8c3` (flip the default to guide — a product
+decision), `strides-7s7` (migrate the eight hand-rolled test factories onto
+`src/results/__fixtures__/metricResult.ts`).
+
 ## Three metric-layer changes that moved numbers this file quotes (2026-08-29/31)
 
 Every "expected value" recorded elsewhere in this file predates at least one of these. Check a
