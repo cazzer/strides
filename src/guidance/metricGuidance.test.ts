@@ -153,7 +153,6 @@ const VERIFIED_URLS: ReadonlySet<string> = new Set([
   'https://pmc.ncbi.nlm.nih.gov/articles/PMC13269574/',
   'https://pmc.ncbi.nlm.nih.gov/articles/PMC6088121/',
   'https://pmc.ncbi.nlm.nih.gov/articles/PMC4887549/',
-  'https://velocityproject.fammed.wisc.edu/wp-content/uploads/sites/2347/2025/05/Running-Injury-Risk-Reduction-Infographic.pdf',
   'https://pmc.ncbi.nlm.nih.gov/articles/PMC11283446/',
   'https://lermagazine.com/article/a-new-approach-to-iliotibial-band-syndrome-in-runners',
   'https://pmc.ncbi.nlm.nih.gov/articles/PMC11520670/',
@@ -334,7 +333,7 @@ describe('band provenance', () => {
     expect(derivation?.statement).toContain("men's 90th percentile, 9.5 cm")
     // The label must not claim a single published 10th–90th percentile range, or "pooled".
     expect(band.zones.map((zone) => zone.label)).toEqual([
-      "From women's 10th percentile to men's 90th percentile, at 10 km/h",
+      "From women's 10th to men's 90th percentile in Malisoux's 860 runners, at 10 km/h (6:00 per km)",
     ])
     expect(band.zones[0].label).not.toMatch(/pooled|10th–90th/i)
   })
@@ -382,7 +381,10 @@ describe('every URL is verified and https', () => {
         ...entry.remediation,
       ]
       for (const item of cited) {
-        expect(item.shortTitle.length, `${entry.metric}: ${item.title}`).toBeGreaterThan(0)
+        expect(
+          item.shortTitle.length,
+          `${entry.metric}: ${item.title}`,
+        ).toBeGreaterThan(0)
         expect(
           item.shortTitle.length,
           `${entry.metric}: ${item.shortTitle}`,
@@ -519,11 +521,11 @@ describe('band zones', () => {
       (zone) => zone.label,
     )
     expect(labels).toEqual([
-      "Lowest 5% of values in Garmin's table", // 0–4
-      '5th–30th percentile by value',
-      '31st–70th percentile by value',
-      '71st–95th percentile by value',
-      "Highest 5% of values in Garmin's table", // 96–100
+      "Lowest 5% of Garmin's table", // 0–4
+      "5th–30th percentile of Garmin's table",
+      "31st–70th percentile of Garmin's table",
+      "71st–95th percentile of Garmin's table",
+      "Highest 5% of Garmin's table", // 96–100
     ])
     // The three closed zones' label numbers ARE the flipped ranges, digit for digit.
     for (let i = 1; i <= 3; i++) {
@@ -634,10 +636,6 @@ describe('no grading word anywhere in the guidance record', () => {
       why: 'A negation: design.md D5.3/4, "No published target range in centimetres exists".',
     },
     {
-      phrase: 'names a step-rate target',
-      why: 'Warns that a linked handout names a target the primary literature does not support.',
-    },
-    {
       phrase: 'correlated with better running performance',
       why: "Folland 2017's own words about a performance outcome, quoted in design.md D2 rank 4.",
     },
@@ -692,6 +690,298 @@ describe('no grading word anywhere in the guidance record', () => {
   it('exempts only phrases that would otherwise trip the list', () => {
     for (const { phrase } of EXEMPT_PHRASES) {
       expect(GRADING_WORDS.test(phrase), phrase).toBe(true)
+    }
+  })
+})
+
+/**
+ * Every string that renders to a runner, with its path. URLs are links, not prose, and are
+ * excluded; everything else in the record — labels, notes, reasons, summaries, hints, titles —
+ * reaches the screen somewhere.
+ */
+function renderedStrings(): Array<[string, string]> {
+  return stringsIn(METRIC_GUIDANCE, 'METRIC_GUIDANCE').filter(
+    ([path]) => !path.endsWith('.url'),
+  )
+}
+
+describe('no implementation detail or jargon leaks into the rendered copy', () => {
+  /**
+   * Every string in the record renders to a runner. None of them may mention a source file, this
+   * change's design document or its decision numbers, the word "ship", a bracketed "[derived]"
+   * tag (the derivations say so in words instead), a p-value, a statistics shorthand ("CI", or
+   * "GRADE"), a paper's own abbreviations ("FST", "RRIs"), anatomical shorthand ("ASIS"), a
+   * units string a reader cannot parse, or an all-caps word used for emphasis.
+   */
+  const LEAKS =
+    /src\/|\.tsx?\b|design\.md|\bD\d\b|\bship(s|ped)?\b|\[derived|\bp = |\bGRADE\b|\bRRIs?\b|\bASIS\b|\bFST\b|\bCI\b|this repo|Nm·s/
+
+  /**
+   * An all-caps word is emphasis or an unexplained acronym, and neither belongs in copy a runner
+   * reads. Titles and short titles of cited works are exempt — a title is a quotation and keeps its
+   * own capitalisation ("PLOS ONE", "IJSPT", "Garmin fenix 7 manual (APAC)").
+   */
+  const ALL_CAPS_WORD = /\b[A-Z]{3,}\b/
+  const ALL_CAPS_ALLOWED: ReadonlySet<string> = new Set([])
+  const isTitle = (path: string) => /\.(title|shortTitle)$/.test(path)
+
+  it('walks a record that genuinely contains strings to check', () => {
+    expect(renderedStrings().length).toBeGreaterThan(200)
+  })
+
+  it('carries no file path, design reference, "ship", "[derived]", p-value or shorthand', () => {
+    const offenders = renderedStrings()
+      .map(([path, text]) => [path, LEAKS.exec(text)?.[0], text] as const)
+      .filter(([, match]) => match !== undefined)
+      .map(([path, match, text]) => `${path}: "${match}" in ${text}`)
+    expect(offenders).toEqual([])
+  })
+
+  it('uses no all-caps word outside the titles of cited works', () => {
+    const offenders: string[] = []
+    for (const [path, text] of renderedStrings()) {
+      if (isTitle(path)) continue
+      for (const word of text.match(new RegExp(ALL_CAPS_WORD, 'g')) ?? []) {
+        if (!ALL_CAPS_ALLOWED.has(word)) offenders.push(`${path}: "${word}"`)
+      }
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('catches what it claims to catch', () => {
+    for (const leak of [
+      'see src/heuristics/strideLength.ts',
+      'strideLength.ts pairs',
+      'design.md D4 refuses one',
+      'this band ships because',
+      '4.06% [derived]',
+      'no relationship (p = .074)',
+      '(CI 0.91–0.98)',
+      'with GRADE applied',
+      'between FST and RRIs',
+      'ASIS width',
+      '3.26 Nm·s/kg/1000 m',
+      'this repo’s own readings'.replace('’', "'"),
+    ]) {
+      expect(LEAKS.test(leak), leak).toBe(true)
+    }
+    expect(ALL_CAPS_WORD.test('step rate was NOT correlated')).toBe(true)
+    expect(ALL_CAPS_WORD.test('relationship between two steps')).toBe(false)
+  })
+})
+
+describe('pace beside a speed', () => {
+  /** Exact seconds per kilometre (or per mile) for a speed in metres per second. */
+  function paceSeconds(metresPerSecond: number, metresPerUnit: number): number {
+    return metresPerUnit / metresPerSecond
+  }
+  /** `m:ss` → seconds. */
+  function secondsOf(stated: string): number {
+    const [minutes, seconds] = stated.split(':').map(Number)
+    return minutes * 60 + seconds
+  }
+  /**
+   * A stated `m:ss` is correct when it is the exact pace to the whole second, rounded either way:
+   * 2.68 m/s is 600.5 s per mile, which the source study means as a 10:00 mile, and a runner reads
+   * "10:00" and "10:01" as the same pace. Anything a second or more out is a typo.
+   */
+  function statesPace(stated: string, exactSeconds: number): boolean {
+    return Math.abs(secondsOf(stated) - exactSeconds) < 1
+  }
+  const METRES_PER_MILE = 1609.344
+
+  /**
+   * One or more speeds followed by a parenthesised pace for each: "10 km/h (6:00 per km, 9:39 per
+   * mile)", "2.68 to 3.83 m/s (6:13 to 4:21 per km, 10:00 to 7:00 per mile)", "2.5, 3.5 and 4.5
+   * m/s (6:40, 4:46 and 3:42 per km)". A parenthesis that is not a pace — a quoted "(6:00-minute
+   * mile)" — has no "per km" and is skipped.
+   */
+  const SPEED_WITH_PACE =
+    /((?:\d+(?:\.\d+)?(?:, | and | to |–))*\d+(?:\.\d+)?) (m\/s|km\/h) \(([^)]*per km[^)]*)\)/g
+
+  function numbersIn(text: string): number[] {
+    return (text.match(/\d+(?:\.\d+)?/g) ?? []).map(Number)
+  }
+  function pacesIn(text: string): string[] {
+    return text.match(/\d+:\d\d/g) ?? []
+  }
+
+  const conversions = renderedStrings().flatMap(([path, text]) =>
+    [...text.matchAll(SPEED_WITH_PACE)].map((match) => ({
+      path,
+      speeds: numbersIn(match[1]).map((value) =>
+        match[2] === 'km/h' ? value / 3.6 : value,
+      ),
+      perKm: pacesIn(match[3].split('per km')[0]),
+      perMile: match[3].includes('per mile')
+        ? pacesIn(match[3].split('per km')[1])
+        : [],
+      raw: match[0],
+    })),
+  )
+
+  it('finds the paces it is meant to check', () => {
+    // 10 km/h, 10–12 km/h, 9.9 km/h, 9.9–10 km/h, 2.9 m/s, 2.68→3.83 m/s, 2.5/3.5/4.5 m/s and the
+    // three step-width speeds, across the record. A walker that matched nothing would pass below.
+    expect(conversions.length).toBeGreaterThanOrEqual(14)
+  })
+
+  it('states every pace as the exact conversion of the speed beside it', () => {
+    for (const { path, speeds, perKm, perMile, raw } of conversions) {
+      expect(perKm.length, `${path}: ${raw}`).toBe(speeds.length)
+      speeds.forEach((speed, index) => {
+        expect(
+          statesPace(perKm[index], paceSeconds(speed, 1000)),
+          `${path}: ${raw} — ${perKm[index]} per km`,
+        ).toBe(true)
+      })
+      if (perMile.length === 0) continue
+      expect(perMile.length, `${path}: ${raw}`).toBe(speeds.length)
+      speeds.forEach((speed, index) => {
+        expect(
+          statesPace(perMile[index], paceSeconds(speed, METRES_PER_MILE)),
+          `${path}: ${raw} — ${perMile[index]} per mile`,
+        ).toBe(true)
+      })
+    }
+  })
+
+  it('checks the checker: right paces pass, a one-second typo fails', () => {
+    const pinned: Array<[string, number, number]> = [
+      ['6:00', 10 / 3.6, 1000],
+      ['9:39', 10 / 3.6, METRES_PER_MILE],
+      ['6:13', 2.68, 1000],
+      ['4:21', 3.83, 1000],
+      ['10:00', 2.68, METRES_PER_MILE],
+      ['7:00', 3.83, METRES_PER_MILE],
+      ['5:45', 2.9, 1000],
+      ['6:40', 2.5, 1000],
+      ['4:46', 3.5, 1000],
+      ['3:42', 4.5, 1000],
+    ]
+    for (const [stated, speed, unit] of pinned) {
+      expect(statesPace(stated, paceSeconds(speed, unit)), stated).toBe(true)
+    }
+    expect(statesPace('5:47', paceSeconds(2.9, 1000))).toBe(false)
+    expect(statesPace('6:31', paceSeconds(2.68, 1000))).toBe(false)
+  })
+
+  it('gives a pace in the first string of each card that names a running speed', () => {
+    // A runner thinks in pace and cannot convert metres per second in their head. A speed
+    // DIFFERENCE ("per extra 1 m/s") has no pace and is skipped; a quoted pace ("6:00-minute
+    // mile") counts as one.
+    for (const entry of entries()) {
+      const first = stringsIn(entry, entry.metric)
+        .filter(([path]) => !path.endsWith('.url'))
+        .map(([, text]) => text.replace(/per (extra )?1 m\/s/g, ''))
+        .find((text) => /\d (m\/s|km\/h)/.test(text))
+      if (first === undefined) continue
+      expect(first, entry.metric).toMatch(/per km|-minute mile/)
+    }
+  })
+})
+
+describe('links within one metric', () => {
+  it('never lists the same URL twice across a metric’s research and remediation', () => {
+    for (const entry of entries()) {
+      const urls = [...entry.research, ...entry.remediation].map(
+        (link) => link.url,
+      )
+      const repeated = urls.filter((url, index) => urls.indexOf(url) !== index)
+      expect(repeated, entry.metric).toEqual([])
+    }
+  })
+
+  it('links no practitioner handout as remediation', () => {
+    for (const entry of entries()) {
+      expect(
+        entry.remediation.filter((link) => link.kind === 'handout'),
+        entry.metric,
+      ).toEqual([])
+    }
+  })
+})
+
+describe('band labels describe people, never a target', () => {
+  it('names the measured population in every single-zone label', () => {
+    expect(METRIC_GUIDANCE.trunkLean.band!.zones[0].label).toBe(
+      "Range across Folland's 97 runners",
+    )
+    expect(METRIC_GUIDANCE.kneeFlexion.band!.zones[0].label).toBe(
+      "Range across Folland's 97 runners",
+    )
+    expect(
+      METRIC_GUIDANCE.verticalOscillationCm.band!.zones[0].label,
+    ).toContain("Malisoux's 860 runners")
+  })
+
+  it("labels every verticalRatio zone as a position in Garmin's table", () => {
+    for (const zone of METRIC_GUIDANCE.verticalRatio.band!.zones) {
+      expect(zone.label).toMatch(/of Garmin's table$/)
+    }
+  })
+
+  it('keeps a central-tendency label a short noun that does not repeat its own value', () => {
+    // The view prints "{label}: {value}", so a label carrying the value prints it twice.
+    for (const [id, band] of bandedEntries()) {
+      if (band.centralTendency === null) continue
+      const { label, value } = band.centralTendency
+      expect(label.length, id).toBeLessThanOrEqual(40)
+      expect(label, id).not.toContain(String(value))
+      expect(label, id).not.toMatch(/\bmean\b/i)
+    }
+  })
+})
+
+describe('guided-view-only copy', () => {
+  it('bridges cadence to overstriding in one sentence above the remediation links', () => {
+    const cadence = METRIC_GUIDANCE.cadence
+    expect(cadence.remediationIntro).toBe(
+      'Raising step rate is also the most-studied way to reduce overstriding — how far the foot lands ahead of the body. The Heiderscheit and Lenhart studies below measured that directly.',
+    )
+    // The two studies the sentence names sit straight after the self-administered protocol.
+    expect(cadence.remediation.map((link) => link.shortTitle)).toEqual([
+      'Huber & Verhoff 2024',
+      'Heiderscheit et al. 2011',
+      'Lenhart et al. 2014',
+      'Petri et al. 2026',
+      'Davis et al. 2020',
+      'Gaudette et al. 2022',
+    ])
+  })
+
+  it('leaves remediationIntro null everywhere else', () => {
+    for (const entry of entries()) {
+      if (entry.metric === 'cadence') continue
+      expect(entry.remediationIntro, entry.metric).toBeNull()
+    }
+  })
+
+  it('overrides the shared description on exactly overstriding and footStrikePattern', () => {
+    const overridden = entries()
+      .filter((entry) => entry.guidedDescription !== null)
+      .map((entry) => entry.metric)
+      .sort()
+    expect(overridden).toEqual(['footStrikePattern', 'overstriding'])
+    expect(METRIC_GUIDANCE.overstriding.guidedDescription).toBe(
+      'How far your foot lands ahead of your hips at footstrike, relative to your torso length.',
+    )
+    expect(METRIC_GUIDANCE.footStrikePattern.guidedDescription).toBe(
+      'Whether your foot tends to land heel-, midfoot- or forefoot-first.',
+    )
+    for (const entry of entries()) {
+      expect(entry.guidedDescription ?? '', entry.metric).not.toMatch(
+        /proxy|pipeline|risk/i,
+      )
+    }
+  })
+
+  it('drops the "Within one runner" and "Between runners" prefixes the view now renders as labels', () => {
+    for (const entry of entries()) {
+      const speed = entry.speedSensitivity
+      if (speed === null) continue
+      expect(speed.withinRunner ?? '', entry.metric).not.toMatch(/^within/i)
+      expect(speed.betweenRunners ?? '', entry.metric).not.toMatch(/^between/i)
     }
   })
 })
@@ -850,11 +1140,9 @@ describe('pinned band numbers', () => {
       'https://pmc.ncbi.nlm.nih.gov/articles/PMC5473370',
     )
     expect(band.source.sampleSize).toBe('97')
-    expect(band.centralTendency?.label).toBe(
-      "Folland's mean swing knee flexion (94.1 ± 11.1°)",
-    )
+    expect(band.centralTendency?.label).toBe('Average in this study (± 11.1°)')
     expect(band.zones.map((zone) => zone.label)).toEqual([
-      'Full range observed across the cohort',
+      "Range across Folland's 97 runners",
     ])
     expect(band.derivation).toBeNull()
     // Fukuchi's three speed means and Hanley now stand beside the band, not inside it.
@@ -950,13 +1238,15 @@ describe('mandatory notes', () => {
     expect(notes).toContain('24%')
     // In the two papers' own published units, with the ratio labelled as arithmetic. A torso-length
     // conversion would rest on an assumed torso constant, so none renders.
-    expect(notes).toContain('about 3.4× apart [derived]')
+    expect(notes).toContain(
+      "about 3.4× apart (our arithmetic from the two papers' figures)",
+    )
     expect(notes).not.toMatch(/torso length/i)
   })
 
   it('labels the derived step-width figure as derived, on screen', () => {
     expect(METRIC_GUIDANCE.stepWidthCm.noBandReason).toContain(
-      "about 1.8 cm in this app's convention [derived: half of Arellano & Kram's 3.61 cm foot-to-foot]",
+      "about 1.8 cm in this app's convention (half of Arellano & Kram's foot-to-foot figure)",
     )
   })
 
@@ -1015,9 +1305,9 @@ describe('speed sensitivity', () => {
     for (const id of ['stepWidth', 'stepWidthCm'] as const) {
       const speed = METRIC_GUIDANCE[id].speedSensitivity
       expect(speed?.betweenRunners, id).toBeNull()
-      expect(JSON.stringify(speed), id).not.toMatch(/pelvis|ASIS/i)
+      expect(JSON.stringify(speed), id).not.toMatch(/pelvis/i)
       expect(METRIC_GUIDANCE[id].mandatoryNotes.join(' '), id).toContain(
-        'ASIS width',
+        'pelvis width',
       )
     }
   })
@@ -1026,7 +1316,10 @@ describe('speed sensitivity', () => {
     const speed = METRIC_GUIDANCE.cadence.speedSensitivity
     expect(speed?.withinRunner).not.toBeNull()
     expect(speed?.betweenRunners).not.toBeNull()
-    expect(speed?.betweenRunners).toContain('NOT correlated')
+    expect(speed?.betweenRunners).toContain('not correlated')
+    // The view labels the two halves, so neither may restate its own label as a prefix.
+    expect(speed?.withinRunner).not.toMatch(/^within one runner/i)
+    expect(speed?.betweenRunners).not.toMatch(/^between runners/i)
   })
 })
 

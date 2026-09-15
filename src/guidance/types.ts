@@ -167,6 +167,10 @@ export interface ReferenceBand {
    * not mark it as a goal, shade toward it, or describe a value's distance from it as a deficit.
    * It is here because the sources publish it and design.md D2 quotes it, and withholding a
    * published statistic would be its own kind of editorialising.
+   *
+   * `label` is a short noun naming whose average it is ("Malisoux's overall average"), with any
+   * spread in brackets ("Average in this study (± 3.7°)"). The view prints `{label}: {value}`, so
+   * the label never repeats the value itself.
    */
   centralTendency: { value: number; label: string } | null
   /** The source the bounds themselves come from. */
@@ -274,8 +278,9 @@ export type GuidanceLinkKind =
   | 'manufacturer'
   /** A clinical trade publication — editorially reviewed, not peer-reviewed. */
   | 'trade-publication'
-  /** A practitioner handout adapted from a consensus statement. The weakest kind of source that
-   *  ships here, and the one place it is used says so. */
+  /** A practitioner handout adapted from a consensus statement — the weakest kind of source. No
+   *  link of this kind is in the record today: the one there was named a step-rate target the
+   *  primary literature does not support, and was removed rather than linked with a warning. */
   | 'handout'
   /** A chapter in a book, not a journal article — so it is not labelled peer-reviewed, which
    *  would claim a review process nobody here verified. The one shipped (Hanley 2021) is linked
@@ -317,9 +322,15 @@ export interface GuidanceLink {
 export interface SpeedSensitivity {
   /** One sentence, suitable as the caveat rendered beside a band. */
   summary: string
-  /** The effect on one runner as their own pace changes; `null` where no source addressed it. */
+  /**
+   * The effect on one runner as their own pace changes; `null` where no source addressed it. The
+   * view labels this half itself, so the sentence does not open with "Within one runner".
+   */
   withinRunner: string | null
-  /** The correlation across runners at self-selected pace; `null` where no source addressed it. */
+  /**
+   * The correlation across runners at self-selected pace; `null` where no source addressed it.
+   * The view labels this half itself, so the sentence does not open with "Between runners".
+   */
   betweenRunners: string | null
 }
 
