@@ -55,7 +55,7 @@ Display rank is the order below and is fixed here, not left to the implementer. 
 |---|---|---|---|---|---|---|
 | 1 | `cadence` | `stepsPerMinute` | five published percentile zones: `<153` / `153–163` / `164–173` / `174–183` / `>183` spm | Garmin fenix 7 + Forerunner 945 owner's manuals (zone table); Malisoux 2023 *Orthop J Sports Med* 11(10) (distribution) | Garmin: unstated (see D9); Malisoux: recreational runners at 9.9 km/h | Garmin: unpublished; Malisoux: **860** |
 | 2 | `verticalRatio` | `percent` (a 0..1 value rendered ×100) | **[derived]** Garmin's per-step zones **halved** to per-stride: `<3.05` / `3.05–3.70` / `3.75–4.30` / `4.35–5.05` / `>5.05` % | Garmin fenix 7 APAC manual (zone table) + Forerunner 255 manual (the definition that forces the halving); Folland 2017 *MSSE* 49(7):1412–1423 (independent corroboration) | Garmin: unstated; Folland: trained runners, 10–12 km/h | Garmin: unpublished; Folland: **97** |
-| 3 | `verticalOscillationCm` | `centimeters` | `6.0–9.5` cm (P10–P90, pooled), midpoint `7.7` cm | Malisoux 2023 *Orthop J Sports Med* 11(10) | recreational runners at 10 km/h | **860** |
+| 3 | `verticalOscillationCm` | `centimeters` | `6.0–9.5` cm (P10–P90, pooled), mean `7.7` cm (Malisoux's overall 77 ± 12 mm) | Malisoux 2023 *Orthop J Sports Med* 11(10) | recreational runners at 10 km/h | **860** |
 | 4 | `trunkLean` | `degrees` | `1.8–21.4°` observed range, mean `10.3°` | Folland 2017 *MSSE* 49(7):1412–1423 | trained runners, 10–12 km/h | **97** |
 | 5 | `kneeFlexion` | `degrees` | `85–125°` | Fukuchi 2017 *PeerJ* 5:e3298 (speed-stratified) + Hanley 2021 (cross-convention corroboration) | Fukuchi: regular runners at 2.5 / 3.5 / 4.5 m/s; Hanley: distance runners at midswing | Fukuchi: **28**; Hanley: book chapter, cohort not restated |
 
@@ -82,7 +82,7 @@ country): each +1 spm associated with 5% lower bone-stress-injury risk, RR 0.95 
 between minimal and maximum vertical positions of the center of mass during a step"* — peak-to-peak,
 per step, at the COM. That is definitionally what `verticalOscillationCm` computes. Overall
 77 ± 12 mm; men 80 ± 13, women 73 ± 11. At 10 km/h, P10–P90: men 64–95 mm (P50 78), women 60–85 mm
-(P50 74). **Pooled to ship: 6.0–9.5 cm, midpoint 7.7 cm.** Heiderscheit 2011 corroborates at
+(P50 74). **Pooled to ship: 6.0–9.5 cm, with Malisoux's overall mean of 7.7 cm.** Heiderscheit 2011 corroborates at
 8.7 ± 1.3 cm COM excursion at 2.9 m/s (falling to 7.3 cm at +10% cadence). D4 records why Garmin's
 bands are **not** used here even though they exist and would have been easier.
 
