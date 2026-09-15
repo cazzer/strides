@@ -31,9 +31,11 @@ This is not caution for its own sake. It is the conclusion two prior investigati
 already reached, arrived at independently and recorded:
 
 - **Bead `strides-yg8`** set out to give `overstriding` an interpretive band so a cross-clip
-  disagreement could surface on it. It closed **without** one, and names the failure mode directly:
+  disagreement could surface on it. It is **still open**, and it rejects picking a number outright,
+  naming the failure mode directly:
   *"A per-metric magnitude threshold means eleven unjustifiable constants … A disagreement threshold
-  picked to make these two clips light up is the same mistake."*
+  picked to make these two clips light up is the same mistake."* The one route it leaves — a band
+  decided on that metric's own terms — is the route D5.1's research finds no published basis for.
 - **CLAUDE.md, "The 4K area floor cannot be re-derived"** is the worked example: a threshold was
   measured, found to sit inside a factor-of-2.9 squeeze between its two endpoints, and the entire
   direction abandoned — *"Do not re-litigate by picking a different number."*
@@ -314,10 +316,10 @@ reason a reader gets when they expand it.
 ### 1. `overstriding` — no band exists in any unit, and the two published measurements of this exact geometry disagree by 3.4×
 
 **This is the metric in the original request, and it is the one this design most has to refuse.**
-Bead **`strides-yg8`** reached the same refusal independently, from a completely different
-direction — it wanted a band so that a cross-clip disagreement caveat could fire on this metric, and
-closed without one rather than pick a threshold. That bead is the in-repo precedent; the research
-below is the external confirmation of it.
+Bead **`strides-yg8`** (still open) reached the same caution independently, from a completely
+different direction — it wanted a band so that a cross-clip disagreement caveat could fire on this
+metric, and rejects picking a threshold to get one. It leaves open a band decided on the metric's own
+terms; the research below is what finds no published basis for such a band.
 
 - **No published study normalises foot-to-hip horizontal distance by TORSO LENGTH**, which is the
   unit this app reports. A targeted Europe PMC search for "trunk length" / "torso length" combined

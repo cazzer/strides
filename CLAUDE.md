@@ -970,7 +970,7 @@ exactly one `?view=guide`; absent, unknown, `GUIDE` or a repeated param all reso
   studies, fitted to this repo's footage or tuned. **Five banded**: `cadence`, `verticalRatio`,
   `verticalOscillationCm`, `trunkLean`, `kneeFlexion`. **Seven deliberately not**: `overstriding`
   (nothing is normalised by torso length, no threshold exists in any unit, and the two published
-  absolute figures disagree 3.4× — `strides-yg8` reached the same refusal), `verticalOscillation`,
+  absolute figures disagree 3.4× — `strides-yg8`, still open, rejects picking a number for it), `verticalOscillation`,
   `stepWidth`, `stepWidthCm`, `footStrikePattern`, `kneeDrive`, `armSwingAmplitude` — reasons in
   design.md D5. An unbanded metric still renders its value and links, collapsed; banding decides
   whether a *scale* renders, never whether the metric does. **Do not add a band without a citation

@@ -17,7 +17,8 @@ import type { BandSource, GuidanceLink, MetricGuidance } from './types'
  *
  * That is not caution for its own sake. Two prior investigations in this repo reached the same
  * refusal independently — bead `strides-yg8` set out to give `overstriding` an interpretive
- * threshold and closed without one, and CLAUDE.md's "The 4K area floor cannot be re-derived"
+ * threshold and rejects picking one without a basis (it is still open; the research behind this
+ * file found no published basis), and CLAUDE.md's "The 4K area floor cannot be re-derived"
  * records a measured threshold abandoned outright rather than re-picked. **Citing a published
  * band is a different act from inventing one**: it is a sourced external fact, attributable and
  * falsifiable by a reader who follows the link. That distinction is the only thing separating

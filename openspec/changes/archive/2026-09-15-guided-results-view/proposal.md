@@ -9,7 +9,7 @@ with a confidence and a caveat about *our* measurement, and nothing at all about
 
 The obvious fix — put a target next to each number — is the one thing this repo has already decided
 it will not do. Bead `strides-yg8` set out to give `overstriding` an interpretive band so a
-cross-clip disagreement could surface on it, and closed without one, naming *"why not just pick a
+cross-clip disagreement could surface on it, and (still open) rejects picking one, naming *"why not just pick a
 number"* explicitly: a per-metric magnitude threshold means eleven unjustifiable constants.
 CLAUDE.md's **"The 4K area floor cannot be re-derived"** section is the same story told as a
 measurement — a threshold measured, found inside a factor-of-2.9 squeeze, and the whole direction
