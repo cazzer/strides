@@ -70,30 +70,15 @@ function zoneLabel(metric: BandedMetric, zoneIndex: number): string {
   return bandOf(metric).zones[zoneIndex].label
 }
 
-/** The labels printed under the track: every bound, with a ≤ 1-display-unit gap's pair merged. */
+/**
+ * The only numbers printed under the track: the band's lowest and highest bound. Every interior
+ * bound is an unlabelled seam, and the zone list beneath prints all of them with their units.
+ */
 function expectedBoundLabels(band: ReferenceBand): string[] {
   const bounds = distinctBounds(band)
-  const labels: string[] = []
-  for (let i = 0; i < bounds.length; i++) {
-    const [from, to] = [bounds[i], bounds[i + 1]]
-    const narrowGap =
-      to !== undefined &&
-      band.zones.some(
-        (zone, z) => z > 0 && band.zones[z - 1].max === from && zone.min === to,
-      ) &&
-      Number(formatBandNumber(to, band.unit)) -
-        Number(formatBandNumber(from, band.unit)) <=
-        1
-    if (narrowGap) {
-      labels.push(
-        `${formatBandNumber(from, band.unit)}/${formatBandNumber(to, band.unit)}`,
-      )
-      i++
-    } else {
-      labels.push(formatBandNumber(from, band.unit))
-    }
-  }
-  return labels
+  return [bounds[0], bounds[bounds.length - 1]].map((bound) =>
+    formatBandNumber(bound, band.unit),
+  )
 }
 
 function renderScale(metric: BandedMetric, value: number) {
@@ -138,7 +123,7 @@ function one(root: Element, selector: string): HTMLElement {
 
 describe('MetricScale — every published zone boundary renders', () => {
   it.each(BANDED)(
-    '%s: a zone per published zone, a tick per bound, and a label per bound or narrow gap',
+    '%s: a zone per published zone, a seam per bound, and a label per bound or narrow gap',
     (metric) => {
       const band = bandOf(metric)
       const bounds = distinctBounds(band)
@@ -150,7 +135,7 @@ describe('MetricScale — every published zone boundary renders', () => {
       expect(container.querySelectorAll('.metric-scale__zone')).toHaveLength(
         band.zones.length,
       )
-      expect(container.querySelectorAll('.metric-scale__tick')).toHaveLength(
+      expect(container.querySelectorAll('.metric-scale__seam')).toHaveLength(
         bounds.length,
       )
       const labels = [
@@ -175,10 +160,15 @@ describe('MetricScale — every published zone boundary renders', () => {
     const items = [...figure.querySelectorAll('.metric-scale__zone-item')].map(
       (node) => node.textContent,
     )
+    // The two gap rows are the hatched spans on the track, which a screen reader cannot see: without
+    // them the list steps from `163` to `164` with nothing saying the span between is uncovered
+    // rather than merely unmentioned.
     expect(items).toEqual([
       `below 153 steps per minute: ${zoneLabel('cadence', 0)}`,
       `153 to 163 steps per minute: ${zoneLabel('cadence', 1)}`,
+      "163 to 164 steps per minute: not in the source's table",
       `164 to 173 steps per minute: ${zoneLabel('cadence', 2)}`,
+      "173 to 174 steps per minute: not in the source's table",
       `174 to 183 steps per minute: ${zoneLabel('cadence', 3)}`,
       `above 183 steps per minute: ${zoneLabel('cadence', 4)}`,
     ])
@@ -192,7 +182,9 @@ describe('MetricScale — every published zone boundary renders', () => {
     expect(items).toEqual([
       `below 3.05%: ${zoneLabel('verticalRatio', 0)}`,
       `3.05 to 3.70%: ${zoneLabel('verticalRatio', 1)}`,
+      "3.70 to 3.75%: not in the source's table",
       `3.75 to 4.30%: ${zoneLabel('verticalRatio', 2)}`,
+      "4.30 to 4.35%: not in the source's table",
       `4.35 to 5.05%: ${zoneLabel('verticalRatio', 3)}`,
       `above 5.05%: ${zoneLabel('verticalRatio', 4)}`,
     ])
@@ -286,13 +278,13 @@ describe('MetricScale — the position is available without the graphic', () => 
     expect(text).not.toMatch(/310(\.0+)?%/)
     expect(text).not.toMatch(/\b0\.03%/)
 
-    // On the track, too: the marker sits between the 3.05 and 3.70 ticks.
-    const ticks = [...container.querySelectorAll('.metric-scale__tick')].map(
+    // On the track, too: the marker sits between the 3.05 and 3.70 seams.
+    const seams = [...container.querySelectorAll('.metric-scale__seam')].map(
       percentOf,
     )
     const marker = percentOf(one(container, '.metric-scale__marker'))
-    expect(marker).toBeGreaterThan(ticks[0])
-    expect(marker).toBeLessThan(ticks[1])
+    expect(marker).toBeGreaterThan(seams[0])
+    expect(marker).toBeLessThan(seams[1])
   })
 
   it('a value in a gap in the source table says it falls between the two zones', () => {
@@ -338,6 +330,24 @@ describe('MetricScale — the position is available without the graphic', () => 
       }
     }
   })
+
+  it('authors no number of its own in the legend: a single range quotes its label verbatim', () => {
+    for (const metric of [
+      'verticalOscillationCm',
+      'trunkLean',
+      'kneeFlexion',
+    ] as const) {
+      const band = bandOf(metric)
+      const { container, unmount } = renderScale(
+        metric,
+        SAMPLE_VALUES[metric][0],
+      )
+      expect(one(container, '.metric-scale__legend').textContent, metric).toBe(
+        band.zones[0].label,
+      )
+      unmount()
+    }
+  })
 })
 
 describe('MetricScale — a value outside its band is reported, never silently clamped', () => {
@@ -352,10 +362,10 @@ describe('MetricScale — a value outside its band is reported, never silently c
     const marker = one(container, '.metric-scale__marker')
     expect(marker).not.toHaveAttribute('data-clamped')
     expect(percentOf(marker)).toBeGreaterThan(0)
-    const [lowerTick] = [
-      ...container.querySelectorAll('.metric-scale__tick'),
+    const [lowerSeam] = [
+      ...container.querySelectorAll('.metric-scale__seam'),
     ].map(percentOf)
-    expect(percentOf(marker)).toBeLessThan(lowerTick)
+    expect(percentOf(marker)).toBeLessThan(lowerSeam)
     expect(figure.textContent).not.toMatch(/drawn scale/)
   })
 
@@ -427,7 +437,16 @@ describe('MetricScale — a value outside its band is reported, never silently c
       )
       for (const value of SAMPLE_VALUES[metric]) {
         const { container, unmount } = renderScale(metric, value)
-        const graphic = one(container, '.metric-scale__graphic')
+        const graphic = one(container, '.metric-scale__graphic').cloneNode(
+          true,
+        ) as HTMLElement
+        // The rule is about what is printed ON THE TRACK — a scale number the reader will try to
+        // read against a mark. The legend beneath it is prose, and where it quotes a single range's
+        // own label (`…women's 10th to men's 90th percentile in Malisoux's 860 runners…`) the
+        // numbers in it are the source's own words, pinned verbatim by the test below.
+        graphic
+          .querySelectorAll('.metric-scale__legend')
+          .forEach((node) => node.remove())
         const valueLabel =
           one(graphic, '.metric-scale__value-label').textContent ?? ''
         // Per text node: adjacent labels' textContent runs together into one bogus number.
@@ -436,7 +455,8 @@ describe('MetricScale — a value outside its band is reported, never silently c
         for (let node = walker.nextNode(); node; node = walker.nextNode()) {
           numbers.push(...(node.textContent?.match(/-?\d+(\.\d+)?/g) ?? []))
         }
-        expect(numbers.length).toBeGreaterThan(distinctBounds(band).length)
+        // Guard against a vacuous pass: the graphic always prints the value and both outer bounds.
+        expect(numbers.length).toBeGreaterThanOrEqual(3)
         const valueNumbers: string[] = valueLabel.match(/-?\d+(\.\d+)?/g) ?? []
         for (const number of numbers) {
           expect(
@@ -446,6 +466,24 @@ describe('MetricScale — a value outside its band is reported, never silently c
         }
         unmount()
       }
+    }
+  })
+
+  it('authors no number of its own in the legend: a single range quotes its label verbatim', () => {
+    for (const metric of [
+      'verticalOscillationCm',
+      'trunkLean',
+      'kneeFlexion',
+    ] as const) {
+      const band = bandOf(metric)
+      const { container, unmount } = renderScale(
+        metric,
+        SAMPLE_VALUES[metric][0],
+      )
+      expect(one(container, '.metric-scale__legend').textContent, metric).toBe(
+        band.zones[0].label,
+      )
+      unmount()
     }
   })
 })
@@ -502,7 +540,9 @@ describe('MetricScale — a band with no finite extent', () => {
   it('draws no graphic but still states the position and the zones in text', () => {
     const band: ReferenceBand = {
       ...bandOf('cadence'),
-      zones: [{ label: 'Open zone', min: null, max: null }],
+      zones: [
+        { label: 'Open zone', min: null, max: null, shareOfRunners: null },
+      ],
     }
     const { container } = render(
       <MetricScale band={band} value={170} label="Cadence" />,
@@ -528,18 +568,32 @@ describe('MetricScale — legibility of the marks', () => {
         'forced-colors:border-[CanvasText]',
       ]),
     )
-    for (const tick of container.querySelectorAll('.metric-scale__tick')) {
-      expect(classesOf(tick)).toContain('forced-colors:bg-[CanvasText]')
+    for (const seam of container.querySelectorAll('.metric-scale__seam')) {
+      expect(classesOf(seam)).toContain('forced-colors:bg-[CanvasText]')
     }
     for (const zone of container.querySelectorAll('.metric-scale__zone')) {
       expect(classesOf(zone)).toEqual(
         expect.arrayContaining([
           'forced-colors:bg-[Canvas]',
+          'forced-colors:bg-none',
           'forced-colors:border-x',
           'forced-colors:border-[CanvasText]',
         ]),
       )
     }
+    // The clause explaining the SHADING goes with the shading forced colours has just dropped; the
+    // clause explaining the HATCHING does not, because `currentColor` hatching survives.
+    const legend = one(container, '.metric-scale__legend')
+    expect(classesOf(legend)).not.toContain('forced-colors:hidden')
+    for (const span of legend.querySelectorAll('span')) {
+      const hidden = classesOf(span).includes('forced-colors:hidden')
+      expect(hidden, span.textContent ?? '').toBe(
+        !classesOf(span).includes('metric-scale__legend-gap'),
+      )
+    }
+    expect(one(legend, '.metric-scale__legend-gap')).toHaveTextContent(
+      "not in the source's table",
+    )
     expect(classesOf(one(container, '.metric-scale__marker'))).toEqual(
       expect.arrayContaining([
         'forced-colors:bg-[Highlight]',
@@ -548,19 +602,19 @@ describe('MetricScale — legibility of the marks', () => {
     )
   })
 
-  it('draws the marker in black/white, not the brand colour, ringed in the opposite so it clears a tick', () => {
-    // Black on either light tint (neutral-300, neutral-400) is at least 8.6:1, and white on either
-    // dark tint (neutral-600, neutral-500) at least 4.7:1. The ring keeps it distinct from a tick,
-    // which is the same black or white.
+  it('draws the marker in the mark colour, not the brand colour, ringed in the track so it clears a seam', () => {
+    // `--color-scale-mark` against the most heavily shaded zone is 3.89:1 light and 3.66:1 dark, and
+    // 17.9:1 / 18.2:1 against bare track — the ring, which is the track colour, is what keeps it
+    // distinct from a seam drawn in the very same mark colour. Ratios live in `src/index.css`.
     const { container } = renderScale('cadence', 172)
     const classes = classesOf(one(container, '.metric-scale__marker'))
     expect(classes).toEqual(
       expect.arrayContaining([
-        'bg-black',
-        'dark:bg-white',
-        'ring-1',
-        'ring-white',
-        'dark:ring-black',
+        'bg-scale-mark',
+        'dark:bg-scale-mark-dark',
+        'ring-2',
+        'ring-scale-track',
+        'dark:ring-scale-track-dark',
       ]),
     )
     expect(classes.join(' ')).not.toMatch(/brand-/)
@@ -576,13 +630,18 @@ describe('MetricScale — legibility of the marks', () => {
           zone.min !== null &&
           band.zones[z - 1].max! < zone.min,
       ).length
-      const { container, unmount } = renderScale(metric, SAMPLE_VALUES[metric][0])
+      const { container, unmount } = renderScale(
+        metric,
+        SAMPLE_VALUES[metric][0],
+      )
       const slivers = [
         ...container.querySelectorAll<HTMLElement>('.metric-scale__gap'),
       ]
       expect(slivers, metric).toHaveLength(gaps)
       for (const sliver of slivers) {
-        expect(sliver.style.backgroundImage).toMatch(/repeating-linear-gradient/)
+        expect(sliver.style.backgroundImage).toMatch(
+          /repeating-linear-gradient/,
+        )
         expect(classesOf(sliver)).toContain('forced-colors:text-[CanvasText]')
       }
       unmount()
@@ -595,85 +654,162 @@ describe('MetricScale — legibility of the marks', () => {
     ).toBe(true)
   })
 
-  it('merges a one-unit gap\'s two bounds into one label, centred between their ticks', () => {
-    const { container } = renderScale('cadence', 172)
-    const ticks = [...container.querySelectorAll('.metric-scale__tick')].map(percentOf)
-    const merged = [
-      ...container.querySelectorAll<HTMLElement>('.metric-scale__bound-label'),
-    ].find((label) => label.textContent === '163/164')
-    expect(merged).toBeDefined()
-    // Ticks: 153, 163, 164, 173, 174, 183 — one each, the merge is the label's only.
-    expect(ticks).toHaveLength(6)
-    expect(percentOf(merged!)).toBeCloseTo((ticks[1] + ticks[2]) / 2, 6)
-  })
-
-  it('keeps a gap wider than one displayed unit as two labels', () => {
-    const band: ReferenceBand = {
-      ...bandOf('cadence'),
-      zones: [
-        { label: 'a', min: 150, max: 160 },
-        { label: 'b', min: 162, max: 170 },
-      ],
+  it("prints exactly three numbers: the band's two outer bounds and the value", () => {
+    for (const metric of BANDED) {
+      const band = bandOf(metric)
+      const bounds = distinctBounds(band)
+      for (const value of SAMPLE_VALUES[metric]) {
+        const { container, unmount } = renderScale(metric, value)
+        const labels = [
+          ...container.querySelectorAll('.metric-scale__bound-label'),
+        ].map((node) => node.textContent)
+        expect(labels, `${metric} at ${value}`).toEqual([
+          formatBandNumber(bounds[0], band.unit),
+          formatBandNumber(bounds[bounds.length - 1], band.unit),
+        ])
+        // ...and one seam per bound all the same, interior ones included.
+        expect(
+          container.querySelectorAll('.metric-scale__seam'),
+          `${metric} at ${value}`,
+        ).toHaveLength(bounds.length)
+        unmount()
+      }
     }
-    const { container } = render(<MetricScale band={band} value={165} label="Cadence" />)
-    const labels = [
-      ...container.querySelectorAll('.metric-scale__bound-label'),
-    ].map((node) => node.textContent)
-    expect(labels).toEqual(['150', '160', '162', '170'])
-    expect(container.querySelectorAll('.metric-scale__gap')).toHaveLength(1)
+    // Not vacuous: two bands publish six bounds each, so four of them go unprinted.
+    expect(distinctBounds(bandOf('cadence'))).toHaveLength(6)
+    expect(distinctBounds(bandOf('verticalRatio'))).toHaveLength(6)
   })
 
-  it('lists zones in the text-xs size, not an arbitrary 11px', () => {
+  it('shades zones by share of runners: the largest share darkest, equal shares alike', () => {
+    for (const metric of ['cadence', 'verticalRatio'] as const) {
+      const band = bandOf(metric)
+      const { container, unmount } = renderScale(
+        metric,
+        SAMPLE_VALUES[metric][0],
+      )
+      const zones = [
+        ...container.querySelectorAll<HTMLElement>('.metric-scale__zone'),
+      ]
+      const steps = zones.map((zone) => Number(zone.dataset.shade))
+      // Garmin's 5 / 30 / 70 / 95 cut points: 0.05, 0.25, 0.40, 0.25, 0.05.
+      expect(
+        band.zones.map((zone) => zone.shareOfRunners),
+        metric,
+      ).toEqual([0.05, 0.25, 0.4, 0.25, 0.05])
+      expect(steps, metric).toEqual([0, 1, 2, 1, 0])
+      // Equal shares are drawn identically, and the fullest step is the most-populated zone.
+      expect(classesOf(zones[0]), metric).toEqual(classesOf(zones[4]))
+      expect(classesOf(zones[1]), metric).toEqual(classesOf(zones[3]))
+      expect(classesOf(zones[2]).join(' '), metric).toContain('scale-zone-3')
+      expect(
+        one(container, '.metric-scale__legend').textContent,
+        metric,
+      ).toContain('more runners')
+      unmount()
+    }
+  })
+
+  it('shades a single published range without claiming a distribution inside it', () => {
+    for (const metric of [
+      'verticalOscillationCm',
+      'trunkLean',
+      'kneeFlexion',
+    ] as const) {
+      const band = bandOf(metric)
+      expect(band.zones, metric).toHaveLength(1)
+      expect(band.zones[0].shareOfRunners, metric).toBeNull()
+      const { container, unmount } = renderScale(
+        metric,
+        SAMPLE_VALUES[metric][0],
+      )
+      const zone = one(container, '.metric-scale__zone')
+      expect(zone.dataset.shade, metric).toBe('range')
+      // FLAT, at one step — no ramp of any shape. A symmetric ramp (which this was: zone-2 easing
+      // to zone-3 across the middle and back) is the universal "optimal range" idiom, and these are
+      // exactly the bands whose source publishes no distribution at all.
+      expect(classesOf(zone).join(' '), metric).not.toContain('linear-gradient')
+      expect(classesOf(zone), metric).toContain('bg-scale-zone-3')
+      expect(classesOf(zone), metric).toContain('dark:bg-scale-zone-3-dark')
+      // The freed legend slot names the range instead of claiming a distribution in it: the
+      // headline can only say "within the range shown", so without this nothing says of what.
+      expect(one(container, '.metric-scale__legend'), metric).toHaveTextContent(
+        band.zones[0].label,
+      )
+      expect(
+        one(container, '.metric-scale__legend').textContent,
+        metric,
+      ).not.toContain('more runners')
+      unmount()
+    }
+  })
+
+  it('states the shading order per theme, because it inverts between them, and says what hatching is', () => {
     const { container } = renderScale('cadence', 172)
-    const classes = classesOf(one(container, '.metric-scale__zones'))
-    expect(classes).toContain('text-xs')
-    expect(classes).not.toContain('text-[11px]')
+    const legend = one(container, '.metric-scale__legend')
+    const spans = [...legend.querySelectorAll('span')]
+    expect(spans.map((span) => span.textContent)).toEqual([
+      'Darker = more runners',
+      'Brighter = more runners',
+      ' · ',
+      "hatched = not in the source's table",
+    ])
+    expect(classesOf(spans[0])).toContain('dark:hidden')
+    expect(classesOf(spans[1])).toEqual(
+      expect.arrayContaining(['hidden', 'dark:inline']),
+    )
   })
 
-  it.each([
-    ['verticalRatio', 0.075],
-    ['cadence', 163.5],
-    ['cadence', 100],
-    ['cadence', 260],
-    ['kneeFlexion', 20],
-  ] as const)('never overprints two bound labels in one row, at a 280 px track — %s at %s', (metric, value) => {
-    // verticalRatio at 0.075 widens the domain almost to its limit, which squeezes the bounds —
-    // including the merged 3.70/3.75 and 4.30/4.35 labels — into under half the track.
+  it('explains hatching only where the band has a gap to explain', () => {
+    // `trunkLean` publishes one range and no gaps, so there is no hatching on its track and the
+    // clause would name a mark that is not there.
+    const { container } = renderScale('trunkLean', 10)
+    expect(container.querySelector('.metric-scale__legend-gap')).toBeNull()
+  })
+
+  it('keeps the text alternative for screen readers, not as visible prose', () => {
+    // The card's headline states the position in words, and the graphic prints the band's outer
+    // bounds with a seam at every interior one — so the caption and the zone list would repeat, in
+    // a second wording, what a sighted reader has already met. They stay in the accessibility tree.
+    const { container } = renderScale('cadence', 172)
+    for (const selector of [
+      '.metric-scale__zones',
+      '.metric-scale__position',
+    ]) {
+      expect(classesOf(one(container, selector)), selector).toContain('sr-only')
+    }
+    // Still text, and still carrying every bound with its unit: sr-only hides nothing from AT.
+    const zones = one(container, '.metric-scale__zones')
+    expect(zones).not.toHaveAttribute('aria-hidden')
+    expect(zones.textContent).toContain('164 to 173 steps per minute')
+  })
+
+  it('keeps the two printed bounds clear of each other at a 280 px track', () => {
+    // The old scale printed a label per bound and stacked them into rows to stop them overprinting.
+    // With two labels there are no rows: the check is simply that they do not touch, at the
+    // narrowest track a 390 px viewport gives this card.
     const TRACK_PX = 280
     // Generous for an 11 px sans-serif digit or point, so the check errs toward failing.
     const CHAR_PX = 7
-    const { container } = renderScale(metric, value)
-    const labels = [
-      ...container.querySelectorAll<HTMLElement>('.metric-scale__bound-label'),
-    ].map((label) => {
-      const width = (label.textContent ?? '').length * CHAR_PX
-      // `anchorAt`: the label's left edge sits at percent × (track − label width).
-      const left = (percentOf(label) / 100) * (TRACK_PX - width)
-      return {
-        text: label.textContent,
-        row: Number(label.dataset.row),
-        left,
-        right: left + width,
-      }
-    })
-    expect(labels.map((label) => label.text)).toEqual(
-      expectedBoundLabels(bandOf(metric)),
-    )
-    for (const a of labels) {
-      for (const b of labels) {
-        if (a === b || a.row !== b.row) continue
-        const overlaps = a.left < b.right && b.left < a.right
-        expect(
-          overlaps,
-          `row ${a.row}: ${a.left}–${a.right} vs ${b.left}–${b.right}`,
-        ).toBe(false)
-      }
+    for (const [metric, value] of [
+      ['verticalRatio', 0.075],
+      ['cadence', 163.5],
+      ['cadence', 100],
+      ['cadence', 260],
+      ['kneeFlexion', 20],
+    ] as const) {
+      const { container, unmount } = renderScale(metric, value)
+      const [left, right] = [
+        ...container.querySelectorAll<HTMLElement>(
+          '.metric-scale__bound-label',
+        ),
+      ].map((label) => {
+        const width = (label.textContent ?? '').length * CHAR_PX
+        // `anchorAt`: the label's left edge sits at percent × (track − label width).
+        const start = (percentOf(label) / 100) * (TRACK_PX - width)
+        return { start, end: start + width }
+      })
+      expect(left.end, `${metric} at ${value}`).toBeLessThan(right.start)
+      unmount()
     }
-    // The label strip is as tall as the rows it uses.
-    const rows = new Set(labels.map((label) => label.row)).size
-    const strip = container.querySelector<HTMLElement>(
-      '.metric-scale__bound-label',
-    )!.parentElement!
-    expect(strip.style.height).toBe(`${rows}rem`)
   })
 })

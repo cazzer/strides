@@ -13,10 +13,15 @@ export type BandUnit = MetricResult['unit']
 /**
  * A source a band or a claim rests on, in the shape the view has to render it.
  *
- * All four fields are required because the spec requires all four on screen, in the same view as
- * the band, without hovering or expanding. That is not a presentation preference: a band with its
- * provenance stripped off is indistinguishable from a number this app invented, and declining to
- * invent numbers is the whole reason this data layer exists (design.md D1).
+ * All five fields are required, and three of them — `shortTitle`, `populationShort`, `sampleSize` —
+ * are what the spec requires on screen without hovering or expanding, as one citation line. That is
+ * not a presentation preference: a band with its provenance stripped off is indistinguishable from
+ * a number this app invented, and declining to invent numbers is the whole reason this data layer
+ * exists (design.md D1).
+ *
+ * `population` — the source's own full description — may sit inside the card's disclosure, because
+ * it is a DETAIL OF an attribution the reader has already seen rather than the attribution itself
+ * (declutter-guided-results-view design.md D1, which narrows the original rule deliberately).
  */
 export interface BandSource {
   /** Author, year and where it was published — enough to find it without following the link. */
@@ -31,6 +36,16 @@ export interface BandSource {
   url: string
   /** Who was measured, and under what conditions. Renders verbatim. */
   population: string
+  /**
+   * `population` compressed to a noun phrase for the visible citation line — "recreational
+   * runners", "population not stated". At most 40 characters, no digits and no pace: the line it
+   * sits on already carries the sample size, and a pace ("at 10 km/h") is the part of a population
+   * statement that needs the full sentence around it to mean anything.
+   *
+   * A compression of `population`, never a new claim about who was measured. Declared right after
+   * `population` because a test walks this interface's key order to keep the pair adjacent.
+   */
+  populationShort: string
   /**
    * How many were measured. A string rather than a number, deliberately: two of the five shipped
    * bands rest on a manufacturer's zone table over a population whose size is not published, and
@@ -91,6 +106,27 @@ export interface BandZone {
    * is also finite, exclusive when `min` is `null` (see the zone-inclusivity rule above).
    */
   max: number | null
+  /**
+   * The share of the source's population this zone holds, 0..1 — `0.40` for a zone spanning the
+   * 30th to the 70th percentile. `null` where the source publishes no share for its zones, which is
+   * every single-range band here.
+   *
+   * **All-or-none per band**, pinned by test: half a distribution is not a distribution, and a
+   * renderer shading some zones by share and others by nothing would invent the missing ones.
+   *
+   * ## Where the number comes from, and where it must NOT come from
+   *
+   * From the source's published percentile **cut points** — Garmin's 5 / 30 / 70 / 95 — as the
+   * spans between them. **Never from this file's own restated integer labels**: reading `5th–30th`,
+   * `31st–70th` and `71st–95th` as spans and summing gives 1.01, because writing half-open
+   * intervals as inclusive integers is an artefact of English rather than a property of the table.
+   * That 1% would be rendered as a shade.
+   *
+   * It is a description of the measured population and carries no preferred end. The most-populated
+   * zone is the most common one, which says nothing about whether a runner should be in it — see
+   * `MetricGuidance.evidenceDirection`, and declutter-guided-results-view design.md D3 and D7.
+   */
+  shareOfRunners: number | null
 }
 
 /**
@@ -192,6 +228,20 @@ export interface ReferenceBand {
    * must render whether or not a band does.
    */
   note: string | null
+  /**
+   * Whose zones these are, as a trailing phrase — "of Garmin's table" — appended to a zone label
+   * in the card's one-line headline. `null` where the labels already say whose table they are.
+   *
+   * It exists because a bare "30th–69th percentile" in a headline names a percentile of nothing:
+   * the spec requires the headline to attribute the zones to the population that was measured.
+   * `cadence`'s labels are Garmin's own and say only the percentile, so it carries one;
+   * `verticalRatio`'s restated labels already end "of Garmin's table", so it is `null` there and
+   * appending anything would read "of Garmin's table of Garmin's table".
+   *
+   * Never used for a single-range band, whose headline says "within the range shown" rather than
+   * quoting a 90-character range label.
+   */
+  zoneOwner: string | null
 }
 
 /** Where a band's finite bounds start and end. See `referenceBandEnvelope`. */
@@ -415,6 +465,35 @@ export interface MetricGuidance {
   }
   /** One plain sentence the guided view renders above this metric's remediation links. null for most. */
   remediationIntro: string | null
+  /**
+   * The one studied change this metric's card shows on screen, or `null` where its record carries
+   * none. The view prefixes it, so `text` starts mid-sentence ("a metronome 5–10% above your own
+   * step rate…").
+   *
+   * Five rules, each pinned by test:
+   *
+   * 1. **`url` MUST be one of this metric's own `remediation` links**, so the line cannot introduce
+   *    a source the record has not verified.
+   * 2. **Relative to the runner's own value, never a value to reach.** "5–10% above your own step
+   *    rate" is the size of the change the study made; no source in this record names a target, and
+   *    a Try line that did would assert what design.md D1 refuses to.
+   * 3. **No grading word** applied to the runner's reading, and no "should", "target" or "aim", and
+   *    no superlative ("the most-studied", "the best", "the only") — a superlative ranks the studies
+   *    rather than the runner, but it is still a claim, and it belongs to whichever text can cite it.
+   * 4. **A compression of the linked study's own summary**, which is already rendered on the card —
+   *    never a new claim. Pinned numerically: every number in `text` appears in that summary.
+   * 5. **`direction` is which way the line moves the quantity the CARD reports**, so the view can
+   *    withhold a line that would point a runner further out of the band they are already outside.
+   *    `overstriding`'s cue raises step rate, but what it moves for the reader of that card is
+   *    overstriding — `'lower'`. A line is withheld only when the value is outside the band on that
+   *    same side; inside the band, in a published gap, or on a metric with no band, it renders.
+   *
+   * `null` is a finding rather than an omission in two places: `footStrikePattern`'s `remediation`
+   * is empty because the best available systematic review rates the injury link as low evidence, and
+   * `trunkLean`'s is contested, four measured outcomes pointing in different directions at once. See
+   * declutter-guided-results-view design.md D6 for the full per-metric table.
+   */
+  tryLine: { text: string; url: string; direction: 'lower' | 'higher' } | null
   /** Guided-view-only replacement for the shared METRIC_DESCRIPTIONS entry (src/results/metricDescriptions.ts),
    * used where the shared copy reads badly in a page about published ranges. null = use the shared one.
    * The shared descriptions are the classic view's copy and are NOT edited. */

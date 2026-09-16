@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   bandBounds,
   describeBandPosition,
+  describeBandPositionBriefly,
   formatMeasuredBandValue,
   locateInBand,
 } from './bandPosition'
@@ -105,8 +106,8 @@ describe('locateInBand — an open-ended zone is strict on its finite bound', ()
     const band: ReferenceBand = {
       ...bandOf('cadence'),
       zones: [
-        { label: 'low', min: null, max: 150 },
-        { label: 'high', min: 190, max: null },
+        { label: 'low', min: null, max: 150, shareOfRunners: null },
+        { label: 'high', min: 190, max: null, shareOfRunners: null },
       ],
     }
     expect(where(locateInBand(band, 149.9))).toBe('low')
@@ -122,8 +123,8 @@ describe('locateInBand — an open-ended zone is strict on its finite bound', ()
     const band: ReferenceBand = {
       ...bandOf('cadence'),
       zones: [
-        { label: 'open', min: null, max: 160 },
-        { label: 'closed', min: 153, max: 163 },
+        { label: 'open', min: null, max: 160, shareOfRunners: null },
+        { label: 'closed', min: 153, max: 163, shareOfRunners: null },
       ],
     }
     expect(where(locateInBand(band, 155))).toBe('closed')
@@ -131,11 +132,21 @@ describe('locateInBand — an open-ended zone is strict on its finite bound', ()
   })
 
   it('a closed zone is inclusive on both bounds', () => {
-    expect(where(locateInBand(bandOf('cadence'), 163))).toBe(label('cadence', 1))
-    expect(where(locateInBand(bandOf('cadence'), 164))).toBe(label('cadence', 2))
-    expect(where(locateInBand(bandOf('trunkLean'), 1.8))).toBe(label('trunkLean', 0))
-    expect(where(locateInBand(bandOf('kneeFlexion'), 129))).toBe(label('kneeFlexion', 0))
-    expect(where(locateInBand(bandOf('kneeFlexion'), 71.3))).toBe(label('kneeFlexion', 0))
+    expect(where(locateInBand(bandOf('cadence'), 163))).toBe(
+      label('cadence', 1),
+    )
+    expect(where(locateInBand(bandOf('cadence'), 164))).toBe(
+      label('cadence', 2),
+    )
+    expect(where(locateInBand(bandOf('trunkLean'), 1.8))).toBe(
+      label('trunkLean', 0),
+    )
+    expect(where(locateInBand(bandOf('kneeFlexion'), 129))).toBe(
+      label('kneeFlexion', 0),
+    )
+    expect(where(locateInBand(bandOf('kneeFlexion'), 71.3))).toBe(
+      label('kneeFlexion', 0),
+    )
   })
 })
 
@@ -214,15 +225,15 @@ describe('bandBounds, and the envelope the scale is drawn over', () => {
     const band: ReferenceBand = {
       ...bandOf('cadence'),
       zones: [
-        { label: 'low', min: null, max: 3 },
-        { label: 'high', min: 5, max: null },
+        { label: 'low', min: null, max: 3, shareOfRunners: null },
+        { label: 'high', min: 5, max: null, shareOfRunners: null },
       ],
     }
     expect(referenceBandEnvelope(band)).toEqual({ min: 3, max: 5 })
     expect(
       referenceBandEnvelope({
         ...band,
-        zones: [{ label: 'all', min: null, max: null }],
+        zones: [{ label: 'all', min: null, max: null, shareOfRunners: null }],
       }),
     ).toBeNull()
   })
@@ -292,7 +303,8 @@ describe('formatMeasuredBandValue', () => {
 describe('describeBandPosition', () => {
   // Zone labels are read from the band (see `label`); the numbers, the units and the sentence
   // shapes are what these rows pin.
-  const quoted = (metric: BandedMetric, zoneIndex: number) => `“${label(metric, zoneIndex)}”`
+  const quoted = (metric: BandedMetric, zoneIndex: number) =>
+    `“${label(metric, zoneIndex)}”`
   it.each([
     [
       'cadence',
@@ -368,14 +380,17 @@ describe('describeBandPosition', () => {
       ...bandOf('cadence'),
       derivation: null,
       zones: [
-        { label: 'first', min: 10, max: 20 },
-        { label: 'second', min: 25, max: 30 },
+        { label: 'first', min: 10, max: 20, shareOfRunners: null },
+        { label: 'second', min: 25, max: 30, shareOfRunners: null },
       ],
     }
     expect(describeBandPosition(gapped, 22)).toBe(
       "22 steps per minute sits in the gap between the zones labelled “first” and “second”; the source's table jumps from 20 steps per minute to 25 steps per minute.",
     )
-    const derived = { ...gapped, derivation: { statement: 'Halved.', restsOn: [] } }
+    const derived = {
+      ...gapped,
+      derivation: { statement: 'Halved.', restsOn: [] },
+    }
     expect(describeBandPosition(derived, 22)).toBe(
       '22 steps per minute sits in the gap between the zones labelled “first” and “second”; the range shown jumps from 20 steps per minute to 25 steps per minute.',
     )
@@ -396,7 +411,7 @@ describe('describeBandPosition', () => {
   it('names the nearest bound when the band has no finite range to quote', () => {
     const band: ReferenceBand = {
       ...bandOf('verticalOscillationCm'),
-      zones: [{ label: 'open above', min: 6, max: null }],
+      zones: [{ label: 'open above', min: 6, max: null, shareOfRunners: null }],
     }
     expect(describeBandPosition(band, 4)).toBe(
       '4.0 centimetres is below the range shown, which starts at 6.0 centimetres.',
@@ -458,3 +473,125 @@ describe('describeBandPosition', () => {
     }
   })
 })
+
+describe('describeBandPositionBriefly — the card headline’s position fragment', () => {
+  /**
+   * The whole headline, value and position, exactly as the card prints it — so this table is read
+   * against what a reader sees rather than against a fragment.
+   */
+  function headline(metric: BandedMetric, value: number): string {
+    const band = bandOf(metric)
+    return `${formatMeasuredBandValue(band, value)} · ${describeBandPositionBriefly(band, value)}`
+  }
+
+  it.each([
+    [
+      'cadence',
+      172,
+      "172 steps/min · 30th–69th percentile of Garmin's table",
+    ],
+    [
+      'cadence',
+      163.5,
+      "163.5 steps/min · between the 5th–29th and 30th–69th percentiles of Garmin's table",
+    ],
+    [
+      'cadence',
+      150,
+      "150 steps/min · below the 5th percentile of Garmin's table",
+    ],
+    [
+      'cadence',
+      190,
+      "190 steps/min · above the 95th percentile of Garmin's table",
+    ],
+    ['verticalRatio', 0.0246, "2.46% · lowest 5% of Garmin's table"],
+    [
+      'verticalRatio',
+      0.0372,
+      "3.72% · between the 5th–30th and 31st–70th percentiles of Garmin's table",
+    ],
+    ['verticalRatio', 0.06, "6.00% · highest 5% of Garmin's table"],
+    ['verticalOscillationCm', 4.42, '4.4 cm · below the range shown'],
+    ['verticalOscillationCm', 7.2, '7.2 cm · within the range shown'],
+    ['verticalOscillationCm', 10.5, '10.5 cm · above the range shown'],
+    ['trunkLean', 4.2, '4.2° · within the range shown'],
+    ['kneeFlexion', 60, '60.0° · below the range shown'],
+    ['kneeFlexion', 102.9, '102.9° · within the range shown'],
+  ] as const)('%s at %s reads "%s"', (metric, value, expected) => {
+    expect(headline(metric, value)).toBe(expected)
+  })
+
+  it('names whose zones they are on every multi-zone band, at every sample value', () => {
+    for (const metric of BANDED) {
+      const band = bandOf(metric)
+      if (band.zones.length === 1) continue
+      for (const value of [
+        ...bandBounds(band),
+        ...bandBounds(band).map((bound) => bound + 0.5),
+      ]) {
+        const brief = describeBandPositionBriefly(band, value)
+        if (/the range shown/.test(brief)) continue
+        expect(/Garmin/.test(brief), `${metric} at ${value}: ${brief}`).toBe(
+          true,
+        )
+      }
+    }
+  })
+
+  it('applies no grading word and quotes no bound, on any band at any of its bounds', () => {
+    const GRADING =
+      /\b(good|bad|poor|optimal|ideal|excessive|healthy|target|normal|abnormal|better|worse|should|recommended)\b/i
+    for (const metric of BANDED) {
+      const band = bandOf(metric)
+      for (const bound of bandBounds(band)) {
+        for (const value of [bound - 0.5, bound, bound + 0.5]) {
+          const brief = describeBandPositionBriefly(band, value)
+          expect(brief, `${metric} at ${value}`).not.toMatch(GRADING)
+          // The scale prints the bounds; the headline states a position, not a range.
+          expect(brief, `${metric} at ${value}`).not.toMatch(/\d+\.\d/)
+        }
+      }
+    }
+  })
+
+  it('quotes both labels whole where they share no tail to merge', () => {
+    // Not a shipped shape — no rule should depend on two labels happening to rhyme.
+    const band: ReferenceBand = {
+      ...bandOf('cadence'),
+      zoneOwner: null,
+      zones: [
+        { label: 'Low readings', min: 150, max: 160, shareOfRunners: null },
+        { label: 'Often seen', min: 170, max: 180, shareOfRunners: null },
+      ],
+    }
+    expect(describeBandPositionBriefly(band, 165)).toBe(
+      'between “Low readings” and “Often seen”',
+    )
+  })
+
+  it('agrees with the long sentence about which zone the value is in', () => {
+    // The two are written separately, so this is where they are held to the same answer.
+    for (const metric of BANDED) {
+      const band = bandOf(metric)
+      for (const bound of bandBounds(band)) {
+        for (const value of [bound - 0.5, bound, bound + 0.5]) {
+          const position = locateInBand(band, value)
+          const brief = describeBandPositionBriefly(band, value)
+          if (position.kind === 'inZone' && band.zones.length > 1) {
+            expect(brief.startsWith(lowercaseFirst(position.zone.label))).toBe(
+              true,
+            )
+          }
+          if (position.kind === 'outside') {
+            expect(brief).toBe(`${position.side} the range shown`)
+          }
+        }
+      }
+    }
+  })
+})
+
+function lowercaseFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1)
+}

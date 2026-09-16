@@ -35,7 +35,11 @@ const FOCUS_RING_TARGET = `scroll-mt-4 ${FOCUS}`
 const H2 = 'font-display text-xl font-bold tracking-tight'
 const SUMMARY = `cursor-pointer p-5 font-sans text-base font-semibold ${FOCUS}`
 
-function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
+function plural(
+  count: number,
+  singular: string,
+  pluralForm = `${singular}s`,
+): string {
   return `${count} ${count === 1 ? singular : pluralForm}`
 }
 
@@ -62,13 +66,18 @@ export function GuidedResultsView({
   clipCount = 1,
 }: GuidedResultsViewProps) {
   const { phase, heuristics, error, start } = analysis
-  const scalePassCouldntAdd = " A second look at the clip couldn't add the extra metrics."
+  const scalePassCouldntAdd =
+    " A second look at the clip couldn't add the extra metrics."
   const addedMetricCount = heuristics
-    ? [heuristics.verticalOscillationCm.value !== null, heuristics.stepWidthCm.value !== null]
-        .filter(Boolean).length
+    ? [
+        heuristics.verticalOscillationCm.value !== null,
+        heuristics.stepWidthCm.value !== null,
+      ].filter(Boolean).length
     : 0
   const analyzeDisabled = phase === 'sampling' || phase === 'processing'
-  const analyzeDisabledReason = analyzeDisabled ? 'Analysis already in progress' : undefined
+  const analyzeDisabledReason = analyzeDisabled
+    ? 'Analysis already in progress'
+    : undefined
 
   return (
     <section className="guided-results space-y-6" aria-label="Analysis results">
@@ -96,7 +105,8 @@ export function GuidedResultsView({
       {phase === 'ready' && (
         <p role="status">
           Analysis complete.
-          {(analysis.scalePass.status === 'pending' || analysis.scalePass.status === 'running') &&
+          {(analysis.scalePass.status === 'pending' ||
+            analysis.scalePass.status === 'running') &&
             ' Measuring more metrics with a second look at the clip…'}
           {analysis.scalePass.status === 'done' &&
             (addedMetricCount > 0
@@ -107,7 +117,10 @@ export function GuidedResultsView({
       )}
 
       {phase === 'error' && error && (
-        <div className="border-2 border-black dark:border-white border-l-4 border-l-brand-600 dark:border-l-brand-400 p-4 space-y-2" role="alert">
+        <div
+          className="border-2 border-black dark:border-white border-l-4 border-l-brand-600 dark:border-l-brand-400 p-4 space-y-2"
+          role="alert"
+        >
           <p>{error.message}</p>
           <button
             type="button"
@@ -165,7 +178,10 @@ function openAncestors(target: Element): boolean {
 let handledHash: string | null = null
 
 /** The element a fragment names, if it is inside `root`. */
-function fragmentTarget(root: HTMLElement | null, hash: string): HTMLElement | null {
+function fragmentTarget(
+  root: HTMLElement | null,
+  hash: string,
+): HTMLElement | null {
   if (root === null || hash.length <= 1) return null
   let id: string
   try {
@@ -186,7 +202,13 @@ function Contents({
   // A click on a link to the CURRENT hash fires no hashchange, which is why this is not left to
   // the listener in `GuidedMeasurements`. A modified click opens a new tab and leaves this page be.
   const reveal = (event: MouseEvent<HTMLAnchorElement>, id: string) => {
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+    if (
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
       return
     }
     const target = event.currentTarget.ownerDocument.getElementById(id)
@@ -202,7 +224,10 @@ function Contents({
       className="guided-results__contents border-2 border-black p-4 dark:border-white"
     >
       {/* The nav's own name already says this; the visible copy is for sighted readers only. */}
-      <p aria-hidden="true" className="mb-2 font-display text-sm font-bold uppercase tracking-wide">
+      <p
+        aria-hidden="true"
+        className="mb-2 font-display text-sm font-bold uppercase tracking-wide"
+      >
         Measurements on this page
       </p>
       <ol className="grid gap-x-8 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
@@ -268,7 +293,9 @@ export function GuidedMeasurements({
   const rootRef = useRef<HTMLDivElement>(null)
   const { banded, unbanded, notMeasured } = guidedGroups(heuristics, guidance)
   // Keyed by metric, never by position: evidence arrives in the extraction plan's own order.
-  const evidenceByMetric = new Map(evidence.map((entry) => [entry.metric, entry]))
+  const evidenceByMetric = new Map(
+    evidence.map((entry) => [entry.metric, entry]),
+  )
 
   useEffect(() => {
     // On mount: a fragment this page session has not revealed yet — typically a shared link, whose
@@ -328,16 +355,12 @@ export function GuidedMeasurements({
           aria-labelledby={bandedHeadingId}
           className="guided-results__group guided-results__group--banded space-y-4"
         >
-          <div className="space-y-1">
-            <h2 id={bandedHeadingId} className={H2}>
-              Compared with published research
-            </h2>
-            <p className={MUTED}>
-              Each range below is where a named study or manufacturer measured a group of runners
-              to fall. It describes that group, and places your reading beside it without grading
-              it.
-            </p>
-          </div>
+          {/* No intro paragraph: every card below carries its own citation line, which says whose
+              range it is over whom, so a paragraph restating that for all five is words the reader
+              has to get past to reach the first number. */}
+          <h2 id={bandedHeadingId} className={H2}>
+            Compared with published research
+          </h2>
           {cards(banded, 'framed')}
         </section>
       )}
@@ -348,18 +371,17 @@ export function GuidedMeasurements({
           className="guided-results__group guided-results__group--unbanded space-y-3"
         >
           <h2 id={unbandedHeadingId} className={H2}>
-            {anyWithheld ? 'Measured, no range shown' : 'Measured, no published range'}
+            {anyWithheld
+              ? 'Measured, no range shown'
+              : 'Measured, no published range'}
           </h2>
           <details className="guided-results__group-details border-2 border-black dark:border-white">
             <summary className={SUMMARY}>
               {plural(unbanded.length, 'measurement')}: {names(unbanded)}
             </summary>
+            {/* Each card states its own reason for having no range, so the group intro that said
+                so for all seven is gone; the heading above already says which group this is. */}
             <div className="space-y-6 px-5 pb-5">
-              <p className={`guided-results__group-intro ${MUTED}`}>
-                {anyWithheld
-                  ? 'No range is shown for these, so no scale is drawn. Each one says why, and keeps its value, notes and links.'
-                  : 'No published range exists for these in the units this app reports them in, so no scale is drawn. Each one says why, and keeps its value, notes and links.'}
-              </p>
               {cards(unbanded, 'divided')}
             </div>
           </details>
@@ -379,10 +401,6 @@ export function GuidedMeasurements({
               {plural(notMeasured.length, 'measurement')}: {names(notMeasured)}
             </summary>
             <div className="space-y-4 px-5 pb-5">
-              <p className={`guided-results__group-intro ${MUTED}`}>
-                Each one says what to film differently to measure it next time, then why it wasn't
-                measured on this clip.
-              </p>
               <ul className="space-y-5">
                 {notMeasured.map((entry) => {
                   const id = guidedEntryId(entry.metric.metric)
@@ -394,7 +412,10 @@ export function GuidedMeasurements({
                       className={`guided-results__not-measured-entry space-y-1 border-t border-neutral-300 pt-4 dark:border-neutral-700 ${FOCUS_RING_TARGET}`}
                       data-metric={entry.metric.metric}
                     >
-                      <h3 id={`${id}-heading`} className="font-display text-lg font-bold tracking-tight">
+                      <h3
+                        id={`${id}-heading`}
+                        className="font-display text-lg font-bold tracking-tight"
+                      >
                         {METRIC_LABELS[entry.metric.metric]}
                       </h3>
                       <p className={`guided-results__capture-hint ${BODY}`}>
@@ -403,7 +424,9 @@ export function GuidedMeasurements({
                         </span>
                         {captureHintFor(entry)}
                       </p>
-                      <p className={`guided-results__not-measured-reason ${MUTED}`}>
+                      <p
+                        className={`guided-results__not-measured-reason ${MUTED}`}
+                      >
                         {notMeasuredReason(entry.metric, scalePassStatus)}
                       </p>
                     </li>

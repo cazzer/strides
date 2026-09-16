@@ -143,6 +143,81 @@ export function formatMeasuredBandValue(
   return `${value < bound ? 'just under' : 'just over'} ${formatBandValue(bound, band.unit, 0, style)}`
 }
 
+/** A zone label as it reads mid-sentence: `30th–69th percentile`, `below the 5th percentile`. */
+function lowercaseLead(label: string): string {
+  return label.charAt(0).toLowerCase() + label.slice(1)
+}
+
+/**
+ * The plural of a zone label's head noun, for a headline naming two zones at once: `percentile` →
+ * `percentiles`.
+ *
+ * The only tail any shipped band's labels share is "percentile", so this is a bare `+ 's'` rather
+ * than an English pluraliser — and it is only ever reached when two labels already share that tail
+ * word for word, which is a strong signal they are the same noun. A tail that pluralises otherwise
+ * would need a rule, and would be better served by {@link describeBandPositionBriefly}'s quoted
+ * fallback than by guessing.
+ */
+function pluralise(word: string): string {
+  return word.endsWith('s') ? word : `${word}s`
+}
+
+/**
+ * The card headline's position fragment — `30th–69th percentile of Garmin's table`,
+ * `between the 5th–29th and 30th–69th percentiles of Garmin's table`, `below the range shown`.
+ *
+ * A compression of {@link describeBandPosition}, which stays the text alternative for the drawn
+ * scale and is unchanged: this one drops the value (the headline prints it beside this fragment),
+ * the zone's own bounds (the scale prints its outer ones) and the sentence's punctuation.
+ *
+ * Three shapes, and the rules for each:
+ *
+ * - **In a zone of a multi-zone band** — the zone's own label, lowercased so it reads mid-sentence,
+ *   plus `band.zoneOwner` where the labels do not already name whose zones they are.
+ * - **A single-range band** — `within` / `below` / `above the range shown`, never the range's own
+ *   label: `verticalOscillationCm`'s is a 90-character sentence naming two percentiles of two sexes.
+ *   A single range is also where `outside` says the least, since there is one range to be outside of.
+ * - **In a published gap** — both zones named. Where their labels share a tail word for word
+ *   (`percentile of Garmin's table`) the heads are merged and the tail stated once, pluralised,
+ *   which is what keeps the fragment to one line. Where they do not, both labels are quoted whole:
+ *   no rule should depend on two labels happening to rhyme.
+ *
+ * Never a verdict, exactly like `describeBandPosition`: every shape is a position.
+ */
+export function describeBandPositionBriefly(
+  band: ReferenceBand,
+  value: number,
+): string {
+  const owner = band.zoneOwner === null ? '' : ` ${band.zoneOwner}`
+  const singleRange = band.zones.length === 1
+  const position = locateInBand(band, value)
+  switch (position.kind) {
+    case 'inZone':
+      return singleRange
+        ? 'within the range shown'
+        : `${lowercaseLead(position.zone.label)}${owner}`
+    case 'outside':
+      return `${position.side} the range shown`
+    case 'betweenZones': {
+      const split = (zone: BandZone) => {
+        const at = zone.label.indexOf(' ')
+        return at === -1
+          ? { head: zone.label, tail: '' }
+          : { head: zone.label.slice(0, at), tail: zone.label.slice(at + 1) }
+      }
+      const lower = split(position.lower)
+      const upper = split(position.upper)
+      if (lower.tail === '' || lower.tail !== upper.tail) {
+        return `between “${position.lower.label}” and “${position.upper.label}”`
+      }
+      const at = lower.tail.indexOf(' ')
+      const noun = at === -1 ? lower.tail : lower.tail.slice(0, at)
+      const rest = at === -1 ? '' : lower.tail.slice(at)
+      return `between the ${lowercaseLead(lower.head)} and ${lowercaseLead(upper.head)} ${pluralise(noun)}${rest}${owner}`
+    }
+  }
+}
+
 /** `(values from 164 to 173 steps per minute)`, `(values below 153 steps per minute)`. */
 function spokenZoneValues(zone: BandZone, band: ReferenceBand): string {
   if (zone.min === null && zone.max === null) return '(any value)'
@@ -186,7 +261,8 @@ export function describeBandPosition(
       // starts above one through a finite `min` (`endBefore`, `startAfter`).
       const from = formatBandValue(position.lower.max!, band.unit, 0, 'spoken')
       const to = formatBandValue(position.upper.min!, band.unit, 0, 'spoken')
-      const table = band.derivation === null ? "the source's table" : 'the range shown'
+      const table =
+        band.derivation === null ? "the source's table" : 'the range shown'
       return `${valueText} sits in the gap between the zones labelled “${position.lower.label}” and “${position.upper.label}”; ${table} jumps from ${from} to ${to}.`
     }
     case 'outside': {

@@ -91,12 +91,18 @@ const STIFFLER_JOACHIM_2020_URL =
 const GARMIN_POPULATION =
   'Not stated. Garmin says only that it "has researched many runners of all different levels"; no protocol and no peer review are published.'
 const GARMIN_SAMPLE_SIZE = 'Not published'
+/**
+ * The same non-statement as {@link GARMIN_POPULATION}, compressed for the visible citation line.
+ * One constant for both Garmin-sourced bands, because it is the same absence in both manuals.
+ */
+const GARMIN_POPULATION_SHORT = 'population not stated'
 
 const MALISOUX_2023_SOURCE: BandSource = {
   title: 'Malisoux et al. 2023, Orthopaedic Journal of Sports Medicine 11(10)',
   shortTitle: 'Malisoux et al. 2023',
   url: MALISOUX_2023_URL,
   population: 'Recreational runners at 10 km/h (6:00 per km, 9:39 per mile)',
+  populationShort: 'recreational runners',
   sampleSize: '860',
 }
 
@@ -107,6 +113,7 @@ const FOLLAND_2017_SOURCE: BandSource = {
   url: FOLLAND_2017_URL,
   population:
     'Trained runners at 10–12 km/h (6:00 to 5:00 per km, 9:39 to 8:03 per mile)',
+  populationShort: 'trained runners',
   sampleSize: '97',
 }
 
@@ -116,6 +123,7 @@ const HEIDERSCHEIT_2011_SOURCE: BandSource = {
   shortTitle: 'Heiderscheit et al. 2011',
   url: HEIDERSCHEIT_2011_URL,
   population: 'Runners at 2.9 m/s (5:45 per km, 9:15 per mile)',
+  populationShort: 'runners',
   sampleSize: '45',
 }
 
@@ -455,18 +463,56 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
        * round. `metricGuidance.test.ts` pins both directions.
        */
       zones: [
-        { label: 'Below the 5th percentile', min: null, max: 153 },
-        { label: '5th–29th percentile', min: 153, max: 163 },
-        { label: '30th–69th percentile', min: 164, max: 173 },
-        { label: '70th–95th percentile', min: 174, max: 183 },
-        { label: 'Above the 95th percentile', min: 183, max: null },
+        {
+          label: 'Below the 5th percentile',
+          min: null,
+          max: 153,
+          shareOfRunners: 0.05,
+        },
+        {
+          label: '5th–29th percentile',
+          min: 153,
+          max: 163,
+          shareOfRunners: 0.25,
+        },
+        {
+          label: '30th–69th percentile',
+          min: 164,
+          max: 173,
+          shareOfRunners: 0.4,
+        },
+        {
+          label: '70th–95th percentile',
+          min: 174,
+          max: 183,
+          shareOfRunners: 0.25,
+        },
+        {
+          label: 'Above the 95th percentile',
+          min: 183,
+          max: null,
+          shareOfRunners: 0.05,
+        },
       ],
       centralTendency: null,
+      /**
+       * Garmin's labels name a percentile and not whose, so the card's headline would read "30th–69th
+       * percentile" — a percentile of nothing. Ends the headline naming the table that was published,
+       * as the spec requires. Compare `verticalRatio`, whose restated labels already say.
+       *
+       * **"of Garmin's table", not "of Garmin's runners"**, and the distinction is the one this
+       * card's own citation line makes three lines further down: Garmin publishes no population and
+       * no sample size, so "Garmin's runners" names a cohort nobody has described. The table is the
+       * thing that exists, and the thing the percentile is a percentile OF. `verticalRatio`'s labels
+       * already end in exactly these words, so the two bands drawn from the same manual agree.
+       */
+      zoneOwner: "of Garmin's table",
       source: {
         title: "Garmin fenix 7 owner's manual — running-dynamics zone table",
         shortTitle: 'Garmin fenix 7 manual',
         url: GARMIN_FENIX_7_ZONES_URL,
         population: GARMIN_POPULATION,
+        populationShort: GARMIN_POPULATION_SHORT,
         sampleSize: GARMIN_SAMPLE_SIZE,
       },
       corroboration: [
@@ -532,6 +578,24 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     },
     remediationIntro:
       'Raising step rate is also the most-studied way to reduce overstriding — how far the foot lands ahead of the body. The Heiderscheit and Lenhart studies below measured that directly.',
+    /**
+     * A compression of Huber & Verhoff's OWN summary — the protocol, and nothing else. "5–10% above
+     * your own step rate" is the size of the change that study made, from wherever the runner is; no
+     * source in this record names a step rate to reach, and cadence's mandatory note says so at
+     * length.
+     *
+     * ⚠️ It used to end "— the most-studied way to reduce overstriding", and that clause is
+     * `remediationIntro`'s claim, sourced to Heiderscheit and Lenhart, hanging off a link to Huber,
+     * whose summary is only the protocol. The reader could not tell which study said which, and the
+     * one visible citation was the wrong one for the superlative. The clause still ships, in
+     * `remediationIntro`, beside the two studies that measured it.
+     */
+    tryLine: {
+      text: 'a phone metronome 5–10% above your own step rate, 2–3 runs a week',
+      url: HUBER_2024_LINK.url,
+      // Cadence goes UP: the protocol is a metronome above the runner's own rate.
+      direction: 'higher',
+    },
     guidedDescription: null,
   },
 
@@ -565,35 +629,59 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
        */
       zones: [
         // Garmin's label, for each: above the 95th percentile.
-        { label: "Lowest 5% of Garmin's table", min: null, max: 0.0305 },
+        {
+          label: "Lowest 5% of Garmin's table",
+          min: null,
+          max: 0.0305,
+          shareOfRunners: 0.05,
+        },
         // Garmin's: 70th–95th percentile.
         {
           label: "5th–30th percentile of Garmin's table",
           min: 0.0305,
           max: 0.037,
+          shareOfRunners: 0.25,
         },
         // Garmin's: 30th–69th percentile.
         {
           label: "31st–70th percentile of Garmin's table",
           min: 0.0375,
           max: 0.043,
+          shareOfRunners: 0.4,
         },
         // Garmin's: 5th–29th percentile.
         {
           label: "71st–95th percentile of Garmin's table",
           min: 0.0435,
           max: 0.0505,
+          shareOfRunners: 0.25,
         },
         // Garmin's: below the 5th percentile.
-        { label: "Highest 5% of Garmin's table", min: 0.0505, max: null },
+        {
+          label: "Highest 5% of Garmin's table",
+          min: 0.0505,
+          max: null,
+          shareOfRunners: 0.05,
+        },
       ],
       centralTendency: null,
+      /**
+       * `null`, and not an oversight: every label above already ends "of Garmin's table", so an owner
+       * phrase would render it twice — and `cadence`'s owner phrase is now those same words.
+       *
+       * ⚠️ **The shares are Garmin's CUT POINTS (5 / 30 / 70 / 95) read in value order — NOT the
+       * spans of the restated labels above.** Reading `5th–30th`, `31st–70th`, `71st–95th` as spans
+       * sums to 1.01: writing half-open intervals as inclusive integers is an artefact of the
+       * restatement, not a property of the table. Same five numbers as `cadence`, by symmetry.
+       */
+      zoneOwner: null,
       source: {
         title:
           "Garmin fenix 7 owner's manual (APAC) — vertical ratio zone table, halved",
         shortTitle: 'Garmin fenix 7 manual (APAC)',
         url: GARMIN_FENIX_7_APAC_ZONES_URL,
         population: GARMIN_POPULATION,
+        populationShort: GARMIN_POPULATION_SHORT,
         sampleSize: GARMIN_SAMPLE_SIZE,
       },
       corroboration: [
@@ -636,6 +724,9 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: `${NOT_ENOUGH_DATA_HINT} A stride runs from one footstrike to the next footstrike of the same foot, so the clip needs several strides in a row.`,
     },
     remediationIntro: null,
+    // `null`: nothing in the record reports an intervention on the RATIO. Its one remediation link
+    // targets the numerator, and already carries `verticalOscillation`'s line.
+    tryLine: null,
     guidedDescription: null,
   },
 
@@ -656,12 +747,19 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
             "From women's 10th to men's 90th percentile in Malisoux's 860 runners, at 10 km/h (6:00 per km)",
           min: 6.0,
           max: 9.5,
+          /**
+           * `null`, and this one has to be checked rather than assumed: the derivation below says in
+           * so many words that "no percentile of the combined cohort is claimed". The span runs from
+           * women's 10th to men's 90th percentile, which is not 80% of anything.
+           */
+          shareOfRunners: null,
         },
       ],
       centralTendency: {
         value: 7.7,
         label: "Malisoux's overall average (± 1.2 cm)",
       },
+      zoneOwner: null,
       source: MALISOUX_2023_SOURCE,
       corroboration: [
         {
@@ -708,6 +806,13 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: `${NOT_ENOUGH_DATA_HINT} ${REAL_WORLD_SCALE_HINT} A steady side-on pass makes that easiest.`,
     },
     remediationIntro: null,
+    // Adams 2018's own verbatim cue, and this metric's only remediation link.
+    tryLine: {
+      text: 'cueing yourself to stay as low to the ground as possible without slouching',
+      url: ADAMS_2018_LINK.url,
+      // "As low to the ground as possible" lowers the bounce this card reports.
+      direction: 'lower',
+    },
     guidedDescription: null,
   },
 
@@ -717,13 +822,20 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     displayRank: 4,
     band: {
       unit: 'degrees',
+      // An observed range, not a percentile span, so there is no share to publish.
       zones: [
-        { label: "Range across Folland's 97 runners", min: 1.8, max: 21.4 },
+        {
+          label: "Range across Folland's 97 runners",
+          min: 1.8,
+          max: 21.4,
+          shareOfRunners: null,
+        },
       ],
       centralTendency: {
         value: 10.3,
         label: 'Average in this study (± 3.7°)',
       },
+      zoneOwner: null,
       source: FOLLAND_2017_SOURCE,
       // Teng & Powers 2014 (7.3 ± 3.6° self-selected) would corroborate, and is deliberately
       // absent: JOSPT returned 403 to the research pass, so it is high-confidence secondary
@@ -751,6 +863,9 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    // `null`: `evidenceDirection` is 'contested'. Four measured outcomes point in different
+    // directions at once, so any Try line here would be picking a side in a live disagreement.
+    tryLine: null,
     guidedDescription: null,
   },
 
@@ -767,13 +882,20 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
        * 85–125°, pooled across Fukuchi's speed means, Hanley and Folland; no source publishes that
        * range, so it was replaced (design.md D1, D2 rank 5).
        */
+      // An observed range, not a percentile span, so there is no share to publish.
       zones: [
-        { label: "Range across Folland's 97 runners", min: 71.3, max: 129 },
+        {
+          label: "Range across Folland's 97 runners",
+          min: 71.3,
+          max: 129,
+          shareOfRunners: null,
+        },
       ],
       centralTendency: {
         value: 94.1,
         label: 'Average in this study (± 11.1°)',
       },
+      zoneOwner: null,
       source: FOLLAND_2017_SOURCE,
       corroboration: [
         {
@@ -782,6 +904,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
           url: FUKUCHI_2017_URL,
           population:
             'Regular runners at 2.5, 3.5 and 4.5 m/s (6:40, 4:46 and 3:42 per km) — 93.5 ± 10.4°, 108.7 ± 10.7° and 119.1 ± 10.4° respectively, in the same convention this app uses, where 0° is full extension',
+          populationShort: 'regular runners',
           sampleSize: '28',
         },
         {
@@ -790,6 +913,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
           url: HANLEY_2021_URL,
           population:
             "Distance runners at midswing — 55–60° of included thigh–shank angle, which is 120–125° in this app's convention",
+          populationShort: 'distance runners',
           sampleSize: 'Book chapter; the cohort is not restated',
         },
       ],
@@ -814,6 +938,8 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    // `null`: `remediation` is empty — no intervention literature on swing knee flexion surfaced.
+    tryLine: null,
     guidedDescription: null,
   },
 
@@ -825,7 +951,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     displayRank: 6,
     band: null,
     noBandReason:
-      'No published study measures foot-to-hip horizontal distance relative to torso length, which is the unit this app reports it in — a targeted search for that combination returned nothing relevant. And there is no threshold in any other unit either: the most recent review states plainly that "there is currently no consensus on what qualifies as excessive overstriding", and the clinical video protocol that uses exactly this app\'s landmarks is explicitly a yes/no judgement with no units and no cutoff. Halving the gap between the two published measurements to manufacture a range would be picking a number and calling it research.',
+      'No study publishes a range for this measurement, in this unit or any other. No published study measures foot-to-hip horizontal distance relative to torso length, which is the unit this app reports it in — a targeted search for that combination returned nothing relevant. And there is no threshold in any other unit either: the most recent review states plainly that "there is currently no consensus on what qualifies as excessive overstriding", and the clinical video protocol that uses exactly this app\'s landmarks is explicitly a yes/no judgement with no units and no cutoff. Halving the gap between the two published measurements to manufacture a range would be picking a number and calling it research.',
     evidenceDirection: 'association-without-target',
     mandatoryNotes: [
       "The two published absolute measurements of this same geometry disagree: Heiderscheit 2011 measured 9.2 ± 4.0 cm from centre of mass to heel at initial contact, and Lieberman 2015 measured the ankle 0.31 ± 0.08 m ahead of the hip — about 3.4× apart (our arithmetic from the two papers' figures). Neither paper defines its computation precisely enough to reconcile them, so neither is offered here as a reference point.",
@@ -845,6 +971,23 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    /**
+     * Heiderscheit 2011 measured this metric's own geometry directly — foot-to-centre-of-mass fell
+     * from 9.2 cm to 7.0 cm at a 10% higher step rate — which is the second mandatory note above,
+     * compressed. Stated as a change from the runner's own step rate, because that is what was
+     * measured; the absolute centimetres are deliberately not quoted, since the two published
+     * measurements of this geometry disagree by about 3.4× (first mandatory note).
+     */
+    tryLine: {
+      text: "a step rate 10% above your own, which brought the foot's landing closer to the body",
+      url: HEIDERSCHEIT_2011_LINK.url,
+      /*
+        `'lower'`, not `'higher'`, and the cue says "above": `direction` is which way the line moves
+        the quantity THIS CARD reports, which is overstriding. Heiderscheit raises step rate in order
+        to bring the foot's landing closer to the body — 9.2 cm to 7.0 cm at +10%.
+      */
+      direction: 'lower',
+    },
     guidedDescription:
       'How far your foot lands ahead of your hips at footstrike, relative to your torso length.',
   },
@@ -856,7 +999,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     // The closest call in the set, and the one place a band was REACHABLE and was refused on the
     // quality of the derivation rather than on its absence. design.md D5.2.
     noBandReason:
-      "A range could be calculated for this measurement, but it isn't shown. It would divide a published pelvis-bounce figure by a textbook estimate of torso length rather than a measured one, and the published figure doesn't say whether it is per step or per stride — either uncertainty changes the answer. The centimetre and ratio versions above do have published ranges.",
+      "A range could be calculated for this measurement, but only from a textbook estimate and an unresolved ambiguity, so it isn't shown. It would divide a published pelvis-bounce figure by a textbook estimate of torso length rather than a measured one, and the published figure doesn't say whether it is per step or per stride — either uncertainty changes the answer. The centimetre and ratio versions above do have published ranges.",
     evidenceDirection: 'association-without-target',
     mandatoryNotes: [],
     speedSensitivity: null,
@@ -867,6 +1010,12 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    // The same cue as `verticalOscillationCm`: the same measurement in a different unit.
+    tryLine: {
+      text: 'cueing yourself to stay as low to the ground as possible without slouching',
+      url: ADAMS_2018_LINK.url,
+      direction: 'lower',
+    },
     guidedDescription: null,
   },
 
@@ -879,7 +1028,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     displayRank: 8,
     band: null,
     noBandReason:
-      'The literature carries three incompatible definitions of step width, differing by about 2× and by sign, and only one of them — "base of gait" — matches the sign convention this app uses. Even that one samples at midstance where this app samples at footstrike, and it publishes in centimetres, where this metric reports a fraction of the runner\'s own hip width. No published target range exists in either unit; the "normal step width is 8–10 cm" figure in wide circulation traces to a non-peer-reviewed page and describes walking, not running.',
+      'No published range exists for step width in this app\'s unit, and the literature does not agree on how to measure it. Three incompatible definitions are in circulation, differing by about 2× and by sign, and only one of them — "base of gait" — matches the sign convention this app uses. Even that one samples at midstance where this app samples at footstrike, and it publishes in centimetres, where this metric reports a fraction of the runner\'s own hip width. No published target range exists in either unit; the "normal step width is 8–10 cm" figure in wide circulation traces to a non-peer-reviewed page and describes walking, not running.',
     evidenceDirection: 'contested',
     mandatoryNotes: [
       'A negative value is not a defect. Crossover is normal at speed: in 166 Division-I athletes, "On average, males demonstrated crossover at 4.47 m/s (6:00-minute mile), whereas females did not demonstrate crossover at any speed", and the authors note that a negative base of gait at fast speeds "may be normal in a healthy population".',
@@ -904,6 +1053,8 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    // `null`: contested, and the injury link is modelling-only in uninjured runners.
+    tryLine: null,
     guidedDescription: null,
   },
 
@@ -912,7 +1063,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     displayRank: 9,
     band: null,
     noBandReason:
-      'The literature carries three incompatible definitions of step width, differing by about 2× and by sign, and only one of them — "base of gait" — matches the sign convention this app uses; even that one samples at midstance where this app samples at footstrike. No published target range in centimetres exists; it was searched for specifically. For scale rather than as a band, two figures: a foot-to-foot measurement of 3.61 ± 2.56 cm, which is about 1.8 cm in this app\'s convention (half of Arellano & Kram\'s foot-to-foot figure), and a statistical model\'s baseline of 1.358 cm. The "normal step width is 8–10 cm" figure in wide circulation traces to a non-peer-reviewed page and describes walking, not running.',
+      'No published range exists for step width in centimetres, and the literature does not agree on how to measure it. Three incompatible definitions are in circulation, differing by about 2× and by sign, and only one of them — "base of gait" — matches the sign convention this app uses; even that one samples at midstance where this app samples at footstrike. No published target range in centimetres exists; it was searched for specifically. For scale rather than as a band, two figures: a foot-to-foot measurement of 3.61 ± 2.56 cm, which is about 1.8 cm in this app\'s convention (half of Arellano & Kram\'s foot-to-foot figure), and a statistical model\'s baseline of 1.358 cm. The "normal step width is 8–10 cm" figure in wide circulation traces to a non-peer-reviewed page and describes walking, not running.',
     evidenceDirection: 'contested',
     mandatoryNotes: [
       'A negative value is not a defect. Crossover is normal at speed: in 166 Division-I athletes, "On average, males demonstrated crossover at 4.47 m/s (6:00-minute mile), whereas females did not demonstrate crossover at any speed", and the authors note that a negative base of gait at fast speeds "may be normal in a healthy population".',
@@ -937,6 +1088,8 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: `${NOT_ENOUGH_DATA_HINT} ${REAL_WORLD_SCALE_HINT}`,
     },
     remediationIntro: null,
+    // `null`: contested, and the injury link is modelling-only in uninjured runners.
+    tryLine: null,
     guidedDescription: null,
   },
 
@@ -945,7 +1098,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     displayRank: 10,
     band: null,
     noBandReason:
-      'This metric reports a classification, and what the literature publishes for it is a prevalence rather than a range: how many distance runners land each way, not a value to compare a number against. No reference range exists for the underlying ankle-relative-to-knee offset this app measures the classification from.',
+      'This metric reports a classification, not a position on a scale, so a range would have nothing to span. What the literature publishes for it is a prevalence rather than a range: how many distance runners land each way, not a value to compare a number against. No reference range exists for the underlying ankle-relative-to-knee offset this app measures the classification from.',
     evidenceDirection: 'redistribution-not-improvement',
     mandatoryNotes: [
       'About 8 in 10 distance runners are rearfoot strikers. A meta-analysis of distance racing found 79% rearfoot early in a race, rising to 86% at the final checkpoint — the share goes up with distance, not down — and reported inconclusive evidence of any competitive advantage for landing otherwise.',
@@ -963,6 +1116,9 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    // `null`, and this emptiness is the finding rather than an omission: `remediation` is empty
+    // because the best available systematic review rates the injury link as low evidence.
+    tryLine: null,
     guidedDescription:
       'Whether your foot tends to land heel-, midfoot- or forefoot-first.',
   },
@@ -983,6 +1139,8 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    // `null`: nothing surfaced for this metric at all.
+    tryLine: null,
     guidedDescription: null,
   },
 
@@ -1003,6 +1161,8 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,
+    // `null`: nothing surfaced for this metric at all.
+    tryLine: null,
     guidedDescription: null,
   },
 }
