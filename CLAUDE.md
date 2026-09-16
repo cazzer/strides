@@ -1025,7 +1025,7 @@ two alternating neutral zone tints differ by a contrast ratio of about **1.2:1**
 chosen by the user from a longer list; **the ones NOT chosen were deliberately not made** (the lower
 two groups stay visible, published gaps keep their hatching, cards keep their frames).
 
-- **A card leads with one headline**: `174 steps/min · 70th–95th percentile of Garmin's runners`.
+- **A card leads with one headline**: `174 steps/min · 70th–95th percentile of Garmin's table`.
   `describeBandPositionBriefly` (`bandPosition.ts`) + `guidedHeadlineParts` (`formatGuidedValue.ts`).
   A gap names both zones, merging their shared tail: `between the 5th–29th and 30th–69th
   percentiles of …`. ⚠️ **`guidedHeadline` stays value-only** — the contents list is a three-column
@@ -1033,9 +1033,13 @@ two groups stay visible, published gaps keep their hatching, cards keep their fr
 - **Zones are shaded by SHARE OF RUNNERS**, one hue family, three steps, darkest (light) / brightest
   (dark) = most runners, with a legend that flips word per theme because the ordering genuinely
   inverts. **Not a grade**: most is not best, and the spec still forbids any element that grades the
-  runner. Tokens in `src/index.css` under **`@theme static`** — two are read as `var(--color-scale-…)`
-  inside an arbitrary gradient rather than through a `bg-*` utility, and a usage-pruned `@theme`
-  drops exactly those, leaving a transparent band with nothing failing.
+  runner. Tokens in `src/index.css` under **`@theme static`**.
+  ⚠️ **The reason this file gave for `static` was BACKWARDS and is withdrawn** (review round 1): it
+  said a token read as `var(--color-scale-…)` inside an arbitrary value would be pruned away.
+  Compiled both ways, those are the ones pruning KEEPS — and there is no such usage left anyway,
+  since a single published range is painted with one flat utility now. A plain `@theme` was built
+  and `dist/` grepped: **all twelve tokens survive**. `static` stays as belt and braces, because
+  Tailwind's pruning rules are not a contract this repo controls.
   ⚠️ **`BandZone.shareOfRunners` comes from Garmin's CUT POINTS (5/30/70/95 → `[.05,.25,.40,.25,.05]`),
   never from the restated integer labels — reading those as spans sums to 1.01.** All-or-none per
   band; every single-range band is `null` (`verticalOscillationCm`'s own derivation says "no
@@ -1056,8 +1060,8 @@ two groups stay visible, published gaps keep their hatching, cards keep their fr
   inside. **One `Try:` line per card**, `MetricGuidance.tryLine`, on four metrics only
   (`cadence`, `verticalOscillationCm`, `verticalOscillation`, `overstriding`) — pinned by name, its
   URL must be in that metric's own `remediation`, and every other study moved into the disclosure.
-  **No description on a banded card** (unbanded keeps it), and the three group intro paragraphs are
-  gone.
+  ~~**No description on a banded card**~~ — **WITHDRAWN in review round 1, every card has one
+  again**; and the three group intro paragraphs are gone.
 
 **Measured on `park-side-landscape.mp4`, same clip and same measure both sides** (card
 `textContent`, `<details>` subtree and `sr-only` removed, whitespace split): `cadence` **332 → 55**,
@@ -1071,6 +1075,47 @@ derived port 5262, at 390 and 1280 px in light and dark plus `forcedColors: 'act
 coloured with the most-populated zone darkest/brightest, marker distinguishable from the seams,
 hatched gaps still reading as gaps, headline one line at 1280 and wrapping to three at 390, and the
 marker still present under forced colours (where the shading is dropped and the legend hidden).
+
+#### Review round 1 — nine further changes, and three things not to re-derive
+
+Two reviews (code + UX) of the above, implemented on the same branch. Full record: that change's
+**design.md D8**. What a later reader most needs:
+
+- ⚠️ **A single published range is drawn FLAT, and its legend slot names the range** (`Range across
+  Folland's 97 runners`). It was a symmetric zone-2→zone-3→zone-2 ramp — the universal "optimal
+  range" idiom — on exactly the three cards (`verticalOscillationCm`, `trunkLean`, `kneeFlexion`)
+  whose one zone carries `shareOfRunners: null` and which render no legend to correct it. **Do not
+  reintroduce a gradient there**; and note the "three printed numbers" rule is now explicitly about
+  the TRACK, since a quoted range label may contain the source's own numbers.
+- ⚠️ **A `Try:` line can be WITHHELD.** `MetricGuidance.tryLine` gained `direction: 'lower' |
+  'higher'` and `tryLineApplies` (`guidedGroups.ts`) drops the line where the value is outside the
+  band on that side — `verticalOscillationCm` reads **4.42 cm** on this clip against a 6.0–9.5 cm
+  band and was being told to stay lower still. `overstriding`'s direction is `'lower'` although its
+  cue RAISES step rate: the field is which way the line moves **the quantity that card reports**. An
+  open-ended outer zone is inside the band, so cadence's line is never withheld.
+- ⚠️ **`zoneOwner` reads `"of Garmin's table"`, not `"of Garmin's runners"`** — the same card's
+  citation line says Garmin publishes no population, so "runners" named a cohort nobody described.
+  And that citation line now collapses two absences into one field: `Garmin fenix 7 manual ·
+  population and sample size not published · derived`.
+- Smaller, all in design.md D8: cadence's Try line drops a superlative sourced to two OTHER studies;
+  every unbanded card's `noBandReason` leads with ≤ 25 reader-first words and splits like a note (the
+  rest inside the disclosure, under *why there is no range*); `--color-scale-zone-2` darkens to
+  `#6fbccd` so the ramp's steps read 1.76 / 2.14 rather than 1.53 / 2.47; the legend is promoted to
+  `text-xs`/`neutral-700` and gains `· hatched = not in the source's table`, with hatched spans also
+  joining the `sr-only` zone list; the description is back on every card; notes and the Try line move
+  into the reading grid's left column.
+- ⚠️ **The furniture budget's MEASURE moved, its number did not.** Still ≤ 50, but now excluding four
+  blocks of borrowed words rather than one — mandatory notes, the description, a single range's
+  legend label and an unbanded card's reason — on the rule that *a sentence this page did not get to
+  write is not a sentence it can spend*. Measured maximum **41**. Cadence's visible count is **68**
+  against its unchanged ≤ 70 (it was 55 before this round; the description and the legend are the
+  13). Unbanded cards all fell 24–44%: `overstriding` **229 → 142** by the same jsdom instrument.
+- 🛠 **`scalePalette.test.ts` reads `index.css` by a path resolved against the test file.** Two
+  traps, both hit: `?raw` comes back EMPTY under this project's CSS transform, and
+  `new URL('../index.css', import.meta.url)` is rewritten by Vite into an asset URL, so
+  `fileURLToPath` throws `The URL must be of scheme file`. `dirname(fileURLToPath(import.meta.url))`
+  then `join` works. (`import.meta.url` itself IS a `file:` URL here — an older comment saying
+  otherwise was wrong about the reason, right about the symptom.)
 
 ## Three metric-layer changes that moved numbers this file quotes (2026-08-29/31)
 

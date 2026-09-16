@@ -19,6 +19,7 @@ import {
   noBandReasonFor,
   noteLead,
   splitFirstSentence,
+  tryLineApplies,
 } from './guidedGroups'
 import type {
   CorroborationReference,
@@ -46,25 +47,36 @@ import type { MetricCardEvidence } from './MetricsPanel'
  *
  * The card leads with one headline — the value, and beside it where that value sits, in the band's
  * own words. Then: a "Varies with pace" tag where speed moves the metric, a confidence label when
- * caveated, the metric's own caveat, the scale with the evidence thumbnail beside it, one citation
- * line naming the source, its population in short and its sample size (and "derived" where the band
- * is arithmetic), the first sentence of each mandatory note, and one `Try:` line.
+ * caveated, one sentence saying what the metric is, the metric's own caveat, the scale with the
+ * evidence thumbnail beside it, one citation line naming the source, its population in short and its
+ * sample size (and "derived" where the band is arithmetic), the first sentence of each mandatory
+ * note, and at most one `Try:` line.
  *
  * Behind one `<details>`: the speed caveat in full, the source's own full population sentence, what
  * a derivation says and rests on, the band's own note, the population's central statistic, the rest
- * of each mandatory note, corroborating sources, the research links, and every study of a change —
- * the Try link among them, as text, which is how its kind, summary and full citation reach the card.
- * Every URL is an anchor at most once per card, and every link's kind and summary reach the card
- * somewhere (`cardReferences`).
+ * of an unbanded card's reason for having no range, the rest of each mandatory note, corroborating
+ * sources, the research links, and every study of a change — the Try link among them, as text, which
+ * is how its kind, summary and full citation reach the card. Every URL is an anchor at most once per
+ * card, and every link's kind and summary reach the card somewhere (`cardReferences`).
  *
  * ## What moved there, and what did not
  *
- * The description leaves a BANDED card (an unbanded one keeps it): a card carrying a scale, a
- * headline naming the zone and a citation line has already said what the metric is. What did NOT
- * move is the attribution — who published the band, over roughly whom, at what sample size, and
- * whether this system did arithmetic on them — because that is what makes a band a sourced fact
- * rather than an assertion (declutter-guided-results-view design.md D1, which narrows the original
- * always-visible rule deliberately rather than dropping it).
+ * Everything on the left of the reading grid sits in ONE column — scale, citation, notes, Try line —
+ * because the right column is a fixed-width thumbnail and prose under it reads as a second column
+ * that is mostly blank.
+ *
+ * What did NOT move is the attribution — who published the band, over roughly whom, at what sample
+ * size, and whether this system did arithmetic on them — because that is what makes a band a sourced
+ * fact rather than an assertion (declutter-guided-results-view design.md D1, which narrows the
+ * original always-visible rule deliberately rather than dropping it). Nor, after review, did the
+ * description: it left banded cards in the first pass of that change and came back, because a scale
+ * says where a number sits and nothing on the card said what the number was.
+ *
+ * ## The one line that can be withheld
+ *
+ * A `Try:` line names a change in one direction, so it renders only where that direction is not
+ * already past the band — `tryLineApplies`. A card can therefore carry a `tryLine` in its guidance
+ * and show none, and that is the runner's reading rather than a missing record.
  */
 
 const BODY = 'font-sans text-sm text-neutral-700 dark:text-neutral-300'
@@ -364,8 +376,16 @@ function TryLine({ text, link }: { text: string; link: GuidanceLink }) {
     <p className={`guided-results__try ${BODY}`}>
       <span className="font-semibold text-black dark:text-white">Try: </span>
       {text}
-      {' — '}
-      <ExternalLink url={link.url}>{link.shortTitle}</ExternalLink>
+      {/*
+        ` · ` and the card's own attribution size, not an em dash at body size: the stored text can
+        itself contain an em dash (`… own step rate — the most-studied …` did), and a second one
+        appended here read as another clause of the instruction rather than as its citation. The
+        middot is the separator this card already uses for attribution, on the citation line.
+      */}
+      <span className={`guided-results__try-source ${SECONDARY}`}>
+        {' · '}
+        <ExternalLink url={link.url}>{link.shortTitle}</ExternalLink>
+      </span>
     </p>
   )
 }
@@ -407,6 +427,11 @@ export function GuidedMetricCard({
   const notes = guidance.mandatoryNotes.map(splitFirstSentence)
   const notesRest = notes.filter((note) => note.rest.length > 0)
   const speed = guidance.speedSensitivity
+  // The same first-sentence rule the notes get, for the same reason: the lead answers "why is there
+  // no bar here" and the rest is the literature review behind that answer. `overstriding`'s ran to
+  // 101 words rendered whole, on the card that had the most to read already.
+  const noBand = scaled ? null : splitFirstSentence(noBandReasonFor(entry))
+  const showsTry = tryLineApplies(entry) && references.tryLink !== null
 
   const hasResearch =
     references.corroboration.length > 0 ||
@@ -420,6 +445,13 @@ export function GuidedMetricCard({
   const summaryParts = [
     ...(speed !== null ? ['pace'] : []),
     ...(scaled ? ['how this range was built'] : []),
+    // Same slot, and mutually exclusive with it: a card either has a range to explain or has an
+    // absence to explain. Named in the summary so the continuation cannot end up behind a
+    // disclosure that does not exist — `kneeDrive` and `armSwingAmplitude` have no notes, no speed
+    // sensitivity and, on a clip that measures them, nothing else to open.
+    ...(noBand !== null && noBand.rest.length > 0
+      ? ['why there is no range']
+      : []),
     ...(hasNotes ? ['notes'] : []),
     ...(hasResearch ? ['research'] : []),
   ]
@@ -458,7 +490,14 @@ export function GuidedMetricCard({
             <span
               className={`guided-results__position font-sans text-base ${BODY}`}
             >
-              <span aria-hidden="true">{'· '}</span>
+              {/*
+                Hidden below `sm`: at 390 px the position wraps onto its own line and a leading `· `
+                reads as a bullet point. Where they share a line it still separates them; where they
+                do not, the value's own type size already does.
+              */}
+              <span aria-hidden="true" className="hidden sm:inline">
+                {'· '}
+              </span>
               {headline.position}
             </span>
           )}
@@ -475,13 +514,16 @@ export function GuidedMetricCard({
             <strong>{confidenceLabel(metric)}</strong>
           </p>
         )}
-        {/* A banded card has a scale, a position and a citation line; it does not also need a
-            sentence saying what the metric is. An unbanded card has none of those, so it keeps it. */}
-        {!scaled && (
-          <p className={`guided-results__description ${BODY}`}>
-            {guidance.guidedDescription ?? METRIC_DESCRIPTIONS[metric.metric]}
-          </p>
-        )}
+        {/*
+          On EVERY card, banded or not. This change originally dropped it from a banded one, on the
+          reasoning that a scale, a headline naming the zone and a citation line have already said
+          what the metric is. They have not: "110° · within the range shown" never says 110° of
+          what, and `verticalRatio`'s headline is a percentile of a ratio the reader has not been
+          told the terms of. The scale says where the number sits; only this says what the number is.
+        */}
+        <p className={`guided-results__description ${BODY}`}>
+          {guidance.guidedDescription ?? METRIC_DESCRIPTIONS[metric.metric]}
+        </p>
       </div>
 
       {metric.caveat !== null && (
@@ -490,6 +532,12 @@ export function GuidedMetricCard({
         </p>
       )}
 
+      {/*
+        The evidence thumbnail is a fixed 9 rem column, and the scale beside it is at most ~120 px of
+        text and a track — so everything after the scale goes in the LEFT column rather than under
+        the grid, where it used to leave 100–250 px of blank paper beside the thumbnail on a desktop
+        and nothing at all to read there.
+      */}
       <div
         className={`guided-results__reading grid gap-4 ${evidence !== undefined ? 'sm:grid-cols-[1fr_9rem] sm:items-start' : ''}`}
       >
@@ -503,8 +551,34 @@ export function GuidedMetricCard({
             </>
           ) : (
             <p className={`guided-results__no-band ${BODY}`}>
-              {noBandReasonFor(entry)}
+              {noBand?.first}
+              {noBand !== null && noBand.rest.length > 0 && (
+                <span className="sr-only">
+                  {' '}
+                  (continued under “{disclosureSummary}”)
+                </span>
+              )}
             </p>
+          )}
+
+          {notes.length > 0 && (
+            <div className={`guided-results__notes space-y-2 ${BODY}`}>
+              {notes.map((note, index) => (
+                <p key={`${index}:${note.first}`} role="note">
+                  {note.first}
+                  {note.rest.length > 0 && (
+                    <span className="sr-only">
+                      {' '}
+                      (continued under “{disclosureSummary}”)
+                    </span>
+                  )}
+                </p>
+              ))}
+            </div>
+          )}
+
+          {showsTry && (
+            <TryLine text={guidance.tryLine!.text} link={references.tryLink!} />
           )}
         </div>
         {evidence !== undefined && (
@@ -512,30 +586,10 @@ export function GuidedMetricCard({
         )}
       </div>
 
-      {notes.length > 0 && (
-        <div className={`guided-results__notes space-y-2 ${BODY}`}>
-          {notes.map((note, index) => (
-            <p key={`${index}:${note.first}`} role="note">
-              {note.first}
-              {note.rest.length > 0 && (
-                <span className="sr-only">
-                  {' '}
-                  (continued under “{disclosureSummary}”)
-                </span>
-              )}
-            </p>
-          ))}
-        </div>
-      )}
-
-      {guidance.tryLine !== null && references.tryLink !== null && (
-        <TryLine text={guidance.tryLine.text} link={references.tryLink} />
-      )}
-
       {hasDisclosure && (
         <details className="guided-results__more border-t border-neutral-300 pt-3 dark:border-neutral-700">
           <summary
-            className={`guided-results__more-summary cursor-pointer font-sans text-sm font-semibold text-black dark:text-white ${FOCUS}`}
+            className={`guided-results__more-summary cursor-pointer py-1 font-sans text-sm font-semibold text-black dark:text-white ${FOCUS}`}
           >
             {disclosureSummary}
           </summary>
@@ -579,6 +633,12 @@ export function GuidedMetricCard({
                 {band.centralTendency.label}:{' '}
                 {formatBandValue(band.centralTendency.value, band.unit)}
               </p>
+            )}
+            {noBand !== null && noBand.rest.length > 0 && (
+              <div className="guided-results__no-band-more space-y-2">
+                <h4 className={SUBHEADING}>Why there is no range</h4>
+                <p>{noBand.rest}</p>
+              </div>
             )}
             {hasNotes && (
               <div className="guided-results__notes-more space-y-2">

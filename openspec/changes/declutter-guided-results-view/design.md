@@ -27,11 +27,18 @@ because it is read rather than skimmed past. The full sentence is a *detail of* 
 reader has already seen, not the attribution itself.
 
 **D7.10 (e)** of the archived change, which enumerated what stays visible per card, is superseded in
-four of its clauses: the description leaves banded cards, the speed caveat becomes a tag plus
-disclosure content, the first-sentence-of-each-note rule loses its visible "(continued below)"
-marker, and "the first few remediation studies" becomes exactly one Try line. The rest of that
-clause — one disclosure per card, every link's kind and summary reachable, no link dropped for
-sharing a URL — is untouched and still holds.
+three of its clauses: the speed caveat becomes a tag plus disclosure content, the
+first-sentence-of-each-note rule loses its visible "(continued below)" marker, and "the first few
+remediation studies" becomes exactly one Try line. The rest of that clause — one disclosure per
+card, every link's kind and summary reachable, no link dropped for sharing a URL — is untouched and
+still holds.
+
+⚠️ **It was four clauses. The fourth — the description leaving a banded card — was reversed by
+review (D8.2) and D7.10 (e) is intact on that point.** The reasoning that dropped it was that a
+scale, a headline naming the zone and a citation line have already said what the metric is. They
+have not: `110° · within the range shown` never says 110° of what, and `verticalRatio`'s headline is
+a percentile of a ratio whose two terms the reader has not been told. A scale says where a number
+sits; only the description says what the number is.
 
 **What is NOT reversed.** Nothing about what the page is allowed to *claim*: no grading word, no
 verdict, no invented number, no preferred end on a band, no target. The 8 changes are about how much
@@ -100,25 +107,38 @@ percentile spans, so likewise `null`.
 
 ## D4 — The colour, and why one hue family
 
-Six tokens, each with a dark twin (twelve declarations), in `src/index.css`'s **`@theme static`** —
-static because two of them are read as `var(--color-scale-…)` inside an arbitrary gradient rather
-than through a `bg-*` utility, and a usage-pruned theme drops exactly those, leaving a transparent
-band with nothing failing. Measured contrast ratios (WCAG
-2.x relative luminance, computed rather than eyeballed):
+Six tokens, each with a dark twin (twelve declarations), in `src/index.css`'s **`@theme static`**.
+
+⚠️ **The reason recorded here for `static` was backwards, and is corrected in D8.4.** It claimed a
+token read as `var(--color-scale-…)` inside an arbitrary value would be pruned away; compiled both
+ways, those are the ones pruning keeps. There is no such usage left in any case (D8.1 replaced the
+gradient with one flat utility), and a plain `@theme` was built and grepped: all twelve tokens reach
+`dist/`. `static` stays as belt and braces, not as a fix for a named failure.
+
+Measured contrast ratios (WCAG 2.x relative luminance, computed rather than eyeballed):
 
 | pair | light | dark |
 |---|---|---|
 | most-populated zone vs track | **4.61** | **4.96** |
 | marker vs least-populated zone | 14.68 | 12.16 |
-| marker vs middle zone | 9.60 | 7.09 |
+| marker vs middle zone | 8.32 | 7.09 |
 | marker vs most-populated zone | **3.89** | **3.66** |
 | marker vs track | 17.93 | 18.16 |
 | marker ring vs marker | 17.93 | 18.16 |
 | gap hatching vs track | 7.81 | 7.85 |
 
+⚠️ **The middle-zone row moved, 9.60 → 8.32**, because `--color-scale-zone-2` darkened from
+`#86c8d6` to `#6fbccd` (D8.6). Every other row is untouched: the two floors do not involve zone-2.
+
 The two floors that matter are the bolded ones: the marker has to stay visible on the darkest zone it
 can land on (3.89 / 3.66, both over 3:1) and the darkest zone has to be distinguishable from bare
 track (4.61 / 4.96). Seams are drawn in the marker's own colour, so they inherit its floor.
+
+**A third property, added by review: the ramp has to be even.** Step to step the light ramp read
+1.53 then 2.47 — the middle step was a variant of the lightest one and the jump to the darkest did
+all the work. It now reads **1.76 then 2.14** (dark: 1.72 then 1.94), and a test holds the two steps
+of each theme within a factor of two of each other. That is a property of the ramp, not a floor
+against a mark, which is why it is stated separately from the table above.
 
 **One hue family (a desaturated cyan-teal), three steps.** Not two hues, not a ramp through a second
 hue: two hues would invite reading one as favourable, which is exactly the thing the band may not do.
@@ -144,9 +164,12 @@ nearly invisible and would imply a continuum the source does not publish.
 
 - **In a zone**: the zone's label with its first letter lowercased, plus the band's `zoneOwner` where
   the labels do not already say whose table it is. `cadence`'s labels are Garmin's own and say only
-  "30th–69th percentile", so it carries `zoneOwner: "of Garmin's runners"`. `verticalRatio`'s labels
-  already end "of Garmin's table", so its `zoneOwner` is `null` — appending an owner would produce
-  "of Garmin's table of Garmin's runners".
+  "30th–69th percentile", so it carries `zoneOwner: "of Garmin's table"`. `verticalRatio`'s labels
+  already end in those same words, so its `zoneOwner` is `null` — appending an owner would produce
+  "of Garmin's table of Garmin's table".
+  ⚠️ **It read `"of Garmin's runners"` and was changed by review (D8.3)**: that card's own citation
+  line, three lines below the headline, says Garmin publishes no population and no sample size, so
+  "Garmin's runners" named a cohort nobody has described. The table is the thing that exists.
 - **A single range**: `within` / `below` / `above the range shown`. Never the range's own label,
   which for `verticalOscillationCm` is a 90-character sentence naming two percentiles of two sexes.
 - **A gap**: the two zone labels merged where they share a tail — `between the 5th–29th and 30th–69th
@@ -166,12 +189,29 @@ A Try line is one sentence, ≤ 100 characters, stating a change **relative to t
 value**, linking a study already in that metric's own `remediation` list. It is not a new claim: each
 is a compression of the linked study's own summary, which is already on the card.
 
-| metric | text | link |
-|---|---|---|
-| `cadence` | a metronome 5–10% above your own step rate — the most-studied way to reduce overstriding | Huber & Verhoff 2024 |
-| `verticalOscillationCm` | cueing yourself to stay as low to the ground as possible without slouching | Adams et al. 2018 |
-| `verticalOscillation` | cueing yourself to stay as low to the ground as possible without slouching | Adams et al. 2018 |
-| `overstriding` | a step rate 10% above your own, which brought the foot's landing closer to the body | Heiderscheit et al. 2011 |
+| metric | text | link | direction |
+|---|---|---|---|
+| `cadence` | a phone metronome 5–10% above your own step rate, 2–3 runs a week | Huber & Verhoff 2024 | `higher` |
+| `verticalOscillationCm` | cueing yourself to stay as low to the ground as possible without slouching | Adams et al. 2018 | `lower` |
+| `verticalOscillation` | cueing yourself to stay as low to the ground as possible without slouching | Adams et al. 2018 | `lower` |
+| `overstriding` | a step rate 10% above your own, which brought the foot's landing closer to the body | Heiderscheit et al. 2011 | `lower` |
+
+⚠️ **`cadence`'s text changed under review (D8.5)**: it ended "— the most-studied way to reduce
+overstriding", which is `remediationIntro`'s claim, sourced to Heiderscheit and Lenhart, hanging off
+a link to Huber, whose summary is only the protocol. The superlative still ships, in
+`remediationIntro`, beside the two studies that measured it. A test now pins the compression
+numerically — every number in a Try line appears in its own study's summary — where it previously
+asserted only that the linked study has a non-empty summary, which every link does.
+
+**`direction` is which way the line moves the quantity THAT CARD reports**, and it is what lets the
+view withhold a line rather than point a runner further out of range. `overstriding`'s is `lower`
+although its cue raises step rate: the cue is the means, overstriding is what the card reports and
+what the study measured falling, 9.2 cm to 7.0 cm. A line is withheld only where the value is
+outside the band on that side — `verticalOscillationCm` reads 4.42 cm on this repo's own side-view
+clip against a 6.0–9.5 cm band, and the card told it to stay lower still. Inside the band, in a
+published gap, or on a metric with no band, the line renders. Note an open-ended outer zone
+(cadence's `<153`, `>183`) is INSIDE the band by construction, so cadence's line is never withheld:
+a runner above Garmin's 95th percentile is in the band's top zone, not past its end.
 
 The other eight are `null`, each for a reason:
 
@@ -203,3 +243,98 @@ metric set by name, so adding a fifth Try line is a deliberate act.
 4. **The word counts are a budget, not a measurement of quality.** 70 words that answer the question
    beat 363 that bury it, but the change is that the 293 moved behind one disclosure — they were not
    deleted, and a reader who wants them is one click away.
+
+## D8 — The review round: nine changes, and what they cost
+
+Two reviews of the shipped branch, one code and one UX. Everything here is a change to what D1–D6
+above specified, and each is stated there too rather than only here.
+
+**D8.1 — A single published range is drawn FLAT.** It was a symmetric ramp: zone-2 → zone-3 at 20% →
+zone-3 at 80% → zone-2, heaviest across the middle and easing at both ends. That is the universal
+"optimal range" idiom — a unimodal hump reads as a distribution with a preferred centre — and it was
+drawn on exactly the three cards that render no legend to correct it (`verticalOscillationCm`,
+`trunkLean`, `kneeFlexion`). Their own data disclaims it: each carries `shareOfRunners: null`, and
+`verticalOscillationCm`'s derivation statement, rendered on that same card, says *no percentile of
+the combined cohort is claimed*. `shadeSteps`'s own doc calls claiming an unpublished distribution
+"the one thing this scale may not do", and the `singleRange` branch went round it.
+
+Flat, at the same one step a most-populated zone gets. **And the freed legend slot now names the
+range**, in the source's own words — `Range across Folland's 97 runners` — so the headline's "within
+the range shown" finally refers to something named. The gradient is deleted.
+
+⚠️ That label can contain numbers (`verticalOscillationCm`'s names two percentiles, a cohort size
+and a speed), and the spec's "at most three numbers" rule is therefore restated as being about the
+TRACK. The rule's own rationale is boundary labels stacking a fraction of a unit apart; a caption
+beneath the track is an attribution, is positioned against no mark, and may not author a number of
+its own — which a test pins by requiring the legend's text to equal the band's own label verbatim.
+
+**D8.2 — The description comes back, to every card.** See D1.
+
+**D8.3 — `cadence`'s `zoneOwner` reads "of Garmin's table".** See D5.
+
+**D8.4 — The `@theme static` rationale was backwards.** See D4.
+
+**D8.5 — `cadence`'s Try line no longer carries a superlative it cannot cite.** See D6.
+
+**D8.6 — Colour and legend legibility.** `--color-scale-zone-2` darkens `#86c8d6` → `#6fbccd`, for
+the even ramp in D4. The legend moves from `text-[11px]` / `neutral-600` — the faintest text on the
+card, explaining the one thing on it a reader cannot otherwise decode — to `text-xs` /
+`neutral-700 dark:neutral-300`, and gains a clause for the hatching: *Darker = more runners ·
+hatched = not in the source's table*. The hatching clause renders only where the band has a gap to
+explain, and unlike the shading clause it is NOT hidden under forced colours, because hatching is
+drawn in `currentColor` and survives a palette the user chose.
+
+**Hatched spans also join the scale's text alternative**, unconditionally: `163 to 164 steps per
+minute: not in the source's table`, in value order between the zones. Hatching is invisible to a
+screen reader, and without this the list stepped from `153 to 163` to `164 to 173` with nothing
+saying the values between are uncovered rather than merely unmentioned.
+
+**D8.7 — Two negations collapse to one citation field.** `Garmin fenix 7 manual · population not
+stated · sample size not published · derived` spends more than half its line, and the reader's whole
+attention, restating one silence as two findings. It is now `population and sample size not
+published`. Narrow by construction: a source that states a population keeps both fields.
+
+**D8.8 — Layout.** The `·` between value and position is hidden below `sm`, where the position wraps
+onto its own line and a leading middot reads as a bullet. The notes and the Try line move INTO the
+reading grid's left column, which had been leaving 100–250 px of blank paper beside the 9 rem
+evidence thumbnail. The Try line's citation is separated by ` · ` at the card's attribution size
+rather than by an em dash at body size — the stored text can itself contain an em dash, and a second
+one read as a further clause of the instruction. `<summary>` gains `py-1`.
+
+**D8.9 — An unbanded card's reason is split like a note.** First sentence visible, the rest inside
+the same disclosure everything else secondary is behind, named in the summary as *why there is no
+range* so the continuation cannot end up behind a disclosure that would not otherwise exist. And
+each of the seven leads was rewritten to answer "why is there no bar here" in ≤ 25 words, reader
+first — `overstriding`'s was 101 words rendered whole on the card with the most to read already.
+**No claim was dropped**: every lead is a compression, and the previous text follows it intact.
+
+### What the round cost in words
+
+Same instrument as D2 (card `textContent`, `<details>` subtree removed, screen-reader-only text and
+the evidence figure excluded), measured in jsdom on `85e0f84` and on this branch:
+
+| card | visible before | visible after |
+|---|---|---|
+| `cadence` | 55 | **68** |
+| `kneeFlexion` | 18 | **36** |
+| `trunkLean` | 39 | 56 |
+| `verticalRatio` | 30 | 76 |
+| `verticalOscillationCm` | 80 | 151 |
+| `overstriding` | 229 | **142** |
+| `verticalOscillation` | 115 | 76 |
+| `stepWidth` | 208 | 139 |
+| `stepWidthCm` | 252 | 153 |
+| `footStrikePattern` | 96 | 66 |
+| `kneeDrive` | 98 | 72 |
+| `armSwingAmplitude` | 91 | 65 |
+
+Banded cards grew — they are what gained a description and a legend — and every unbanded card fell,
+by 24% to 44%, because its reason was split. `cadence` stays inside its 70-word budget at 68.
+
+**The furniture budget's MEASURE moved; its number did not.** D2 held every banded card to 50 words
+excluding mandatory notes, on the rule that *a sentence this page did not get to write is not a
+sentence it can spend*. The same rule now excludes three more blocks of borrowed words: the
+description (shared verbatim with the classic view; `verticalOscillationCm`'s is 53 words), a single
+range's legend label (the source's own, 16 words on that card), and an unbanded card's reason. On
+that measure the maximum is **41** against the same budget of 50. Left as it was, the budget would
+have read 112 on `verticalOscillationCm` and failed for words this view did not author.

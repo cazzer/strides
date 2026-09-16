@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 /**
  * The reference scale's palette, held to the contrast floors it was chosen against.
  *
- * Reads the hex values out of `src/index.css` — from disk, because the project's CSS transform
- * hands `?raw` back empty — and recomputes every ratio, so a "nicer" colour that
+ * Reads the hex values out of `src/index.css` and recomputes every ratio, so a "nicer" colour that
  * breaks a floor fails here rather than on somebody's screen. The ratios themselves are transcribed
  * from declutter-guided-results-view design.md D4 — computed there, asserted here — rather than
  * derived from the same code that computes them, which would only prove the formula agrees with
@@ -16,9 +17,17 @@ import { describe, expect, it } from 'vitest'
  * marker vanishes on the darkest zone, or if the darkest zone cannot be told from bare track.
  */
 
-// From the repo root: vitest runs with `process.cwd()` there, and `import.meta.url` is not a
-// file: URL under this setup.
-const css = readFileSync('src/index.css', 'utf8')
+// Read from disk rather than imported: the project's CSS transform hands `?raw` back empty.
+//
+// Resolved against this file rather than `process.cwd()`. ⚠️ `import.meta.url` IS a `file:` URL
+// here — an earlier comment claiming otherwise was wrong — but it may NOT be spelled
+// `new URL('../index.css', import.meta.url)`: Vite rewrites that exact pattern into an asset URL at
+// transform time, and `fileURLToPath` then throws `The URL must be of scheme file`. Taking the
+// directory first sidesteps the rewrite.
+const css = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), '../index.css'),
+  'utf8',
+)
 
 /** WCAG 2.x relative luminance of an `#rrggbb` string. */
 function luminance(hex: string): number {
@@ -63,10 +72,14 @@ describe('the reference scale palette', () => {
     }
   })
 
-  it('emits them statically, so a token used only inside a gradient is not pruned away', () => {
-    // Two of these are read as `var(--color-scale-…)` in an arbitrary gradient rather than through a
-    // `bg-*` utility. A usage-pruned `@theme` would drop exactly those and leave a transparent band
-    // with nothing failing — which is why the block is `@theme static`.
+  it('emits them statically — belt and braces, not because pruning is known to drop one', () => {
+    // ⚠️ The reason recorded here was backwards. It claimed a token read as `var(--color-scale-…)`
+    // inside an arbitrary value would be PRUNED; compiled both ways, those are the ones pruning
+    // keeps. There is no such usage left in any case — a single published range is painted with one
+    // flat utility now, not a gradient — and every token here is reached through a `bg-*`,
+    // `border-*`, `text-*` or `ring-*` utility, so a plain `@theme` emits all twelve today. `static`
+    // stays because Tailwind's pruning rules are not a contract this repo controls, and the failure
+    // mode if they change is a transparent band with nothing failing.
     expect(css).toMatch(/@theme static\s*\{[^}]*--color-scale-zone-3-dark/)
   })
 
@@ -89,7 +102,7 @@ describe('the reference scale palette', () => {
       'the marker against the middle zone',
       'scale-mark',
       'scale-zone-2',
-      9.6,
+      8.32,
       7.09,
     ],
     [
@@ -148,6 +161,37 @@ describe('the reference scale palette', () => {
     expect(
       contrast(token('scale-zone-3-dark'), token('scale-track-dark')),
     ).toBeGreaterThanOrEqual(3)
+  })
+
+  it('spaces the three steps evenly enough that the middle one reads as a middle step', () => {
+    // `--color-scale-zone-2` was `#86c8d6`, which put the light ramp at 1.53 then 2.47: the middle
+    // step read as a variant of the lightest one and the jump to the darkest did all the work.
+    // Neither step may be more than twice the other, which is what "evenly" means here and is a
+    // property of the ramp rather than a floor against a mark.
+    for (const suffix of ['', '-dark']) {
+      const steps = [1, 2].map((step) =>
+        contrast(
+          token(`scale-zone-${step}${suffix}`),
+          token(`scale-zone-${step + 1}${suffix}`),
+        ),
+      )
+      expect(Math.max(...steps) / Math.min(...steps), suffix).toBeLessThan(2)
+    }
+    // As measured, so a change that keeps the ratio but moves the ramp still shows up in a diff.
+    expect(contrast(token('scale-zone-1'), token('scale-zone-2'))).toBeCloseTo(
+      1.76,
+      2,
+    )
+    expect(contrast(token('scale-zone-2'), token('scale-zone-3'))).toBeCloseTo(
+      2.14,
+      2,
+    )
+    expect(
+      contrast(token('scale-zone-1-dark'), token('scale-zone-2-dark')),
+    ).toBeCloseTo(1.72, 2)
+    expect(
+      contrast(token('scale-zone-2-dark'), token('scale-zone-3-dark')),
+    ).toBeCloseTo(1.94, 2)
   })
 
   it('orders the three steps monotonically, and inverts that order between themes', () => {

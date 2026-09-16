@@ -10,6 +10,7 @@ import { formatGuidedValue } from './formatGuidedValue'
 import {
   WITHHELD_BAND_REASON,
   cardReferences,
+  citationParts,
   citationText,
   guidedEntryId,
   guidedGroups,
@@ -836,7 +837,14 @@ describe('A reference band renders only with its provenance on screen', () => {
       expect(citation.textContent?.replace(' (opens in a new tab)', '')).toBe(
         citationText(band.source, band.derivation !== null),
       )
-      expect(citation).toHaveTextContent(band.source.populationShort)
+      // Verbatim where the source states a population; where it states NEITHER a population nor a
+      // sample size, the line says that once instead of twice (`citationParts`).
+      const fields = citationParts(band.source, band.derivation !== null)
+      expect(
+        fields.includes(band.source.populationShort) ||
+          fields.includes('population and sample size not published'),
+        guidance.metric,
+      ).toBe(true)
 
       // The source's own full population sentence, and everything else about the band, is present
       // in the card — inside its disclosure.
@@ -1005,7 +1013,12 @@ describe('A reference band renders only with its provenance on screen', () => {
     expect(section.querySelector('h2')).toHaveTextContent(
       'Measured, no range shown',
     )
-    expect(section).not.toHaveTextContent(/no published range/i)
+    // The GROUP's title is what speaks for every card in it, and it is what must not claim a
+    // finding about the literature. An individual card's own reason may legitimately say "No
+    // published range exists for step width…" — that card really has none.
+    expect(section.querySelector('h2')).not.toHaveTextContent(
+      /no published range/i,
+    )
     expect(
       card(METRIC_LABELS[target.metric]).querySelector(
         '.guided-results__no-band',
@@ -1577,29 +1590,44 @@ describe('Banding controls whether a scale renders, not whether the metric rende
     'An unbanded metric can say why it has no band, visibly — %s',
     (_id, guidance) => {
       renderView(readyAnalysis())
-      const reason = card(METRIC_LABELS[guidance.metric]).querySelector(
-        '.guided-results__no-band',
-      )
-      expect(reason).toHaveTextContent(guidance.noBandReason!)
+      const article = card(METRIC_LABELS[guidance.metric])
+      const reason = article.querySelector('.guided-results__no-band')
+      // Its FIRST sentence, on the same rule as a mandatory note: `overstriding`'s ran to 101 words
+      // rendered whole, on the card with the most to read already. Nothing is dropped — the rest is
+      // inside the same disclosure everything else secondary is behind.
+      const { first, rest } = splitFirstSentence(guidance.noBandReason!)
+      expect(reason).toHaveTextContent(first)
       expect(visibleInCard(reason!)).toBe(true)
+      if (rest.length > 0) {
+        const more = disclosure(article)
+        expect(more, guidance.metric).toHaveTextContent(rest)
+        expect(
+          more!.querySelector('.guided-results__no-band-more'),
+        ).not.toBeNull()
+        // Named in the summary, so the continuation cannot end up behind a disclosure that would
+        // not otherwise exist.
+        expect(article.querySelector('summary')).toHaveTextContent(
+          /why there is no range/i,
+        )
+      }
     },
   )
 
   it.each(guidanceInDisplayOrder().map((g) => [g.metric, g] as const))(
-    'an unbanded card carries its description and a banded one does not — %s',
+    'every card says what the metric is, banded or not — %s',
     (id, guidance) => {
       renderView(readyAnalysis())
       const description = card(METRIC_LABELS[id]).querySelector(
         '.guided-results__description',
       )
-      if (guidance.band === null) {
-        expect(description).toHaveTextContent(
-          guidance.guidedDescription ?? METRIC_DESCRIPTIONS[id],
-        )
-      } else {
-        // A scale, a headline naming the zone and a citation line have already said what it is.
-        expect(description, id).toBeNull()
-      }
+      // ⚠️ This change originally dropped the description from a BANDED card, on the reasoning that
+      // a scale, a headline naming the zone and a citation line have already said what the metric
+      // is. They have not: "110° · within the range shown" never says 110° of what. The scale says
+      // where the number sits; only this says what the number is.
+      expect(description, id).toHaveTextContent(
+        guidance.guidedDescription ?? METRIC_DESCRIPTIONS[id],
+      )
+      expect(visibleInCard(description!), id).toBe(true)
     },
   )
 
@@ -1642,8 +1670,12 @@ describe('Banding controls whether a scale renders, not whether the metric rende
     expect(groupDetails(container, 'unbanded')?.contains(overstriding)).toBe(
       true,
     )
+    // Whole — its first sentence visible, the rest inside the card's disclosure.
     expect(overstriding).toHaveTextContent(
-      METRIC_GUIDANCE.overstriding.noBandReason!,
+      splitFirstSentence(METRIC_GUIDANCE.overstriding.noBandReason!).first,
+    )
+    expect(disclosure(overstriding)).toHaveTextContent(
+      splitFirstSentence(METRIC_GUIDANCE.overstriding.noBandReason!).rest,
     )
 
     // Attached to cadence as well (D8). Where cadence's band or research already links the same
@@ -1674,14 +1706,21 @@ describe('Research on changing this', () => {
         entry={kneeDriveEntry({
           remediation: four,
           research: [],
-          tryLine: { text: 'something a study measured', url: four[0].url },
+          tryLine: {
+            text: 'something a study measured',
+            url: four[0].url,
+            direction: 'lower',
+          },
         })}
         clipCount={1}
       />,
     )
     const line = document.querySelector('.guided-results__try') as HTMLElement
     expect(visibleInCard(line)).toBe(true)
-    expect(line.textContent).toContain('Try: something a study measured — ')
+    // ` · `, the card's own attribution separator — not an em dash, which the stored text can
+    // itself contain and which read as another clause of the instruction rather than its citation.
+    expect(line.textContent).toContain('Try: something a study measured · ')
+    expect(line.textContent).not.toContain(' — ')
     const anchor = within(line).getByRole('link')
     expect(anchor).toHaveAttribute('href', four[0].url)
     expect(anchor).toHaveTextContent(four[0].shortTitle)
@@ -2326,8 +2365,11 @@ describe('A band states where the runner sits, never where they should be', () =
     // Split sentences are vetted with their notes, so strip both halves too.
     const vetted = guidanceStrings(METRIC_GUIDANCE)
     const halves = Object.values(METRIC_GUIDANCE).flatMap((g) =>
-      g.mandatoryNotes.flatMap((note) => {
-        const { first, rest } = splitFirstSentence(note)
+      [
+        ...g.mandatoryNotes,
+        ...(g.noBandReason === null ? [] : [g.noBandReason]),
+      ].flatMap((text) => {
+        const { first, rest } = splitFirstSentence(text)
         // A continuation's label quotes the note's own opening words.
         return [first, rest, noteLead(first)]
       }),
@@ -2391,6 +2433,9 @@ describe('how much a card says before the reader opens anything', () => {
    * The budget, set by declutter-guided-results-view design.md D2 against a measured 363 words.
    * `cadence` is the worst card in the set and the one the reader named: it alone carries a
    * remediation intro, two speed halves and a 90-word mandatory note.
+   *
+   * Unchanged by the review round that restored the description to every card: through this same
+   * instrument cadence read 55 before it and reads 68 after, so the budget still binds.
    */
   const CADENCE_VISIBLE_WORD_BUDGET = 70
 
@@ -2405,10 +2450,24 @@ describe('how much a card says before the reader opens anything', () => {
   })
 
   /**
-   * A mandatory note's first sentence is the SOURCE's sentence, and its length is not the card's to
-   * spend: `verticalOscillationCm`'s is 51 words in one sentence and cannot be shortened without
-   * editing a claim. So every banded card is held to a budget on its own furniture — everything
-   * except those notes — which is where this change's savings actually are.
+   * The card's OWN furniture: everything except the blocks whose words are a source's rather than
+   * this view's, which is where this change's savings actually are.
+   *
+   * Four blocks are excluded, on one rule — **a sentence this page did not get to write is not a
+   * sentence it can spend**:
+   *
+   * - a **mandatory note**'s first sentence is the source's own, and `verticalOscillationCm`'s is
+   *   51 words in one sentence that cannot be shortened without editing a claim;
+   * - the **description** is the metric's definition, shared verbatim with the classic view
+   *   (`METRIC_DESCRIPTIONS`), and `verticalOscillationCm`'s runs to 53 words;
+   * - a single range's **legend** quotes that range's own label, 16 words on the same card;
+   * - an unbanded card's **reason for having no range** is the guidance record's, first sentence
+   *   only, on the same rule as a note.
+   *
+   * ⚠️ The first pass of this change excluded only the notes and budgeted 50 against the rest. The
+   * review then restored the description to every card and gave the legend slot the range's own
+   * label, which put `verticalOscillationCm` at 112 on that measure — so the measure moved rather
+   * than the number, and the number is the same 50 it was. Measured maximum today: 41.
    */
   const CARD_FURNITURE_WORD_BUDGET = 50
 
@@ -2419,12 +2478,17 @@ describe('how much a card says before the reader opens anything', () => {
         true,
       ) as Element
       article
-        .querySelectorAll('.guided-results__notes')
+        .querySelectorAll(
+          '.guided-results__notes, .guided-results__description, .metric-scale__legend, .guided-results__no-band',
+        )
         .forEach((node) => node.remove())
       const words = visibleWordCount(article)
       expect(words, `${guidance.metric}: ${words} words`).toBeLessThanOrEqual(
         CARD_FURNITURE_WORD_BUDGET,
       )
+      // Not vacuous: the card still carries a headline, a citation and — where it has one — a Try
+      // line after those four blocks come out.
+      expect(words, guidance.metric).toBeGreaterThan(10)
     }
   })
 

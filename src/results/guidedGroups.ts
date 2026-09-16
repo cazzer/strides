@@ -3,6 +3,7 @@ import type {
   MetricId,
   MetricResult,
 } from '../heuristics/types'
+import { locateInBand } from '../guidance/bandPosition'
 import { METRIC_GUIDANCE } from '../guidance/metricGuidance'
 import type {
   BandSource,
@@ -170,6 +171,31 @@ export function noBandReasonFor(entry: GuidedEntry): string {
 }
 
 /**
+ * Whether this entry's Try line would point the runner further out of the band they are outside.
+ *
+ * A Try line names a change in one direction — `tryLine.direction`, which is which way it moves the
+ * quantity THIS card reports. Rendered unconditionally, `verticalOscillationCm` reads 4.4 cm on this
+ * repo's own side-view clip, below a 6.0–9.5 cm band, under a line saying to stay lower still.
+ *
+ * Withheld only where the value is genuinely PAST the band on the matching side. Inside the band, in
+ * one of the source table's published gaps, or on a metric with no band at all, it renders: those
+ * are not positions a direction can be wrong about. Note an open-ended outer zone (cadence's `<153`,
+ * `>183`) is INSIDE the band by construction — `locateInBand` never reports `outside` for a value
+ * such a zone contains — so cadence's line is never withheld, which is correct: a runner above
+ * Garmin's 95th percentile is in the band's top zone, not past its end.
+ */
+export function tryLineApplies(entry: GuidedEntry): boolean {
+  const { tryLine } = entry.guidance
+  if (tryLine === null) return false
+  const { band } = entry
+  const value = entry.metric.value
+  if (band === null || value === null) return true
+  const position = locateInBand(band, value)
+  if (position.kind !== 'outside') return true
+  return position.side !== (tryLine.direction === 'lower' ? 'below' : 'above')
+}
+
+/**
  * The capture hint for a not-measured entry, chosen by CAUSE: an unsuitable camera angle gets the
  * angle advice, anything else (too little usable data, a failed scale pass) gets the other.
  */
@@ -280,13 +306,18 @@ export function cardReferences(entry: GuidedEntry): CardReferences {
   if (entry.band !== null) claim(entry.band.source.url)
 
   const { tryLine, remediation, research: researchLinks } = entry.guidance
-  const tryLink =
+  let tryLink =
     tryLine === null
       ? null
       : (remediation.find((link) => link.url === tryLine.url) ?? null)
   // Claimed but deliberately NOT `placed`: the disclosure renders this same link again, as text,
   // which is where its kind, summary and full citation reach the card.
-  if (tryLink !== null) claim(tryLink.url)
+  //
+  // The claim's RESULT decides whether the Try line renders at all. No shipped metric names a Try
+  // study whose URL is also its band's source, so today this never fires — which is exactly why it
+  // has to be structural rather than left to that staying true: the alternative is a card that
+  // anchors one URL twice, silently, the first time a record pairs them.
+  if (tryLink !== null && !claim(tryLink.url)) tryLink = null
 
   const before = rendered.size
   const placed: GuidanceLink[] = []
@@ -320,7 +351,7 @@ export function cardReferences(entry: GuidedEntry): CardReferences {
 
 /**
  * The visible citation line's fields, in order — `["Malisoux et al. 2023", "recreational runners",
- * "n = 860"]`, or `["Garmin fenix 7 manual", "population not stated", "sample size not published",
+ * "n = 860"]`, or `["Garmin fenix 7 manual", "population and sample size not published",
  * "derived"]`.
  *
  * Returned as parts rather than one string because the view anchors the first one and joins the
@@ -334,13 +365,23 @@ export function cardReferences(entry: GuidedEntry): CardReferences {
  */
 export function citationParts(source: BandSource, derived: boolean): string[] {
   const size = source.sampleSize.trim()
+  const counted = /^\d[\d,]*$/.test(size)
   // A bare count reads as `n = 860`. Anything else is a sentence about the absence of one, and is
   // labelled so it cannot be read as a population: "Not published" alone would be ambiguous on a
   // line whose previous field is a population.
-  const sampleSize = /^\d[\d,]*$/.test(size)
+  const sampleSize = counted
     ? `n = ${size}`
     : `sample size ${size.charAt(0).toLowerCase()}${size.slice(1)}`
-  const parts = [source.shortTitle, source.populationShort, sampleSize]
+  // Where NEITHER field states a fact, they are one fact: that this source published neither.
+  // `Garmin fenix 7 manual · population not stated · sample size not published · derived` spends
+  // more than half a line, and the reader's whole attention, on two adjacent negations — and a
+  // reader scanning fields reads the second one as a further finding rather than as the same
+  // silence restated. The predicate is deliberately narrow: an absent population is written in this
+  // record as `population not …`, and an absent sample size is anything that is not a count.
+  const parts =
+    !counted && /^population not\b/i.test(source.populationShort.trim())
+      ? [source.shortTitle, 'population and sample size not published']
+      : [source.shortTitle, source.populationShort, sampleSize]
   if (derived) parts.push('derived')
   return parts
 }

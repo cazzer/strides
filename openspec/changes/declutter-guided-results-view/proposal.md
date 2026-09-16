@@ -34,7 +34,7 @@ Eight changes, all to presentation. **No measurement, value, confidence, caveat,
 crop or image moves.**
 
 1. **A headline that states the value and its position in one line** — `172 steps/min · 30th–69th
-   percentile of Garmin's runners` — so the card's first line answers the question the reader came
+   percentile of Garmin's table` — so the card's first line answers the question the reader came
    with.
 2. **Zone shading by share of runners**, in one hue family, darkest (light theme) / brightest (dark
    theme) = most runners, with a legend saying so. Never a grade, never red/green/amber, never the
@@ -47,8 +47,9 @@ crop or image moves.**
 5. **Provenance becomes one citation line** — `Malisoux et al. 2023 · recreational runners ·
    n = 860` — with the full population sentence, the derivation statement and what it rests on
    inside the disclosure.
-6. **The description leaves banded cards.** A card with a scale, a headline naming the zone and a
-   citation line does not also need a sentence explaining what the metric is; unbanded cards keep it.
+6. ~~**The description leaves banded cards.**~~ **WITHDRAWN under review** (design.md D1, D8.2): a
+   scale says where a number sits, and nothing else on the card said what the number was —
+   `110° · within the range shown` never says 110° of what. Every card keeps its description.
 7. **At most one studied change per card**, as a single `Try:` line stating a change relative to the
    runner's own value. The remaining remediation links move into the disclosure, keeping every link's
    kind and summary reachable.
@@ -68,3 +69,6 @@ crop or image moves.**
   remediation list.
 - **Spec**: three MODIFIED and three ADDED requirements on `guided-results-view`. Two of them
   deliberately reverse a decision the shipped change made — see design.md D1.
+- **Review round 1** added nine further presentation changes and withdrew one of the eight above.
+  Still no measurement, value, confidence, caveat, tier, exemplar, crop or image moves, and still no
+  new research claim — see design.md D8.

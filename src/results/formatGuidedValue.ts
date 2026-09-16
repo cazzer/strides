@@ -77,7 +77,7 @@ export interface GuidedHeadlineParts {
 
 /**
  * The two halves of a banded card's headline — `172 steps/min` and `30th–69th percentile of
- * Garmin's runners` — kept apart so the view can set them at different sizes, and joined nowhere
+ * Garmin's table` — kept apart so the view can set them at different sizes, and joined nowhere
  * else so the two can never disagree about which is which.
  *
  * `position` is `null` for an entry with no band or no value: there is nothing to be positioned

@@ -1553,17 +1553,34 @@ describe('zone shares — how many runners each zone holds', () => {
     expect(expected.reduce((a, b) => a + b, 0)).toBe(1)
   })
 
-  it("gives verticalRatio Garmin's same shares, its zones being that table read backwards", () => {
-    // The vertical-ratio zones are Garmin's own, restated in value order (design.md D3), so their
-    // shares are the same five numbers — and symmetric, so the reversal is not observable in them.
-    const cadence = METRIC_GUIDANCE.cadence.band!.zones.map(
-      (zone) => zone.shareOfRunners,
+  it("derives verticalRatio's shares from the same cut points, not from its restated labels", () => {
+    // ⚠️ This used to assert `ratio === reverse(cadence)` AND `ratio === cadence`, which is one
+    // statement about a palindrome and holds for any symmetric list — including a wrong one.
+    //
+    // Garmin's cut points are the 5th, 30th, 70th and 95th percentiles. Vertical ratio is Garmin's
+    // table read in value order (design.md D3), and the four cuts fall in the same four places.
+    const CUT_POINTS = [0, 5, 30, 70, 95, 100]
+    const expected = CUT_POINTS.slice(1).map(
+      (cut, index) => (cut - CUT_POINTS[index]) / 100,
     )
-    const ratio = METRIC_GUIDANCE.verticalRatio.band!.zones.map(
-      (zone) => zone.shareOfRunners,
-    )
-    expect(ratio).toEqual([...cadence].reverse())
-    expect(ratio).toEqual(cadence)
+    const band = METRIC_GUIDANCE.verticalRatio.band!
+    expect(band.zones.map((zone) => zone.shareOfRunners)).toEqual(expected)
+    expect(expected.reduce((a, b) => a + b, 0)).toBe(1)
+
+    // And the mistake that pins against: reading the LABELS as spans. They restate half-open
+    // intervals as inclusive integers ("5th–30th", "31st–70th"), so counting the integers each
+    // names sums to 101, not 100 — the extra point is an artefact of English.
+    const fromLabels = band.zones.map((zone) => {
+      const span = /^(\d+)(?:st|nd|rd|th)–(\d+)(?:st|nd|rd|th) percentile/.exec(
+        zone.label,
+      )
+      if (span !== null) return Number(span[2]) - Number(span[1]) + 1
+      const tail = /^(?:Lowest|Highest) (\d+)%/.exec(zone.label)
+      if (tail !== null) return Number(tail[1])
+      throw new Error(`unparsed zone label: ${zone.label}`)
+    })
+    expect(fromLabels.reduce((a, b) => a + b, 0)).toBe(101)
+    expect(fromLabels.map((points) => points / 100)).not.toEqual(expected)
   })
 
   it('publishes no share for a band that is one observed range', () => {
@@ -1589,7 +1606,9 @@ describe('zone owner — whose zones a headline names', () => {
       )
       expect(band.zoneOwner === null, `${id} zoneOwner`).toBe(labelsSayWhose)
     }
-    expect(METRIC_GUIDANCE.cadence.band!.zoneOwner).toBe("of Garmin's runners")
+    // "of Garmin's table", not "of Garmin's runners": the same manual's own citation line says the
+    // population is not published, so naming a cohort here would name one nobody has described.
+    expect(METRIC_GUIDANCE.cadence.band!.zoneOwner).toBe("of Garmin's table")
   })
 
   it('reads as a trailing phrase, so a label plus an owner is one noun phrase', () => {
@@ -1706,11 +1725,50 @@ describe('the one studied change a card may show', () => {
   })
 
   it('is a compression of the linked study, not a new claim', () => {
-    // Every Try line's link carries a summary on the same card, so the line adds no source.
+    // ⚠️ This used to assert only that the linked study HAS a non-empty summary, which every link
+    // does — so any Try line text passed it, including one whose claim came from somewhere else.
+    // Two checks that can actually fail:
+    //
+    // 1. Every number the line quotes is in that study's own summary. `cadence`'s "5–10%" and
+    //    "2–3 runs a week" are Huber's protocol; a number from another paper fails here.
+    // 2. No superlative and no grading token. A superlative ranks the literature rather than the
+    //    runner, but it is still a claim, and it belongs beside the source that supports it — which
+    //    is `remediationIntro`, inside the disclosure, next to the two studies that measured it.
+    let checked = 0
     for (const entry of entries()) {
       if (entry.tryLine === null) continue
+      const { text } = entry.tryLine
       const link = entry.remediation.find((l) => l.url === entry.tryLine!.url)!
       expect(link.summary.length, entry.metric).toBeGreaterThan(0)
+      for (const number of text.match(
+        /\d+(?:[.,]\d+)?(?:–\d+(?:[.,]\d+)?)?%?/g,
+      ) ?? []) {
+        checked++
+        expect(link.summary, `${entry.metric}: ${number}`).toContain(number)
+      }
+      expect(text, entry.metric).not.toMatch(
+        /\b(most[- ]studied|best|only|should|target|optimal|better|worse)\b/i,
+      )
     }
+    // Not vacuous: some shipped line quotes a number.
+    expect(checked).toBeGreaterThan(0)
+  })
+
+  it('names which way it moves the quantity its own card reports', () => {
+    for (const entry of entries()) {
+      if (entry.tryLine === null) continue
+      expect(['lower', 'higher'], entry.metric).toContain(
+        entry.tryLine.direction,
+      )
+    }
+    // `overstriding`'s cue RAISES step rate, and its direction is `'lower'`, because the quantity
+    // its card reports is overstriding. Pinned by name: getting this backwards would point a runner
+    // further out of range on exactly the card the rule exists for.
+    expect(METRIC_GUIDANCE.overstriding.tryLine!.direction).toBe('lower')
+    expect(METRIC_GUIDANCE.cadence.tryLine!.direction).toBe('higher')
+    expect(METRIC_GUIDANCE.verticalOscillationCm.tryLine!.direction).toBe(
+      'lower',
+    )
+    expect(METRIC_GUIDANCE.verticalOscillation.tryLine!.direction).toBe('lower')
   })
 })

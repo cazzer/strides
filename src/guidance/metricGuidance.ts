@@ -497,10 +497,16 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       centralTendency: null,
       /**
        * Garmin's labels name a percentile and not whose, so the card's headline would read "30th–69th
-       * percentile" — a percentile of nothing. Ends the headline naming the population that was
-       * measured, as the spec requires. Compare `verticalRatio`, whose restated labels already say.
+       * percentile" — a percentile of nothing. Ends the headline naming the table that was published,
+       * as the spec requires. Compare `verticalRatio`, whose restated labels already say.
+       *
+       * **"of Garmin's table", not "of Garmin's runners"**, and the distinction is the one this
+       * card's own citation line makes three lines further down: Garmin publishes no population and
+       * no sample size, so "Garmin's runners" names a cohort nobody has described. The table is the
+       * thing that exists, and the thing the percentile is a percentile OF. `verticalRatio`'s labels
+       * already end in exactly these words, so the two bands drawn from the same manual agree.
        */
-      zoneOwner: "of Garmin's runners",
+      zoneOwner: "of Garmin's table",
       source: {
         title: "Garmin fenix 7 owner's manual — running-dynamics zone table",
         shortTitle: 'Garmin fenix 7 manual',
@@ -573,14 +579,22 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     remediationIntro:
       'Raising step rate is also the most-studied way to reduce overstriding — how far the foot lands ahead of the body. The Heiderscheit and Lenhart studies below measured that directly.',
     /**
-     * Huber & Verhoff is this metric's own first remediation link, and the clause after the dash is
-     * `remediationIntro`'s own claim compressed — both already render on this card. "5–10% above your
-     * own step rate" is the size of the change the study made, from wherever the runner is; no source
-     * in this record names a step rate to reach, and cadence's mandatory note says so at length.
+     * A compression of Huber & Verhoff's OWN summary — the protocol, and nothing else. "5–10% above
+     * your own step rate" is the size of the change that study made, from wherever the runner is; no
+     * source in this record names a step rate to reach, and cadence's mandatory note says so at
+     * length.
+     *
+     * ⚠️ It used to end "— the most-studied way to reduce overstriding", and that clause is
+     * `remediationIntro`'s claim, sourced to Heiderscheit and Lenhart, hanging off a link to Huber,
+     * whose summary is only the protocol. The reader could not tell which study said which, and the
+     * one visible citation was the wrong one for the superlative. The clause still ships, in
+     * `remediationIntro`, beside the two studies that measured it.
      */
     tryLine: {
-      text: 'a metronome 5–10% above your own step rate — the most-studied way to reduce overstriding',
+      text: 'a phone metronome 5–10% above your own step rate, 2–3 runs a week',
       url: HUBER_2024_LINK.url,
+      // Cadence goes UP: the protocol is a metronome above the runner's own rate.
+      direction: 'higher',
     },
     guidedDescription: null,
   },
@@ -653,7 +667,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       centralTendency: null,
       /**
        * `null`, and not an oversight: every label above already ends "of Garmin's table", so an owner
-       * phrase would render "of Garmin's table of Garmin's runners".
+       * phrase would render it twice — and `cadence`'s owner phrase is now those same words.
        *
        * ⚠️ **The shares are Garmin's CUT POINTS (5 / 30 / 70 / 95) read in value order — NOT the
        * spans of the restated labels above.** Reading `5th–30th`, `31st–70th`, `71st–95th` as spans
@@ -796,6 +810,8 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     tryLine: {
       text: 'cueing yourself to stay as low to the ground as possible without slouching',
       url: ADAMS_2018_LINK.url,
+      // "As low to the ground as possible" lowers the bounce this card reports.
+      direction: 'lower',
     },
     guidedDescription: null,
   },
@@ -935,7 +951,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     displayRank: 6,
     band: null,
     noBandReason:
-      'No published study measures foot-to-hip horizontal distance relative to torso length, which is the unit this app reports it in — a targeted search for that combination returned nothing relevant. And there is no threshold in any other unit either: the most recent review states plainly that "there is currently no consensus on what qualifies as excessive overstriding", and the clinical video protocol that uses exactly this app\'s landmarks is explicitly a yes/no judgement with no units and no cutoff. Halving the gap between the two published measurements to manufacture a range would be picking a number and calling it research.',
+      'No study publishes a range for this measurement, in this unit or any other. No published study measures foot-to-hip horizontal distance relative to torso length, which is the unit this app reports it in — a targeted search for that combination returned nothing relevant. And there is no threshold in any other unit either: the most recent review states plainly that "there is currently no consensus on what qualifies as excessive overstriding", and the clinical video protocol that uses exactly this app\'s landmarks is explicitly a yes/no judgement with no units and no cutoff. Halving the gap between the two published measurements to manufacture a range would be picking a number and calling it research.',
     evidenceDirection: 'association-without-target',
     mandatoryNotes: [
       "The two published absolute measurements of this same geometry disagree: Heiderscheit 2011 measured 9.2 ± 4.0 cm from centre of mass to heel at initial contact, and Lieberman 2015 measured the ankle 0.31 ± 0.08 m ahead of the hip — about 3.4× apart (our arithmetic from the two papers' figures). Neither paper defines its computation precisely enough to reconcile them, so neither is offered here as a reference point.",
@@ -965,6 +981,12 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     tryLine: {
       text: "a step rate 10% above your own, which brought the foot's landing closer to the body",
       url: HEIDERSCHEIT_2011_LINK.url,
+      /*
+        `'lower'`, not `'higher'`, and the cue says "above": `direction` is which way the line moves
+        the quantity THIS CARD reports, which is overstriding. Heiderscheit raises step rate in order
+        to bring the foot's landing closer to the body — 9.2 cm to 7.0 cm at +10%.
+      */
+      direction: 'lower',
     },
     guidedDescription:
       'How far your foot lands ahead of your hips at footstrike, relative to your torso length.',
@@ -977,7 +999,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     // The closest call in the set, and the one place a band was REACHABLE and was refused on the
     // quality of the derivation rather than on its absence. design.md D5.2.
     noBandReason:
-      "A range could be calculated for this measurement, but it isn't shown. It would divide a published pelvis-bounce figure by a textbook estimate of torso length rather than a measured one, and the published figure doesn't say whether it is per step or per stride — either uncertainty changes the answer. The centimetre and ratio versions above do have published ranges.",
+      "A range could be calculated for this measurement, but only from a textbook estimate and an unresolved ambiguity, so it isn't shown. It would divide a published pelvis-bounce figure by a textbook estimate of torso length rather than a measured one, and the published figure doesn't say whether it is per step or per stride — either uncertainty changes the answer. The centimetre and ratio versions above do have published ranges.",
     evidenceDirection: 'association-without-target',
     mandatoryNotes: [],
     speedSensitivity: null,
@@ -992,6 +1014,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     tryLine: {
       text: 'cueing yourself to stay as low to the ground as possible without slouching',
       url: ADAMS_2018_LINK.url,
+      direction: 'lower',
     },
     guidedDescription: null,
   },
@@ -1005,7 +1028,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     displayRank: 8,
     band: null,
     noBandReason:
-      'The literature carries three incompatible definitions of step width, differing by about 2× and by sign, and only one of them — "base of gait" — matches the sign convention this app uses. Even that one samples at midstance where this app samples at footstrike, and it publishes in centimetres, where this metric reports a fraction of the runner\'s own hip width. No published target range exists in either unit; the "normal step width is 8–10 cm" figure in wide circulation traces to a non-peer-reviewed page and describes walking, not running.',
+      'No published range exists for step width in this app\'s unit, and the literature does not agree on how to measure it. Three incompatible definitions are in circulation, differing by about 2× and by sign, and only one of them — "base of gait" — matches the sign convention this app uses. Even that one samples at midstance where this app samples at footstrike, and it publishes in centimetres, where this metric reports a fraction of the runner\'s own hip width. No published target range exists in either unit; the "normal step width is 8–10 cm" figure in wide circulation traces to a non-peer-reviewed page and describes walking, not running.',
     evidenceDirection: 'contested',
     mandatoryNotes: [
       'A negative value is not a defect. Crossover is normal at speed: in 166 Division-I athletes, "On average, males demonstrated crossover at 4.47 m/s (6:00-minute mile), whereas females did not demonstrate crossover at any speed", and the authors note that a negative base of gait at fast speeds "may be normal in a healthy population".',
@@ -1040,7 +1063,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     displayRank: 9,
     band: null,
     noBandReason:
-      'The literature carries three incompatible definitions of step width, differing by about 2× and by sign, and only one of them — "base of gait" — matches the sign convention this app uses; even that one samples at midstance where this app samples at footstrike. No published target range in centimetres exists; it was searched for specifically. For scale rather than as a band, two figures: a foot-to-foot measurement of 3.61 ± 2.56 cm, which is about 1.8 cm in this app\'s convention (half of Arellano & Kram\'s foot-to-foot figure), and a statistical model\'s baseline of 1.358 cm. The "normal step width is 8–10 cm" figure in wide circulation traces to a non-peer-reviewed page and describes walking, not running.',
+      'No published range exists for step width in centimetres, and the literature does not agree on how to measure it. Three incompatible definitions are in circulation, differing by about 2× and by sign, and only one of them — "base of gait" — matches the sign convention this app uses; even that one samples at midstance where this app samples at footstrike. No published target range in centimetres exists; it was searched for specifically. For scale rather than as a band, two figures: a foot-to-foot measurement of 3.61 ± 2.56 cm, which is about 1.8 cm in this app\'s convention (half of Arellano & Kram\'s foot-to-foot figure), and a statistical model\'s baseline of 1.358 cm. The "normal step width is 8–10 cm" figure in wide circulation traces to a non-peer-reviewed page and describes walking, not running.',
     evidenceDirection: 'contested',
     mandatoryNotes: [
       'A negative value is not a defect. Crossover is normal at speed: in 166 Division-I athletes, "On average, males demonstrated crossover at 4.47 m/s (6:00-minute mile), whereas females did not demonstrate crossover at any speed", and the authors note that a negative base of gait at fast speeds "may be normal in a healthy population".',
@@ -1075,7 +1098,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     displayRank: 10,
     band: null,
     noBandReason:
-      'This metric reports a classification, and what the literature publishes for it is a prevalence rather than a range: how many distance runners land each way, not a value to compare a number against. No reference range exists for the underlying ankle-relative-to-knee offset this app measures the classification from.',
+      'This metric reports a classification, not a position on a scale, so a range would have nothing to span. What the literature publishes for it is a prevalence rather than a range: how many distance runners land each way, not a value to compare a number against. No reference range exists for the underlying ankle-relative-to-knee offset this app measures the classification from.',
     evidenceDirection: 'redistribution-not-improvement',
     mandatoryNotes: [
       'About 8 in 10 distance runners are rearfoot strikers. A meta-analysis of distance racing found 79% rearfoot early in a race, rising to 86% at the final checkpoint — the share goes up with distance, not down — and reported inconclusive evidence of any competitive advantage for landing otherwise.',

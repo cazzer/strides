@@ -160,10 +160,15 @@ describe('MetricScale — every published zone boundary renders', () => {
     const items = [...figure.querySelectorAll('.metric-scale__zone-item')].map(
       (node) => node.textContent,
     )
+    // The two gap rows are the hatched spans on the track, which a screen reader cannot see: without
+    // them the list steps from `163` to `164` with nothing saying the span between is uncovered
+    // rather than merely unmentioned.
     expect(items).toEqual([
       `below 153 steps per minute: ${zoneLabel('cadence', 0)}`,
       `153 to 163 steps per minute: ${zoneLabel('cadence', 1)}`,
+      "163 to 164 steps per minute: not in the source's table",
       `164 to 173 steps per minute: ${zoneLabel('cadence', 2)}`,
+      "173 to 174 steps per minute: not in the source's table",
       `174 to 183 steps per minute: ${zoneLabel('cadence', 3)}`,
       `above 183 steps per minute: ${zoneLabel('cadence', 4)}`,
     ])
@@ -177,7 +182,9 @@ describe('MetricScale — every published zone boundary renders', () => {
     expect(items).toEqual([
       `below 3.05%: ${zoneLabel('verticalRatio', 0)}`,
       `3.05 to 3.70%: ${zoneLabel('verticalRatio', 1)}`,
+      "3.70 to 3.75%: not in the source's table",
       `3.75 to 4.30%: ${zoneLabel('verticalRatio', 2)}`,
+      "4.30 to 4.35%: not in the source's table",
       `4.35 to 5.05%: ${zoneLabel('verticalRatio', 3)}`,
       `above 5.05%: ${zoneLabel('verticalRatio', 4)}`,
     ])
@@ -323,6 +330,24 @@ describe('MetricScale — the position is available without the graphic', () => 
       }
     }
   })
+
+  it('authors no number of its own in the legend: a single range quotes its label verbatim', () => {
+    for (const metric of [
+      'verticalOscillationCm',
+      'trunkLean',
+      'kneeFlexion',
+    ] as const) {
+      const band = bandOf(metric)
+      const { container, unmount } = renderScale(
+        metric,
+        SAMPLE_VALUES[metric][0],
+      )
+      expect(one(container, '.metric-scale__legend').textContent, metric).toBe(
+        band.zones[0].label,
+      )
+      unmount()
+    }
+  })
 })
 
 describe('MetricScale — a value outside its band is reported, never silently clamped', () => {
@@ -412,7 +437,16 @@ describe('MetricScale — a value outside its band is reported, never silently c
       )
       for (const value of SAMPLE_VALUES[metric]) {
         const { container, unmount } = renderScale(metric, value)
-        const graphic = one(container, '.metric-scale__graphic')
+        const graphic = one(container, '.metric-scale__graphic').cloneNode(
+          true,
+        ) as HTMLElement
+        // The rule is about what is printed ON THE TRACK — a scale number the reader will try to
+        // read against a mark. The legend beneath it is prose, and where it quotes a single range's
+        // own label (`…women's 10th to men's 90th percentile in Malisoux's 860 runners…`) the
+        // numbers in it are the source's own words, pinned verbatim by the test below.
+        graphic
+          .querySelectorAll('.metric-scale__legend')
+          .forEach((node) => node.remove())
         const valueLabel =
           one(graphic, '.metric-scale__value-label').textContent ?? ''
         // Per text node: adjacent labels' textContent runs together into one bogus number.
@@ -432,6 +466,24 @@ describe('MetricScale — a value outside its band is reported, never silently c
         }
         unmount()
       }
+    }
+  })
+
+  it('authors no number of its own in the legend: a single range quotes its label verbatim', () => {
+    for (const metric of [
+      'verticalOscillationCm',
+      'trunkLean',
+      'kneeFlexion',
+    ] as const) {
+      const band = bandOf(metric)
+      const { container, unmount } = renderScale(
+        metric,
+        SAMPLE_VALUES[metric][0],
+      )
+      expect(one(container, '.metric-scale__legend').textContent, metric).toBe(
+        band.zones[0].label,
+      )
+      unmount()
     }
   })
 })
@@ -529,9 +581,18 @@ describe('MetricScale — legibility of the marks', () => {
         ]),
       )
     }
-    // The legend explains a shading forced colours has just dropped, so it goes with it.
-    expect(classesOf(one(container, '.metric-scale__legend'))).toContain(
-      'forced-colors:hidden',
+    // The clause explaining the SHADING goes with the shading forced colours has just dropped; the
+    // clause explaining the HATCHING does not, because `currentColor` hatching survives.
+    const legend = one(container, '.metric-scale__legend')
+    expect(classesOf(legend)).not.toContain('forced-colors:hidden')
+    for (const span of legend.querySelectorAll('span')) {
+      const hidden = classesOf(span).includes('forced-colors:hidden')
+      expect(hidden, span.textContent ?? '').toBe(
+        !classesOf(span).includes('metric-scale__legend-gap'),
+      )
+    }
+    expect(one(legend, '.metric-scale__legend-gap')).toHaveTextContent(
+      "not in the source's table",
     )
     expect(classesOf(one(container, '.metric-scale__marker'))).toEqual(
       expect.arrayContaining([
@@ -663,28 +724,46 @@ describe('MetricScale — legibility of the marks', () => {
       )
       const zone = one(container, '.metric-scale__zone')
       expect(zone.dataset.shade, metric).toBe('range')
-      expect(classesOf(zone).join(' '), metric).toContain('linear-gradient')
-      // No legend: there is no share to explain, and claiming one would invent a distribution.
+      // FLAT, at one step — no ramp of any shape. A symmetric ramp (which this was: zone-2 easing
+      // to zone-3 across the middle and back) is the universal "optimal range" idiom, and these are
+      // exactly the bands whose source publishes no distribution at all.
+      expect(classesOf(zone).join(' '), metric).not.toContain('linear-gradient')
+      expect(classesOf(zone), metric).toContain('bg-scale-zone-3')
+      expect(classesOf(zone), metric).toContain('dark:bg-scale-zone-3-dark')
+      // The freed legend slot names the range instead of claiming a distribution in it: the
+      // headline can only say "within the range shown", so without this nothing says of what.
+      expect(one(container, '.metric-scale__legend'), metric).toHaveTextContent(
+        band.zones[0].label,
+      )
       expect(
-        container.querySelector('.metric-scale__legend'),
+        one(container, '.metric-scale__legend').textContent,
         metric,
-      ).toBeNull()
+      ).not.toContain('more runners')
       unmount()
     }
   })
 
-  it('states the shading order per theme, because it inverts between them', () => {
+  it('states the shading order per theme, because it inverts between them, and says what hatching is', () => {
     const { container } = renderScale('cadence', 172)
     const legend = one(container, '.metric-scale__legend')
     const spans = [...legend.querySelectorAll('span')]
     expect(spans.map((span) => span.textContent)).toEqual([
       'Darker = more runners',
       'Brighter = more runners',
+      ' · ',
+      "hatched = not in the source's table",
     ])
     expect(classesOf(spans[0])).toContain('dark:hidden')
     expect(classesOf(spans[1])).toEqual(
       expect.arrayContaining(['hidden', 'dark:inline']),
     )
+  })
+
+  it('explains hatching only where the band has a gap to explain', () => {
+    // `trunkLean` publishes one range and no gaps, so there is no hatching on its track and the
+    // clause would name a mark that is not there.
+    const { container } = renderScale('trunkLean', 10)
+    expect(container.querySelector('.metric-scale__legend-gap')).toBeNull()
   })
 
   it('keeps the text alternative for screen readers, not as visible prose', () => {

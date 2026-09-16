@@ -10,6 +10,11 @@ population it was measured over; and its sample size, or the fact that the sourc
 one. Where the band is arithmetic on published numbers rather than a published range, that visible
 line SHALL also declare that it is derived.
 
+Where the source publishes NEITHER a population NOR a sample size, that visible line MAY state the
+two absences as one field rather than two. Two adjacent negations spend half a line and read as two
+findings where there is one: that this source published neither. The line SHALL still say so — an
+absence stated once is an attribution; an absence left out is a gap the reader cannot see.
+
 The source's own full description of its population, the derivation's statement and the definitions
 the derivation rests on MAY sit inside the card's disclosure. What may not move there is the
 attribution itself: a reader SHALL be able to see whose numbers a band is, over roughly whom, at
@@ -38,6 +43,12 @@ interpolated between studies, or chosen to make measured values fall inside it.
 - **THEN** the visible provenance line states that the band is derived, and the derivation's
   statement and the definitions it rests on are present in that metric's card
 
+#### Scenario: A source that publishes neither states that once
+
+- **WHEN** a band's source publishes neither a population nor a sample size
+- **THEN** the visible provenance line states that both are unpublished, in one field rather than
+  as two separate negations
+
 #### Scenario: A band without provenance does not render
 
 - **WHEN** a metric's guidance carries bounds but no source, no short population, no full population
@@ -55,11 +66,22 @@ Where a band publishes more than one zone, every zone boundary SHALL be rendered
 scale, not merely the outer envelope of all zones — a five-zone percentile table collapsed to its
 extremes discards the information the reader came for.
 
-The scale SHALL print at most three numbers: the lowest and the highest bound the band publishes,
-and the measured value. Every other zone boundary SHALL render as an unlabelled seam. Printing a
-number at every boundary stacks labels a fraction of a unit apart into rows that read as unrelated
-numbers, which costs the reader more than it tells them; the bounds themselves are not withheld, as
-the text alternative carries every one of them.
+The scale SHALL print at most three numbers ON THE TRACK: the lowest and the highest bound the band
+publishes, and the measured value. Every other zone boundary SHALL render as an unlabelled seam.
+Printing a number at every boundary stacks labels a fraction of a unit apart into rows that read as
+unrelated numbers, which costs the reader more than it tells them; the bounds themselves are not
+withheld, as the text alternative carries every one of them.
+
+A caption beneath the track MAY quote the source's own words for the range, including any numbers
+those words contain, and SHALL NOT author a number of its own. A quoted label is an attribution, not
+a scale reading: nothing beneath the track is positioned against a mark, so it cannot be misread as
+one, and rewording a cited label to keep numbers off the scale would be editing the citation.
+
+Where the band's zones do not tile — where the source's table jumps — the span between them SHALL
+appear in the text alternative, named as a span the source does not cover. The graphic distinguishes
+it by hatching, and hatching is invisible to a reader who cannot see the graphic: without it the
+text alternative steps from one zone to the next with nothing saying the values in between are
+uncovered rather than merely unmentioned.
 
 #### Scenario: The scale's accessible description carries value, unit and bounds
 
@@ -76,8 +98,14 @@ the text alternative carries every one of them.
 #### Scenario: Only the band's outer bounds and the value are printed
 
 - **WHEN** a scale renders for a band publishing more than two distinct bounds
-- **THEN** the only numbers printed on the graphic are the band's lowest bound, its highest bound
+- **THEN** the only numbers printed on the track are the band's lowest bound, its highest bound
   and the measured value
+
+#### Scenario: A published gap is named in the text alternative
+
+- **WHEN** a band's published zones leave a span between them uncovered
+- **THEN** that span and its bounds appear in the scale's text alternative, stated as a span the
+  source's table does not cover
 
 ### Requirement: The speed caveat renders wherever speed materially moves the metric
 
@@ -131,8 +159,13 @@ the range shown. It SHALL name whose zones they are wherever the zone labels do 
 so that "30th–69th percentile" cannot be read as a percentile of anything but the population that
 was measured.
 
-Everything a card says beyond the value, its position, its own caveats, its scale, its provenance
-and its imagery MAY sit inside that card's one disclosure.
+Everything a card says beyond the value, its position, what the metric measures, its own caveats,
+its scale, its provenance and its imagery MAY sit inside that card's one disclosure.
+
+What the metric measures SHALL stay outside it, on every card, banded or not. A scale says where a
+number sits; it does not say what the number is. `110° · within the range shown` never says 110° of
+what, and a headline naming a percentile of a ratio is unreadable to anyone not already told the
+ratio's terms.
 
 #### Scenario: The headline names the zone a value falls in
 
@@ -151,7 +184,8 @@ and its imagery MAY sit inside that card's one disclosure.
 - **WHEN** a banded metric's card renders
 - **THEN** the source's full population description, a derived band's statement, the band's own
   assembly note, the population's central statistic and the corroborating and research links are
-  present in the card but inside its disclosure
+  present in the card but inside its disclosure, and the sentence saying what the metric measures is
+  outside it
 
 ### Requirement: Zone shading shows how many runners each zone holds, never a grade
 
@@ -171,8 +205,18 @@ SHALL NOT use red, green, amber, emerald, lime, orange, rose or yellow, and SHAL
 system's brand colour, which is reserved for interactive elements and would read as an accent
 meaning something.
 
-Where a band publishes a single range with no zone shares, the range SHALL be shaded without
-implying any distribution within it.
+Where a band publishes a single range with no zone shares, the range SHALL be shaded evenly across
+its whole width. It SHALL NOT be drawn with any gradient, ramp or emphasis that varies across the
+range: a shape that peaks in the middle and eases at both ends is the form readers know as an
+optimal range, and it asserts a distribution that these bands' sources do not publish. One of them
+says so in the derivation statement rendered on its own card — that no percentile of the combined
+cohort is claimed.
+
+Where a band publishes a single range, the scale SHALL name that range in the source's own words
+where the legend would otherwise sit. A headline can only place a value "within the range shown",
+and a range shown is a range the reader has not been told the extent or the owner of.
+
+Where any published gap is drawn, the legend SHALL also say what the mark drawn over a gap means.
 
 Every mark on the scale SHALL meet a contrast floor against what it is drawn on: at least 3:1 for
 the marker against any zone it can sit on and against the track, and at least 3:1 for the most
@@ -185,10 +229,16 @@ system colours, because the shading is a background and forced colours replace b
 - **THEN** the zone with the largest share is shaded most heavily, zones with equal shares are
   shaded identically, and a legend states which end of the shading means more runners
 
-#### Scenario: A single range is shaded without a share claim
+#### Scenario: A single range is shaded evenly and named
 
 - **WHEN** a band publishing one range with no zone shares renders its scale
-- **THEN** the range is shaded and no legend claims a distribution of runners within it
+- **THEN** the range is shaded evenly across its width, no legend claims a distribution of runners
+  within it, and the range's own published label renders beneath the track
+
+#### Scenario: The legend says what hatching means
+
+- **WHEN** a scale renders a span its source's table does not cover
+- **THEN** the legend states what the mark drawn over that span means
 
 #### Scenario: Marks stay distinguishable under forced colours
 
@@ -215,6 +265,12 @@ carries no study of a change.
 The study it links SHALL be one of that metric's own recorded studies of changes, so the line cannot
 introduce a source the record has not verified.
 
+A studied change moves the measurement one way, and the line SHALL NOT render where the runner's
+value is already past the band in that direction. A reading below a published range, under a line
+naming a change that would lower it further, reads as an instruction to go further out — which is
+both a grade on the reading and advice the study does not support. A value inside the band, in a
+published gap, or on a metric with no band is not past anything, and the line renders.
+
 #### Scenario: A metric with a studied change shows exactly one
 
 - **WHEN** a metric whose guidance records a studied change renders
@@ -230,3 +286,9 @@ introduce a source the record has not verified.
 
 - **WHEN** a studied-change line renders
 - **THEN** its text describes a change from the runner's own reading and names no value to reach
+
+#### Scenario: A line is withheld from a value already past the band that way
+
+- **WHEN** a metric's value falls outside its band on the side its studied change moves toward
+- **THEN** no studied-change line renders for that metric, and the study itself is still present
+  inside that card's disclosure with its kind and its summary

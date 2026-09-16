@@ -163,8 +163,8 @@ function pluralise(word: string): string {
 }
 
 /**
- * The card headline's position fragment — `30th–69th percentile of Garmin's runners`,
- * `between the 5th–29th and 30th–69th percentiles of Garmin's runners`, `below the range shown`.
+ * The card headline's position fragment — `30th–69th percentile of Garmin's table`,
+ * `between the 5th–29th and 30th–69th percentiles of Garmin's table`, `below the range shown`.
  *
  * A compression of {@link describeBandPosition}, which stays the text alternative for the drawn
  * scale and is unchanged: this one drops the value (the headline prints it beside this fragment),

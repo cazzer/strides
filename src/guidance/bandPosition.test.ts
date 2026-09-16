@@ -488,22 +488,22 @@ describe('describeBandPositionBriefly — the card headline’s position fragmen
     [
       'cadence',
       172,
-      "172 steps/min · 30th–69th percentile of Garmin's runners",
+      "172 steps/min · 30th–69th percentile of Garmin's table",
     ],
     [
       'cadence',
       163.5,
-      "163.5 steps/min · between the 5th–29th and 30th–69th percentiles of Garmin's runners",
+      "163.5 steps/min · between the 5th–29th and 30th–69th percentiles of Garmin's table",
     ],
     [
       'cadence',
       150,
-      "150 steps/min · below the 5th percentile of Garmin's runners",
+      "150 steps/min · below the 5th percentile of Garmin's table",
     ],
     [
       'cadence',
       190,
-      "190 steps/min · above the 95th percentile of Garmin's runners",
+      "190 steps/min · above the 95th percentile of Garmin's table",
     ],
     ['verticalRatio', 0.0246, "2.46% · lowest 5% of Garmin's table"],
     [

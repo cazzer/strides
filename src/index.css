@@ -1,7 +1,8 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 @theme {
-  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-sans:
+    'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-display: 'League Spartan', 'Poppins', system-ui, sans-serif;
 
   --color-brand-400: #ff8f5c;
@@ -14,9 +15,14 @@
 /*
  * The reference scale's palette (`src/guidance/MetricScale.tsx`).
  *
- * `static`, not a plain `@theme`: two of these are read as `var(--color-scale-…)` inside an
- * arbitrary gradient rather than through a `bg-*` utility, and a usage-pruned theme would drop
- * exactly those and leave a transparent band with nothing failing.
+ * `static`, not a plain `@theme`: belt and braces. Every token here is reached through a `bg-*`,
+ * `border-*`, `text-*` or `ring-*` utility today, and a usage-pruned `@theme` emits all twelve —
+ * checked against the built CSS, not assumed. `static` is kept because Tailwind's pruning rules are
+ * not a contract this repo controls, and the failure mode if they change is a transparent band with
+ * nothing failing. (An earlier version of this comment had the reason backwards: it claimed pruning
+ * would DROP a token read as `var(--color-scale-…)` inside an arbitrary value. Pruning keeps those;
+ * there is no such usage here any more in any case, since a single published range is painted with
+ * one flat utility rather than a gradient.)
  *
  * ## What the three zone steps mean, and what they do NOT mean
  *
@@ -37,10 +43,15 @@
  * |-----------------------------------|-------|------|
  * | zone-3 (most runners) vs track    | 4.61  | 4.96 |
  * | mark (marker, seams) vs zone-3    | 3.89  | 3.66 |
- * | mark vs zone-2                    | 9.60  | 7.09 |
+ * | mark vs zone-2                    | 8.32  | 7.09 |
  * | mark vs zone-1                    | 14.68 | 12.16|
  * | mark vs track (= ring vs marker)  | 17.93 | 18.16|
  * | hatch vs track                    | 7.81  | 7.85 |
+ *
+ * The three steps are also spaced as evenly as the two floors allow: step to step, light reads
+ * 1.76 then 2.14 (it read 1.53 then 2.47 before `--color-scale-zone-2` was darkened from `#86c8d6`),
+ * dark 1.72 then 1.94. An even ramp is what makes the middle step read as a middle step rather than
+ * as a variant of the lightest one.
  *
  * The two that bind are `mark` against `zone-3` — the marker has to stay visible on the darkest
  * zone it can land on — and `zone-3` against bare track. Both clear 3:1 in both themes. A test
@@ -53,7 +64,7 @@
 @theme static {
   --color-scale-zone-1: #d4edf2;
   --color-scale-zone-1-dark: #12343d;
-  --color-scale-zone-2: #86c8d6;
+  --color-scale-zone-2: #6fbccd;
   --color-scale-zone-2-dark: #1b5a6a;
   --color-scale-zone-3: #1f7f99;
   --color-scale-zone-3-dark: #2b8aa2;

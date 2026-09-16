@@ -116,7 +116,7 @@ describe('guidedHeadlineParts — the two halves of a card headline', () => {
     expect(entry.metric.metric).toBe('cadence')
     expect(guidedHeadlineParts(entry)).toEqual({
       value: '172 steps/min',
-      position: "30th–69th percentile of Garmin's runners",
+      position: "30th–69th percentile of Garmin's table",
     })
   })
 

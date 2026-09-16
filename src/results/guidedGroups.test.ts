@@ -23,6 +23,7 @@ import {
   renderableBand,
   sourceHasProvenance,
   splitFirstSentence,
+  tryLineApplies,
 } from './guidedGroups'
 import type { GuidedEntry } from './guidedGroups'
 import { makeHeuristics, makeMetric } from './__fixtures__/metricResult'
@@ -226,7 +227,11 @@ function entryWith({
   // The Try line names one of `remediation`'s own URLs, or is `null` where there is nothing to name.
   const tryLine =
     remediation.length > 0
-      ? { text: 'something studied', url: remediation[0].url }
+      ? {
+          text: 'something studied',
+          url: remediation[0].url,
+          direction: 'lower' as const,
+        }
       : null
   const guidance: MetricGuidance = {
     ...base,
@@ -313,15 +318,29 @@ describe('cardReferences — each URL an anchor once per card, visible first, no
     expect(refs.disclosureSourceCount).toBe(2)
   })
 
-  it('defers a study whose URL is the band source into the disclosure, unlinked, rather than dropping it', () => {
+  it('withholds a Try line whose study is already the band source, and keeps the study inside', () => {
     const band = 'https://band.example/'
     const refs = cardReferences(
       entryWith({ bandUrl: band, remediation: [link(band)] }),
     )
-    // Named as the Try line, but its URL is the band's, already an anchor — so it shows as text.
-    expect(refs.tryLink?.url).toBe(band)
+    // Named as the Try line, but its URL is the citation line's anchor already. `TryLine` renders an
+    // anchor unconditionally, so showing it would anchor one URL twice on one card; the study is not
+    // lost, it renders inside the disclosure as text, with its kind, summary and full citation.
+    expect(refs.tryLink).toBeNull()
     expect(refs.moreRemediation).toEqual([{ link: link(band), linked: false }])
     expect(refs.disclosureSourceCount).toBe(0)
+  })
+
+  it('still shows a Try line whose study is only its own, unclaimed URL — the rule is not "never"', () => {
+    // Not vacuous: the withholding above is about a COLLISION with the band source, and this is the
+    // shipped shape (no shipped metric names a Try study that is also its band's source).
+    const refs = cardReferences(
+      entryWith({
+        bandUrl: 'https://band.example/',
+        remediation: [link('https://try.example/')],
+      }),
+    )
+    expect(refs.tryLink?.url).toBe('https://try.example/')
   })
 
   it("places every shipped link's summary somewhere on its card", () => {
@@ -519,10 +538,34 @@ describe('citationParts — the one visible attribution line', () => {
   })
 
   it('labels an unpublished sample size, so it cannot read as another population', () => {
-    const band = METRIC_GUIDANCE.cadence.band!
-    expect(citationText(band.source, false)).toBe(
-      'Garmin fenix 7 manual · population not stated · sample size not published',
+    // A source that publishes a population but no count: the sample-size field still says so, in
+    // words, rather than printing a bare "Not published" that reads as a second population.
+    const source = {
+      ...METRIC_GUIDANCE.verticalOscillationCm.band!.source,
+      sampleSize: 'Not published',
+    }
+    expect(citationText(source, false)).toBe(
+      'Malisoux et al. 2023 · recreational runners · sample size not published',
     )
+  })
+
+  it('collapses two adjacent absences into one field, so the line states each fact once', () => {
+    // Garmin publishes neither, and `population not stated · sample size not published` spent more
+    // than half the line — and the reader's attention — restating one silence as two findings.
+    for (const metric of ['cadence', 'verticalRatio'] as const) {
+      const band = METRIC_GUIDANCE[metric].band!
+      expect(citationParts(band.source, false), metric).toEqual([
+        band.source.shortTitle,
+        'population and sample size not published',
+      ])
+    }
+    expect(citationText(METRIC_GUIDANCE.cadence.band!.source, false)).toBe(
+      'Garmin fenix 7 manual · population and sample size not published',
+    )
+    // Narrow by construction: a source that states a population keeps both fields, above.
+    expect(
+      citationParts(METRIC_GUIDANCE.verticalOscillationCm.band!.source, false),
+    ).toHaveLength(3)
   })
 
   it('says "derived" last, and only for a derived band', () => {
@@ -536,8 +579,11 @@ describe('citationParts — the one visible attribution line', () => {
     for (const entry of guidedGroups(makeHeuristics()).banded) {
       const band = entry.band!
       const text = citationText(band.source, band.derivation !== null)
+      // Three fields — source, population, sample size — except where the last two are both
+      // absences and collapse into one, and plus one where the band is derived.
+      const collapsed = text.includes('population and sample size')
       expect(text.split(' · '), entry.metric.metric).toHaveLength(
-        band.derivation === null ? 3 : 4,
+        (collapsed ? 2 : 3) + (band.derivation === null ? 0 : 1),
       )
       expect(text.includes(' · derived'), entry.metric.metric).toBe(
         band.derivation !== null,
@@ -548,6 +594,101 @@ describe('citationParts — the one visible attribution line', () => {
         text.length,
         `${entry.metric.metric}: ${text}`,
       ).toBeLessThanOrEqual(95)
+    }
+  })
+})
+
+describe('tryLineApplies — a studied change may not point further out of the band', () => {
+  /** The shipped `verticalOscillationCm` entry at one measured value. Its band is 6.0–9.5 cm. */
+  function vocmAt(value: number): GuidedEntry {
+    const guidance = METRIC_GUIDANCE.verticalOscillationCm
+    return {
+      metric: makeMetric('verticalOscillationCm', { value }),
+      guidance,
+      band: guidance.band,
+    }
+  }
+
+  it("withholds a 'lower' line from a value already below the band", () => {
+    // 4.4215 cm is what this repo's own side-view clip measures (CLAUDE.md's standing anchor), and
+    // the line it sat under said to stay lower still.
+    expect(METRIC_GUIDANCE.verticalOscillationCm.tryLine?.direction).toBe(
+      'lower',
+    )
+    expect(tryLineApplies(vocmAt(4.421467928439415))).toBe(false)
+  })
+
+  it('shows the same line for a value inside the band', () => {
+    expect(tryLineApplies(vocmAt(7.5))).toBe(true)
+    // The bounds themselves are inside: a closed zone is inclusive on both (bandPosition.ts).
+    expect(tryLineApplies(vocmAt(6.0))).toBe(true)
+    expect(tryLineApplies(vocmAt(9.5))).toBe(true)
+  })
+
+  it("shows a 'lower' line to a value ABOVE the band — that is the direction that helps", () => {
+    expect(tryLineApplies(vocmAt(12))).toBe(true)
+  })
+
+  it("withholds a 'higher' line from a value already above the band", () => {
+    const guidance = METRIC_GUIDANCE.verticalOscillationCm
+    const higher: MetricGuidance = {
+      ...guidance,
+      tryLine: { ...guidance.tryLine!, direction: 'higher' },
+    }
+    const above: GuidedEntry = {
+      metric: makeMetric('verticalOscillationCm', { value: 12 }),
+      guidance: higher,
+      band: guidance.band,
+    }
+    expect(tryLineApplies(above)).toBe(false)
+    expect(
+      tryLineApplies({
+        ...above,
+        metric: makeMetric('verticalOscillationCm', { value: 4 }),
+      }),
+    ).toBe(true)
+  })
+
+  it('shows a line on a metric with no band, and on one with no value to place', () => {
+    const overstriding = METRIC_GUIDANCE.overstriding
+    expect(overstriding.band).toBeNull()
+    expect(overstriding.tryLine?.direction).toBe('lower')
+    for (const value of [-5, 0, 5]) {
+      expect(
+        tryLineApplies({
+          metric: makeMetric('overstriding', { value }),
+          guidance: overstriding,
+          band: null,
+        }),
+        `${value}`,
+      ).toBe(true)
+    }
+  })
+
+  it('shows nothing where the guidance names no studied change', () => {
+    expect(METRIC_GUIDANCE.trunkLean.tryLine).toBeNull()
+    expect(
+      tryLineApplies({
+        metric: makeMetric('trunkLean'),
+        guidance: METRIC_GUIDANCE.trunkLean,
+        band: METRIC_GUIDANCE.trunkLean.band,
+      }),
+    ).toBe(false)
+  })
+
+  it("never withholds cadence's line: an open-ended outer zone is inside the band", () => {
+    // Garmin's `<153` and `>183` cover every value, so `locateInBand` never reports `outside` here —
+    // a runner at 200 steps/min is in the band's top zone, not past its end.
+    const cadence = METRIC_GUIDANCE.cadence
+    for (const value of [120, 172, 200]) {
+      expect(
+        tryLineApplies({
+          metric: makeMetric('cadence', { value }),
+          guidance: cadence,
+          band: cadence.band,
+        }),
+        `${value}`,
+      ).toBe(true)
     }
   })
 })

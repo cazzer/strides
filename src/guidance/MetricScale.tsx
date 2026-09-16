@@ -88,6 +88,37 @@ function gapsBetween(zones: BandZone[]): { from: number; to: number }[] {
   return gaps
 }
 
+/** What a hatched span is, in the one wording the legend and the zone list both use. */
+const GAP_MEANING = "not in the source's table"
+
+/**
+ * The band's zones and its published gaps, in value order, for the text alternative.
+ *
+ * A gap is drawn as hatching and hatching is invisible to a screen reader, so a reader who cannot
+ * see the track met a list that jumped from `up to 163` to `164 to 173` with nothing saying the two
+ * numbers between them are uncovered rather than merely unmentioned. Gaps are appended
+ * unconditionally: a band with none contributes none, which is the same list as before.
+ */
+function zoneListEntries(
+  band: ReferenceBand,
+): { key: string; range: string; label: string }[] {
+  const entries = band.zones.map((zone) => ({
+    key: `zone:${zone.min}:${zone.max}`,
+    range: formatBandRange(zone.min, zone.max, band.unit, 'spoken'),
+    label: zone.label,
+    at: zone.min ?? Number.NEGATIVE_INFINITY,
+  }))
+  const gaps = gapsBetween(band.zones).map(({ from, to }) => ({
+    key: `gap:${from}:${to}`,
+    range: formatBandRange(from, to, band.unit, 'spoken'),
+    label: GAP_MEANING,
+    at: from,
+  }))
+  return [...entries, ...gaps]
+    .sort((a, b) => a.at - b.at)
+    .map(({ key, range, label }) => ({ key, range, label }))
+}
+
 /**
  * Anchors an absolutely-positioned element at `percent` along its container while keeping it
  * inside the container: the element's own anchor point slides from its left edge (at 0%) to its
@@ -122,12 +153,17 @@ const ZONE_SHADES = [
 ]
 
 /**
- * A single published range, shaded without claiming a distribution inside it: heaviest across the
- * middle, easing at both ends, so it reads as one range rather than as three zones. Written as
- * literal class strings because Tailwind scans source text for candidates.
+ * A single published range: ONE flat step, the same one a most-populated zone gets.
+ *
+ * It was a symmetric ramp — zone-2 easing to zone-3 across the middle and back — and that is the
+ * universal "optimal range" idiom: a unimodal hump reads as a distribution with a preferred centre.
+ * Every band drawn this way publishes `shareOfRunners: null` on its one zone, and
+ * `verticalOscillationCm`'s own derivation says in so many words that *no percentile of the combined
+ * cohort is claimed* — so the picture was asserting exactly what the words beside it disclaimed, and
+ * on the three cards that render no legend to correct it. Flat says the one true thing: this span is
+ * the range, and nothing is known about where inside it runners fall.
  */
-const SINGLE_RANGE_SHADE =
-  'bg-[linear-gradient(to_right,var(--color-scale-zone-2),var(--color-scale-zone-3)_20%,var(--color-scale-zone-3)_80%,var(--color-scale-zone-2))] dark:bg-[linear-gradient(to_right,var(--color-scale-zone-2-dark),var(--color-scale-zone-3-dark)_20%,var(--color-scale-zone-3-dark)_80%,var(--color-scale-zone-2-dark))]'
+const SINGLE_RANGE_SHADE = ZONE_SHADES[ZONE_SHADES.length - 1]
 
 /**
  * One shading step per zone, by how many runners the source's table puts in it: the zone with the
@@ -185,14 +221,22 @@ function shadeSteps(zones: BandZone[]): number[] | null {
  * pass/fail colours, and no brand colour, which is reserved for interactive elements.
  * `centralTendency` is still not drawn: a mark at the mean reads as a goal however it is styled.
  *
+ * **A band publishing one range is drawn FLAT**, at that same one step, and says so in words in the
+ * legend's slot: the range's own label. A ramp across it — however styled — is a shape, and a
+ * symmetric hump is the shape readers already know as "the optimal range". These are exactly the
+ * bands whose one zone carries `shareOfRunners: null`, i.e. the bands whose source publishes no
+ * distribution at all.
+ *
  * ## Forced colours
  *
  * Every mark on the track is a coloured `div`, and Windows High Contrast replaces backgrounds with
  * the page colour — seams, zones and the marker would all vanish. So the track opts out of forced
  * colour adjustment and restates each mark in system colours: `Canvas` ground, `CanvasText` border,
  * seams, zone edges and gap hatching, and `Highlight` for the marker, ringed in `Canvas` so it stays
- * distinct from a seam it overlaps. The shading itself is dropped (`forced-colors:bg-none`) and its
- * legend hidden, because neither survives a palette the user chose.
+ * distinct from a seam it overlaps. The shading itself is dropped (`forced-colors:bg-none`) and the
+ * clause of the legend that explains it is hidden, because neither survives a palette the user chose.
+ * The clause naming what HATCHING means is not hidden — hatching is `currentColor` and survives —
+ * and neither is a single range's label, which is a fact about the band rather than about paint.
  *
  * The marker is near-black (near-white in dark mode), not the brand colour. It is told apart from a
  * seam by its width, its overhang above and below the track, and its ring. The text around the track
@@ -246,16 +290,11 @@ export function MetricScale({ band, value, label }: MetricScaleProps) {
           multiZone ? 'Reference zones, lowest value first' : 'Reference range'
         }
       >
-        {band.zones.map((zone) => (
-          <li
-            key={`${zone.min}:${zone.max}`}
-            className="metric-scale__zone-item"
-          >
-            <span className="font-semibold">
-              {formatBandRange(zone.min, zone.max, band.unit, 'spoken')}
-            </span>
+        {zoneListEntries(band).map(({ key, range, label }) => (
+          <li key={key} className="metric-scale__zone-item">
+            <span className="font-semibold">{range}</span>
             {': '}
-            {zone.label}
+            {label}
           </li>
         ))}
       </ul>
@@ -282,9 +321,11 @@ function MetricScaleGraphic({
   const boundPercents = bounds.map((bound) => toPercent(domain, bound))
   const steps = shadeSteps(band.zones)
   const singleRange = band.zones.length === 1
-  // A legend is a claim about the shading's meaning, so it renders only where the shading has one:
-  // more than one zone, each with a published share.
-  const showsLegend = !singleRange && steps !== null
+  const gaps = gapsBetween(band.zones)
+  // What the SHADING means, which is a claim, so it renders only where the shading has one: more
+  // than one zone, each with a published share. A single range's shading means nothing — that is
+  // the point of drawing it flat — and its legend slot says what the range IS instead.
+  const showsShading = !singleRange && steps !== null
 
   return (
     <div className="metric-scale__graphic w-full" aria-hidden="true">
@@ -356,12 +397,48 @@ function MetricScaleGraphic({
         ))}
       </div>
 
-      {showsLegend && (
-        <p className="metric-scale__legend mt-1 text-[11px] leading-4 text-neutral-600 dark:text-neutral-400 forced-colors:hidden">
-          {/* The ordering inverts between themes, so each theme states its own true sentence. */}
-          <span className="dark:hidden">Darker = more runners</span>
-          <span className="hidden dark:inline">Brighter = more runners</span>
+      {singleRange ? (
+        /*
+          The freed slot, now that a single range is flat: the range's OWN label. The headline can
+          only say "within the range shown" — `describeBandPositionBriefly` refuses a label that is a
+          90-character sentence naming two percentiles of two sexes — so without this the reader met
+          "the range shown" and was never told whose range, or of what. No `forced-colors:hidden`,
+          unlike the shading legend below: this is a fact about the band, true in any palette.
+        */
+        <p className="metric-scale__legend mt-1 text-xs leading-4 text-neutral-700 dark:text-neutral-300">
+          {band.zones[0].label}
         </p>
+      ) : (
+        (showsShading || gaps.length > 0) && (
+          <p className="metric-scale__legend mt-1 text-xs leading-4 text-neutral-700 dark:text-neutral-300">
+            {showsShading && (
+              <>
+                {/* The ordering inverts between themes, so each theme states its own true
+                    sentence — and forced colours drop the shading, so both go with it. */}
+                <span className="dark:hidden forced-colors:hidden">
+                  Darker = more runners
+                </span>
+                <span className="hidden dark:inline forced-colors:hidden">
+                  Brighter = more runners
+                </span>
+              </>
+            )}
+            {gaps.length > 0 && (
+              <>
+                {/* The separator belongs to the clause before it, so forced colours leave the
+                    hatching clause standing alone rather than behind a dangling middot. */}
+                {showsShading && (
+                  <span className="forced-colors:hidden">{' · '}</span>
+                )}
+                {/* Hatching is drawn in `currentColor` and SURVIVES forced colours, so unlike the
+                    shading legend this clause stays true there and is not hidden. */}
+                <span className="metric-scale__legend-gap">
+                  hatched = {GAP_MEANING}
+                </span>
+              </>
+            )}
+          </p>
+        )
       )}
     </div>
   )

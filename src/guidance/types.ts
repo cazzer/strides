@@ -229,14 +229,14 @@ export interface ReferenceBand {
    */
   note: string | null
   /**
-   * Whose zones these are, as a trailing phrase — "of Garmin's runners" — appended to a zone label
+   * Whose zones these are, as a trailing phrase — "of Garmin's table" — appended to a zone label
    * in the card's one-line headline. `null` where the labels already say whose table they are.
    *
    * It exists because a bare "30th–69th percentile" in a headline names a percentile of nothing:
    * the spec requires the headline to attribute the zones to the population that was measured.
    * `cadence`'s labels are Garmin's own and say only the percentile, so it carries one;
    * `verticalRatio`'s restated labels already end "of Garmin's table", so it is `null` there and
-   * appending anything would read "of Garmin's table of Garmin's runners".
+   * appending anything would read "of Garmin's table of Garmin's table".
    *
    * Never used for a single-range band, whose headline says "within the range shown" rather than
    * quoting a 90-character range label.
@@ -470,23 +470,30 @@ export interface MetricGuidance {
    * none. The view prefixes it, so `text` starts mid-sentence ("a metronome 5–10% above your own
    * step rate…").
    *
-   * Four rules, each pinned by test:
+   * Five rules, each pinned by test:
    *
    * 1. **`url` MUST be one of this metric's own `remediation` links**, so the line cannot introduce
    *    a source the record has not verified.
    * 2. **Relative to the runner's own value, never a value to reach.** "5–10% above your own step
    *    rate" is the size of the change the study made; no source in this record names a target, and
    *    a Try line that did would assert what design.md D1 refuses to.
-   * 3. **No grading word** applied to the runner's reading, and no "should", "target" or "aim".
+   * 3. **No grading word** applied to the runner's reading, and no "should", "target" or "aim", and
+   *    no superlative ("the most-studied", "the best", "the only") — a superlative ranks the studies
+   *    rather than the runner, but it is still a claim, and it belongs to whichever text can cite it.
    * 4. **A compression of the linked study's own summary**, which is already rendered on the card —
-   *    never a new claim.
+   *    never a new claim. Pinned numerically: every number in `text` appears in that summary.
+   * 5. **`direction` is which way the line moves the quantity the CARD reports**, so the view can
+   *    withhold a line that would point a runner further out of the band they are already outside.
+   *    `overstriding`'s cue raises step rate, but what it moves for the reader of that card is
+   *    overstriding — `'lower'`. A line is withheld only when the value is outside the band on that
+   *    same side; inside the band, in a published gap, or on a metric with no band, it renders.
    *
    * `null` is a finding rather than an omission in two places: `footStrikePattern`'s `remediation`
    * is empty because the best available systematic review rates the injury link as low evidence, and
    * `trunkLean`'s is contested, four measured outcomes pointing in different directions at once. See
    * declutter-guided-results-view design.md D6 for the full per-metric table.
    */
-  tryLine: { text: string; url: string } | null
+  tryLine: { text: string; url: string; direction: 'lower' | 'higher' } | null
   /** Guided-view-only replacement for the shared METRIC_DESCRIPTIONS entry (src/results/metricDescriptions.ts),
    * used where the shared copy reads badly in a page about published ranges. null = use the shared one.
    * The shared descriptions are the classic view's copy and are NOT edited. */
