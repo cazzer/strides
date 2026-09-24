@@ -56,6 +56,7 @@ function makeHeuristics(): FormHeuristicsResult {
     stepWidthCm: { ...base, metric: 'stepWidthCm', value: 8.2, unit: 'centimeters' },
     kneeDrive: { ...base, metric: 'kneeDrive', value: 45 },
     armSwingAmplitude: { ...base, metric: 'armSwingAmplitude', value: 0.25 },
+    swingFootLateralExcursion: { ...base, metric: 'swingFootLateralExcursion', value: 0.18, unit: 'percent' },
   }
 }
 

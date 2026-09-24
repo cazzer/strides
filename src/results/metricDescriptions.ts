@@ -33,4 +33,6 @@ export const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
     'How high you lift your thigh at the peak of each stride — the angle between your thigh and vertical, both legs combined. A movement-amplitude measurement from the video only: it says how far the knee comes up, not how much force is behind it. Distinct from knee flexion, which measures how much the knee bends.',
   armSwingAmplitude:
     'How far your wrists travel up and down through one arm swing, as a percentage of your torso length, averaged across both arms. A movement-amplitude measurement from the video only: it says how big the swing is, not what it contributes to your stride.',
+  swingFootLateralExcursion:
+    'Sideways ankle travel relative to the same-side knee during early-to-mid swing, as a percentage of hip width. This describes the foot path seen from front or rear video, not heel rotation or a diagnosis.',
 }

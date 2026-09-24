@@ -393,6 +393,7 @@ export function MetricsPanel({
     heuristics.stepWidthCm,
     heuristics.kneeDrive,
     heuristics.armSwingAmplitude,
+    heuristics.swingFootLateralExcursion,
   ]
   const excluded = metrics.filter((metric) => metricTier(metric) === 'excluded')
   const caveatedCount = metrics.filter((metric) => metricTier(metric) === 'caveated').length

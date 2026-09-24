@@ -273,6 +273,10 @@ const FAKE_HEURISTICS: FormHeuristicsResult = {
     sampleSize: 2,
     caveat: null,
   },
+  swingFootLateralExcursion: {
+    metric: 'swingFootLateralExcursion', value: 0.18, unit: 'percent', confidence: 1,
+    viewFit: 'primary', interpolatedFraction: 0, frameCoverage: 1, sampleSize: 3, caveat: null,
+  },
 }
 
 function makeFakeHandle(): SampleClipHandle {
@@ -374,6 +378,10 @@ const FAKE_SCALE_HEURISTICS: FormHeuristicsResult = {
     frameCoverage: 1,
     sampleSize: 2,
     caveat: null,
+  },
+  swingFootLateralExcursion: {
+    metric: 'swingFootLateralExcursion', value: 0.2, unit: 'percent', confidence: 0.9,
+    viewFit: 'primary', interpolatedFraction: 0, frameCoverage: 1, sampleSize: 3, caveat: null,
   },
 }
 

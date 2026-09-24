@@ -1165,6 +1165,29 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     tryLine: null,
     guidedDescription: null,
   },
+  swingFootLateralExcursion: {
+    metric: 'swingFootLateralExcursion',
+    displayRank: 13,
+    band: null,
+    noBandReason:
+      'No reference range has been established for this image-based ankle path measurement.',
+    evidenceDirection: 'none-established',
+    mandatoryNotes: [
+      'Detected footstrikes can trail visible landing, so the final third of each strike interval is excluded. This reduces, but cannot eliminate, the risk of including contact frames.',
+    ],
+    speedSensitivity: null,
+    research: [],
+    remediation: [],
+    captureHints: {
+      wrongAngle:
+        'Film from directly in front of or behind the runner so sideways foot travel is visible.',
+      notEnoughData:
+        'Record several complete strides with both knees, ankles and hips visible throughout swing.',
+    },
+    remediationIntro: null,
+    tryLine: null,
+    guidedDescription: null,
+  },
 }
 
 /**

@@ -143,6 +143,9 @@ function makeHighConfidenceResult(): FormHeuristicsResult {
       unit: 'ratio',
       confidence: 0.8,
     }),
+    swingFootLateralExcursion: makeMetric({
+      metric: 'swingFootLateralExcursion', value: 0.18, unit: 'percent', confidence: 0.8,
+    }),
   }
 }
 
@@ -232,6 +235,9 @@ function makeMixedTierResult(): FormHeuristicsResult {
       unit: 'ratio',
       confidence: 0.72,
     }),
+    swingFootLateralExcursion: makeMetric({
+      metric: 'swingFootLateralExcursion', value: 0.18, unit: 'percent', confidence: 0.72,
+    }),
   }
 }
 
@@ -260,7 +266,7 @@ describe('MetricsPanel', () => {
     // on the panel.
     expect(screen.getByText('4.8 cm')).toBeInTheDocument()
     expect(screen.getByText('8.2 cm')).toBeInTheDocument()
-    expect(screen.getAllByText(/high confidence/i).length).toBe(12)
+    expect(screen.getAllByText(/high confidence/i).length).toBe(13)
     // No metric is excluded, so the excluded section doesn't render at all.
     expect(screen.queryByText(/not measurable for this clip/i)).not.toBeInTheDocument()
     // footStrikePattern is the one deliberate exception: its caveat is always present, even in a
@@ -277,7 +283,7 @@ describe('MetricsPanel', () => {
   it('renders a tier-1 card with the plain border and no data-tier="caveated"/"excluded"', () => {
     const { container } = render(<MetricsPanel heuristics={makeHighConfidenceResult()} />)
     const cards = container.querySelectorAll('.metrics-panel__card')
-    expect(cards.length).toBe(12)
+    expect(cards.length).toBe(13)
     for (const card of Array.from(cards)) {
       expect(card.getAttribute('data-tier')).toBe('normal')
     }
@@ -343,10 +349,10 @@ describe('MetricsPanel', () => {
     // the caveated share parenthesised inside that total rather than subtracted from it. The
     // assertion below deliberately reads the card count off the same render, because the whole
     // point of the line is that it must not disagree with what is on screen.
-    expect(container.querySelectorAll('.metrics-panel__card').length).toBe(9)
+    expect(container.querySelectorAll('.metrics-panel__card').length).toBe(10)
     expect(
       screen.getByText(
-        '9 metrics measured (1 with caveat) · 3 not measurable for this clip (listed below)',
+        '10 metrics measured (1 with caveat) · 3 not measurable for this clip (listed below)',
       ),
     ).toBeInTheDocument()
   })
@@ -361,7 +367,7 @@ describe('MetricsPanel', () => {
     const cards = container.querySelectorAll('.metrics-panel__card')
     // trunkLean, overstriding and kneeDrive are excluded; the other 9 (1 caveated, 8 normal)
     // render as cards.
-    expect(cards.length).toBe(9)
+    expect(cards.length).toBe(10)
     const caveatedCount = Array.from(cards).filter(
       (card) => card.getAttribute('data-tier') === 'caveated',
     ).length
@@ -389,6 +395,7 @@ describe('MetricsPanel', () => {
       'Step width',
       'Step width (cm)',
       'Arm swing amplitude',
+      'Swing-foot lateral excursion',
     ])
   })
 
@@ -699,7 +706,7 @@ describe('MetricsPanel', () => {
 
     // Nothing is excluded here, so the total is every metric on the panel and the caveated one
     // is counted inside it, not against it.
-    expect(screen.getByText('12 metrics measured (1 with caveat)')).toBeInTheDocument()
+    expect(screen.getByText('13 metrics measured (1 with caveat)')).toBeInTheDocument()
   })
 
   it('falls back to a generic reason for an excluded metric with no caveat text', () => {

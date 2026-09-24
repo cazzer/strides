@@ -640,7 +640,7 @@ describe('The guided view ranks metrics into three groups by what can be said ab
     expect(labels).toHaveLength(5)
     expect(
       groupDetails(container, 'unbanded')?.querySelectorAll('article'),
-    ).toHaveLength(7)
+    ).toHaveLength(8)
     expect(groupSection(container, 'not-measured')).toBeNull()
   })
 
@@ -735,7 +735,7 @@ describe('The guided view ranks metrics into three groups by what can be said ab
     expect(groupSection(container, 'unbanded')).toBeNull()
     expect(
       groupDetails(container, 'not-measured')?.querySelector('summary'),
-    ).toHaveTextContent(/^12 measurements: /)
+    ).toHaveTextContent(/^13 measurements: /)
     unmount()
     const second = renderView(
       readyAnalysis(withUnmeasured(BANDED.map((g) => g.metric))),
@@ -772,7 +772,7 @@ describe('The heading outline reads group → measurement', () => {
     expect(h2s).toHaveLength(3)
     for (const h2 of h2s) expect(h2.closest('summary')).toBeNull()
     const h3s = Array.from(container.querySelectorAll('h3'))
-    expect(h3s).toHaveLength(12)
+    expect(h3s).toHaveLength(13)
     for (const h3 of h3s) {
       const preceding = h2s.filter(
         (h2) =>
@@ -2143,7 +2143,7 @@ describe('Every outbound reference is from a verified set and opens safely', () 
     const inPage = Array.from(container.querySelectorAll('a')).filter(
       (anchor) => (anchor.getAttribute('href') ?? '').startsWith('#'),
     )
-    expect(inPage).toHaveLength(12)
+    expect(inPage).toHaveLength(13)
     for (const anchor of inPage) {
       expect(anchor.closest('nav')).not.toBeNull()
       expect(anchor).not.toHaveAttribute('target')

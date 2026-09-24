@@ -74,6 +74,7 @@ export type MetricId =
   | 'stepWidthCm'
   | 'kneeDrive'
   | 'armSwingAmplitude'
+  | 'swingFootLateralExcursion'
 
 export interface ViewDetectionResult {
   view: View
@@ -146,6 +147,8 @@ export type MetricExemplarKind =
    * series' minima are the trailing extremes). The trough is legibility, not a measurement,
    * mirroring `kneeFlexionPeak`'s peak/trough contract clause for clause. */
   | 'kneeDrivePeak'
+  /** Two positions of one swing ankle relative to its own knee's vertical line. */
+  | 'swingFootLateralRange'
 
 /**
  * One renderable piece of evidence for a metric: either a single instant, or a ghosted PAIR of
@@ -513,6 +516,7 @@ export interface FormHeuristicsResult {
   stepWidthCm: MetricResult
   kneeDrive: MetricResult
   armSwingAmplitude: MetricResult
+  swingFootLateralExcursion: MetricResult
 }
 
 export interface HeuristicsConfig {
@@ -910,6 +914,11 @@ export const DEFAULT_VIEW_FIT_TABLE: HeuristicsConfig['viewFitTable'] = {
   // than a loss of the swing signal itself — and an amplitude averaged over one visible arm and
   // one occluded arm is contaminated by the occlusion.
   armSwingAmplitude: {
+    front: { fit: 'primary', multiplier: 1.0 },
+    side: { fit: 'unsuitable', multiplier: 0.1 },
+    ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
+  },
+  swingFootLateralExcursion: {
     front: { fit: 'primary', multiplier: 1.0 },
     side: { fit: 'unsuitable', multiplier: 0.1 },
     ambiguous: { fit: 'unsuitable', multiplier: 0.2 },

@@ -13,6 +13,7 @@ export const METRIC_LABELS: Record<MetricId, string> = {
   stepWidthCm: 'Step width (cm)',
   kneeDrive: 'Knee drive',
   armSwingAmplitude: 'Arm swing amplitude',
+  swingFootLateralExcursion: 'Swing-foot lateral excursion',
 }
 
 /**

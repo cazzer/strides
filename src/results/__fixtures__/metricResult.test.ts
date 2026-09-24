@@ -30,6 +30,7 @@ const METRIC_IDS: readonly MetricId[] = [
   'stepWidthCm',
   'kneeDrive',
   'armSwingAmplitude',
+  'swingFootLateralExcursion',
 ]
 
 /**
@@ -50,6 +51,7 @@ const PRODUCTION_UNITS: Record<MetricId, MetricResult['unit']> = {
   stepWidthCm: 'centimeters',
   kneeDrive: 'degrees',
   armSwingAmplitude: 'ratio',
+  swingFootLateralExcursion: 'percent',
 }
 
 describe('makeMetric', () => {

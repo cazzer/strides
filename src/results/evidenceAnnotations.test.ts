@@ -573,6 +573,33 @@ describe('per-metric mark sets', () => {
     ])
   })
 
+  it('draws both swing-foot offsets against the same-side knee line', () => {
+    const points = (ankleX: number) => [
+      pos('left_hip', 300, 400), pos('right_hip', 400, 400),
+      pos('left_knee', 320, 500), pos('left_ankle', ankleX, 620),
+    ]
+    const annotation = planEvidenceAnnotations(
+      plan({
+        metric: 'swingFootLateralExcursion',
+        kind: 'swingFootLateralRange',
+        side: 'left',
+        base: instant(points(370)),
+        ghost: instant(points(330), { opacity: EVIDENCE_GHOST_BLEND_ALPHA }),
+      }),
+      MAX_OUTPUT_SIDE,
+    )
+    expect(byRole(annotation.ops, 'kneePlumb')).toHaveLength(1)
+    expect(byRole(annotation.ops, 'kneePlumb', 'ghost')).toHaveLength(1)
+    expect(byRole(annotation.ops, 'hipWidthSegment')).toHaveLength(1)
+    expect(byRole(annotation.ops, 'hipWidthSegment', 'ghost')).toHaveLength(1)
+    const calipers = [
+      ...byRole(annotation.ops, 'ankleOffsetCaliper'),
+      ...byRole(annotation.ops, 'ankleOffsetCaliper', 'ghost'),
+    ] as EvidenceCaliperOp[]
+    expect(calipers.map((op) => [op.x1, op.x2])).toEqual([[320, 370], [320, 330]])
+    expect(calipers.every((op) => op.polarity === null)).toBe(true)
+  })
+
   it('stepWidth draws THIS frame’s hip-width segment, a per-frame midline, and a signed caliper', () => {
     const hips = (y: number): EvidenceKeypointPosition[] => [
       pos('left_hip', 300, y),
@@ -1359,6 +1386,22 @@ describe('the honesty rule', () => {
         base: instant([pos('left_hip', 300, 300), pos('left_knee', 380, 450)]),
       }),
     },
+    {
+      kind: 'swingFootLateralRange',
+      plan: plan({
+        metric: 'swingFootLateralExcursion',
+        kind: 'swingFootLateralRange',
+        side: 'left',
+        base: instant([
+          pos('left_hip', 300, 400), pos('right_hip', 400, 400),
+          pos('left_knee', 320, 500), pos('left_ankle', 370, 620),
+        ]),
+        ghost: instant([
+          pos('left_hip', 300, 400), pos('right_hip', 400, 400),
+          pos('left_knee', 320, 500), pos('left_ankle', 330, 620),
+        ], { opacity: EVIDENCE_GHOST_BLEND_ALPHA }),
+      }),
+    },
   ]
 
   it('covers every exemplar kind, so a new kind cannot slip past this block', () => {
@@ -1372,6 +1415,7 @@ describe('the honesty rule', () => {
       'armSwingCycle',
       'stridePair',
       'kneeDrivePeak',
+      'swingFootLateralRange',
     ]
     expect(FIXTURES.map((fixture) => fixture.kind).sort()).toEqual(
       [...kinds].sort(),
@@ -1467,6 +1511,7 @@ describe('the honesty rule', () => {
       ['bounceCycle', false, false],
       ['stridePair', true, true],
       ['kneeDrivePeak', true, null],
+      ['swingFootLateralRange', true, true],
     ])
   })
 

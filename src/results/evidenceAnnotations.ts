@@ -788,6 +788,29 @@ function buildFootStrikeMarks(ctx: InstantContext): void {
   )
 }
 
+function buildSwingFootLateralMarks(ctx: InstantContext): void {
+  const { builder, index, plan } = ctx
+  const side = plan.side
+  if (side === undefined) return
+  const leftHip = builder.point(index, 'left_hip')
+  const rightHip = builder.point(index, 'right_hip')
+  if (leftHip !== null && rightHip !== null) {
+    builder.line('hipWidthSegment', leftHip, rightHip, ['left_hip', 'right_hip'])
+  }
+  const knee = builder.point(index, KNEE_NAME[side])
+  const ankle = builder.point(index, ANKLE_NAME[side])
+  if (knee === null || ankle === null) return
+  builder.guide('kneePlumb', 'vertical', knee)
+  builder.line('shank', knee, ankle, [KNEE_NAME[side], ANKLE_NAME[side]])
+  builder.caliper(
+    'ankleOffsetCaliper',
+    'horizontal',
+    derived(ankle, knee.x, ankle.y),
+    ankle,
+    null,
+  )
+}
+
 function buildStepWidthMarks(ctx: InstantContext): void {
   const { builder, index, instant } = ctx
   const left = builder.point(index, 'left_hip')
@@ -897,6 +920,7 @@ const INSTANT_MARK_BUILDERS: Record<
   bounceCycle: buildBounceMarks,
   stridePair: buildStrideInstantMarks,
   kneeDrivePeak: buildKneeDriveMarks,
+  swingFootLateralRange: buildSwingFootLateralMarks,
 }
 
 /**

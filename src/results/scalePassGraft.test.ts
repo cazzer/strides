@@ -138,6 +138,7 @@ function makeResult(
     stepWidthCm,
     kneeDrive: makeMetric({ metric: 'kneeDrive', value: 45 }),
     armSwingAmplitude: makeMetric({ metric: 'armSwingAmplitude', value: 0.25, unit: 'ratio' }),
+    swingFootLateralExcursion: makeMetric({ metric: 'swingFootLateralExcursion', value: 0.18, unit: 'percent' }),
   }
 }
 

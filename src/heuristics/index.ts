@@ -15,9 +15,10 @@ import { computeStepWidth } from './stepWidth'
 import { computeStepWidthCm } from './stepWidthCm'
 import { computeKneeDrive } from './kneeDrive'
 import { computeArmSwingAmplitude } from './armSwingAmplitude'
+import { computeSwingFootLateralExcursion } from './swingFootLateralExcursion'
 
 /**
- * View detection must run before all twelve metrics — each one's view-fit gating and confidence
+ * View detection must run before all thirteen metrics — each one's view-fit gating and confidence
  * depend on the detected `View`. Encoding that ordering dependency here, rather than leaving it
  * to every caller, means the results view makes one call instead of twelve that have to be
  * invoked in the right order.
@@ -32,7 +33,8 @@ import { computeArmSwingAmplitude } from './armSwingAmplitude'
  * established append-only convention (#46, #45) — same order as their `MetricId` declaration
  * (ratio before cm, matching the `verticalOscillation`/`verticalOscillationCm` pairing above).
  * `kneeDrive` is appended after `stepWidthCm` on the same convention (add-knee-drive-metric),
- * and `armSwingAmplitude` after `kneeDrive` (add-arm-swing-amplitude-metric).
+ * `armSwingAmplitude` after `kneeDrive` (add-arm-swing-amplitude-metric), and
+ * `swingFootLateralExcursion` last (add-swing-foot-lateral-excursion).
  *
  * What the metrics are gated by is the view PLAUSIBILITY, not the view label
  * (`propagate-view-confidence-to-metric-gating`). This function resolves the config's view-fit
@@ -83,5 +85,6 @@ export function computeFormHeuristics(
     stepWidthCm: computeStepWidthCm(frames, gatedView, gatedConfig),
     kneeDrive: computeKneeDrive(frames, gatedView, gatedConfig),
     armSwingAmplitude: computeArmSwingAmplitude(frames, gatedView, gatedConfig),
+    swingFootLateralExcursion: computeSwingFootLateralExcursion(frames, gatedView, gatedConfig),
   }
 }

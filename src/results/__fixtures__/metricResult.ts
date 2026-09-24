@@ -107,6 +107,7 @@ const METRIC_DEFAULTS: Record<MetricId, MetricDefaults> = {
   kneeDrive: { unit: 'degrees', value: 45, sampleSize: 8, caveat: null },
   // Arm swing runs at STRIDE frequency (1.5 Hz), half the bounce rate: 4.5 cycles, floored.
   armSwingAmplitude: { unit: 'ratio', value: 0.25, sampleSize: 4, caveat: null },
+  swingFootLateralExcursion: { unit: 'percent', value: 0.18, sampleSize: 3, caveat: null },
 }
 
 /** Clears `HIGH_CONFIDENCE_THRESHOLD` (0.7) with margin, so no default sits on the tier boundary. */
@@ -318,6 +319,7 @@ export function makeHeuristics(
     stepWidthCm: makeMetric('stepWidthCm', shared),
     kneeDrive: makeMetric('kneeDrive', shared),
     armSwingAmplitude: makeMetric('armSwingAmplitude', shared),
+    swingFootLateralExcursion: makeMetric('swingFootLateralExcursion', shared),
     ...overrides,
   }
 }

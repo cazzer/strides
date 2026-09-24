@@ -27,6 +27,7 @@ const EXPECTED_METRIC_IDS: MetricId[] = [
   'stepWidthCm',
   'kneeDrive',
   'armSwingAmplitude',
+  'swingFootLateralExcursion',
 ]
 
 /**
@@ -51,6 +52,7 @@ const EXPECTED_BANDED: Record<MetricId, boolean> = {
   stepWidthCm: false,
   kneeDrive: false,
   armSwingAmplitude: false,
+  swingFootLateralExcursion: false,
 }
 
 /** The five metrics design.md D2 bands, as a type, so a pinned-literal table must name all five. */
@@ -224,7 +226,7 @@ describe('METRIC_GUIDANCE exhaustiveness', () => {
     const ordered = guidanceInDisplayOrder()
     expect(ordered).toHaveLength(EXPECTED_METRIC_IDS.length)
     expect(ordered.map((entry) => entry.displayRank)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
     ])
   })
 })
@@ -251,11 +253,11 @@ describe('which metrics carry a band', () => {
 })
 
 describe('display rank', () => {
-  it('is unique and dense across 1..12', () => {
+  it('is unique and dense across 1..13', () => {
     const ranks = entries()
       .map((entry) => entry.displayRank)
       .sort((a, b) => a - b)
-    expect(ranks).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+    expect(ranks).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13])
   })
 
   it('puts the five banded metrics in design.md D2 order at ranks 1-5', () => {
@@ -1235,6 +1237,7 @@ describe('mandatory notes', () => {
     'stepWidth',
     'stepWidthCm',
     'footStrikePattern',
+    'swingFootLateralExcursion',
   ]
 
   it('carries a note on exactly the metrics that need one', () => {
@@ -1478,7 +1481,7 @@ describe('capture hints', () => {
       ].sort(),
     )
     expect(byKind(ASKS_FOR_FRONT_OR_REAR)).toEqual(
-      ['armSwingAmplitude', 'stepWidth', 'stepWidthCm'].sort(),
+      ['armSwingAmplitude', 'stepWidth', 'stepWidthCm', 'swingFootLateralExcursion'].sort(),
     )
     expect(byKind(NO_ANGLE_RULED_OUT)).toEqual(
       ['cadence', 'verticalOscillation', 'verticalOscillationCm'].sort(),

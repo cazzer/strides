@@ -52,7 +52,7 @@ describe('guidedGroups — the three groups, by what can honestly be said', () =
       groups.banded.length,
       groups.unbanded.length,
       groups.notMeasured.length,
-    ]).toEqual([5, 7, 0])
+    ]).toEqual([5, 8, 0])
   })
 
   it('accounts for all twelve metrics exactly once', () => {

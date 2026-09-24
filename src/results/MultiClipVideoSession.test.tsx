@@ -103,6 +103,7 @@ const FAKE_HEURISTICS = {
   stepWidthCm: makeMetric('stepWidthCm', { unit: 'centimeters', value: null, confidence: 0 }),
   kneeDrive: makeMetric('kneeDrive', { unit: 'degrees' }),
   armSwingAmplitude: makeMetric('armSwingAmplitude', { unit: 'ratio' }),
+  swingFootLateralExcursion: makeMetric('swingFootLateralExcursion', { unit: 'percent' }),
 } as unknown as FormHeuristicsResult
 
 function markVideoReady(video: HTMLVideoElement) {
