@@ -83,3 +83,23 @@
 :root {
   color-scheme: light dark;
 }
+
+.motion-story__grid {
+  background-image: linear-gradient(#727d881c 1px, transparent 1px), linear-gradient(90deg, #727d881c 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+.motion-story { top: var(--motion-story-header-height, 88px); }
+.motion-story__dialog { position: fixed; inset: 0; margin: auto; }
+@media (max-width: 63.999rem) {
+  [data-motion-metric] { scroll-margin-top: calc(var(--motion-story-header-height, 88px) + 92px); }
+}
+
+.motion-story__ghost { opacity: 0.26; }
+.motion-story__reference-a { animation: motion-story-stride-a 1100ms steps(1, end) infinite; }
+.motion-story__reference-b { animation: motion-story-stride-b 1100ms steps(1, end) infinite; }
+@keyframes motion-story-stride-a { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+@keyframes motion-story-stride-b { 0%, 49% { opacity: 0; } 50%, 100% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .motion-story__reference-a, .motion-story__reference-b { animation: none; }
+  .motion-story__reference-b { opacity: 0; }
+}

@@ -250,6 +250,7 @@ function MetricCard({ metric, chart, evidence, clipCount }: MetricCardProps) {
         isCaveated ? 'border-l-4 border-l-brand-600 dark:border-l-brand-400' : ''
       }`}
       data-tier={tier}
+      data-motion-metric={metric.metric}
       aria-label={METRIC_LABELS[metric.metric]}
     >
       <h3 className="font-display text-lg font-bold tracking-tight">
@@ -347,7 +348,7 @@ interface ExcludedEntryProps {
  */
 function ExcludedEntry({ metric, hint }: ExcludedEntryProps) {
   return (
-    <li className="metrics-panel__excluded-entry">
+    <li className="metrics-panel__excluded-entry" data-motion-metric={metric.metric}>
       <p className="font-display font-bold">{METRIC_LABELS[metric.metric]}</p>
       <p className="font-sans text-sm text-neutral-700 dark:text-neutral-300">
         {hint ?? metric.caveat ?? 'Not measurable for this clip.'}

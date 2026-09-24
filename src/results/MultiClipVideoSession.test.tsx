@@ -850,7 +850,9 @@ describe('MultiClipVideoSession — results view mode', () => {
     expect(screen.getByRole('banner')).not.toContainElement(group)
     const toggleRoot = group.closest('.results-view-toggle')
     expect(toggleRoot).not.toBeNull()
-    expect(toggleRoot!.nextElementSibling).toBe(resultsRoots()[0])
+    const storyLayout = toggleRoot!.nextElementSibling
+    expect(storyLayout?.querySelector('.motion-story')).not.toBeNull()
+    expect(storyLayout?.contains(resultsRoots()[0])).toBe(true)
   })
 
   it('toggles between the views, mounting exactly one each way, and writes the address', async () => {

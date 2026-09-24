@@ -150,6 +150,73 @@ describe('useSessionEvidence', () => {
     )
   })
 
+  it('withholds old clip evidence when a metric winner changes during re-extraction', async () => {
+    const firstBlob = new Blob(['first'])
+    const secondBlob = new Blob(['second'])
+    const firstCanvas = {} as HTMLCanvasElement
+    const secondCanvas = {} as HTMLCanvasElement
+    const updatedCanvas = {} as HTMLCanvasElement
+    plansByHeuristics.set('first', planWithQuality(0.5))
+    plansByHeuristics.set('second', planWithQuality(0.5))
+    plansByHeuristics.set('second-grafted', planWithQuality(0.9))
+    const firstWinner = { ...SOURCE_INDICES, cadence: 0 }
+    const secondWinner = { ...SOURCE_INDICES, cadence: 1 }
+
+    const { result, rerender } = renderHook(
+      ({ clips, indices }: { clips: ClipSession[]; indices: Record<MetricId, number> }) =>
+        useSessionEvidence(clips, indices),
+      { initialProps: {
+        clips: [makeClip('c1', 'first', firstBlob), makeClip('c2', 'second', secondBlob)],
+        indices: firstWinner,
+      } },
+    )
+    await act(async () => {
+      pending.shift()?.([evidenceWithCanvas(firstCanvas), evidenceWithCanvas(secondCanvas)])
+    })
+    await waitFor(() => expect(result.current.status).toBe('settled'))
+    expect(result.current.status === 'settled' && result.current.sections[0].clipIndex).toBe(0)
+
+    rerender({
+      clips: [makeClip('c1', 'first', firstBlob), makeClip('c2', 'second-grafted', secondBlob)],
+      indices: secondWinner,
+    })
+    expect(result.current.status).toBe('extracting')
+    expect(result.current.status === 'extracting' && result.current.sections).toEqual([])
+    expect(result.current.status === 'extracting' && result.current.pending).toEqual(['cadence'])
+
+    await act(async () => {
+      pending.shift()?.([evidenceWithCanvas(updatedCanvas)])
+    })
+    await waitFor(() => expect(result.current.status).toBe('settled'))
+    expect(result.current.status === 'settled' && result.current.sections[0].clipIndex).toBe(1)
+    expect(result.current.status === 'settled' && result.current.sections[0].items[0].canvas).toBe(updatedCanvas)
+  })
+
+  it('switches to cached evidence when only the winning source index changes', async () => {
+    const clips = [
+      makeClip('c1', 'first', new Blob(['first'])),
+      makeClip('c2', 'second', new Blob(['second'])),
+    ]
+    plansByHeuristics.set('first', planWithQuality(0.5))
+    plansByHeuristics.set('second', planWithQuality(0.5))
+    const firstWinner = { ...SOURCE_INDICES, cadence: 0 }
+    const secondWinner = { ...SOURCE_INDICES, cadence: 1 }
+    const { result, rerender } = renderHook(
+      ({ indices }: { indices: Record<MetricId, number> }) => useSessionEvidence(clips, indices),
+      { initialProps: { indices: firstWinner } },
+    )
+    await act(async () => {
+      pending.shift()?.([
+        evidenceWithCanvas({} as HTMLCanvasElement),
+        evidenceWithCanvas({} as HTMLCanvasElement),
+      ])
+    })
+    await waitFor(() => expect(result.current.status).toBe('settled'))
+    rerender({ indices: secondWinner })
+    expect(extractSessionEvidence).toHaveBeenCalledTimes(1)
+    expect(result.current.status === 'settled' && result.current.sections[0].clipIndex).toBe(1)
+  })
+
   it('names every planned metric as pending on a first extraction', () => {
     plansByHeuristics.set('primary', planWithQuality(0.5))
 

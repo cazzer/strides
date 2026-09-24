@@ -411,6 +411,7 @@ export function GuidedMeasurements({
                       tabIndex={-1}
                       className={`guided-results__not-measured-entry space-y-1 border-t border-neutral-300 pt-4 dark:border-neutral-700 ${FOCUS_RING_TARGET}`}
                       data-metric={entry.metric.metric}
+                      data-motion-metric={entry.metric.metric}
                     >
                       <h3
                         id={`${id}-heading`}

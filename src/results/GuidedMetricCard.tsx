@@ -473,6 +473,7 @@ export function GuidedMetricCard({
       className={`guided-results__card scroll-mt-4 space-y-4 ${frame} ${FOCUS}`}
       aria-labelledby={headingId}
       data-metric={metric.metric}
+      data-motion-metric={metric.metric}
       data-tier={tier}
     >
       <div className="space-y-1">

@@ -166,6 +166,15 @@ function sameInputList(a: ClipEvidenceInputs[] | null, b: ClipEvidenceInputs[] |
   return a.length === b.length && a.every((entry, i) => sameClipInputs(entry, b[i]))
 }
 
+function sameSourceIndices(
+  a: Record<MetricId, number> | null,
+  b: Record<MetricId, number> | null,
+): boolean {
+  if (a === null || b === null) return a === b
+  const metrics = Object.keys(a) as MetricId[]
+  return metrics.length === Object.keys(b).length && metrics.every((metric) => a[metric] === b[metric])
+}
+
 /**
  * Whether the clip SET is the same one, ignoring everything about each clip's contents.
  *
@@ -383,6 +392,7 @@ export function useSessionEvidence(
   // `useVideoAnalysis`'s `runIdRef`.
   const runIdRef = useRef(0)
   const inputsRef = useRef<ClipEvidenceInputs[] | null>(null)
+  const sourceIndicesRef = useRef<Record<MetricId, number> | null>(null)
   // Per-clip, so adding a second clip re-extracts only the new one rather than re-decoding a 4K
   // clip that has not changed — and, since `canReuseCachedEvidence`, so does any change that
   // leaves an existing clip's plan intact.
@@ -404,9 +414,10 @@ export function useSessionEvidence(
       setState(next)
     }
     const inputs = sourceIndices === null ? null : collectClipInputs(clips)
-    if (sameInputList(inputsRef.current, inputs)) return
+    if (sameInputList(inputsRef.current, inputs) && sameSourceIndices(sourceIndicesRef.current, sourceIndices)) return
     const previousInputs = inputsRef.current
     inputsRef.current = inputs
+    sourceIndicesRef.current = sourceIndices
     const runId = (runIdRef.current += 1)
     // Reached only past the signature guard above, so this fires when a run is genuinely
     // superseded — never on the every-render re-entry that guard exists to absorb. Putting it in
@@ -423,7 +434,9 @@ export function useSessionEvidence(
     // whenever the clip SET is unchanged — the common case, and the one this guard exists for: the
     // scale-pass graft supersedes a run that has already settled, and blanking every card for the
     // length of a decode is the thing that made a correct re-extraction look like a bug.
-    const carried = sameClipSet(previousInputs, inputs ?? []) ? sectionsRef.current : NO_SECTIONS
+    const carried = sameClipSet(previousInputs, inputs ?? []) && sourceIndices !== null
+      ? sectionsRef.current.filter((section) => sourceIndices[section.metric] === section.clipIndex)
+      : NO_SECTIONS
 
     commit(
       run === null

@@ -7,6 +7,7 @@ import { releaseClipPoster } from '../video/posterFrame'
 import { ClipSlot } from './ClipSlot'
 import type { ClipPendingLoad } from './ClipSlot'
 import { GuidedResultsView } from './GuidedResultsView'
+import { MotionStoryStage } from './MotionStoryStage'
 import type { MetricCardEvidence } from './MetricsPanel'
 import { ResultsView } from './ResultsView'
 import { ResultsViewToggle } from './ResultsViewToggle'
@@ -96,6 +97,8 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   // the page heading, the one thing on the page that is always there. Same fix already applied
   // once for the single-clip flow (WebcamCapture, #4).
   const headingRef = useRef<HTMLHeadingElement>(null)
+  const headerRef = useRef<HTMLElement>(null)
+  const resultsRef = useRef<HTMLDivElement>(null)
   // Seeded EMPTY, and that is the whole point: a session with no clips is now representable, so
   // the zero-clip state is genuinely "no clips" rather than "one slot whose videoSource.status is
   // 'empty'". Every clip, the first one included, is now created by `addClip` and loaded through a
@@ -231,9 +234,9 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
     evidenceState.status === 'idle'
       ? NO_EVIDENCE
       : evidenceState.status === 'settled'
-        ? evidenceState.sections
+        ? evidenceState.sections.filter((section) => sourceIndices?.[section.metric] === section.clipIndex)
         : [
-            ...evidenceState.sections,
+            ...evidenceState.sections.filter((section) => sourceIndices?.[section.metric] === section.clipIndex),
             ...evidenceState.pending.map((metric) => ({
               metric,
               clipIndex: sourceIndices?.[metric] ?? 0,
@@ -268,7 +271,7 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
 
   return (
     <>
-      <header className="sticky top-0 z-10 border-b-2 border-black dark:border-white bg-white dark:bg-black px-4 sm:px-6 py-4">
+      <header ref={headerRef} className="sticky top-0 z-10 border-b-2 border-black dark:border-white bg-white dark:bg-black px-4 sm:px-6 py-4">
         {/*
           `flex-wrap` exists for the add-a-clip panel and nothing else: it is the one item allowed
           to take a line of its own (`basis-full`), which is what keeps it BELOW the strip instead
@@ -388,8 +391,21 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
           take identical props, and the swap unmounts one and mounts the other, so the canvases move
           across rather than being lost.
         */}
-        {anyClipVideoReady &&
-          (resultsViewMode === 'guide' ? (
+        {anyClipVideoReady && (
+          <div className={aggregate.phase === 'idle' || aggregate.phase === 'error'
+            ? ''
+            : 'lg:grid lg:grid-cols-[minmax(16rem,19rem)_minmax(0,1fr)] lg:items-start lg:gap-6'}>
+            <MotionStoryStage
+              analysis={aggregate}
+              clips={clips}
+              sourceIndices={sourceIndices}
+              evidence={evidence}
+              resultsRef={resultsRef}
+              headerRef={headerRef}
+              viewMode={resultsViewMode}
+            />
+            <div ref={resultsRef} className="min-w-0">
+          {resultsViewMode === 'guide' ? (
             <GuidedResultsView
               analysis={aggregate}
               onTryAgain={handleTryAgain}
@@ -405,7 +421,10 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
               evidence={evidence}
               clipCount={clips.length}
             />
-          ))}
+          )}
+            </div>
+          </div>
+        )}
 
         {/*
           The in-body "Add another clip" block used to mount here. It is gone, not moved:
