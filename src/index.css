@@ -95,11 +95,14 @@
 }
 
 .motion-story__ghost { opacity: 0.26; }
+.motion-story__trace { transition: opacity 120ms ease-in-out; }
+.motion-story__trace--hidden { opacity: 0; }
 .motion-story__reference-a { animation: motion-story-stride-a 1100ms steps(1, end) infinite; }
 .motion-story__reference-b { animation: motion-story-stride-b 1100ms steps(1, end) infinite; }
 @keyframes motion-story-stride-a { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
 @keyframes motion-story-stride-b { 0%, 49% { opacity: 0; } 50%, 100% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
+  .motion-story__trace { transition: none; }
   .motion-story__reference-a, .motion-story__reference-b { animation: none; }
   .motion-story__reference-b { opacity: 0; }
 }
