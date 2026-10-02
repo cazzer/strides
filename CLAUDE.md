@@ -1260,9 +1260,14 @@ several-fold on screen, the p95−p5 range is set by the near-field frames, and 
 inflated SER past the 0.40 front bar. Measured before → after (`83cccf7`, `--trials 2`, fresh
 process, zero spread): side-landscape SER 1.78749 → 1.78798, side-portrait 1.70594 → 1.69972,
 front-approach **0.334267 → 0.293851** (view `front` both, confidence 0.541 → 0.592), multiperson
-1.76229 → 1.76076 — no view and no metric field moved on any public clip. Private front-approach
+1.76229 → 1.76076 — on the PRIMARY pass no view and no metric field moved on any public clip
+(the scale pass did move: front-approach's grafted `stepWidthCm` confidence 0.448 → 0.358, excluded
+both ways). Private front-approach
 fixture IMG_9116 **0.593543 → 0.261516, `ambiguous` → `front`**; IMG_9114 0.601 → 0.422 and IMG_9115
-0.678 → 0.471 move most of the way but stay `ambiguous`. ⚠️ The background MediaPipe scale pass on
+0.678 → 0.471 move most of the way but stay `ambiguous` — and their plausibility still shifts
+toward front (0.50 → 0.94, 0.31 → 0.82), so gating moves on clips whose label does not:
+`stepWidth` excluded → normal on both, `armSwingAmplitude` excluded → caveated on IMG_9114. (IMG_9115
+is a rear view; the spec's `'front'` means front-or-back, so that is in scope.) ⚠️ The background MediaPipe scale pass on
 front-approach moves the other way, **0.6759 → 0.7212** (`ambiguous` both), most likely because
 MediaPipe's clip-opening ankle outliers sit where the runner is smallest and the rescale amplifies
 them. Full table: that change's `design.md` "Measurement".

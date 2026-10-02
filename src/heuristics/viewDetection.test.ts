@@ -565,7 +565,7 @@ describe('detectView', () => {
     const controlSer = control.diagnostics.sagittalExcursionRatio as number
     const approachingSer = approaching.diagnostics.sagittalExcursionRatio as number
     expect(controlSer).toBe(0.3)
-    expect(Math.abs(approachingSer / controlSer - 1)).toBeLessThan(0.15)
+    expect(Math.abs(approachingSer / controlSer - 1)).toBeLessThan(0.05)
     expect(approaching.view).toBe('front')
     // Measured: 0.3076 here (2.5% high, from the truncated windows at the clip's two ends). Under
     // the old clip-wide normalization the same frames read 0.7463 — 2.49x the truth: the ±15 px
@@ -586,7 +586,7 @@ describe('detectView', () => {
     )
     expect(
       Math.abs((approaching.diagnostics.sagittalExcursionRatio as number) / 1.2 - 1),
-    ).toBeLessThan(0.15)
+    ).toBeLessThan(0.05)
     expect(approaching.view).toBe('side')
   })
 
