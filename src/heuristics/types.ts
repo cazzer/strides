@@ -97,6 +97,9 @@ export interface ViewDetectionResult {
   plausibility: ViewPlausibility
   diagnostics: {
     bilateralSpreadRatio: number | null
+    /** Ankle-relative-to-hip range over torso length, with each sample normalized by the torso
+     * length LOCAL to it in time (±0.5 s median) rather than the clip-wide one — see
+     * `computeSagittalRange`. Still a ratio to torso length, on the same scale as before. */
     sagittalExcursionRatio: number | null
     /** Per side, how many DIRECTLY-DETECTED ankle+hip samples the sagittal range was computed
      * from — or would have been, on a side whose count fell below the minimum and which therefore

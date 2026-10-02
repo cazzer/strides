@@ -2,7 +2,7 @@ import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { HeuristicsConfig, View, ViewDetectionResult } from './types'
-import { estimateBodyScale } from './bodyScale'
+import { estimateBodyScale, estimateLocalTorsoLengths } from './bodyScale'
 import { resolveBilateralPair, resolvePoint } from './keypoints'
 import { clamp01, mean, median, percentile } from './mathUtils'
 import {
@@ -25,6 +25,20 @@ import {
  */
 const MIN_SAGITTAL_RANGE_SAMPLES = 21
 
+/**
+ * Half-width, in SECONDS, of the window each sagittal sample's local torso length is the median
+ * over (`estimateLocalTorsoLengths`). A module constant rather than a `HeuristicsConfig` key because
+ * it describes the estimator's own sample, not a threshold anyone should sweep against this corpus.
+ *
+ * - Time, not frames: the corpus spans 25, 30 and 60 fps, and a frame-count window would smooth the
+ *   same physical motion over a different duration at each.
+ * - 1 s in total covers at least one full stride at any running cadence (≥ 120 steps/min, so a
+ *   stride ≤ 1 s), so the torso's own within-stride flex and the shoulder/hip jitter average out
+ *   rather than leaking into the extreme quantile — yet it is short enough to follow a runner
+ *   approaching the camera, whose on-screen size can grow several-fold within a clip.
+ */
+const LOCAL_TORSO_HALF_WINDOW_SECONDS = 0.5
+
 interface SagittalRange {
   /** The p95-p5 spread in pixels, or `null` iff `detectedSamples < MIN_SAGITTAL_RANGE_SAMPLES`. */
   range: number | null
@@ -38,6 +52,13 @@ interface SagittalRange {
 /**
  * Per-side sagittal excursion range: the p95-p5 spread of that side's ankle position relative to
  * its own hip (which cancels whole-body camera pan, leaving only the leg's own reach).
+ *
+ * Each sample is first rescaled from its own LOCAL torso length (the median over ±0.5 s,
+ * `LOCAL_TORSO_HALF_WINDOW_SECONDS`) to the clip's reference torso, so the range is expressed at one
+ * consistent scale even when the runner's on-screen size changes. Without it, a runner approaching
+ * the camera has their largest pixel excursions — which set the p95-p5 range — measured when they
+ * are nearest, then divided by a mid-clip torso, and SER reads high enough to block a front label
+ * (`strides-cge`). On a constant-distance clip the rescale factor is exactly 1.
  *
  * The population is DIRECTLY-DETECTED samples only. A frame where the robustness layer had to
  * interpolate either point is discarded outright rather than discounted, and the asymmetry with
@@ -75,18 +96,29 @@ function computeSagittalRange(
   frames: RobustPoseFrame[],
   ankleName: KeypointName,
   hipName: KeypointName,
+  localTorsoPx: readonly (number | null)[],
+  referenceTorsoPx: number,
 ): SagittalRange {
   const relX: number[] = []
   let interpolatedSamples = 0
-  for (const frame of frames) {
+  for (const [i, frame] of frames.entries()) {
     const ankle = resolvePoint(frame, ankleName)
     const hip = resolvePoint(frame, hipName)
-    if (ankle === null || hip === null) continue
+    // A sample with no local torso cannot be normalized, so it is skipped exactly like an
+    // unresolvable ankle — counted as neither detected nor interpolated. Falling back to the clip
+    // torso would re-introduce the very mis-sizing this normalization exists to remove, on exactly
+    // the frames least able to bear it.
+    const localTorso = localTorsoPx[i]
+    if (ankle === null || hip === null || localTorso === null) continue
     if (ankle.interpolated || hip.interpolated) {
       interpolatedSamples += 1
       continue
     }
-    relX.push(ankle.x - hip.x)
+    // RESCALED to the clip's reference torso rather than divided by the local one: the two agree in
+    // exact arithmetic, but this form is bit-identical to the un-normalized sample wherever the
+    // torso is constant (the factor is exactly 1), so a constant-distance clip reads exactly what
+    // it did before local normalization existed.
+    relX.push((ankle.x - hip.x) * (referenceTorsoPx / localTorso))
   }
   const detectedSamples = relX.length
   if (detectedSamples < MIN_SAGITTAL_RANGE_SAMPLES) {
@@ -216,7 +248,10 @@ export function viewPhrase(view: View): string {
  *   /hip width is visible).
  * - Sagittal Excursion Ratio (SER): how far each ankle ranges relative to its own hip over the
  *   clip, relative to torso length, measured over that side's DIRECTLY-DETECTED samples only and
- *   reported for a side at all only once there are enough of them (`computeSagittalRange`). Side
+ *   reported for a side at all only once there are enough of them (`computeSagittalRange`). Each
+ *   sample is normalized by the torso length LOCAL to it in time (referenced back to the clip-wide
+ *   torso), so a runner approaching the camera reads the same SER as one at constant distance;
+ *   BSR keeps the clip-wide torso. Side
  *   view shows the leg's full fore-aft reach in the image plane (large range); front view hides
  *   that reach in depth, leaving only minor mediolateral sway (small range).
  *
@@ -279,8 +314,21 @@ export function detectView(
   }
   const bilateralSpreadRatio = bsrSamples.length > 0 ? median(bsrSamples) : null
 
-  const sagittalLeft = computeSagittalRange(frames, 'left_ankle', 'left_hip')
-  const sagittalRight = computeSagittalRange(frames, 'right_ankle', 'right_hip')
+  const localTorsoPx = estimateLocalTorsoLengths(frames, LOCAL_TORSO_HALF_WINDOW_SECONDS)
+  const sagittalLeft = computeSagittalRange(
+    frames,
+    'left_ankle',
+    'left_hip',
+    localTorsoPx,
+    torsoLengthPx,
+  )
+  const sagittalRight = computeSagittalRange(
+    frames,
+    'right_ankle',
+    'right_hip',
+    localTorsoPx,
+    torsoLengthPx,
+  )
   const ranges = [sagittalLeft.range, sagittalRight.range].filter(
     (r): r is number => r !== null,
   )

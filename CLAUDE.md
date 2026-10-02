@@ -1245,11 +1245,27 @@ every filled frame lands in the extreme zone. **13 of 87 frames (14.9%), all t <
 than 100% of the raw inflation** — dropping them takes the range 163.0 px → **70.8 px, below
 MoveNet's own 77.1 px**. `computeSagittalRange`'s p95−p5 trims only ~4 values at n=87; its docstring
 claims robustness to "a single wildly-off ankle sample", true for one and false for fourteen.
-⚠️ **`viewDetection.ts` is the ONLY consumer in the repo that receives `resolvePoint`'s
-`.interpolated` flag and discards it** — `stepWidth.ts:99` honours the identical flag. That is
-backend-agnostic shared code, and view detection gates every other metric. It does not bite MoveNet
-on these clips only because MoveNet has no gaps to fill. Filed as `strides-kxn` — and note it must be
-A/B'd on all three clips before shipping, because its blast radius reaches MoveNet's view path.
+✅ **Fixed since `strides-kxn`:** `computeSagittalRange` now EXCLUDES every sample whose ankle or
+own hip was interpolated (`viewDetection.ts:113`) and reports the discarded share per side as
+`sagittalExcursionInterpolatedFraction`. (This paragraph used to say `viewDetection.ts` was the only
+consumer that received `resolvePoint`'s `.interpolated` flag and discarded it; that is no longer
+true.)
+
+**SER is normalized by a LOCAL torso since `strides-cge`** (2026-10-02, change
+`normalize-sagittal-excursion-by-local-torso`). Each detected sample is rescaled by
+`clipTorso / localTorso`, where `localTorso` is the median over ±0.5 s
+(`LOCAL_TORSO_HALF_WINDOW_SECONDS`, `estimateLocalTorsoLengths` in `bodyScale.ts`); BSR and every
+other consumer keep the clip-wide torso. Motivation: a runner approaching a handheld camera grows
+several-fold on screen, the p95−p5 range is set by the near-field frames, and the mid-clip torso
+inflated SER past the 0.40 front bar. Measured before → after (`83cccf7`, `--trials 2`, fresh
+process, zero spread): side-landscape SER 1.78749 → 1.78798, side-portrait 1.70594 → 1.69972,
+front-approach **0.334267 → 0.293851** (view `front` both, confidence 0.541 → 0.592), multiperson
+1.76229 → 1.76076 — no view and no metric field moved on any public clip. Private front-approach
+fixture IMG_9116 **0.593543 → 0.261516, `ambiguous` → `front`**; IMG_9114 0.601 → 0.422 and IMG_9115
+0.678 → 0.471 move most of the way but stay `ambiguous`. ⚠️ The background MediaPipe scale pass on
+front-approach moves the other way, **0.6759 → 0.7212** (`ambiguous` both), most likely because
+MediaPipe's clip-opening ankle outliers sit where the runner is smallest and the rescale amplifies
+them. Full table: that change's `design.md` "Measurement".
 
 **Ground truth, measured by hand from keyframes** (grid overlay, ~13 frames): per-ankle excursion
 **0.16–0.20 torso**, every offset medial; **0.20–0.35** all-in. **MoveNet's 0.3284 is in band;

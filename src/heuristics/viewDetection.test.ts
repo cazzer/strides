@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
+import { estimateBodyScale } from './bodyScale'
+import { resolvePoint } from './keypoints'
+import { percentile } from './mathUtils'
 import { detectView, viewPhrase } from './viewDetection'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildFrame } from './__fixtures__/testFrames'
@@ -546,7 +550,124 @@ describe('detectView', () => {
     expect(oneLegged.diagnostics.sagittalExcursionRatio).toBeCloseTo(1.2, 10)
     expect(oneLegged.view).toBe('side')
   })
+
+  // -------------------------------------------------------------------------------------------
+  // SER normalizes each sample by its LOCAL torso length (±0.5 s median), referenced back to the
+  // clip torso (`strides-cge`). A runner approaching a handheld camera grows several-fold in
+  // pixels; the p95-p5 range is set by the largest pixel excursions, which happen when they are
+  // nearest, and a single clip-median torso — the runner at mid-distance — mis-sizes them.
+  // -------------------------------------------------------------------------------------------
+
+  it('reads an approaching runner at the SER of the same runner at constant distance', () => {
+    const control = detectView(framesApproaching(FRONT_BSR, 0.3, 120, () => 1))
+    const approaching = detectView(framesApproaching(FRONT_BSR, 0.3, 120, geometricApproach))
+
+    const controlSer = control.diagnostics.sagittalExcursionRatio as number
+    const approachingSer = approaching.diagnostics.sagittalExcursionRatio as number
+    expect(controlSer).toBe(0.3)
+    expect(Math.abs(approachingSer / controlSer - 1)).toBeLessThan(0.15)
+    expect(approaching.view).toBe('front')
+    // Measured: 0.3076 here (2.5% high, from the truncated windows at the clip's two ends). Under
+    // the old clip-wide normalization the same frames read 0.7463 — 2.49x the truth: the ±15 px
+    // reach is multiplied by up to 10x near the camera, the p95 sits in that near-field tail, and
+    // the denominator is the mid-clip torso (~3.2x). 0.75 is nowhere near the 0.40 front bar, so
+    // BSR's front vote would have stood alone and the clip been labelled 'ambiguous'.
+    expect(oldClipWideSer(framesApproaching(FRONT_BSR, 0.3, 120, geometricApproach))).toBeGreaterThan(
+      2 * controlSer,
+    )
+  })
+
+  it('still reads a side view while approaching, so the change cannot manufacture front labels', () => {
+    // Measured 1.2306 against a true 1.2 (the old normalization read 2.985 — side either way).
+    const approaching = detectView(framesApproaching(0.05, 1.2, 120, geometricApproach))
+
+    expect(approaching.diagnostics.sagittalExcursionRatio).toBeGreaterThan(
+      DEFAULT_HEURISTICS_CONFIG.sideViewMinSagittalExcursionRatio,
+    )
+    expect(
+      Math.abs((approaching.diagnostics.sagittalExcursionRatio as number) / 1.2 - 1),
+    ).toBeLessThan(0.15)
+    expect(approaching.view).toBe('side')
+  })
+
+  it('is bit-identical to the clip-wide normalization when the runner stays the same size', () => {
+    // The rescale factor `torsoRef / localTorso` is exactly 1 on constant-scale input, so the
+    // whole result — not just SER — matches the plain fixture to the last bit.
+    expect(detectView(framesApproaching(FRONT_BSR, 0.3, 120, () => 1))).toEqual(
+      detectView(framesWithSignals(FRONT_BSR, 0.3, 120)),
+    )
+  })
+
+  it('drops samples whose whole ±0.5 s window has no torso from the sagittal population', () => {
+    // 120 frames at 30 fps with shoulders missing on frames 40..79 (a 1.33 s run). Ankles and hips
+    // are present throughout. Frame i keeps a local torso while a resolvable one lies within 15
+    // frames, i.e. up to 54 and from 65 on, so frames 55..64 — ten per side — cannot be normalized
+    // and are skipped like an unresolvable ankle: neither detected nor interpolated.
+    const frames = framesWithSignals(FRONT_BSR, 0.3, 120).map((frame, i) =>
+      i >= 40 && i <= 79
+        ? {
+            ...frame,
+            keypoints: frame.keypoints.map((kp) =>
+              kp.name === 'left_shoulder' || kp.name === 'right_shoulder'
+                ? { ...kp, x: null, y: null, score: 0, status: 'unrecoverable' as const }
+                : kp,
+            ),
+          }
+        : frame,
+    )
+
+    const result = detectView(frames)
+
+    expect(result.diagnostics.sagittalExcursionSampleCount).toEqual({ left: 110, right: 110 })
+    expect(result.diagnostics.sagittalExcursionInterpolatedFraction).toEqual({ left: 0, right: 0 })
+    // The surviving samples are still constant-scale, so the ratio itself is untouched.
+    expect(result.diagnostics.sagittalExcursionRatio).toBe(0.3)
+  })
 })
+
+/** On-screen scale growing geometrically from 1x to 10x across a 120-frame (4 s) approach. */
+function geometricApproach(i: number): number {
+  return 10 ** (i / 119)
+}
+
+/**
+ * `framesWithSignals` with every coordinate of frame `i` multiplied by `scaleAt(i)` — the same
+ * runner, the same camera geometry, filmed while their on-screen size changes. Torso, spreads and
+ * ankle reach all scale together, so every per-frame RATIO is exactly what `framesWithSignals`
+ * builds; only a normalization that uses one clip-wide torso can tell the two clips apart.
+ */
+function framesApproaching(
+  bsr: number,
+  ser: number,
+  count: number,
+  scaleAt: (i: number) => number,
+): RobustPoseFrame[] {
+  return framesWithSignals(bsr, ser, count).map((frame, i) => {
+    const s = scaleAt(i)
+    return {
+      ...frame,
+      keypoints: frame.keypoints.map((kp) =>
+        kp.x === null || kp.y === null ? kp : { ...kp, x: kp.x * s, y: kp.y * s },
+      ),
+    }
+  })
+}
+
+/**
+ * SER as `detectView` computed it before local normalization: each side's p95-p5 of raw
+ * `ankle.x − hip.x`, averaged, over ONE clip-median torso. Restated here only so the approach test
+ * can show the size of the defect it guards against.
+ */
+function oldClipWideSer(frames: RobustPoseFrame[]): number {
+  const torso = estimateBodyScale(frames)?.torsoLengthPx as number
+  const rangeFor = (ankle: KeypointName, hip: KeypointName) => {
+    const relX = frames.map(
+      (frame) => (resolvePoint(frame, ankle)?.x as number) - (resolvePoint(frame, hip)?.x as number),
+    )
+    return percentile(relX, 0.95) - percentile(relX, 0.05)
+  }
+  return (rangeFor('left_ankle', 'left_hip') + rangeFor('right_ankle', 'right_hip')) / 2 / torso
+}
 
 describe('viewPhrase', () => {
   // The whole point of the helper: 'ambiguous' is the one label taking "an", and it is reachable
