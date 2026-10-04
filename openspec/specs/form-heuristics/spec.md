@@ -21,8 +21,14 @@ SER SHALL be computed per side as an extreme-quantile range over that side's **d
 ankle-relative-to-hip samples, excluding every sample whose ankle or whose own hip the robustness
 layer had to interpolate, and SHALL be reported for a side only where that detected population
 reaches the minimum count the range estimator needs (see "Interpolated samples are excluded from
-extreme-quantile signals rather than discounted"). The clip's SER is the mean over whichever sides
-produced a range, normalized by torso length; where no side produced one, SER is unavailable.
+extreme-quantile signals rather than discounted"). Each sample SHALL be normalized by the torso
+length LOCAL to it in time — the median torso length over the frames within ±0.5 s of that sample —
+expressed at the clip's reference torso length (the clip-wide median) before the range is taken, so
+that a runner whose on-screen size changes during the clip is measured at one consistent scale; a
+sample whose window resolves no torso length SHALL be skipped, counted as neither detected nor
+interpolated. The clip's SER is the mean over whichever sides produced a range, divided by the
+clip's reference torso length; where no side produced one, SER is unavailable. BSR, and every other
+consumer of torso length, SHALL keep the clip-wide torso length.
 
 A threshold SHALL be clearable by a clip filmed dead-on for the view it admits, for every plausible
 adult body build. In particular `frontViewMinBilateralSpreadRatio` SHALL sit below the bilateral
@@ -54,6 +60,15 @@ differently-built runner `'front'`.
 - **WHEN** a runner whose shoulder and hip-joint-centre separations sit at the narrow end of the
   adult range is filmed square-on, so BSR reads the lowest value a dead-on front view can produce
 - **THEN** BSR still clears `frontViewMinBilateralSpreadRatio` and the clip is classified `'front'`
+
+#### Scenario: A runner approaching the camera reads the same SER as one at constant distance
+
+- **WHEN** a runner's on-screen size grows several-fold across the clip (approaching a handheld
+  camera) while the ankle's reach relative to the torso stays the same
+- **THEN** SER reads within a small tolerance of the SER the same runner produces at constant
+  distance, and a front-view approach is classified `'front'` rather than `'ambiguous'`
+- **AND** where the runner's size is constant, SER is exactly what a single clip-wide torso length
+  produces
 
 ### Requirement: View detection degrades to ambiguous, zero confidence, under insufficient coverage
 
