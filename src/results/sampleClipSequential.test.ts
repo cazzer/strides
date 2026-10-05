@@ -16,6 +16,7 @@ vi.mock('../video/sequentialFrameSource', () => ({
 }))
 
 import { sampleClipSequential } from './sampleClipSequential'
+import { __resetForTests as resetClipBytesCache } from '../video/clipBytesCache'
 
 const FAKE_TRACK: DemuxedTrack = {
   codec: 'avc1.640034',
@@ -99,6 +100,7 @@ async function flush() {
 }
 
 beforeEach(() => {
+  resetClipBytesCache()
   demuxMp4Mock.mockReset()
   openSequentialFrameSourceMock.mockReset()
   demuxMp4Mock.mockResolvedValue(FAKE_TRACK)
@@ -255,5 +257,41 @@ describe('sampleClipSequential', () => {
 
     await expect(promise).rejects.toThrow('malformed clip')
     expect(openSequentialFrameSourceMock).not.toHaveBeenCalled()
+  })
+
+  it('a second pass over the same clip reuses the first pass\'s demuxed track instead of reading it again', async () => {
+    const blob = makeFakeBlob()
+    const readSpy = vi.spyOn(blob, 'arrayBuffer')
+    const detector: PoseDetector = {
+      estimatePose: vi.fn().mockResolvedValue(makePoseFrame()),
+      dispose: vi.fn(),
+    }
+    const config = { enabled: true, targetSamplesPerSecond: null }
+
+    const runPass = async () => {
+      const stream = createControlledFrameStream()
+      openSequentialFrameSourceMock.mockResolvedValueOnce({
+        frames: stream.asyncIterable,
+        stop: vi.fn(),
+      })
+      const onTimings = vi.fn()
+      const { promise } = sampleClipSequential(blob, detector, 1, { onTimings }, config)
+      await flush()
+      stream.finish()
+      await promise
+      return onTimings.mock.calls[0][0]
+    }
+
+    await runPass()
+    const second = await runPass()
+
+    expect(readSpy).toHaveBeenCalledTimes(1)
+    expect(demuxMp4Mock).toHaveBeenCalledTimes(1)
+    expect(openSequentialFrameSourceMock.mock.calls[1][0]).toBe(
+      openSequentialFrameSourceMock.mock.calls[0][0],
+    )
+    expect(second.arrayBufferMs).toBe(0)
+    expect(second.containerProbeMs).toBe(0)
+    expect(second.demuxMs).toBeTypeOf('number')
   })
 })

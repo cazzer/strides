@@ -3,6 +3,7 @@ import type { PoseDetector } from '../pose/detector'
 import type { VideoMetadata, VideoSource } from '../video/types'
 import { canUseSequentialDecode } from '../video/webCodecsSupport'
 import type { SequentialDecodeProbeTimings } from '../video/webCodecsSupport'
+import { releaseClipDemux } from '../video/clipBytesCache'
 import type { PoseSample } from '../pose/robustness/types'
 import type { SampleClipHandle } from './sampleClip'
 import { sampleClipAdaptive } from './sampleClipAdaptive'
@@ -498,6 +499,20 @@ export function useVideoAnalysis(
     video.loop = false
     video.pause()
   }, [presented, state.phase, state.scalePass.status, videoRef])
+
+  // Drops this clip's cached demuxed track (`clipBytesCache.ts`) — the whole compressed bitstream —
+  // once neither pass can sample it again: the run failed, or it is 'ready' and the scale pass
+  // has reached a terminal status. Releasing early is only ever a cost, never a wrong answer: a
+  // later run simply reads and demuxes afresh.
+  useEffect(() => {
+    if (!sourceBlob) return
+    const passesDone =
+      state.phase === 'error' ||
+      (state.phase === 'ready' &&
+        state.scalePass.status !== 'pending' &&
+        state.scalePass.status !== 'running')
+    if (passesDone) releaseClipDemux(sourceBlob)
+  }, [sourceBlob, state.phase, state.scalePass.status])
 
   // Drives the background scale pass (add-background-scale-pass, D1): once the primary run is
   // 'ready' with the pass 'pending', replay the same clip through a dedicated MediaPipe detector

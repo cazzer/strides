@@ -30,8 +30,10 @@ export interface SamplerTimings {
   totalMs: number
   /** One entry per detection attempt, from `estimatePose` being called to it settling. */
   detectMs: DurationSummary
-  /** Sequential path only. */
+  /** Sequential path only. `0` read and container-probe time, and the wait on the shared track as
+   * `demuxMs`, when this pass reused a track another pass demuxed (`clipBytesCache.ts`). */
   arrayBufferMs?: number
+  containerProbeMs?: number
   demuxMs?: number
   decoderOpenMs?: number
   /** Sequential path only: the `drawImage` of each decoded frame onto the detector canvas. */

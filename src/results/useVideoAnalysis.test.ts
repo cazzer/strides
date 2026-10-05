@@ -21,12 +21,14 @@ const {
   computeFormHeuristicsMock,
   getScalePassDetectorMock,
   canUseSequentialDecodeMock,
+  releaseClipDemuxMock,
 } = vi.hoisted(() => ({
   sampleClipMock: vi.fn(),
   applyRobustnessMock: vi.fn(),
   computeFormHeuristicsMock: vi.fn(),
   getScalePassDetectorMock: vi.fn(),
   canUseSequentialDecodeMock: vi.fn(),
+  releaseClipDemuxMock: vi.fn(),
 }))
 
 vi.mock('./sampleClip', () => ({
@@ -60,6 +62,10 @@ vi.mock('../pose/scalePassDetector', () => ({
 // nothing about their behavior, only makes it observable.
 vi.mock('../video/webCodecsSupport', () => ({
   canUseSequentialDecode: canUseSequentialDecodeMock,
+}))
+
+vi.mock('../video/clipBytesCache', () => ({
+  releaseClipDemux: releaseClipDemuxMock,
 }))
 
 import { useVideoAnalysis } from './useVideoAnalysis'
@@ -391,6 +397,7 @@ beforeEach(() => {
   computeFormHeuristicsMock.mockReset()
   getScalePassDetectorMock.mockReset()
   canUseSequentialDecodeMock.mockReset()
+  releaseClipDemuxMock.mockReset()
   applyRobustnessMock.mockReturnValue(FAKE_ROBUST_FRAMES)
   computeFormHeuristicsMock.mockReturnValue(FAKE_HEURISTICS)
   getScalePassDetectorMock.mockResolvedValue(makeFakeDetector())
@@ -1542,6 +1549,77 @@ describe('useVideoAnalysis', () => {
 
         logSpy.mockRestore()
       })
+    })
+  })
+
+  describe("releasing the clip's cached demux (strides-dt9)", () => {
+    it('holds the demux while the scale pass may still sample it, and releases it once the pass is terminal', async () => {
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+      let resolveScale!: (samples: { timestamp: number; frame: null }[]) => void
+      sampleClipMock
+        .mockImplementationOnce(() => ({
+          promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+          handle: makeFakeHandle(),
+        }))
+        .mockImplementationOnce(() => ({
+          promise: new Promise((resolve) => {
+            resolveScale = resolve
+          }),
+          handle: makeFakeHandle(),
+        }))
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+
+      await waitFor(() => expect(result.current.scalePass.status).toBe('running'))
+      expect(releaseClipDemuxMock).not.toHaveBeenCalled()
+
+      await act(async () => {
+        resolveScale([{ timestamp: 0, frame: null }])
+      })
+      await waitFor(() =>
+        expect(['done', 'failed']).toContain(result.current.scalePass.status),
+      )
+      expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob)
+    })
+
+    it('releases at ready when there is no scale pass to wait for', async () => {
+      window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__ = { enabled: false }
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+      sampleClipMock.mockImplementation(() => ({
+        promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+        handle: makeFakeHandle(),
+      }))
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+
+      await waitFor(() => expect(result.current.scalePass.status).toBe('skipped'))
+      expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob)
+    })
+
+    it('releases when the run fails', async () => {
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+      sampleClipMock.mockImplementation(() => ({
+        promise: Promise.reject(new Error('broken detector')),
+        handle: makeFakeHandle(),
+      }))
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+
+      await waitFor(() => expect(result.current.phase).toBe('error'))
+      expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob)
+    })
+
+    it('does not release while the primary run is still sampling', async () => {
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+
+      await waitFor(() => expect(result.current.phase).toBe('sampling'))
+      expect(releaseClipDemuxMock).not.toHaveBeenCalled()
     })
   })
 })

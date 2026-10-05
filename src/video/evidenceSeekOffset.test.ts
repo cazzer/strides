@@ -24,6 +24,7 @@ import {
   frameMidpointOffsetSeconds,
   resolveEvidenceSeekCalibration,
 } from './evidenceSeekOffset'
+import { __resetForTests as resetClipBytesCache, demuxClip } from './clipBytesCache'
 
 function makeTrack(
   overrides: Partial<ContainerVideoTrackTiming> = {},
@@ -54,6 +55,7 @@ function makeBlob(): Blob {
 }
 
 beforeEach(() => {
+  resetClipBytesCache()
   probeContainerTimingMock.mockReset()
   canUseSequentialDecodeMock.mockReset()
   resolveConfigMock.mockReset()
@@ -330,5 +332,20 @@ describe('resolveEvidenceSeekCalibration', () => {
 
     expect(probeContainerTimingMock).toHaveBeenCalledTimes(1)
     expect(canUseSequentialDecodeMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("reads nothing when the analysis run's demux already probed the container (strides-dt9)", async () => {
+    const blob = makeBlob()
+    const readSpy = vi.spyOn(blob, 'arrayBuffer')
+    // The real demux rejects these four bytes; the container probe it seeded first still stands.
+    await demuxClip(blob).catch(() => {})
+    expect(readSpy).toHaveBeenCalledTimes(1)
+
+    await expect(resolveEvidenceSeekCalibration(blob)).resolves.toEqual({
+      offsetSeconds: -0.08,
+      midpointOffsetSeconds: 1 / 50,
+    })
+    expect(readSpy).toHaveBeenCalledTimes(1)
+    expect(probeContainerTimingMock).toHaveBeenCalledTimes(1)
   })
 })
