@@ -270,25 +270,28 @@ export function useVideoAnalysis(
     // computed, and diagnostics must report the path THIS run actually took, not whatever the
     // state says by the time the run finishes.
     const usesSequentialDecode = sequentialDecodeSupported === true
-    // Start creating the background scale pass's MediaPipe detector now, overlapping this primary
-    // pass, rather than when the pass is first needed at 'ready' — otherwise its WASM fetch, model
-    // load and GPU init sit on the critical path between "Analysis complete" and the scale pass
-    // (strides-e4c.2). Sequential path only: there, main-thread/GPU contention costs this pass
-    // wall-clock time but never frames, whereas the playback sampler drops real-time frames under
-    // exactly that contention (strides-gyl measured it), so a playback run keeps paying creation
-    // lazily. Skipped wherever the pass will be skipped anyway: the kill switch, and a
-    // mediapipe-primary backend — the only backend that emits `pixelsPerMeter`, hence the only one
-    // that can produce the non-null calibration behind the 'primary-scale' skip below.
-    // `getScalePassDetector` never rejects (null on failure, and it clears its cached promise so
-    // the pass's own later call retries), so firing and forgetting is safe; that later call joins
-    // this in-flight creation instead of starting a second one. Once feat/eager-model-prefetch
-    // lands, this same call joins its parked bytes prefetch rather than downloading twice.
+    // Create the scale pass's detector now, overlapping this primary pass, instead of at 'ready'.
+    // Sequential path only: the playback sampler drops real-time frames under the main-thread/GPU
+    // contention creation causes (strides-gyl), where the sequential one only runs slower. The
+    // backend check stands in for the 'primary-scale' skip below: only MediaPipe emits
+    // `pixelsPerMeter`, so only a MediaPipe primary can carry the calibration that skips the pass.
     if (
       usesSequentialDecode &&
       resolveScalePassConfig().enabled &&
       resolvePoseDetectorConfig().backend !== 'mediapipePoseLandmarker'
     ) {
-      void getScalePassDetector()
+      const warmupStartedAt = performance.now()
+      const warmup = getScalePassDetector()
+      // Settle time on the page clock (`atMs`), so a driver can see a creation still in flight
+      // while a later clip samples — e.g. clip 1 errors before 'ready' and clip 2 takes over.
+      if (import.meta.env.DEV) void warmup.then((scaleDetector) =>
+        logPerfTimings('scale-detector-warmup', {
+          ...perfClipIdentity(metadata, sourceBlob),
+          startedAtMs: roundMs(warmupStartedAt),
+          durationMs: roundMs(performance.now() - warmupStartedAt),
+          created: scaleDetector !== null,
+        }),
+      )
     }
     const startedAt = performance.now()
     let samplerTimings: SamplerTimings | null = null

@@ -1585,6 +1585,7 @@ describe('useVideoAnalysis', () => {
     it('starts creating the scale-pass detector before the primary result arrives on the sequential path', async () => {
       useSequentialPath()
       const releasePrimary = deferPrimary(sampleClipSequentialMock)
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
 
       const videoSource = makeVideoSource({ sourceBlob })
       const detector = makeFakeDetector()
@@ -1593,6 +1594,23 @@ describe('useVideoAnalysis', () => {
       await waitFor(() => expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1))
       expect(result.current.phase).toBe('sampling')
       expect(getScalePassDetectorMock).toHaveBeenCalledTimes(1)
+      expect(getScalePassDetectorMock.mock.invocationCallOrder[0]).toBeLessThan(
+        sampleClipSequentialMock.mock.invocationCallOrder[0],
+      )
+      await waitFor(() => {
+        const warmupLine = logSpy.mock.calls.find(
+          (args) =>
+            args[0] === '[perf-timings]' &&
+            (JSON.parse(args[1] as string) as { stage: string }).stage === 'scale-detector-warmup',
+        )
+        expect(warmupLine).toBeDefined()
+        expect(JSON.parse(warmupLine![1] as string)).toMatchObject({
+          startedAtMs: expect.any(Number),
+          durationMs: expect.any(Number),
+          created: true,
+        })
+      })
+      logSpy.mockRestore()
 
       await act(async () => {
         releasePrimary([{ timestamp: 0, frame: null }])
@@ -1601,8 +1619,7 @@ describe('useVideoAnalysis', () => {
       await waitFor(() =>
         expect(['done', 'failed', 'skipped']).toContain(result.current.scalePass.status),
       )
-      // The pass's own call at 'ready' joins the cached creation (scalePassDetector.ts); the
-      // warm-up adds exactly one call ahead of it, never a second warm-up.
+      // The pass makes its own call; the real module de-duplicates.
       expect(getScalePassDetectorMock).toHaveBeenCalledTimes(2)
     })
 
