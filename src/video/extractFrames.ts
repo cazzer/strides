@@ -10,6 +10,7 @@ import { evidenceOutputSide } from '../results/evidenceFrames'
 import { planEvidenceAnnotations } from '../results/evidenceAnnotations'
 import { drawEvidenceAnnotation } from './drawEvidenceAnnotations'
 import { resolveEvidenceSeekCalibration } from './evidenceSeekOffset'
+import { logPerfTimings, roundMs } from '../results/perfTimings'
 import {
   FRAME_PRESENTATION_TIMEOUT_MS,
   LOAD_TIMEOUT_MS,
@@ -386,15 +387,35 @@ export async function extractPlannedFrames(
  * because it is literally the same code rather than a second copy of it. A clip whose element never
  * decodes degrades every planned metric to `'extraction-failed'`.
  */
+/** Seeks a plan asks for: one per instant, so two for a ghosted pair. Dev-only instrumentation. */
+function countPlannedInstants(plan: ClipEvidencePlan): number {
+  let instants = 0
+  for (const [, entry] of metricEntries(plan)) {
+    if (entry.status !== 'planned') continue
+    for (const item of entry.items) instants += item.ghost === null ? 1 : 2
+  }
+  return instants
+}
+
+function countExtractedImages(evidence: ClipEvidence): number {
+  let images = 0
+  for (const entry of Object.values(evidence)) {
+    if (entry.status === 'extracted') images += entry.items.length
+  }
+  return images
+}
+
 async function decodeClipEvidence(
   sourceBlob: Blob,
   plan: ClipEvidencePlan,
   options: EvidenceExtractionOptions,
+  requestedAt: number,
 ): Promise<ClipEvidence> {
   // Re-checked AFTER the queue has granted a turn, not only before the call joined it: a pass
   // abandoned while it waited must not then go on to open the decoder it was queued for — nor
   // read the blob for the calibration below, which is why this sits ahead of that too.
   if (options.signal?.aborted) return extractionFailed(plan)
+  const startedAt = performance.now()
 
   // Derived from THIS clip's bytes, not read off a constant — see `evidenceSeekOffset.ts`. An
   // explicit option still wins PER TERM, so a caller (and every unit test) can pin either seek
@@ -414,13 +435,31 @@ async function decodeClipEvidence(
       options.midpointOffsetSeconds ?? calibration?.midpointOffsetSeconds,
   }
   const resolved = resolveOptions(calibrated)
+  const calibratedAt = performance.now()
+  let decodedAt: number | null = null
 
-  return withDecodedVideo(
+  const evidence = await withDecodedVideo(
     sourceBlob,
     resolved.loadTimeoutMs,
-    (video) => extractPlannedFrames(video, plan, calibrated),
+    (video) => {
+      decodedAt = performance.now()
+      return extractPlannedFrames(video, plan, calibrated)
+    },
     () => extractionFailed(plan),
   )
+  const doneAt = performance.now()
+  logPerfTimings('evidence-extraction', {
+    bytes: sourceBlob.size,
+    queueWaitMs: roundMs(startedAt - requestedAt),
+    calibrationMs: roundMs(calibratedAt - startedAt),
+    videoLoadMs: decodedAt === null ? null : roundMs(decodedAt - calibratedAt),
+    seekAndDrawMs: decodedAt === null ? null : roundMs(doneAt - decodedAt),
+    plannedSeeks: countPlannedInstants(plan),
+    images: countExtractedImages(evidence),
+    aborted: options.signal?.aborted === true,
+    totalMs: roundMs(doneAt - startedAt),
+  })
+  return evidence
 }
 
 /**
@@ -449,8 +488,9 @@ export function extractClipEvidence(
   if (sourceBlob === null || options.signal?.aborted) {
     return Promise.resolve(extractionFailed(plan))
   }
+  const requestedAt = performance.now()
   return queueDetachedDecode(() =>
-    decodeClipEvidence(sourceBlob, plan, options),
+    decodeClipEvidence(sourceBlob, plan, options, requestedAt),
   )
 }
 

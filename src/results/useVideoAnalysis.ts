@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PoseDetector } from '../pose/detector'
 import type { VideoMetadata, VideoSource } from '../video/types'
 import { canUseSequentialDecode } from '../video/webCodecsSupport'
+import type { SequentialDecodeProbeTimings } from '../video/webCodecsSupport'
 import type { PoseSample } from '../pose/robustness/types'
 import type { SampleClipHandle } from './sampleClip'
 import { sampleClipAdaptive } from './sampleClipAdaptive'
@@ -16,6 +17,26 @@ import {
 import { assessScalePassSubjectAgreement } from './scalePassSubjectAgreement'
 import { getScalePassDetector } from '../pose/scalePassDetector'
 import type { ScalePassState, VideoAnalysisState } from './types'
+import { logPerfTimings, roundMs } from './perfTimings'
+import type { SamplerTimings } from './perfTimings'
+
+/** Which clip a `[perf-timings]` line is about. Byte size is the one identity every stage —
+ * including evidence and posters, which see only the blob — can report. */
+function perfClipIdentity(metadata: VideoMetadata, sourceBlob: Blob | null) {
+  return {
+    bytes: sourceBlob?.size ?? null,
+    width: metadata.width,
+    height: metadata.height,
+    durationSec: metadata.durationSec,
+  }
+}
+
+/** `SequentialDecodeProbeTimings`' raw clock deltas, rounded for the log line. */
+function roundProbeTimings(timings: SequentialDecodeProbeTimings) {
+  return Object.fromEntries(
+    Object.entries(timings).map(([stage, ms]) => [stage, roundMs(ms)]),
+  )
+}
 
 /** Defensive upper bound on the sequential-decode feasibility probe the auto-start effect waits
  * on — see `sequentialDecodeSupported`'s doc for why auto-start waits at all. */
@@ -78,6 +99,9 @@ export function useVideoAnalysis(
   // already started for, so a re-render between the 'pending' commit and the 'running' commit
   // (or a strict-mode double-fire) can't start the pass twice for one run.
   const scalePassStartedForRunRef = useRef<number | null>(null)
+  // `performance.now()` at the moment the primary run committed 'ready' — the scale pass's
+  // `[perf-timings]` line measures its own latency from here. Dev-only instrumentation.
+  const primaryReadyAtRef = useRef<number | null>(null)
   // Whether the WebCodecs sequential-decode sampling path (`sampleClipAdaptive.ts`) can be used
   // for the currently loaded clip — resolved once per clip, ahead of time, specifically so
   // `start()` never has to await it: `start()`'s `video.play()` call must stay in the same
@@ -167,10 +191,23 @@ export function useVideoAnalysis(
     // `return` with its own direct `setSequentialDecodeSupported` call) — a second, differently-
     // shaped call site to the same setter read as a render-cascade risk to `react-hooks/set-
     // state-in-effect`'s static analysis even though this one is also microtask-deferred.
-    const probe = resolveSamplingRobustnessConfig().sequentialSampling.enabled
-      ? canUseSequentialDecode(sourceBlob)
+    const probeEnabled = resolveSamplingRobustnessConfig().sequentialSampling.enabled
+    const probeStartedAt = performance.now()
+    const probeTimings: SequentialDecodeProbeTimings = {}
+    const probe = probeEnabled
+      ? canUseSequentialDecode(sourceBlob, probeTimings)
       : Promise.resolve(false)
     void probe.then(settle)
+    // Chained after `settle`, so the line can never delay the result reaching auto-start.
+    void probe.then((supported) =>
+      logPerfTimings('sequential-probe', {
+        ...perfClipIdentity(probedFor, sourceBlob),
+        enabled: probeEnabled,
+        supported,
+        totalMs: roundMs(performance.now() - probeStartedAt),
+        ...roundProbeTimings(probeTimings),
+      }),
+    )
     // Defensive bound, not an expected path: canUseSequentialDecode is documented to never hang
     // (every gate resolves, nothing awaits an unbounded external operation once a Blob is already
     // in hand) — this exists so a future regression there degrades to "no sequential decode this
@@ -232,6 +269,8 @@ export function useVideoAnalysis(
     // computed, and diagnostics must report the path THIS run actually took, not whatever the
     // state says by the time the run finishes.
     const usesSequentialDecode = sequentialDecodeSupported === true
+    const startedAt = performance.now()
+    let samplerTimings: SamplerTimings | null = null
     const { promise, handle } = sampleClipAdaptive(
       video,
       // Already-resolved boolean, not an internal probe — see sequentialDecodeSupported's doc
@@ -251,6 +290,9 @@ export function useVideoAnalysis(
         },
         maxConsecutiveErrors: samplingRobustnessConfig.maxConsecutiveErrors,
         detectionTimeoutMs: samplingRobustnessConfig.detectionTimeoutMs,
+        onTimings: (timings) => {
+          samplerTimings = timings
+        },
       },
       samplingRobustnessConfig.sequentialSampling,
     )
@@ -311,6 +353,7 @@ export function useVideoAnalysis(
       }
 
       if (runIdRef.current !== runId) return
+      const sampledAt = performance.now()
       setState((s) => ({
         ...s,
         phase: 'processing',
@@ -330,12 +373,14 @@ export function useVideoAnalysis(
         // `verticalOscillationCm` (#36, D1), so there is no second `trimToPresenceWindow` call
         // left to drift apart from this one — `computeAnalysisDiagnostics` reads that figure back
         // off `heuristics.verticalOscillationCm.calibration` by reference (D1b).
+        const pipelineStartedAt = performance.now()
         const { robustFrames, heuristics, diagnostics } = runClipAnalysisPipeline(
           samples,
           samplingRobustnessConfig,
           usesSequentialDecode ? 'sequential' : 'playback',
           { width: metadata.width, height: metadata.height },
         )
+        const pipelineMs = performance.now() - pipelineStartedAt
         if (runIdRef.current !== runId) return
         // Decide the background scale pass's fate at the moment the primary result exists
         // (add-background-scale-pass, D1): nothing to add when the primary backend already
@@ -361,6 +406,20 @@ export function useVideoAnalysis(
           diagnostics,
           scalePass,
           error: null,
+        })
+        const readyAt = performance.now()
+        primaryReadyAtRef.current = readyAt
+        logPerfTimings('analysis-pass', {
+          pass: 'primary',
+          path: usesSequentialDecode ? 'sequential' : 'playback',
+          ...perfClipIdentity(metadata, sourceBlob),
+          samples: samples.length,
+          samplingMs: roundMs(sampledAt - startedAt),
+          // The 'processing' render yield between sampling and the pipeline.
+          processingYieldMs: roundMs(pipelineStartedAt - sampledAt),
+          pipelineMs: roundMs(pipelineMs),
+          startToReadyMs: roundMs(readyAt - startedAt),
+          sampler: samplerTimings,
         })
       } catch (err) {
         if (runIdRef.current !== runId) return
@@ -488,6 +547,7 @@ export function useVideoAnalysis(
     const samplingRobustnessConfig = resolveSamplingRobustnessConfig()
     const watchdogMs = Math.max(30_000, 3 * metadata.durationSec * 1000)
 
+    const passStartedAt = performance.now()
     void (async () => {
       // The watchdog must bound detector creation too: a stalled WASM/model fetch never
       // settles, and getScalePassDetector caches the still-pending promise — without this
@@ -501,6 +561,7 @@ export function useVideoAnalysis(
         }),
       ])
       clearTimeout(detectorDeadline)
+      const detectorReadyAt = performance.now()
       if (runIdRef.current !== runId) return
       if (!scaleDetector) {
         failPass('The scale-pass detector could not be created.')
@@ -528,6 +589,7 @@ export function useVideoAnalysis(
 
       // Forward declaration: onPausedChange below needs abortPass, which needs the handle.
       let abortPassRef: (error: string) => void = () => {}
+      let samplerTimings: SamplerTimings | null = null
       const { promise, handle } = sampleClipAdaptive(
         video,
         // Same already-resolved signal start() uses above — the scale pass replays the same
@@ -547,6 +609,9 @@ export function useVideoAnalysis(
             if (paused && !video.ended) {
               abortPassRef('Video playback was paused before the scale pass finished.')
             }
+          },
+          onTimings: (timings) => {
+            samplerTimings = timings
           },
         },
         samplingRobustnessConfig.sequentialSampling,
@@ -601,6 +666,7 @@ export function useVideoAnalysis(
       clearTimeout(watchdog)
       if (abortedLocally || runIdRef.current !== runId) return
       if (scaleHandleRef.current === handle) scaleHandleRef.current = null
+      const sampledAt = performance.now()
 
       try {
         // The byte-identical pipeline the primary run uses, over the scale pass's own samples.
@@ -616,6 +682,7 @@ export function useVideoAnalysis(
             usesSequentialDecode ? 'sequential' : 'playback',
             { width: metadata.width, height: metadata.height },
           )
+        const pipelineMs = performance.now() - sampledAt
         // Graft rule: a pass that measured no real-world scale has nothing to graft — that is a
         // failed pass (named as such), never a silent no-op replacement of the primary metrics.
         // Still gated on `verticalOscillationCm.calibration` alone (#45): `stepWidthCm` has no
@@ -665,6 +732,24 @@ export function useVideoAnalysis(
             robustFrames: scaleRobustFrames,
           },
         }))
+        const doneAt = performance.now()
+        logPerfTimings('analysis-pass', {
+          pass: 'scale',
+          path: usesSequentialDecode ? 'sequential' : 'playback',
+          ...perfClipIdentity(metadata, sourceBlob),
+          samples: samples.length,
+          detectorWaitMs: roundMs(detectorReadyAt - passStartedAt),
+          samplingMs: roundMs(sampledAt - detectorReadyAt),
+          pipelineMs: roundMs(pipelineMs),
+          // The subject-agreement check and the graft.
+          postPipelineMs: roundMs(doneAt - sampledAt - pipelineMs),
+          startToDoneMs: roundMs(doneAt - passStartedAt),
+          primaryReadyToDoneMs:
+            primaryReadyAtRef.current === null
+              ? null
+              : roundMs(doneAt - primaryReadyAtRef.current),
+          sampler: samplerTimings,
+        })
       } catch (err) {
         failPass(err instanceof Error ? err.message : 'Scale pass failed unexpectedly.')
       }

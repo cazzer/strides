@@ -143,6 +143,39 @@ describe('sampleClipSequential', () => {
     ])
   })
 
+  it('reports its stage timings once when the frame stream ends naturally', async () => {
+    const stream = createControlledFrameStream()
+    openSequentialFrameSourceMock.mockResolvedValue({ frames: stream.asyncIterable, stop: vi.fn() })
+    const detector: PoseDetector = {
+      estimatePose: vi.fn().mockResolvedValue(makePoseFrame()),
+      dispose: vi.fn(),
+    }
+    const onTimings = vi.fn()
+
+    const { promise } = sampleClipSequential(makeFakeBlob(), detector, 1, { onTimings }, {
+      enabled: true,
+      targetSamplesPerSecond: null,
+    })
+
+    stream.push(makeSelectedFrame(0, 0))
+    stream.push(makeSelectedFrame(1, 0.1))
+    await flush()
+    stream.finish()
+    await promise
+
+    expect(onTimings).toHaveBeenCalledTimes(1)
+    const timings = onTimings.mock.calls[0][0]
+    expect(timings).toMatchObject({
+      path: 'sequential',
+      drawMs: { count: 2 },
+      detectMs: { count: 2 },
+      decodeWaitMs: { count: 2 },
+    })
+    for (const stage of ['arrayBufferMs', 'demuxMs', 'decoderOpenMs', 'totalMs']) {
+      expect(timings[stage]).toBeTypeOf('number')
+    }
+  })
+
   it('stop() resolves with only the samples already collected — a detection that settles after stop() is not appended', async () => {
     const stream = createControlledFrameStream()
     openSequentialFrameSourceMock.mockResolvedValue({ frames: stream.asyncIterable, stop: vi.fn() })

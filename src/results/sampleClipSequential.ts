@@ -11,6 +11,7 @@ import {
   withTimeout,
 } from './sampleClip'
 import type { SampleClipHandle, SampleClipOptions } from './sampleClip'
+import { roundMs, summarizeDurations } from './perfTimings'
 
 /**
  * The WebCodecs counterpart to `sampleClip.ts`'s `<video>`-playback sampler: demuxes `sourceBlob`
@@ -45,7 +46,17 @@ export function sampleClipSequential(
     onProgress,
     maxConsecutiveErrors = DEFAULT_MAX_CONSECUTIVE_ERRORS,
     detectionTimeoutMs = DEFAULT_DETECTION_TIMEOUT_MS,
+    onTimings,
   } = opts
+
+  // Dev-only `[perf-timings]` instrumentation (`perfTimings.ts`): plain clock reads, no awaits.
+  const startedAt = performance.now()
+  let arrayBufferMs: number | undefined
+  let demuxMs: number | undefined
+  let decoderOpenMs: number | undefined
+  const drawMs: number[] = []
+  const detectMs: number[] = []
+  const decodeWaitMs: number[] = []
 
   const samples: PoseSample[] = []
   let cancelled = false
@@ -98,9 +109,13 @@ export function sampleClipSequential(
   void (async () => {
     let track: Awaited<ReturnType<typeof demuxMp4>>
     try {
+      const readStartedAt = performance.now()
       const bytes = await sourceBlob.arrayBuffer()
+      const demuxStartedAt = performance.now()
+      arrayBufferMs = demuxStartedAt - readStartedAt
       if (cancelled) return
       track = await demuxMp4(bytes)
+      demuxMs = performance.now() - demuxStartedAt
     } catch (err) {
       abort(
         err instanceof Error ? err : new Error('Failed to demux the clip for sequential sampling.'),
@@ -113,7 +128,9 @@ export function sampleClipSequential(
 
     let source: Awaited<ReturnType<typeof openSequentialFrameSource>>
     try {
+      const openStartedAt = performance.now()
       source = await openSequentialFrameSource(track, selectFrame)
+      decoderOpenMs = performance.now() - openStartedAt
     } catch (err) {
       abort(
         err instanceof Error
@@ -135,8 +152,10 @@ export function sampleClipSequential(
       // hundred frames (review finding).
       if (canvas.width !== frame.displayWidth) canvas.width = frame.displayWidth
       if (canvas.height !== frame.displayHeight) canvas.height = frame.displayHeight
+      const drawStartedAt = performance.now()
       try {
         ctx.drawImage(frame, 0, 0, canvas.width, canvas.height)
+        drawMs.push(performance.now() - drawStartedAt)
       } finally {
         // Always closed, even if drawImage throws — an open VideoFrame leaking past this point
         // would violate the one-frame-open-at-a-time discipline this module's whole design rests
@@ -151,12 +170,15 @@ export function sampleClipSequential(
         height: canvas.height,
       }
 
+      const detectStartedAt = performance.now()
       try {
         const detected = await withTimeout(detector.estimatePose(poseSource), detectionTimeoutMs)
+        detectMs.push(performance.now() - detectStartedAt)
         if (cancelled) return
         samples.push({ timestamp: ptsSec, frame: detected })
         consecutiveErrors = 0
       } catch {
+        detectMs.push(performance.now() - detectStartedAt)
         if (cancelled) return
         samples.push({ timestamp: ptsSec, frame: null })
         consecutiveErrors += 1
@@ -176,13 +198,16 @@ export function sampleClipSequential(
     }
 
     try {
+      let waitStartedAt = performance.now()
       for await (const selected of source.frames) {
+        decodeWaitMs.push(performance.now() - waitStartedAt)
         if (cancelled || settled) {
           selected.frame.close()
           break
         }
         await handleSelectedFrame(selected)
         if (settled) break
+        waitStartedAt = performance.now()
       }
     } catch (err) {
       if (!settled) {
@@ -190,6 +215,18 @@ export function sampleClipSequential(
       }
     } finally {
       source.stop()
+      if (!settled) {
+        onTimings?.({
+          path: 'sequential',
+          totalMs: roundMs(performance.now() - startedAt),
+          arrayBufferMs: arrayBufferMs === undefined ? undefined : roundMs(arrayBufferMs),
+          demuxMs: demuxMs === undefined ? undefined : roundMs(demuxMs),
+          decoderOpenMs: decoderOpenMs === undefined ? undefined : roundMs(decoderOpenMs),
+          drawMs: summarizeDurations(drawMs),
+          detectMs: summarizeDurations(detectMs),
+          decodeWaitMs: summarizeDurations(decodeWaitMs),
+        })
+      }
       finish()
     }
   })()

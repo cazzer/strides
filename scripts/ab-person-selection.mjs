@@ -43,6 +43,10 @@
  *                         changes what gets measured — see the runTrial comment.
  *   --evidence            Also capture the `[evidence-coverage]` line (exemplar timestamps, crop
  *                         sides, per-metric status). Costs a wait for the scale-pass re-extraction.
+ *   --perf                Also capture every dev-only `[perf-timings]` line as `perf.*` rows
+ *                         (`src/results/perfTimings.ts`). Same settle wait as --evidence. Every
+ *                         row is wall-clock, so expect spread; off by default so a report without
+ *                         it stays byte-identical to one taken before the line existed.
  *   --json <path>         Also write the aggregate + every raw per-trial record here.
  *
  * Example:
@@ -120,6 +124,7 @@ const CLIPS = {
 const DIAGNOSTICS_PREFIX = '[analysis-diagnostics]'
 const SCALE_PASS_PREFIX = '[analysis-diagnostics:scale-pass]'
 const EVIDENCE_PREFIX = '[evidence-coverage]'
+const PERF_PREFIX = '[perf-timings]'
 
 /**
  * How long `--evidence` waits for the `[evidence-coverage]` stream to go quiet before taking the
@@ -227,6 +232,7 @@ const FIELD_GROUPS = [
   'view.',
   'metrics.',
   'evidence.',
+  'perf.',
 ]
 
 function requireValue(flag, value) {
@@ -312,6 +318,7 @@ function parseArgs(argv) {
     reuseServer: false,
     reuseBrowser: false,
     evidence: false,
+    perf: false,
     jsonPath: null,
   }
 
@@ -368,6 +375,9 @@ function parseArgs(argv) {
         break
       case '--evidence':
         options.evidence = true
+        break
+      case '--perf':
+        options.perf = true
         break
       case '--json':
         options.jsonPath = requireValue(flag, value)
@@ -555,7 +565,7 @@ async function warmUpAndReadRenderer(launchArgs, baseURL) {
  */
 async function runTrial(
   browser,
-  { baseURL, clip, clipName, override, backendOverride, timeoutMs, evidence },
+  { baseURL, clip, clipName, override, backendOverride, timeoutMs, evidence, perf },
 ) {
   const context = await browser.newContext()
   try {
@@ -581,6 +591,7 @@ async function runTrial(
     diagnosticsPromise.catch(() => {})
 
     const evidenceLines = []
+    const perfLines = []
     let lastEvidenceAt = 0
     let scalePassSeen = false
 
@@ -588,6 +599,14 @@ async function runTrial(
       const text = message.text()
       if (text.startsWith(SCALE_PASS_PREFIX)) {
         scalePassSeen = true
+        return
+      }
+      if (text.startsWith(PERF_PREFIX)) {
+        try {
+          perfLines.push(JSON.parse(text.slice(PERF_PREFIX.length).trim()))
+        } catch {
+          // A malformed perf line costs its rows, not the trial.
+        }
         return
       }
       if (text.startsWith(EVIDENCE_PREFIX)) {
@@ -642,7 +661,7 @@ async function runTrial(
     // Wait for the evidence stream to go quiet rather than for a line count: see
     // EVIDENCE_SETTLE_MS. Quiescence is gated on the scale pass having reported, so a fast machine
     // cannot settle in the gap before the graft's re-extraction starts.
-    if (evidence) {
+    if (evidence || perf) {
       const deadline = Date.now() + EVIDENCE_MAX_WAIT_MS
       let settled = false
       while (!settled && Date.now() < deadline) {
@@ -663,7 +682,12 @@ async function runTrial(
 
     // `undefined` means "not asked for"; `null` means "asked for and none arrived" — distinct
     // states that must not both render as an absent row.
-    return extractFields(diagnostics, elapsedMs, evidence ? (evidenceLines.at(-1) ?? null) : undefined)
+    const fields = extractFields(
+      diagnostics,
+      elapsedMs,
+      evidence ? (evidenceLines.at(-1) ?? null) : undefined,
+    )
+    return perf ? { ...fields, ...flattenPerfLines(perfLines) } : fields
   } finally {
     await context.close()
   }
@@ -756,6 +780,23 @@ function extractFields(diagnostics, elapsedMs, evidenceCoverage) {
   }
 
   fields.elapsedMs = elapsedMs
+  return fields
+}
+
+/**
+ * One row per field per `[perf-timings]` line, keyed `perf.<stage>[.<pass>][<n>].<field>` where
+ * `<n>` counts that key's occurrences in the trial — the pre- and post-graft evidence extractions
+ * are two lines of one stage and must stay two rows.
+ */
+function flattenPerfLines(lines) {
+  const seen = new Map()
+  const fields = {}
+  for (const { stage, pass, ...rest } of lines) {
+    const key = `perf.${stage}${pass ? `.${pass}` : ''}`
+    const occurrence = seen.get(key) ?? 0
+    seen.set(key, occurrence + 1)
+    Object.assign(fields, flatten(`${key}[${occurrence}].`, rest))
+  }
   return fields
 }
 
@@ -949,6 +990,7 @@ async function main() {
               backendOverride: arm.backendOverride,
               timeoutMs: options.timeoutMs,
               evidence: options.evidence,
+              perf: options.perf,
             })
             process.stderr.write(
               `detected ${record.fields['sampling.detectedFrames']}/${record.fields['sampling.totalSamples']} in ${record.fields.elapsedMs}ms\n`,

@@ -1,6 +1,8 @@
 import { videoFrameSource } from '../pose/detector'
 import type { PoseDetector } from '../pose/detector'
 import type { PoseSample } from '../pose/robustness/types'
+import { roundMs, summarizeDurations } from './perfTimings'
+import type { SamplerTimings } from './perfTimings'
 
 export interface SampleClipHandle {
   /**
@@ -27,6 +29,9 @@ export interface SampleClipOptions {
    * attempt so a hang degrades into a normal counted error instead of a silent full stop.
    * Default 5000ms. */
   detectionTimeoutMs?: number
+  /** Called once, just before the promise RESOLVES (never on an abort), with what the sampler
+   * measured about its own run — dev-only `[perf-timings]` instrumentation (`perfTimings.ts`). */
+  onTimings?: (timings: SamplerTimings) => void
 }
 
 export const DEFAULT_MAX_CONSECUTIVE_ERRORS = 30
@@ -88,7 +93,13 @@ export function sampleClip(
     onPausedChange,
     maxConsecutiveErrors = DEFAULT_MAX_CONSECUTIVE_ERRORS,
     detectionTimeoutMs = DEFAULT_DETECTION_TIMEOUT_MS,
+    onTimings,
   } = opts
+
+  const startedAt = performance.now()
+  const detectMs: number[] = []
+  let frameCallbacks = 0
+  let droppedWhileInFlight = 0
 
   const samples: PoseSample[] = []
   let cancelled = false
@@ -130,6 +141,13 @@ export function sampleClip(
     cancelled = true
     cancelPendingCallback()
     cleanupListeners()
+    onTimings?.({
+      path: 'playback',
+      totalMs: roundMs(performance.now() - startedAt),
+      detectMs: summarizeDurations(detectMs),
+      frameCallbacks,
+      droppedWhileInFlight,
+    })
     resolvePromise(samples)
   }
 
@@ -149,10 +167,13 @@ export function sampleClip(
   const onFrame: VideoFrameRequestCallback = (_now, metadata) => {
     pendingHandle = null
     if (cancelled) return
+    frameCallbacks += 1
 
+    if (inFlight) droppedWhileInFlight += 1
     if (!inFlight) {
       const t = metadata.mediaTime
       const source = videoFrameSource(video, t)
+      const detectStartedAt = performance.now()
       inFlight = withTimeout(detector.estimatePose(source), detectionTimeoutMs)
         .then((frame) => {
           // Cancellation can land between this attempt starting and settling (e.g. `stop()`
@@ -176,6 +197,7 @@ export function sampleClip(
           }
         })
         .finally(() => {
+          detectMs.push(performance.now() - detectStartedAt)
           inFlight = null
           if (!cancelled && durationSec > 0) {
             onProgress?.(Math.min(t / durationSec, 1))

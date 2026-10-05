@@ -71,7 +71,18 @@ async function looksLikeIsoBmff(blob: Blob): Promise<boolean> {
  * see its doc) lives one layer up, in `useVideoAnalysis.ts` — this function is never even called
  * while the plane is disabled, so it has no gate of its own for it.
  */
-export async function canUseSequentialDecode(blob: Blob | null): Promise<boolean> {
+/** Where `canUseSequentialDecode`'s time goes, filled in as each stage completes — a stage the
+ * probe never reached stays absent. Dev-only `[perf-timings]` instrumentation. */
+export interface SequentialDecodeProbeTimings {
+  arrayBufferMs?: number
+  demuxMs?: number
+  isConfigSupportedMs?: number
+}
+
+export async function canUseSequentialDecode(
+  blob: Blob | null,
+  timings?: SequentialDecodeProbeTimings,
+): Promise<boolean> {
   if (typeof VideoDecoder === 'undefined') return false
   if (blob === null) return false
   if (blob.size > MAX_SEQUENTIAL_DECODE_BLOB_BYTES) return false
@@ -79,16 +90,22 @@ export async function canUseSequentialDecode(blob: Blob | null): Promise<boolean
   try {
     if (!(await looksLikeIsoBmff(blob))) return false
 
+    const readStartedAt = performance.now()
     const bytes = await blob.arrayBuffer()
+    const demuxStartedAt = performance.now()
+    if (timings) timings.arrayBufferMs = demuxStartedAt - readStartedAt
     const track = await demuxMp4(bytes)
+    if (timings) timings.demuxMs = performance.now() - demuxStartedAt
 
     if (!isIdentityMatrix(track.matrix)) return false
 
+    const configStartedAt = performance.now()
     const support = await VideoDecoder.isConfigSupported({
       codec: track.codec,
       codedWidth: track.width,
       codedHeight: track.height,
     })
+    if (timings) timings.isConfigSupportedMs = performance.now() - configStartedAt
     return support.supported === true
   } catch {
     return false
