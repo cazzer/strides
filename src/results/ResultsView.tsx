@@ -1,9 +1,10 @@
-import type { VideoAnalysisState } from './types'
+import type { AggregateAnalysisState } from './types'
 import { MetricsPanel } from './MetricsPanel'
 import type { MetricCardEvidence } from './MetricsPanel'
 
 export interface ResultsViewProps {
-  analysis: VideoAnalysisState
+  /** Has no `progress` — see `AggregateAnalysisState`; per-clip progress lives on the clip strip. */
+  analysis: AggregateAnalysisState
   /** Called instead of `analysis.reset` directly for "Try again" — the alert this button lives
    * in unmounts the instant it's clicked, so whoever composes this component (`App.tsx`) needs
    * the chance to move focus somewhere stable first, the same fix already applied there and in

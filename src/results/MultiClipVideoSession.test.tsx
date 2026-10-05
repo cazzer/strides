@@ -241,7 +241,7 @@ describe('MultiClipVideoSession', () => {
     expect(sampleClipMock).toHaveBeenCalled()
   })
 
-  it('re-renders the session about once per displayed percent while a clip samples, not once per frame (strides-e4c.3)', async () => {
+  it('commits about once per displayed percent while a clip samples, and never re-renders the session for it (strides-e4c.3)', async () => {
     // Clip 1 finishes (results view, evidence and all mounted); clip 2's primary pass then hangs
     // so the test can drive its progress by hand — the shape where per-frame progress was most
     // expensive, since every update re-rendered clip 1's finished results too.
@@ -279,20 +279,33 @@ describe('MultiClipVideoSession', () => {
     const { onProgress } = progressCalls()[1][3] as { onProgress: (fraction: number) => void }
     await act(async () => {})
 
-    // A 12 s, 30 fps clip's worth of sampled frames.
-    const FRAMES = 360
-    const before = commits.count
+    // `useSessionEvidence` is called exactly once per render of the session component, so its
+    // passthrough spy (bottom of this file) counts SESSION renders, as distinct from commits that
+    // only re-render the sampling clip's own `ClipSlot`.
+    const sessionHook = vi.mocked((await import('./useSessionEvidence')).useSessionEvidence)
+    const strip = screen.getByRole('list', { name: /clips/i })
+    const clip2Entry = () => strip.querySelectorAll('[data-clip-condition]')[1]
+
+    // Far more sampled frames than displayed percents, so a per-frame regression cannot hide
+    // inside the bound.
+    const FRAMES = 2000
+    const commitsBefore = commits.count
+    const sessionRendersBefore = sessionHook.mock.calls.length
     for (let k = 1; k <= FRAMES; k += 1) {
       act(() => onProgress(k / FRAMES))
+      // The strip still advances while the session above it stays put.
+      if (k === FRAMES / 2) expect(clip2Entry().textContent).toMatch(/50%/)
     }
-    const sessionCommits = commits.count - before
+    const sampledCommits = commits.count - commitsBefore
+    const sessionRenders = sessionHook.mock.calls.length - sessionRendersBefore
 
-    // Measured in this test: 1080 commits before this change (three per sampled frame — the clip's
-    // own state update, then its report up into `setClipStates` re-rendering the whole session),
-    // 300 after (three per displayed percent). The bound is per percent, so it holds at any length.
-    expect(sessionCommits).toBeLessThanOrEqual(3 * 100)
-    const strip = screen.getByRole('list', { name: /clips/i })
-    expect(strip.querySelectorAll('[data-clip-condition]')[1].textContent).toMatch(/100%/)
+    // Measured in this test, 2000 frames (commits / session renders): 6000 / 4000 with neither
+    // change (every frame published, every publish re-rendering the session); 300 / 200 with the
+    // whole-percent throttle alone; 100 / 0 with `sameClipSession` also ignoring progress — the
+    // 100 being the sampling clip's own `ClipSlot`, which is the strip entry that shows it.
+    expect(sampledCommits).toBeLessThanOrEqual(400)
+    expect(sessionRenders).toBe(0)
+    expect(clip2Entry().textContent).toMatch(/100%/)
   })
 
   it('one source, one clip: selecting several files at once creates one clip per file', async () => {
