@@ -1,3 +1,4 @@
+import { Profiler } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PoseDetector } from '../pose/detector'
@@ -238,6 +239,60 @@ describe('MultiClipVideoSession', () => {
 
     await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
     expect(sampleClipMock).toHaveBeenCalled()
+  })
+
+  it('re-renders the session about once per displayed percent while a clip samples, not once per frame (strides-e4c.3)', async () => {
+    // Clip 1 finishes (results view, evidence and all mounted); clip 2's primary pass then hangs
+    // so the test can drive its progress by hand — the shape where per-frame progress was most
+    // expensive, since every update re-rendered clip 1's finished results too.
+    sampleClipMock
+      .mockImplementationOnce(() => ({
+        promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+        handle: { stop: vi.fn() },
+      }))
+    const commits = { count: 0 }
+    render(
+      <Profiler id="session" onRender={() => (commits.count += 1)}>
+        <MultiClipVideoSession detector={makeFakeDetector()} />
+      </Profiler>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
+
+    sampleClipMock.mockImplementation(() => ({
+      promise: new Promise(() => {}),
+      handle: { stop: vi.fn() },
+    }))
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
+    markVideoReady(canonicalVideos()[1])
+
+    // The primary pass is the one call carrying onProgress; a scale pass passes none.
+    const progressCalls = () =>
+      sampleClipMock.mock.calls.filter(
+        (call) => typeof (call[3] as { onProgress?: unknown })?.onProgress === 'function',
+      )
+    await waitFor(() => expect(progressCalls()).toHaveLength(2))
+    const { onProgress } = progressCalls()[1][3] as { onProgress: (fraction: number) => void }
+    await act(async () => {})
+
+    // A 12 s, 30 fps clip's worth of sampled frames.
+    const FRAMES = 360
+    const before = commits.count
+    for (let k = 1; k <= FRAMES; k += 1) {
+      act(() => onProgress(k / FRAMES))
+    }
+    const sessionCommits = commits.count - before
+
+    // Measured in this test: 1080 commits before this change (three per sampled frame — the clip's
+    // own state update, then its report up into `setClipStates` re-rendering the whole session),
+    // 300 after (three per displayed percent). The bound is per percent, so it holds at any length.
+    expect(sessionCommits).toBeLessThanOrEqual(3 * 100)
+    const strip = screen.getByRole('list', { name: /clips/i })
+    expect(strip.querySelectorAll('[data-clip-condition]')[1].textContent).toMatch(/100%/)
   })
 
   it('one source, one clip: selecting several files at once creates one clip per file', async () => {

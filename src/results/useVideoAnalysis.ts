@@ -19,6 +19,7 @@ import { getScalePassDetector } from '../pose/scalePassDetector'
 import type { ScalePassState, VideoAnalysisState } from './types'
 import { logPerfTimings, roundMs } from './perfTimings'
 import type { SamplerTimings } from './perfTimings'
+import { progressPercent } from './progressPercent'
 
 /** Which clip a `[perf-timings]` line is about. Byte size is the one identity every stage —
  * including evidence and posters, which see only the blob — can report. */
@@ -271,6 +272,9 @@ export function useVideoAnalysis(
     const usesSequentialDecode = sequentialDecodeSupported === true
     const startedAt = performance.now()
     let samplerTimings: SamplerTimings | null = null
+    // The whole percent this run last published (strides-e4c.3). The run starts at progress 0,
+    // set just above, so percent 0 is already on screen.
+    let publishedPercent = progressPercent(0)
     const { promise, handle } = sampleClipAdaptive(
       video,
       // Already-resolved boolean, not an internal probe — see sequentialDecodeSupported's doc
@@ -282,6 +286,14 @@ export function useVideoAnalysis(
       {
         onProgress: (fraction) => {
           if (runIdRef.current !== runId) return
+          // Publish only when the DISPLAYED percent moves — at most 100 updates a run instead of
+          // one per sampled frame. Each update re-renders the whole session tree (ClipSlot reports
+          // it up and `sameClipSession` compares `progress`), on the main thread the sampler runs
+          // on. Nothing renders progress finer than `progressPercent`, so what is shown is
+          // unchanged; the fraction published is still exact, and 'ready' sets 1 regardless.
+          const percent = progressPercent(fraction)
+          if (percent === publishedPercent) return
+          publishedPercent = percent
           setState((s) => ({ ...s, progress: fraction }))
         },
         onPausedChange: (paused) => {
