@@ -132,7 +132,7 @@ export interface EvidenceExtractionOptions {
   maxOutputSidePx?: number
   /** Bounded wait for `loadeddata` on a detached element. */
   loadTimeoutMs?: number
-  /** Bounded wait for each seek. A seek that exhausts it fails its exemplar. */
+  /** Bounded wait for each seek. A seek that exhausts it fails every image waiting on its frame. */
   seekTimeoutMs?: number
   /** Backstop on the post-seek presentation grace period (see `FRAME_PRESENTATION_TIMEOUT_MS`).
    * Exhausting it is not a failure — the frame is drawn either way. */
@@ -245,22 +245,15 @@ function resolveOptions(options: EvidenceExtractionOptions): ResolvedOptions {
 }
 
 /**
- * Seeks to one planned instant and draws it through the plan's crop rect at the plan's opacity.
- * `false` only when the SEEK itself never completed — the caller drops the whole exemplar rather
- * than shipping an image of whichever instant happened to be loaded. The presentation wait that
- * follows a completed seek cannot fail it (see `waitForPresentedFrame`).
- *
- * The nine-argument `drawImage` is the point (design R3): only the crop rect is ever read, and the
- * destination canvas is the display crop, so a 3840x2160 clip never allocates a full-frame canvas.
+ * The `currentTime` one planned instant is seeked to. Computed once per instant, and the schedule
+ * in `extractPlannedFrames` dedupes on this exact number: two instants share a seek only when they
+ * would each have asked the element for the identical `currentTime`.
  */
-async function drawInstant(
-  ctx: CanvasRenderingContext2D,
-  video: HTMLVideoElement,
+function seekTargetOf(
   instant: EvidenceInstantPlan,
-  crop: EvidenceFramePlan['crop'],
-  outputSide: number,
+  video: HTMLVideoElement,
   options: ResolvedOptions,
-): Promise<boolean> {
+): number {
   // Edit-list shift FIRST, then the midpoint. The shift converts a media-clock frame START to a
   // presentation-clock frame START; only after that is "add half an interval" the middle of the
   // interval `currentTime` will be compared against. Both terms are additive so the order does not
@@ -271,23 +264,55 @@ async function drawInstant(
   // beyond a duration the element will refuse. Clamped only against a duration it actually
   // reports: jsdom gives `NaN` and a webcam recording gives `Infinity`, and comparing against
   // either would poison the target or never fire.
-  const target = Math.max(
+  return Math.max(
     0,
     Number.isFinite(video.duration)
       ? Math.min(requested, video.duration)
       : requested,
   )
+}
+
+/**
+ * Seeks to one target and waits for its frame. `'timed-out'` only when the SEEK itself never
+ * completed — every image waiting on that frame is dropped rather than shipped with whichever
+ * instant happened to be loaded. The presentation wait that follows a completed seek cannot fail it
+ * (see `waitForPresentedFrame`).
+ */
+async function presentTarget(
+  video: HTMLVideoElement,
+  target: number,
+  options: ResolvedOptions,
+): Promise<'presented' | 'timed-out' | 'aborted'> {
   const outcome = await seekTo(video, target, options.seekTimeoutMs)
-  if (outcome === 'timed-out') return false
-  // An abort that arrived DURING the seek skips the presentation wait and the draw: the image is
-  // already destined for the bin, and `extractPlannedFrames` reads the signal, not this `false`.
-  if (options.signal?.aborted) return false
+  if (outcome === 'timed-out') return 'timed-out'
+  // An abort that arrived DURING the seek skips the presentation wait and the draws: every image
+  // is already destined for the bin.
+  if (options.signal?.aborted) return 'aborted'
   // `'already-there'` skips the wait rather than shortening it: the short-circuit means the element
   // is ALREADY showing this instant, so no new frame is coming and every arm but the backstop would
   // be dead. Waiting there could only burn the timeout and then draw the identical pixels.
   if (outcome === 'seeked') {
     await waitForPresentedFrame(video, options.presentationTimeoutMs)
   }
+  return 'presented'
+}
+
+/**
+ * Draws the element's presented frame through the plan's crop rect at the instant's opacity —
+ * straight from the `<video>`, every time, never through an intermediate canvas or bitmap. That is
+ * what keeps a deduplicated schedule pixel-identical to one seek per instant: the same source, the
+ * same nine-argument call, the same `globalAlpha`, so the same single resample and the same blend.
+ *
+ * The nine-argument `drawImage` is the point (design R3): only the crop rect is ever read, and the
+ * destination canvas is the display crop, so a 3840x2160 clip never allocates a full-frame canvas.
+ */
+function drawInstant(
+  ctx: CanvasRenderingContext2D,
+  video: HTMLVideoElement,
+  instant: EvidenceInstantPlan,
+  crop: EvidenceFramePlan['crop'],
+  outputSide: number,
+): void {
   ctx.globalAlpha = instant.opacity
   ctx.drawImage(
     video,
@@ -300,26 +325,45 @@ async function drawInstant(
     outputSide,
     outputSide,
   )
-  return true
 }
 
 /**
- * One planned image. The base is drawn first at full opacity and the ghost composited over it at
- * the plan's blend alpha, making the result a double exposure of one runner at two instants that is
- * deliberately WEIGHTED TOWARD THE BASE — `source-over` onto a transparent canvas gives
- * `α·ghost + (1 − α)·base`, and `EVIDENCE_GHOST_BLEND_ALPHA` is below a half so the base reads as
- * the foreground body the caption and the solid annotation both already name (`strides-c37`). The
- * annotation layer goes on last, over both.
+ * One planned image in flight: its canvas, and how far through its instants the schedule has got.
  *
- * `null` on any failure, including a ghost that fails after its base already drew: a range or
- * cycle exemplar shorn of its second instant would read as a single still and assert something the
- * metric never claimed.
+ * `instants` is always base first, then the ghost. The base is drawn at full opacity and the ghost
+ * composited over it at the plan's blend alpha, making the result a double exposure of one runner
+ * at two instants that is deliberately WEIGHTED TOWARD THE BASE — `source-over` onto a transparent
+ * canvas gives `α·ghost + (1 − α)·base`, and `EVIDENCE_GHOST_BLEND_ALPHA` is below a half so the
+ * base reads as the foreground body the caption and the solid annotation both already name
+ * (`strides-c37`). That ORDER is a per-canvas invariant the schedule must keep whatever order it
+ * seeks in: a base drawn second at full opacity erases the ghost rather than being blended with it.
  */
-async function extractFrame(
-  video: HTMLVideoElement,
+interface ImageInFlight {
+  metric: MetricId
+  plan: EvidenceFramePlan
+  canvas: HTMLCanvasElement
+  ctx: CanvasRenderingContext2D
+  side: number
+  instants: EvidenceInstantPlan[]
+  /** `seekTargetOf` each of `instants`, index for index. */
+  targets: number[]
+  /** How many of `instants` are on the canvas. */
+  drawn: number
+  /**
+   * `'failed'` on any failure, including a ghost whose seek fails after its base already drew: a
+   * range or cycle exemplar shorn of its second instant would read as a single still and assert
+   * something the metric never claimed.
+   */
+  state: 'pending' | 'done' | 'failed'
+}
+
+/** A canvas for one planned image, or `null` where the element offers no 2D context. */
+function openImage(
+  metric: MetricId,
   item: EvidenceFramePlan,
+  video: HTMLVideoElement,
   options: ResolvedOptions,
-): Promise<ExtractedEvidenceFrame | null> {
+): ImageInFlight | null {
   // Shared with the pure layer rather than restated: annotation geometry has to land on the same
   // canvas these pixels do, and `toEvidenceOutputSpace` scales by exactly this number.
   const side = evidenceOutputSide(item.crop.side, options.maxOutputSidePx)
@@ -328,25 +372,36 @@ async function extractFrame(
   canvas.height = side
   const ctx = canvas.getContext('2d')
   if (ctx === null) return null
-
-  const instants: EvidenceInstantPlan[] =
-    item.ghost === null ? [item.base] : [item.base, item.ghost]
-  for (const instant of instants) {
-    // Per SEEK, not per image: a ghosted pair is two seeks, and an abandoned pass must not pay for
-    // the second one. The caller re-checks the signal on the way out, so a `null` produced here is
-    // never mistaken for a seek that timed out.
-    if (options.signal?.aborted) return null
-    const drawn = await drawInstant(
-      ctx,
-      video,
-      instant,
-      item.crop,
-      side,
-      options,
-    )
-    if (!drawn) return null
+  const instants = item.ghost === null ? [item.base] : [item.base, item.ghost]
+  return {
+    metric,
+    plan: item,
+    canvas,
+    ctx,
+    side,
+    instants,
+    targets: instants.map((instant) => seekTargetOf(instant, video, options)),
+    drawn: 0,
+    state: 'pending',
   }
+}
 
+/**
+ * Draws every instant of `image` that the presented `target` frame satisfies, in instant order, and
+ * annotates the image once its last instant is down. Only the image's NEXT instant may be drawn —
+ * a ghost whose base is not on the canvas yet waits for a later visit to its target.
+ */
+function drawPresentedInstants(
+  image: ImageInFlight,
+  video: HTMLVideoElement,
+  target: number,
+  maxOutputSidePx: number,
+): void {
+  while (image.drawn < image.targets.length && image.targets[image.drawn] === target) {
+    drawInstant(image.ctx, video, image.instants[image.drawn], image.plan.crop, image.side)
+    image.drawn += 1
+  }
+  if (image.drawn < image.targets.length) return
   // Annotation strictly after the photographic layers, and computed from the SAME `side` those were
   // drawn at — `planEvidenceAnnotations` recomputes it through `evidenceOutputSide` from the same
   // cap, so the marks and the pixels are scaled by one number by construction (design D3).
@@ -355,11 +410,57 @@ async function extractFrame(
   // instant's blend value — `EVIDENCE_GHOST_BLEND_ALPHA` on a ghosted pair, which is not the ghost's
   // MARK opacity and is not a half. `drawEvidenceAnnotation` resets it explicitly and drives every
   // mark from the op's own composed opacity; nothing here relies on the value above.
-  drawEvidenceAnnotation(
-    ctx,
-    planEvidenceAnnotations(item, options.maxOutputSidePx),
-  )
-  return { plan: item, canvas }
+  drawEvidenceAnnotation(image.ctx, planEvidenceAnnotations(image.plan, maxOutputSidePx))
+  image.state = 'done'
+}
+
+/**
+ * The next frame to seek to, or `null` when no image is waiting on one (`strides-e4c.5`).
+ *
+ * The aim is ONE seek per distinct target, in ascending time. Instants repeat across metrics on
+ * every clip — the vertical-oscillation family shares its bounce pair, footstrikes recur across the
+ * footstrike metrics, `armSwingAmplitude`'s two images are the same two instants swapped — and a
+ * seek is the whole cost of an image (~470 ms on a 4K clip).
+ *
+ * Strict ascending order is not always allowed, because a ghost may come BEFORE its own base in
+ * time, and must still be composited AFTER it. Holding that earlier frame for later would mean an
+ * intermediate canvas or bitmap, and a crop resampled into one and then blended out of it is not
+ * guaranteed to match the same crop blended straight from the `<video>` — two quantisation steps
+ * instead of one, and possibly a different YUV-to-RGB path. So every draw stays direct, and the
+ * ORDER gives instead: this picks the earliest target at which every instant still waiting is
+ * drawable now (its image's base is already down), which is a topological order of the
+ * base-before-ghost constraints that runs ascending wherever they allow.
+ *
+ * Only a CYCLE leaves no such target — two images on the same two instants with base and ghost
+ * swapped, as `armSwingAmplitude` plans on a front view. That is broken by visiting the earliest
+ * target that has anything drawable at all; what it could not draw is visited again later. One
+ * extra seek per cycle, against two saved by the shared pair.
+ */
+function nextSeekTarget(images: readonly ImageInFlight[]): number | null {
+  // Per target still needed: whether every instant waiting on it is drawable on the next visit.
+  const drawableNow = new Map<number, boolean>()
+  let earliestDrawable: number | null = null
+  for (const image of images) {
+    if (image.state !== 'pending') continue
+    const next = image.targets[image.drawn]
+    if (earliestDrawable === null || next < earliestDrawable) earliestDrawable = next
+    for (let index = image.drawn; index < image.targets.length; index += 1) {
+      const target = image.targets[index]
+      // Drawable on a visit to `target` only if nothing of this image is still owed before it —
+      // which, past its next instant, means every instant in between shares this target.
+      const drawable = image.targets
+        .slice(image.drawn, index + 1)
+        .every((earlier) => earlier === target)
+      drawableNow.set(target, (drawableNow.get(target) ?? true) && drawable)
+    }
+  }
+  let earliestComplete: number | null = null
+  for (const [target, complete] of drawableNow) {
+    if (complete && (earliestComplete === null || target < earliestComplete)) {
+      earliestComplete = target
+    }
+  }
+  return earliestComplete ?? earliestDrawable
 }
 
 function metricEntries(plan: ClipEvidencePlan): Array<[MetricId, MetricEvidencePlan]> {
@@ -415,67 +516,130 @@ function needsDecoder(plan: ClipEvidencePlan, reuse: ReusedMetricEvidence): bool
  * element, not a blob, so it has nothing to derive from. `extractClipEvidence` is the one that
  * owns the bytes and therefore the derivation.
  *
- * Metrics are extracted in the plan's own key order, and every metric that planned at least one
- * image but produced none reports `'extraction-failed'` rather than an empty list.
+ * Every distinct seek target is visited once, in ascending time wherever the base-before-ghost
+ * order allows, and every image needing that frame is drawn from it (`nextSeekTarget`). The RESULT
+ * does not depend on that order: metrics come back in the plan's own key order, each with its
+ * images in plan order, and every metric that planned at least one image but produced none
+ * reports `'extraction-failed'` rather than an empty list. A seek that times out drops exactly the
+ * images that were waiting on that frame.
  *
  * An abandoned pass (`options.signal`) abandons the WHOLE clip at the next seek, rather than
  * returning the images it happened to finish: a half-extracted clip reported as `'extracted'` would
  * be a partial answer wearing a complete one's shape, and nothing downstream could tell the
  * difference. The metrics it DID finish are not lost for that — each was already reported, whole,
- * through `hooks.onMetricExtracted` the moment it finished, a channel that cannot carry a
- * half-finished one.
+ * through `hooks.onMetricExtracted` the moment its last image was drawn, a channel that cannot carry
+ * a half-finished one. Under the time-ordered schedule metrics finish in the order their LAST
+ * instants fall, not in plan order.
  *
  * `hooks.reuse` names metrics the caller already holds: they are passed through by reference, in
  * their plan position, and never seeked (see `ClipEvidenceInput.reuse`).
  */
-export async function extractPlannedFrames(
+export function extractPlannedFrames(
   video: HTMLVideoElement,
   plan: ClipEvidencePlan,
   options: EvidenceExtractionOptions = {},
   hooks: ClipExtractionHooks = {},
 ): Promise<ClipEvidence> {
+  return extractPlannedFramesCounted(video, plan, options, hooks, { seeks: 0 })
+}
+
+/** What a pass actually did, beyond its result. Dev-only instrumentation. */
+interface ExtractionStats {
+  /** Seeks issued — one per distinct target, plus one per base/ghost cycle the schedule broke. */
+  seeks: number
+}
+
+async function extractPlannedFramesCounted(
+  video: HTMLVideoElement,
+  plan: ClipEvidencePlan,
+  options: EvidenceExtractionOptions,
+  hooks: ClipExtractionHooks,
+  stats: ExtractionStats,
+): Promise<ClipEvidence> {
   const resolved = resolveOptions(options)
   const reuse = hooks.reuse ?? {}
-  const evidence = {} as ClipEvidence
-  for (const [metric, entry] of metricEntries(plan)) {
-    if (entry.status !== 'planned') {
-      evidence[metric] = entry
-      continue
-    }
-    const reused = reusedFor(reuse, metric, entry)
-    if (reused !== undefined) {
-      evidence[metric] = reused
-      continue
-    }
-    const items: ExtractedEvidenceFrame[] = []
-    for (const item of entry.items) {
-      // Before AND after every image. Before, so an abandoned pass starts no further seek; after,
-      // because `extractFrame` also stops between its own seeks and hands back `null` when it
-      // does — which must read as abandonment, never as an exemplar whose seek timed out.
-      if (resolved.signal?.aborted) return extractionFailed(plan, reuse)
-      const extracted = await extractFrame(video, item, resolved)
-      if (resolved.signal?.aborted) return extractionFailed(plan, reuse)
-      if (extracted !== null) items.push(extracted)
-    }
-    const finished: MetricEvidence =
+
+  const decoded = metricEntries(plan).filter(
+    (pair): pair is [MetricId, Extract<MetricEvidencePlan, { status: 'planned' }>] =>
+      pair[1].status === 'planned' && reusedFor(reuse, pair[0], pair[1]) === undefined,
+  )
+  // Plan order, metric by metric and item by item, so a metric's surviving images keep their plan
+  // order whatever order the schedule finished them in.
+  const images: Array<ImageInFlight | null> = []
+  const imagesOf = new Map<MetricId, Array<ImageInFlight | null>>()
+  for (const [metric, entry] of decoded) {
+    const opened = entry.items.map((item) => openImage(metric, item, video, resolved))
+    imagesOf.set(metric, opened)
+    images.push(...opened)
+  }
+  const inFlight = images.filter((image): image is ImageInFlight => image !== null)
+
+  // Each decoded metric's verdict, settled the moment none of its images is still pending — and
+  // the same object later merged into the result, so what a caller kept IS what the pass returned.
+  const settled = new Map<MetricId, MetricEvidence>()
+  const settle = (metric: MetricId) => {
+    const own = imagesOf.get(metric) ?? []
+    if (settled.has(metric) || own.some((image) => image?.state === 'pending')) return
+    const items = own
+      .filter((image): image is ImageInFlight => image?.state === 'done')
+      .map((image) => ({ plan: image.plan, canvas: image.canvas }))
+    const verdict: MetricEvidence =
       items.length > 0
         ? { status: 'extracted', items }
         : { status: 'no-evidence', reason: 'extraction-failed' }
-    evidence[metric] = finished
-    // Reached only with the signal clear after this metric's LAST image (checked just above). And
-    // only a COMPLETE answer is offered for keeping: a metric that lost an image to a seek timeout
+    settled.set(metric, verdict)
+    // Only a COMPLETE answer is offered for keeping: a metric that lost an image to a seek timeout
     // — or lost all of them — is a fine verdict for this pass, but a caller that kept it would
     // reuse it for as long as the plan entry stays the same, and the primary pass that produces
     // most harvests runs exactly while the scale pass contends for the GPU. Not keeping it lets the
     // next pass try again, as the whole-clip re-extraction used to.
-    if (finished.status === 'extracted' && items.length === entry.items.length) {
-      hooks.onMetricExtracted?.(metric, finished)
+    if (verdict.status === 'extracted' && items.length === own.length) {
+      hooks.onMetricExtracted?.(metric, verdict)
     }
+  }
+  // A metric with nothing left to seek — no items, or no canvas for any of them — is settled up
+  // front; it can never be complete, so this offers nothing.
+  for (const [metric] of decoded) settle(metric)
+
+  for (;;) {
+    const target = nextSeekTarget(inFlight)
+    if (target === null) break
+    // Per SEEK, so an abandoned pass starts no further one and pays for at most the one in flight.
+    // It used to be checked once per image, which on a ghosted pair let an abandoned pass seek and
+    // draw a whole second instant first (`strides-zm8`).
+    if (resolved.signal?.aborted) return extractionFailed(plan, reuse)
+    stats.seeks += 1
+    const outcome = await presentTarget(video, target, resolved)
+    if (outcome === 'aborted' || resolved.signal?.aborted) {
+      return extractionFailed(plan, reuse)
+    }
+    const touched = new Set<MetricId>()
+    for (const image of inFlight) {
+      if (image.state !== 'pending' || image.targets[image.drawn] !== target) continue
+      touched.add(image.metric)
+      if (outcome === 'timed-out') image.state = 'failed'
+      else drawPresentedInstants(image, video, target, resolved.maxOutputSidePx)
+    }
+    // Re-checked after the draws and before anything is reported: an abort that lands while this
+    // frame is being drawn must not let the metric those draws finished be offered for keeping.
+    // Both this check and the reports below run synchronously, so a caller that aborts and then
+    // reads its own cache cannot be written to behind its back.
+    if (resolved.signal?.aborted) return extractionFailed(plan, reuse)
+    for (const metric of touched) settle(metric)
+  }
+
+  const evidence = {} as ClipEvidence
+  for (const [metric, entry] of metricEntries(plan)) {
+    evidence[metric] =
+      entry.status !== 'planned'
+        ? entry
+        : (reusedFor(reuse, metric, entry) ?? settled.get(metric)!)
   }
   return evidence
 }
 
-/** Seeks a plan asks for: one per instant, so two for a ghosted pair. Dev-only instrumentation. */
+/** Instants a plan asks for: one per instant, so two for a ghosted pair. Dev-only instrumentation —
+ * the seeks before `strides-e4c.5` deduplicated them, kept beside `seeks` so the two compare. */
 function countPlannedInstants(
   plan: ClipEvidencePlan,
   reuse: ReusedMetricEvidence,
@@ -553,6 +717,7 @@ async function decodeClipEvidence(
   }
   const resolved = resolveOptions(calibrated)
   const calibratedAt = performance.now()
+  const stats: ExtractionStats = { seeks: 0 }
   let decodedAt: number | null = null
 
   const evidence = await withDecodedVideo(
@@ -560,7 +725,7 @@ async function decodeClipEvidence(
     resolved.loadTimeoutMs,
     (video) => {
       decodedAt = performance.now()
-      return extractPlannedFrames(video, plan, calibrated, hooks)
+      return extractPlannedFramesCounted(video, plan, calibrated, hooks, stats)
     },
     () => extractionFailed(plan, reuse),
   )
@@ -572,6 +737,7 @@ async function decodeClipEvidence(
     videoLoadMs: decodedAt === null ? null : roundMs(decodedAt - calibratedAt),
     seekAndDrawMs: decodedAt === null ? null : roundMs(doneAt - decodedAt),
     plannedSeeks: countPlannedInstants(plan, reuse),
+    seeks: stats.seeks,
     images: countExtractedImages(evidence, plan, reuse),
     reusedImages: countReusedImages(plan, reuse),
     aborted: options.signal?.aborted === true,
