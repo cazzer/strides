@@ -78,13 +78,21 @@ const PAUSED_SUFFIX = ' — paused, resume playback to continue analyzing'
  * On the default WebCodecs path neither reader touches the element, so this is simply harmless
  * there; nothing in the UI can tell the two paths apart, and being visible is never the wrong
  * answer.
+ *
+ * The one exception is a scale pass that is `'pending'` only because it is waiting for the
+ * session's scale-pass lane behind other clips (`isWaitingForScalePassLane`) — possibly for several
+ * other clips' whole primary passes. Nothing reads the element then, so it goes back to its poster
+ * until the lane reaches it. A playback-path clip is never in that state: it keeps the shared
+ * detector until its pass is terminal, and gets the lane straight after its own primary.
  */
 export function clipHostsLiveElement(
   phase: AnalysisPhase,
   scalePassStatus: ScalePassStatus,
+  scalePassWaitingForLane = false,
 ): boolean {
   if (phase === 'sampling' || phase === 'processing') return true
-  return scalePassStatus === 'pending' || scalePassStatus === 'running'
+  if (scalePassStatus === 'pending') return !scalePassWaitingForLane
+  return scalePassStatus === 'running'
 }
 
 /**

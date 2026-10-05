@@ -18,7 +18,12 @@ import {
 import { assessScalePassSubjectAgreement } from './scalePassSubjectAgreement'
 import { getScalePassDetector } from '../pose/scalePassDetector'
 import { resolvePoseDetectorConfig } from '../pose/poseBackendConfig'
-import type { ScalePassState, VideoAnalysisState } from './types'
+import type {
+  AnalysisPhase,
+  ScalePassState,
+  ScalePassStatus,
+  VideoAnalysisState,
+} from './types'
 import { logPerfTimings, roundMs } from './perfTimings'
 import type { SamplerTimings } from './perfTimings'
 import { progressPercent } from './progressPercent'
@@ -59,6 +64,27 @@ function idleState(): Omit<VideoAnalysisState, 'start' | 'reset'> {
 }
 
 /**
+ * Whether a clip's primary run is done and its background scale pass is waiting its turn behind
+ * other clips (`nextScalePassClipIndex`) — due, but not allowed to start, so nothing will read
+ * this clip's bytes or element until the lane reaches it.
+ *
+ * `queued` (not the clip holding the shared detector) is required as well as `!scalePassAllowed`,
+ * because the session learns of a clip's `'ready'` one render after the clip does: on that render
+ * a lone clip — whose pass is about to start — still reads `scalePassAllowed: false`. A clip that
+ * still holds the detector is never treated as waiting, so the lone clip neither drops its demux
+ * nor gives up its on-screen element for one render. The last clip of a session stays active
+ * after its primary (there is nothing to advance to), so it is never treated as waiting either.
+ */
+export function isWaitingForScalePassLane(
+  phase: AnalysisPhase,
+  scalePassStatus: ScalePassStatus,
+  queued: boolean,
+  scalePassAllowed: boolean,
+): boolean {
+  return phase === 'ready' && scalePassStatus === 'pending' && queued && !scalePassAllowed
+}
+
+/**
  * Drives one end-to-end analysis run: samples the loaded clip via `sampleClip` (playing it
  * once, at 1x), then runs the synchronous robustness + heuristics pipeline over the result.
  * Guards every state update behind a monotonic `runId` — the same stale-result-discard pattern
@@ -83,6 +109,14 @@ export function useVideoAnalysis(
    * active clip while the model loads (see `ClipSlot`'s `isActiveClip`).
    */
   queued = false,
+  /**
+   * Whether this clip's background scale pass may start now — the session's scale-pass lane
+   * (`nextScalePassClipIndex`), which runs every clip's primary pass before any scale pass and at
+   * most one scale pass at a time. While `false`, a pass that is due stays `'pending'`. A pass
+   * that has already started is never cancelled by this turning `false`. Defaults to `true`, i.e.
+   * a lone clip's pass starts as soon as its primary is ready, as it always has.
+   */
+  scalePassAllowed = true,
 ): VideoAnalysisState {
   const { videoRef, metadata, sourceBlob } = videoSource
 
@@ -557,9 +591,10 @@ export function useVideoAnalysis(
   // Drops this clip's cached demuxed track (`clipBytesCache.ts`) — the whole compressed bitstream —
   // whenever no pass will sample it soon: the run failed, or it is 'ready' and the scale pass has
   // reached a terminal status, or the probe has settled while this clip is queued behind another
-  // (whose primary + scale pass may take many seconds, with N clips each holding a track).
-  // Releasing early is only ever a cost, never a wrong answer: a later run reads and demuxes
-  // afresh.
+  // (whose primary may take many seconds, with N clips each holding a track), or its primary is
+  // done and its scale pass is waiting for the lane behind other clips' passes. Releasing
+  // early is only ever a cost, never a wrong answer: a later pass reads and demuxes afresh
+  // (`demuxClip`'s cache miss).
   useEffect(() => {
     if (!sourceBlob) return
     const passesDone =
@@ -569,8 +604,21 @@ export function useVideoAnalysis(
         state.scalePass.status !== 'running')
     const waitingBehindAnotherClip =
       queued && state.phase === 'idle' && sequentialDecodeSupported !== null
-    if (passesDone || waitingBehindAnotherClip) releaseClipDemux(sourceBlob)
-  }, [sourceBlob, state.phase, state.scalePass.status, queued, sequentialDecodeSupported])
+    const waitingForLane = isWaitingForScalePassLane(
+      state.phase,
+      state.scalePass.status,
+      queued,
+      scalePassAllowed,
+    )
+    if (passesDone || waitingBehindAnotherClip || waitingForLane) releaseClipDemux(sourceBlob)
+  }, [
+    sourceBlob,
+    state.phase,
+    state.scalePass.status,
+    queued,
+    scalePassAllowed,
+    sequentialDecodeSupported,
+  ])
 
   // Drives the background scale pass (add-background-scale-pass, D1): once the primary run is
   // 'ready' with the pass 'pending', replay the same clip through a dedicated MediaPipe detector
@@ -579,8 +627,11 @@ export function useVideoAnalysis(
   // write is guarded by the primary run's `runId` (a reset()/new clip invalidates the pass
   // exactly like a primary run), and every failure path lands on scalePass 'failed' with the
   // primary result untouched — the pass can only ever improve the displayed result.
+  //
+  // Starts only while `scalePassAllowed` (the session's scale-pass lane). No cleanup cancels the
+  // pass when the flag later drops: the guard below only ever declines to START one.
   useEffect(() => {
-    if (state.phase !== 'ready' || state.scalePass.status !== 'pending') return
+    if (state.phase !== 'ready' || state.scalePass.status !== 'pending' || !scalePassAllowed) return
     if (scalePassStartedForRunRef.current === runIdRef.current) return
     scalePassStartedForRunRef.current = runIdRef.current
     const runId = runIdRef.current
@@ -832,6 +883,7 @@ export function useVideoAnalysis(
   }, [
     state.phase,
     state.scalePass.status,
+    scalePassAllowed,
     state.heuristics,
     // Inert additions (#56): neither changes independently of `phase`/`heuristics` — all three are
     // written in one literal — and the once-per-run latch above no-ops a re-fire regardless.

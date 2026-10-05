@@ -1,0 +1,147 @@
+## ADDED Requirements
+
+### Requirement: At most one scale pass runs, and none while a primary is outstanding
+
+The system SHALL allow at most one clip in a session to run its background scale pass at any time,
+and SHALL NOT start a clip's scale pass while any clip's primary analysis is still outstanding, so
+that every primary pass — the work the fused result waits on — runs before any scale pass, and a
+primary pass and a scale pass never contend for the GPU. A primary pass is outstanding while a clip
+is `'sampling'` or `'processing'`, or while a clip at or after the shared detector's active index is
+`'idle'` with a video source that has not failed to load. The allowance SHALL be decided in this
+order: a clip whose scale pass is already `'running'` keeps it until the pass is terminal (a started
+pass is never cancelled); otherwise none, while any primary is `'sampling'` or `'processing'`;
+otherwise the lowest-index `'ready'` clip with a `'pending'` pass whose primary sampled on the
+playback path; otherwise none, while any primary is outstanding; otherwise the lowest-index
+`'ready'` clip with a `'pending'` pass. The scale-pass detector is one stateful MediaPipe instance
+shared by every clip, which is why passes never overlap. A playback-path clip is served ahead of the
+outstanding-primary rule because it keeps the shared detector until its own pass is terminal (see
+"Serialized shared-detector access across concurrently mounted clips"), so every later primary waits
+for it.
+
+#### Scenario: Three sequential-path clips run every primary first
+
+- **WHEN** three clips are loaded together and every one samples on the sequential path
+- **THEN** the passes run in the order primary 1, primary 2, primary 3, scale 1, scale 2, scale 3,
+  with exactly one pass in flight at any moment
+
+#### Scenario: No scale pass starts while a primary is outstanding
+
+- **WHEN** one clip is `'ready'` with its scale pass `'pending'` and another clip is `'sampling'`,
+  or is `'idle'` at or after the active index with a source that has not failed
+- **THEN** no clip is allowed a scale pass, and the `'ready'` clip's pass stays `'pending'`
+
+#### Scenario: The lowest-index pending pass goes first
+
+- **WHEN** every primary is terminal and two or more clips are `'ready'` with `'pending'` passes
+- **THEN** only the lowest-index such clip is allowed its pass, and the next is allowed only once
+  that pass is terminal
+
+#### Scenario: A running pass keeps its allowance
+
+- **WHEN** a clip's scale pass is `'running'` and a new clip is added to the session
+- **THEN** the running pass keeps its allowance and completes, the new clip's primary runs after it,
+  and the remaining `'pending'` passes run after that primary
+
+#### Scenario: A playback-path clip's pass runs straight after its own primary
+
+- **WHEN** a clip that sampled on the playback path reaches `'ready'` with its pass `'pending'` while
+  later clips have not yet run their primaries
+- **THEN** that clip is allowed its pass immediately, and the later clips' primaries wait for it
+
+#### Scenario: A clip that cannot run does not hold up the passes
+
+- **WHEN** a clip has errored, or its video source failed to load
+- **THEN** it is not an outstanding primary, and the other clips' passes are allowed as if it were
+  absent
+
+## MODIFIED Requirements
+
+### Requirement: Aggregate multi-clip analysis state
+
+The system SHALL derive one aggregate analysis state from a list of per-clip sessions (each
+carrying its own independently-driven `VideoAnalysisState`): `phase` is `'idle'` when there are no
+clips, `'error'` if any clip's phase is `'error'`, `'sampling'`/`'processing'` if any clip is in
+that phase, `'ready'` iff every clip's phase is `'ready'`, and `'idle'` otherwise; `progress` is
+the mean of every clip's own progress; `isPausedMidAnalysis` is true iff any clip reports it;
+`heuristics` is `null` until the aggregate phase is `'ready'`, at which point it is the per-metric
+fusion (above) over every clip's heuristics; `scalePass.status` is the highest-priority status
+across all clips in the order `running > pending > done > failed > skipped` — `pending` outranks
+every terminal status because a clip's pass can wait its turn (see "At most one scale pass runs, and
+none while a primary is outstanding") after another clip's pass has finished, and the session has
+not finished measuring until it has run; `error` is the first (lowest-index) errored clip's error;
+`robustFrames`, `diagnostics`, and `scalePass.diagnostics` are always `null` at the aggregate level,
+since nothing downstream reads an aggregate version of either (each clip renders its own skeleton
+overlay off its own state).
+
+#### Scenario: Aggregate phase requires every clip ready
+
+- **WHEN** two clips are both present, one `'ready'` and one still `'sampling'`
+- **THEN** the aggregate `phase` is `'sampling'`, not `'ready'`
+
+#### Scenario: Aggregate phase is error if any clip errored
+
+- **WHEN** one clip is `'ready'` and another is `'error'`
+- **THEN** the aggregate `phase` is `'error'`, and `error` is the errored clip's error
+
+#### Scenario: Aggregate heuristics appear only once every clip is ready
+
+- **WHEN** every clip's phase is `'ready'`
+- **THEN** the aggregate `heuristics` is the fusion of every clip's own `heuristics`, and is
+  `null` at every phase other than `'ready'`
+
+#### Scenario: Empty clip list is idle
+
+- **WHEN** there are no clips
+- **THEN** the aggregate `phase` is `'idle'`
+
+#### Scenario: A pass still waiting its turn keeps the aggregate pending
+
+- **WHEN** one clip's scale pass is `'done'` and another clip's is still `'pending'`
+- **THEN** the aggregate `scalePass.status` is `'pending'`, not `'done'`, so nothing reports the
+  second look as finished while a pass is still to run
+
+### Requirement: Serialized shared-detector access across concurrently mounted clips
+
+The system SHALL grant the shared pose detector to at most one clip at a time, advancing which
+clip holds it only once the previously-active clip's primary analysis run has reached a terminal
+state (`phase` is `'ready'` or `'error'`). A clip whose primary run sampled on the playback path —
+by playing its own `<video>` element, as a WebM, a webcam recording, or an MP4 the sequential-decode
+probe declined does — SHALL additionally keep the detector until its background scale pass has
+reached a terminal state (`scalePass.status` is `'done'`, `'failed'`, or `'skipped'`), because that
+pass replays the same element. The active clip SHALL NOT advance while any clip's scale pass is
+`'running'`. A sequential-path clip's scale pass uses its own detector and is scheduled separately
+(see "At most one scale pass runs, and none while a primary is outstanding"). This exists because
+the shared detector carries mutable cross-frame tracking state (MoveNet's tracking-crop bounding
+box, MediaPipe's `PoseLandmarker` VIDEO-mode timestamp tracking) that is not per-clip-scoped, so two
+clips sampling concurrently against it could silently leak one clip's tracking state into another's
+frames.
+
+#### Scenario: Only one clip receives a live detector at a time
+
+- **WHEN** two or more clips are mounted concurrently
+- **THEN** at most one of them is ever passed a non-null detector at any point in time; every
+  other clip receives `null`
+
+#### Scenario: The active clip advances once its primary pass is ready
+
+- **WHEN** the active clip sampled on the sequential path and its primary analysis reaches
+  `'ready'` while its background scale pass is still `'pending'`
+- **THEN** the next clip receives the detector without waiting for that scale pass
+
+#### Scenario: The active clip advances only after its scale pass also finishes
+
+- **WHEN** the active clip sampled on the playback path and its primary analysis reaches `'ready'`
+  but its background scale pass is still `'pending'` or `'running'`
+- **THEN** the active clip does not yet change — the next clip does not receive a detector until
+  the scale pass also reaches a terminal status
+
+#### Scenario: A clip added while a scale pass runs waits for it
+
+- **WHEN** every primary is terminal, one clip's scale pass is `'running'`, and a new clip is added
+- **THEN** the new clip does not receive the detector until that scale pass is terminal
+
+#### Scenario: A single clip never needs to advance
+
+- **WHEN** exactly one clip is mounted
+- **THEN** it holds the detector for the lifetime of the session; the active-clip index never
+  changes

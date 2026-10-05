@@ -77,7 +77,7 @@ vi.mock('../video/clipBytesCache', () => ({
   releaseClipDemux: releaseClipDemuxMock,
 }))
 
-import { useVideoAnalysis } from './useVideoAnalysis'
+import { isWaitingForScalePassLane, useVideoAnalysis } from './useVideoAnalysis'
 
 function makeMetadata(overrides: Partial<VideoMetadata> = {}): VideoMetadata {
   return { durationSec: 10, width: 640, height: 480, frameRate: 30, ...overrides }
@@ -1879,6 +1879,135 @@ describe('useVideoAnalysis', () => {
 
       await waitFor(() => expect(result.current.phase).toBe('sampling'))
       expect(releaseClipDemuxMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('the scale-pass lane (schedule-scale-passes-after-primaries)', () => {
+    interface LaneProps {
+      queued: boolean
+      scalePassAllowed: boolean
+    }
+
+    function renderLaneHook(videoSource: VideoSource, detector: PoseDetector, initial: LaneProps) {
+      return renderHook(
+        (props: LaneProps) =>
+          useVideoAnalysis(videoSource, detector, false, props.queued, props.scalePassAllowed),
+        { initialProps: initial },
+      )
+    }
+
+    it('holds a due pass at pending while not allowed, and starts it once allowed', async () => {
+      sampleClipMock.mockImplementation(() => ({
+        promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+        handle: makeFakeHandle(),
+      }))
+      const scaleDetector = makeFakeDetector()
+      getScalePassDetectorMock.mockResolvedValue(scaleDetector)
+
+      const { result, rerender } = renderLaneHook(makeVideoSource(), makeFakeDetector(), {
+        queued: true,
+        scalePassAllowed: false,
+      })
+
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      await act(async () => {})
+      expect(result.current.scalePass.status).toBe('pending')
+      expect(sampleClipMock).toHaveBeenCalledTimes(1)
+
+      rerender({ queued: true, scalePassAllowed: true })
+      await waitFor(() =>
+        expect(['done', 'failed']).toContain(result.current.scalePass.status),
+      )
+      expect(sampleClipMock).toHaveBeenCalledTimes(2)
+      expect(sampleClipMock.mock.calls[1][1]).toBe(scaleDetector)
+    })
+
+    it('never cancels a pass that has started when the lane is withdrawn', async () => {
+      const scaleHandle = makeFakeHandle()
+      let resolveScale!: (samples: { timestamp: number; frame: null }[]) => void
+      sampleClipMock
+        .mockImplementationOnce(() => ({
+          promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+          handle: makeFakeHandle(),
+        }))
+        .mockImplementationOnce(() => ({
+          promise: new Promise((resolve) => {
+            resolveScale = resolve
+          }),
+          handle: scaleHandle,
+        }))
+
+      const { result, rerender } = renderLaneHook(makeVideoSource(), makeFakeDetector(), {
+        queued: false,
+        scalePassAllowed: true,
+      })
+      await waitFor(() => expect(result.current.scalePass.status).toBe('running'))
+
+      rerender({ queued: true, scalePassAllowed: false })
+      await act(async () => {})
+      expect(scaleHandle.stop).not.toHaveBeenCalled()
+      expect(result.current.scalePass.status).toBe('running')
+
+      await act(async () => {
+        resolveScale([{ timestamp: 0, frame: null }])
+      })
+      await waitFor(() =>
+        expect(['done', 'failed']).toContain(result.current.scalePass.status),
+      )
+      expect(sampleClipMock).toHaveBeenCalledTimes(2)
+    })
+
+    it("releases a queued clip's demux while its pass waits for the lane", async () => {
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+      sampleClipMock.mockImplementation(() => ({
+        promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+        handle: makeFakeHandle(),
+      }))
+
+      const { result } = renderLaneHook(makeVideoSource({ sourceBlob }), makeFakeDetector(), {
+        queued: true,
+        scalePassAllowed: false,
+      })
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      expect(result.current.scalePass.status).toBe('pending')
+      expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob)
+    })
+
+    it('keeps the demux of a clip that still holds the detector, even before the lane reaches it', async () => {
+      // The session learns of 'ready' one render after the clip does, so a lone clip reads
+      // `scalePassAllowed: false` for that render. Releasing then would make its pass re-read
+      // and re-demux the clip for nothing.
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+      sampleClipMock
+        .mockImplementationOnce(() => ({
+          promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+          handle: makeFakeHandle(),
+        }))
+        .mockImplementationOnce(() => ({ promise: new Promise(() => {}), handle: makeFakeHandle() }))
+
+      const { result, rerender } = renderLaneHook(
+        makeVideoSource({ sourceBlob }),
+        makeFakeDetector(),
+        { queued: false, scalePassAllowed: false },
+      )
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      await act(async () => {})
+      expect(releaseClipDemuxMock).not.toHaveBeenCalled()
+
+      rerender({ queued: false, scalePassAllowed: true })
+      await waitFor(() => expect(result.current.scalePass.status).toBe('running'))
+      expect(releaseClipDemuxMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('isWaitingForScalePassLane', () => {
+    it('is true only for a ready clip, pass pending, queued behind the detector, lane elsewhere', () => {
+      expect(isWaitingForScalePassLane('ready', 'pending', true, false)).toBe(true)
+      expect(isWaitingForScalePassLane('ready', 'pending', true, true)).toBe(false)
+      expect(isWaitingForScalePassLane('ready', 'pending', false, false)).toBe(false)
+      expect(isWaitingForScalePassLane('ready', 'running', true, false)).toBe(false)
+      expect(isWaitingForScalePassLane('ready', 'done', true, false)).toBe(false)
+      expect(isWaitingForScalePassLane('idle', 'idle', true, false)).toBe(false)
     })
   })
 })

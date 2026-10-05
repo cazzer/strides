@@ -142,6 +142,15 @@ describe('clipHostsLiveElement', () => {
     expect(clipHostsLiveElement('ready', 'running')).toBe(true)
   })
 
+  it('gives the element back to its poster while the pass only waits for the scale-pass lane', () => {
+    // Behind every other clip's primary (schedule-scale-passes-after-primaries), nothing reads the
+    // element, possibly for several seconds. Once the lane reaches it, it is hosted again.
+    expect(clipHostsLiveElement('ready', 'pending', true)).toBe(false)
+    expect(clipHostsLiveElement('ready', 'pending', false)).toBe(true)
+    // A running pass is always hosted, whatever the lane says.
+    expect(clipHostsLiveElement('ready', 'running', true)).toBe(true)
+  })
+
   it('is false once nothing is reading frames off it', () => {
     for (const terminal of ['done', 'failed', 'skipped'] satisfies ScalePassStatus[]) {
       expect(clipHostsLiveElement('ready', terminal)).toBe(false)

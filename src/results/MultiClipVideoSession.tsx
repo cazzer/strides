@@ -19,6 +19,7 @@ import {
   computeAggregateAnalysisState,
   computeFusionSourceIndices,
   nextActiveClipIndex,
+  nextScalePassClipIndex,
 } from './multiClipAnalysis'
 import type { ClipSession } from './multiClipAnalysis'
 
@@ -213,6 +214,12 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
     setActiveClipIndex(desiredActiveIndex)
   }
   const activeClipId = clips[desiredActiveIndex]?.clipId ?? null
+  // The scale-pass lane: which ONE clip may run its background scale pass now. Pure and computed
+  // fresh every render, like the active index above — a pass that has started keeps the lane
+  // until it is terminal, so nothing needs to be remembered across renders.
+  const scalePassClipIndex = nextScalePassClipIndex(clips, desiredActiveIndex)
+  const scalePassClipId =
+    scalePassClipIndex === null ? null : (clips[scalePassClipIndex]?.clipId ?? null)
 
   const aggregate = computeAggregateAnalysisState(clips)
   const anyClipVideoReady = clips.some((c) => c.videoSource.status === 'ready')
@@ -333,6 +340,7 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
                   index={index}
                   total={clipIds.length}
                   isActiveClip={id === activeClipId}
+                  scalePassAllowed={id === scalePassClipId}
                   isPresented={id === presentedClipId}
                   onPresent={setPresentedClipId}
                   onDismiss={dismissPreview}
