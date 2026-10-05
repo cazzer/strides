@@ -1,7 +1,12 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MetricId } from '../heuristics/types'
-import type { ClipEvidence } from '../video/extractFrames'
+import type {
+  ClipEvidence,
+  ClipEvidenceInput,
+  EvidenceExtractionOptions,
+  MetricEvidence,
+} from '../video/extractFrames'
 import type { ClipEvidencePlan } from './evidenceFrames'
 import type { ClipSession } from './multiClipAnalysis'
 import { useSessionEvidence } from './useSessionEvidence'
@@ -35,10 +40,34 @@ vi.mock('./evidenceFrames', async (importOriginal) => {
 /** Resolvers for extractions started but not yet finished, so a test can observe the in-flight
  * state before letting the pass settle. */
 let pending: Array<(evidence: ClipEvidence[]) => void> = []
+/** Every batch the hook handed the extractor, with the options it passed alongside. */
+let calls: Array<{ batch: ClipEvidenceInput[]; options: EvidenceExtractionOptions }> = []
+
+/**
+ * Plays the real extractor's merge contract: every planned metric the batch says the hook already
+ * holds comes back as that very object, in plan key order, and only the rest are taken from what the
+ * test resolves with. A test therefore supplies evidence for exactly the metrics a decoder would
+ * have produced, and a reused one it forgot cannot sneak in through the resolution.
+ */
+function mergeLikeTheExtractor(input: ClipEvidenceInput, produced: ClipEvidence): ClipEvidence {
+  const merged = {} as ClipEvidence
+  for (const metric of Object.keys(input.plan) as MetricId[]) {
+    const entry = input.plan[metric]
+    merged[metric] =
+      entry.status === 'planned'
+        ? (input.reuse?.[metric] ?? produced[metric])
+        : entry
+  }
+  return merged
+}
+
 const extractSessionEvidence = vi.fn(
-  () =>
+  (batch: ClipEvidenceInput[], options: EvidenceExtractionOptions) =>
     new Promise<ClipEvidence[]>((resolve) => {
-      pending.push(resolve)
+      calls.push({ batch, options })
+      pending.push((evidence) =>
+        resolve(batch.map((input, i) => mergeLikeTheExtractor(input, evidence[i]))),
+      )
     }),
 )
 
@@ -47,7 +76,7 @@ vi.mock('../video/extractFrames', () => ({
     (extractSessionEvidence as unknown as (...a: unknown[]) => Promise<ClipEvidence[]>)(...args),
 }))
 
-const SOURCE_INDICES = { cadence: 0 } as unknown as Record<MetricId, number>
+const SOURCE_INDICES = { cadence: 0, trunkLean: 0 } as unknown as Record<MetricId, number>
 
 /** A plan with one planned metric. Rebuilt on every call, as the real planner does, so a reuse can
  * only come from structural comparison and never from a shared reference. */
@@ -59,6 +88,36 @@ function planWithQuality(quality: number): () => ClipEvidencePlan {
         items: [{ metric: 'cadence', kind: 'bounceCycle', quality }],
       },
     }) as unknown as ClipEvidencePlan
+}
+
+/** Two planned metrics, each with its own quality, so a graft can move one and leave the other. */
+function twoMetricPlan(cadence: number, trunkLean: number): () => ClipEvidencePlan {
+  return () =>
+    ({
+      cadence: {
+        status: 'planned',
+        items: [{ metric: 'cadence', kind: 'bounceCycle', quality: cadence }],
+      },
+      trunkLean: {
+        status: 'planned',
+        items: [{ metric: 'trunkLean', kind: 'trunkLeanRange', quality: trunkLean }],
+      },
+    }) as unknown as ClipEvidencePlan
+}
+
+function metricWithCanvas(metric: MetricId, canvas: HTMLCanvasElement): MetricEvidence {
+  return {
+    status: 'extracted',
+    items: [{ plan: { metric }, canvas }],
+  } as unknown as MetricEvidence
+}
+
+function canvasOf(
+  state: ReturnType<typeof useSessionEvidence>,
+  metric: MetricId,
+): HTMLCanvasElement | undefined {
+  if (state.status === 'idle') return undefined
+  return state.sections.find((section) => section.metric === metric)?.items[0].canvas
 }
 
 function evidenceWithCanvas(canvas: HTMLCanvasElement): ClipEvidence {
@@ -83,6 +142,7 @@ function makeClip(clipId: string, heuristicsId: string, sourceBlob: Blob): ClipS
 describe('useSessionEvidence', () => {
   beforeEach(() => {
     pending = []
+    calls = []
     plansByHeuristics.clear()
     extractSessionEvidence.mockClear()
   })
@@ -298,4 +358,275 @@ describe('useSessionEvidence', () => {
 
     expect(extractSessionEvidence).toHaveBeenCalledTimes(2)
   })
+
+  describe('per-metric re-extraction (strides-zm8)', () => {
+    it('re-decodes only the metric whose plan moved, reusing the rest by reference', async () => {
+      const blob = new Blob(['a'])
+      const cadence = {} as HTMLCanvasElement
+      const leanBefore = {} as HTMLCanvasElement
+      const leanAfter = {} as HTMLCanvasElement
+      plansByHeuristics.set('primary', twoMetricPlan(0.5, 0.5))
+      // The graft's shape: one metric's plan moves, the other's is carried through unchanged.
+      plansByHeuristics.set('grafted', twoMetricPlan(0.5, 0.9))
+
+      const { result, rerender } = renderHook(
+        ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+        { initialProps: { clips: [makeClip('c1', 'primary', blob)] } },
+      )
+      await act(async () => {
+        pending.shift()?.([
+          {
+            cadence: metricWithCanvas('cadence', cadence),
+            trunkLean: metricWithCanvas('trunkLean', leanBefore),
+          } as ClipEvidence,
+        ])
+      })
+      await waitFor(() => expect(result.current.status).toBe('settled'))
+
+      rerender({ clips: [makeClip('c1', 'grafted', blob)] })
+
+      // A decoder IS needed — for trunkLean only. cadence rides along as held evidence.
+      expect(extractSessionEvidence).toHaveBeenCalledTimes(2)
+      const second = calls[1].batch[0]
+      expect(Object.keys(second.reuse ?? {})).toEqual(['cadence'])
+      const held = second.reuse?.cadence
+      expect(held?.status === 'extracted' && held.items[0].canvas).toBe(cadence)
+
+      await act(async () => {
+        pending.shift()?.([{ trunkLean: metricWithCanvas('trunkLean', leanAfter) } as ClipEvidence])
+      })
+      await waitFor(() => expect(result.current.status).toBe('settled'))
+      // The same canvas ELEMENT for the unchanged metric, a new one for the moved metric, and the
+      // sections still in plan order — exactly what a full re-extraction would have settled to.
+      expect(canvasOf(result.current, 'cadence')).toBe(cadence)
+      expect(canvasOf(result.current, 'trunkLean')).toBe(leanAfter)
+      expect(
+        result.current.status === 'settled' && result.current.sections.map((s) => s.metric),
+      ).toEqual(['cadence', 'trunkLean'])
+    })
+
+    it('keeps the metrics a superseded pass finished, and drops the rest of it', async () => {
+      const blob = new Blob(['a'])
+      const cadence = {} as HTMLCanvasElement
+      const lateLean = {} as HTMLCanvasElement
+      const lateCadence = {} as HTMLCanvasElement
+      const leanAfter = {} as HTMLCanvasElement
+      plansByHeuristics.set('primary', twoMetricPlan(0.5, 0.5))
+      plansByHeuristics.set('grafted', twoMetricPlan(0.5, 0.9))
+
+      const { result, rerender } = renderHook(
+        ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+        { initialProps: { clips: [makeClip('c1', 'primary', blob)] } },
+      )
+      // The first pass finishes cadence and is still decoding trunkLean when the graft lands —
+      // the shape of every single-clip run, where the scale pass beats the primary extraction.
+      const first = calls[0]
+      first.batch[0].onMetricExtracted?.('cadence', metricWithCanvas('cadence', cadence))
+
+      rerender({ clips: [makeClip('c1', 'grafted', blob)] })
+
+      // Superseded passes are abandoned, not merely ignored.
+      expect(first.options.signal?.aborted).toBe(true)
+      // The superseding pass is handed cadence's finished image instead of a seek for it.
+      const second = calls[1].batch[0]
+      expect(Object.keys(second.reuse ?? {})).toEqual(['cadence'])
+
+      // The abandoned pass resolves late, whatever it resolves with: none of it lands.
+      await act(async () => {
+        pending.shift()?.([
+          {
+            cadence: metricWithCanvas('cadence', lateCadence),
+            trunkLean: metricWithCanvas('trunkLean', lateLean),
+          } as ClipEvidence,
+        ])
+      })
+      expect(result.current.status).toBe('extracting')
+      expect(canvasOf(result.current, 'trunkLean')).toBeUndefined()
+
+      await act(async () => {
+        pending.shift()?.([{ trunkLean: metricWithCanvas('trunkLean', leanAfter) } as ClipEvidence])
+      })
+      await waitFor(() => expect(result.current.status).toBe('settled'))
+      expect(canvasOf(result.current, 'cadence')).toBe(cadence)
+      expect(canvasOf(result.current, 'trunkLean')).toBe(leanAfter)
+    })
+
+    it('does not reuse a finished metric whose own plan moved', async () => {
+      const blob = new Blob(['a'])
+      plansByHeuristics.set('primary', twoMetricPlan(0.5, 0.5))
+      plansByHeuristics.set('grafted', twoMetricPlan(0.5, 0.9))
+
+      const { rerender } = renderHook(
+        ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+        { initialProps: { clips: [makeClip('c1', 'primary', blob)] } },
+      )
+      calls[0].batch[0].onMetricExtracted?.(
+        'trunkLean',
+        metricWithCanvas('trunkLean', {} as HTMLCanvasElement),
+      )
+
+      rerender({ clips: [makeClip('c1', 'grafted', blob)] })
+
+      // trunkLean was finished — for a plan entry nothing asks for any more.
+      expect(calls[1].batch[0].reuse).toEqual({})
+    })
+
+    it('ignores a metric reported by a pass after it was superseded', async () => {
+      const blob = new Blob(['a'])
+      plansByHeuristics.set('primary', twoMetricPlan(0.5, 0.5))
+      plansByHeuristics.set('grafted', twoMetricPlan(0.5, 0.9))
+      plansByHeuristics.set('regrafted', twoMetricPlan(0.5, 0.7))
+
+      const { rerender } = renderHook(
+        ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+        { initialProps: { clips: [makeClip('c1', 'primary', blob)] } },
+      )
+      rerender({ clips: [makeClip('c1', 'grafted', blob)] })
+      // A report that arrives after the pass was let go of — whatever the extractor did to get
+      // here, the hook must not take it: a released run writes nothing.
+      calls[0].batch[0].onMetricExtracted?.(
+        'cadence',
+        metricWithCanvas('cadence', {} as HTMLCanvasElement),
+      )
+
+      rerender({ clips: [makeClip('c1', 'regrafted', blob)] })
+
+      expect(calls[2].batch[0].reuse).toEqual({})
+    })
+
+    it('opens no decoder when a superseded pass already finished everything the new plan needs', async () => {
+      const blob = new Blob(['a'])
+      const cadence = {} as HTMLCanvasElement
+      const lean = {} as HTMLCanvasElement
+      plansByHeuristics.set('primary', twoMetricPlan(0.5, 0.5))
+      plansByHeuristics.set('grafted', twoMetricPlan(0.5, 0.5))
+
+      const { result, rerender } = renderHook(
+        ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+        { initialProps: { clips: [makeClip('c1', 'primary', blob)] } },
+      )
+      calls[0].batch[0].onMetricExtracted?.('cadence', metricWithCanvas('cadence', cadence))
+      calls[0].batch[0].onMetricExtracted?.('trunkLean', metricWithCanvas('trunkLean', lean))
+
+      rerender({ clips: [makeClip('c1', 'grafted', blob)] })
+
+      expect(extractSessionEvidence).toHaveBeenCalledTimes(1)
+      expect(result.current.status).toBe('settled')
+      expect(canvasOf(result.current, 'cadence')).toBe(cadence)
+      expect(canvasOf(result.current, 'trunkLean')).toBe(lean)
+    })
+
+    it('re-decodes a metric whose previous pass lost an image, rather than reusing the loss', async () => {
+      const blob = new Blob(['a'])
+      plansByHeuristics.set('primary', twoMetricPlan(0.5, 0.5))
+      // The graft moves cadence; trunkLean's plan entry is unchanged.
+      plansByHeuristics.set('grafted', twoMetricPlan(0.9, 0.5))
+
+      const { result, rerender } = renderHook(
+        ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+        { initialProps: { clips: [makeClip('c1', 'primary', blob)] } },
+      )
+      // trunkLean's only image timed out on its seek: a correct verdict for that pass.
+      await act(async () => {
+        pending.shift()?.([
+          {
+            cadence: metricWithCanvas('cadence', {} as HTMLCanvasElement),
+            trunkLean: { status: 'no-evidence', reason: 'extraction-failed' },
+          } as ClipEvidence,
+        ])
+      })
+      await waitFor(() => expect(result.current.status).toBe('settled'))
+
+      rerender({ clips: [makeClip('c1', 'grafted', blob)] })
+
+      // Its plan entry still matches, and it is decoded again anyway: a failure is not an image,
+      // and caching it would pin the loss for as long as the entry stays the same — where the
+      // whole-clip re-extraction this replaced would have retried it.
+      expect(calls[1].batch[0].reuse).toEqual({})
+    })
+
+    it('never keeps a metric that finished with fewer images than it planned', async () => {
+      const blob = new Blob(['a'])
+      const twoImages = (quality: number) => () =>
+        ({
+          cadence: {
+            status: 'planned',
+            items: [
+              { metric: 'cadence', kind: 'bounceCycle', quality },
+              { metric: 'cadence', kind: 'bounceCycle', quality },
+            ],
+          },
+        }) as unknown as ClipEvidencePlan
+      plansByHeuristics.set('primary', twoImages(0.5))
+      plansByHeuristics.set('grafted', twoImages(0.5))
+
+      const { rerender } = renderHook(
+        ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+        { initialProps: { clips: [makeClip('c1', 'primary', blob)] } },
+      )
+      // One of its two images lost to a seek timeout, reported through the harvest channel.
+      calls[0].batch[0].onMetricExtracted?.('cadence', metricWithCanvas('cadence', {} as HTMLCanvasElement))
+
+      rerender({ clips: [makeClip('c1', 'grafted', blob)] })
+
+      // Same plan, but the partial answer was not kept, so a decoder opens for the whole metric.
+      expect(extractSessionEvidence).toHaveBeenCalledTimes(2)
+      expect(calls[1].batch[0].reuse).toEqual({})
+    })
+
+    it('shows held images straight away instead of placeholders while the rest decodes', async () => {
+      const blob = new Blob(['a'])
+      const cadence = {} as HTMLCanvasElement
+      plansByHeuristics.set('primary', twoMetricPlan(0.5, 0.5))
+      plansByHeuristics.set('grafted', twoMetricPlan(0.5, 0.9))
+
+      const { result, rerender } = renderHook(
+        ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+        { initialProps: { clips: [makeClip('c1', 'primary', blob)] } },
+      )
+      calls[0].batch[0].onMetricExtracted?.('cadence', metricWithCanvas('cadence', cadence))
+
+      rerender({ clips: [makeClip('c1', 'grafted', blob)] })
+
+      // The superseded pass never landed, so nothing was carried — but cadence's image is final
+      // for this run's plan, so it goes up now and only trunkLean waits behind a placeholder.
+      expect(result.current.status).toBe('extracting')
+      expect(canvasOf(result.current, 'cadence')).toBe(cadence)
+      expect(result.current.status === 'extracting' && result.current.pending).toEqual([
+        'trunkLean',
+      ])
+    })
+
+    it('never replaces an image already on screen with a held one before the run settles', async () => {
+      const blob = new Blob(['a'])
+      const onScreen = {} as HTMLCanvasElement
+      const held = {} as HTMLCanvasElement
+      plansByHeuristics.set('primary', twoMetricPlan(0.5, 0.5))
+      plansByHeuristics.set('grafted', twoMetricPlan(0.9, 0.5))
+      plansByHeuristics.set('regrafted', twoMetricPlan(0.7, 0.5))
+
+      const { result, rerender } = renderHook(
+        ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+        { initialProps: { clips: [makeClip('c1', 'primary', blob)] } },
+      )
+      await act(async () => {
+        pending.shift()?.([
+          {
+            cadence: metricWithCanvas('cadence', onScreen),
+            trunkLean: metricWithCanvas('trunkLean', {} as HTMLCanvasElement),
+          } as ClipEvidence,
+        ])
+      })
+      await waitFor(() => expect(result.current.status).toBe('settled'))
+
+      // A pass for a moved cadence finishes it, then is itself superseded by a further move.
+      rerender({ clips: [makeClip('c1', 'grafted', blob)] })
+      calls[1].batch[0].onMetricExtracted?.('cadence', metricWithCanvas('cadence', held))
+      rerender({ clips: [makeClip('c1', 'regrafted', blob)] })
+
+      // The carried image stays until settle, whatever the cache holds.
+      expect(canvasOf(result.current, 'cadence')).toBe(onScreen)
+    })
+  })
 })
+

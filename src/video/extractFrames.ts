@@ -147,9 +147,12 @@ export interface EvidenceExtractionOptions {
    * Nothing here throws, so a caller that never looks at the result cannot produce an unhandled
    * rejection by walking away from one.
    *
-   * Checked before a decoder is opened, again after the queue grants a turn, and once per planned
-   * image thereafter — so the worst-case latency between the abort and the decoder being released
-   * is one exemplar, itself bounded by `seekTimeoutMs`.
+   * Checked before a decoder is opened, again after the queue grants a turn, and before every
+   * SEEK thereafter — so the worst-case latency between the abort and the decoder being released is
+   * one seek, itself bounded by `seekTimeoutMs`. It used to be checked once per image, which on a
+   * ghosted pair let an abandoned pass seek and draw a whole second instant first: ~470 ms on a 4K
+   * clip, spent on an image destined for the bin, with the superseding pass queued behind it
+   * (`strides-zm8`).
    */
   signal?: AbortSignal
 }
@@ -176,7 +179,44 @@ export type ClipEvidence = Record<MetricId, MetricEvidence>
 export interface ClipEvidenceInput {
   sourceBlob: Blob | null
   plan: ClipEvidencePlan
+  /**
+   * Metrics whose evidence the caller ALREADY HOLDS for exactly this plan entry and this blob, and
+   * which must therefore not be decoded again (`strides-zm8`). Each is returned in the result
+   * verbatim — the same object, so the same canvas elements — at its own position in the plan's key
+   * order, so the merged result is indistinguishable from a full extraction that happened to
+   * reproduce those images.
+   *
+   * The caller owns the claim that a reused entry matches the plan. This module cannot check it: it
+   * decides nothing about pixels beyond what the plan says, and a reused metric is by definition
+   * one it was asked not to look at. A key here whose plan entry is not `'planned'` is ignored —
+   * there was nothing to extract for it, so there is nothing to reuse.
+   */
+  reuse?: ReusedMetricEvidence
+  /**
+   * Told each metric's evidence the moment that metric is FINISHED — every one of its planned
+   * images PRODUCED, and the pass not abandoned at any point up to and including the last one. A
+   * metric that lost any image (a seek timeout) is never offered: it is a verdict for this pass,
+   * not something a later pass should inherit instead of retrying.
+   *
+   * This is what lets a caller keep the work of a pass it is about to supersede. The scale-pass
+   * graft supersedes the primary pass's extraction on every single-clip run, typically more than
+   * halfway through, and the clip-level verdict of an abandoned pass is deliberately all-failed
+   * (`extractPlannedFrames`); without this channel every finished metric in it was thrown away and
+   * decoded again, identically, by the pass that replaced it.
+   *
+   * Never told about a reused metric (the caller already has it), about a metric the abort landed
+   * inside, or about anything after the abort: the check that guards every seek is the same check
+   * that guards this call, and both run synchronously, so a caller that aborts and then reads its
+   * own cache cannot be written to behind its back.
+   */
+  onMetricExtracted?: (metric: MetricId, evidence: MetricEvidence) => void
 }
+
+/** Evidence a caller already holds, keyed by the metric it belongs to (`ClipEvidenceInput.reuse`). */
+export type ReusedMetricEvidence = Partial<Record<MetricId, MetricEvidence>>
+
+/** The per-clip half of `ClipEvidenceInput`: everything but the bytes and the plan. */
+type ClipExtractionHooks = Pick<ClipEvidenceInput, 'reuse' | 'onMetricExtracted'>
 
 interface ResolvedOptions {
   seekOffsetSeconds: number
@@ -239,6 +279,9 @@ async function drawInstant(
   )
   const outcome = await seekTo(video, target, options.seekTimeoutMs)
   if (outcome === 'timed-out') return false
+  // An abort that arrived DURING the seek skips the presentation wait and the draw: the image is
+  // already destined for the bin, and `extractPlannedFrames` reads the signal, not this `false`.
+  if (options.signal?.aborted) return false
   // `'already-there'` skips the wait rather than shortening it: the short-circuit means the element
   // is ALREADY showing this instant, so no new frame is coming and every arm but the backstop would
   // be dead. Waiting there could only burn the timeout and then draw the identical pixels.
@@ -289,6 +332,10 @@ async function extractFrame(
   const instants: EvidenceInstantPlan[] =
     item.ghost === null ? [item.base] : [item.base, item.ghost]
   for (const instant of instants) {
+    // Per SEEK, not per image: a ghosted pair is two seeks, and an abandoned pass must not pay for
+    // the second one. The caller re-checks the signal on the way out, so a `null` produced here is
+    // never mistaken for a seek that timed out.
+    if (options.signal?.aborted) return null
     const drawn = await drawInstant(
       ctx,
       video,
@@ -324,15 +371,38 @@ function metricEntries(plan: ClipEvidencePlan): Array<[MetricId, MetricEvidenceP
  * evidence keeps the reason the plan gave it. Used when the clip never became extractable at all
  * (no bytes, or the detached element never decoded any).
  */
-function extractionFailed(plan: ClipEvidencePlan): ClipEvidence {
+function extractionFailed(
+  plan: ClipEvidencePlan,
+  reuse: ReusedMetricEvidence = {},
+): ClipEvidence {
   const evidence = {} as ClipEvidence
   for (const [metric, entry] of metricEntries(plan)) {
     evidence[metric] =
       entry.status === 'planned'
-        ? { status: 'no-evidence', reason: 'extraction-failed' }
+        ? (reusedFor(reuse, metric, entry) ?? {
+            status: 'no-evidence',
+            reason: 'extraction-failed',
+          })
         : entry
   }
   return evidence
+}
+
+/** A reused metric's evidence, honoured only where the plan actually asked for images. */
+function reusedFor(
+  reuse: ReusedMetricEvidence,
+  metric: MetricId,
+  entry: MetricEvidencePlan,
+): MetricEvidence | undefined {
+  return entry.status === 'planned' ? reuse[metric] : undefined
+}
+
+/** Whether any planned metric is left for a decoder once the reused ones are taken out. */
+function needsDecoder(plan: ClipEvidencePlan, reuse: ReusedMetricEvidence): boolean {
+  return metricEntries(plan).some(
+    ([metric, entry]) =>
+      entry.status === 'planned' && reusedFor(reuse, metric, entry) === undefined,
+  )
 }
 
 /**
@@ -348,53 +418,98 @@ function extractionFailed(plan: ClipEvidencePlan): ClipEvidence {
  * Metrics are extracted in the plan's own key order, and every metric that planned at least one
  * image but produced none reports `'extraction-failed'` rather than an empty list.
  *
- * An abandoned pass (`options.signal`) abandons the WHOLE clip at the next image boundary, rather
- * than returning the images it happened to finish: a half-extracted clip reported as `'extracted'`
- * would be a partial answer wearing a complete one's shape, and nothing downstream could tell the
- * difference.
+ * An abandoned pass (`options.signal`) abandons the WHOLE clip at the next seek, rather than
+ * returning the images it happened to finish: a half-extracted clip reported as `'extracted'` would
+ * be a partial answer wearing a complete one's shape, and nothing downstream could tell the
+ * difference. The metrics it DID finish are not lost for that — each was already reported, whole,
+ * through `hooks.onMetricExtracted` the moment it finished, a channel that cannot carry a
+ * half-finished one.
+ *
+ * `hooks.reuse` names metrics the caller already holds: they are passed through by reference, in
+ * their plan position, and never seeked (see `ClipEvidenceInput.reuse`).
  */
 export async function extractPlannedFrames(
   video: HTMLVideoElement,
   plan: ClipEvidencePlan,
   options: EvidenceExtractionOptions = {},
+  hooks: ClipExtractionHooks = {},
 ): Promise<ClipEvidence> {
   const resolved = resolveOptions(options)
+  const reuse = hooks.reuse ?? {}
   const evidence = {} as ClipEvidence
   for (const [metric, entry] of metricEntries(plan)) {
     if (entry.status !== 'planned') {
       evidence[metric] = entry
       continue
     }
+    const reused = reusedFor(reuse, metric, entry)
+    if (reused !== undefined) {
+      evidence[metric] = reused
+      continue
+    }
     const items: ExtractedEvidenceFrame[] = []
     for (const item of entry.items) {
-      // Per IMAGE, not per clip: the point of abandoning is to stop holding a decoder, and a
-      // whole clip's plan is on the order of forty instants.
-      if (resolved.signal?.aborted) return extractionFailed(plan)
+      // Before AND after every image. Before, so an abandoned pass starts no further seek; after,
+      // because `extractFrame` also stops between its own seeks and hands back `null` when it
+      // does — which must read as abandonment, never as an exemplar whose seek timed out.
+      if (resolved.signal?.aborted) return extractionFailed(plan, reuse)
       const extracted = await extractFrame(video, item, resolved)
+      if (resolved.signal?.aborted) return extractionFailed(plan, reuse)
       if (extracted !== null) items.push(extracted)
     }
-    evidence[metric] =
+    const finished: MetricEvidence =
       items.length > 0
         ? { status: 'extracted', items }
         : { status: 'no-evidence', reason: 'extraction-failed' }
+    evidence[metric] = finished
+    // Reached only with the signal clear after this metric's LAST image (checked just above). And
+    // only a COMPLETE answer is offered for keeping: a metric that lost an image to a seek timeout
+    // — or lost all of them — is a fine verdict for this pass, but a caller that kept it would
+    // reuse it for as long as the plan entry stays the same, and the primary pass that produces
+    // most harvests runs exactly while the scale pass contends for the GPU. Not keeping it lets the
+    // next pass try again, as the whole-clip re-extraction used to.
+    if (finished.status === 'extracted' && items.length === entry.items.length) {
+      hooks.onMetricExtracted?.(metric, finished)
+    }
   }
   return evidence
 }
 
 /** Seeks a plan asks for: one per instant, so two for a ghosted pair. Dev-only instrumentation. */
-function countPlannedInstants(plan: ClipEvidencePlan): number {
+function countPlannedInstants(
+  plan: ClipEvidencePlan,
+  reuse: ReusedMetricEvidence,
+): number {
   let instants = 0
-  for (const [, entry] of metricEntries(plan)) {
-    if (entry.status !== 'planned') continue
+  for (const [metric, entry] of metricEntries(plan)) {
+    if (entry.status !== 'planned' || reusedFor(reuse, metric, entry) !== undefined) continue
     for (const item of entry.items) instants += item.ghost === null ? 1 : 2
   }
   return instants
 }
 
-function countExtractedImages(evidence: ClipEvidence): number {
+/** Images handed back by reference rather than decoded. Dev-only instrumentation. */
+function countReusedImages(plan: ClipEvidencePlan, reuse: ReusedMetricEvidence): number {
   let images = 0
-  for (const entry of Object.values(evidence)) {
-    if (entry.status === 'extracted') images += entry.items.length
+  for (const [metric, entry] of metricEntries(plan)) {
+    const reused = reusedFor(reuse, metric, entry)
+    if (reused?.status === 'extracted') images += reused.items.length
+  }
+  return images
+}
+
+/** Images this pass actually DECODED — a reused metric's images are counted by
+ * `countReusedImages` instead, so the line reports decode work rather than its result's size. */
+function countExtractedImages(
+  evidence: ClipEvidence,
+  plan: ClipEvidencePlan,
+  reuse: ReusedMetricEvidence,
+): number {
+  let images = 0
+  for (const [metric, entry] of metricEntries(plan)) {
+    if (reusedFor(reuse, metric, entry) !== undefined) continue
+    const produced = evidence[metric]
+    if (produced.status === 'extracted') images += produced.items.length
   }
   return images
 }
@@ -408,13 +523,15 @@ function countExtractedImages(evidence: ClipEvidence): number {
 async function decodeClipEvidence(
   sourceBlob: Blob,
   plan: ClipEvidencePlan,
+  hooks: ClipExtractionHooks,
   options: EvidenceExtractionOptions,
   requestedAt: number,
 ): Promise<ClipEvidence> {
+  const reuse = hooks.reuse ?? {}
   // Re-checked AFTER the queue has granted a turn, not only before the call joined it: a pass
   // abandoned while it waited must not then go on to open the decoder it was queued for — nor
   // read the blob for the calibration below, which is why this sits ahead of that too.
-  if (options.signal?.aborted) return extractionFailed(plan)
+  if (options.signal?.aborted) return extractionFailed(plan, reuse)
   const startedAt = performance.now()
 
   // Derived from THIS clip's bytes, not read off a constant — see `evidenceSeekOffset.ts`. An
@@ -443,9 +560,9 @@ async function decodeClipEvidence(
     resolved.loadTimeoutMs,
     (video) => {
       decodedAt = performance.now()
-      return extractPlannedFrames(video, plan, calibrated)
+      return extractPlannedFrames(video, plan, calibrated, hooks)
     },
-    () => extractionFailed(plan),
+    () => extractionFailed(plan, reuse),
   )
   const doneAt = performance.now()
   if (import.meta.env.DEV) logPerfTimings('evidence-extraction', {
@@ -454,8 +571,9 @@ async function decodeClipEvidence(
     calibrationMs: roundMs(calibratedAt - startedAt),
     videoLoadMs: decodedAt === null ? null : roundMs(decodedAt - calibratedAt),
     seekAndDrawMs: decodedAt === null ? null : roundMs(doneAt - decodedAt),
-    plannedSeeks: countPlannedInstants(plan),
-    images: countExtractedImages(evidence),
+    plannedSeeks: countPlannedInstants(plan, reuse),
+    images: countExtractedImages(evidence, plan, reuse),
+    reusedImages: countReusedImages(plan, reuse),
     aborted: options.signal?.aborted === true,
     totalMs: roundMs(doneAt - startedAt),
   })
@@ -477,20 +595,24 @@ async function decodeClipEvidence(
  * call site has to know about — the same posture, and the same 4K memory reason, as
  * `deriveClipPoster`.
  *
- * Nothing-to-do calls take no place in the queue: a clip with no bytes, and a pass already
- * abandoned, both open no decoder, so making them wait behind one would be pure latency.
+ * Nothing-to-do calls take no place in the queue: a clip with no bytes, a pass already abandoned,
+ * and a clip whose every planned metric the caller already holds (`input.reuse`) all open no
+ * decoder, so making them wait behind one would be pure latency.
  */
 export function extractClipEvidence(
   input: ClipEvidenceInput,
   options: EvidenceExtractionOptions = {},
 ): Promise<ClipEvidence> {
-  const { sourceBlob, plan } = input
-  if (sourceBlob === null || options.signal?.aborted) {
-    return Promise.resolve(extractionFailed(plan))
+  const { sourceBlob, plan, ...hooks } = input
+  const reuse = hooks.reuse ?? {}
+  // A clip whose every planned metric is already held is fully known without a single seek, so it
+  // joins no queue and opens no decoder — the merge below fills in nothing but those held metrics.
+  if (sourceBlob === null || options.signal?.aborted || !needsDecoder(plan, reuse)) {
+    return Promise.resolve(extractionFailed(plan, reuse))
   }
   const requestedAt = performance.now()
   return queueDetachedDecode(() =>
-    decodeClipEvidence(sourceBlob, plan, options, requestedAt),
+    decodeClipEvidence(sourceBlob, plan, hooks, options, requestedAt),
   )
 }
 

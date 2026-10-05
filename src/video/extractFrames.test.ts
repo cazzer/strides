@@ -957,7 +957,7 @@ describe('extractSessionEvidence', () => {
 })
 
 describe('abandoning an in-flight clip', () => {
-  it('abandons the WHOLE clip at the next image boundary, never a partial one', async () => {
+  it('abandons the WHOLE clip at the next SEEK, never a partial one', async () => {
     const ctx = stubCanvas2DContext()
     const { video } = seekableVideo()
     const controller = new AbortController()
@@ -966,17 +966,23 @@ describe('abandoning an in-flight clip', () => {
       drawn += 1
       if (drawn === 1) controller.abort()
     })
+    const onMetricExtracted = vi.fn()
 
     const evidence = await extractPlannedFrames(
       video,
       planWith({ trunkLean: [PAIR], footStrikePattern: [SINGLE] }),
       { signal: controller.signal },
+      { onMetricExtracted },
     )
 
-    // The pair whose base drew was already in flight and finishes its ghost — the check is per
-    // IMAGE — but it is reported as failed rather than shipped: a half-extracted clip wearing an
-    // `'extracted'` shape is a partial answer nothing downstream could tell apart from a whole one.
-    expect(drawn).toBe(2)
+    // The abort landed between the pair's two seeks, and the ghost's seek is never started: the
+    // check is per SEEK (`strides-zm8`), so an abandoned pass pays for at most the one in flight.
+    // On a 4K clip that second seek was ~470 ms of decode spent on an image already destined for
+    // the bin, with the superseding pass queued behind it.
+    expect(drawn).toBe(1)
+    expect(video.currentTime).toBe(drawnTimeOf(PAIR.base))
+    // And nothing half-done is reported as finished, through either channel.
+    expect(onMetricExtracted).not.toHaveBeenCalled()
     expect(evidence.trunkLean).toEqual({
       status: 'no-evidence',
       reason: 'extraction-failed',
@@ -987,6 +993,63 @@ describe('abandoning an in-flight clip', () => {
     })
     // A metric that never planned anything keeps the reason the plan gave it.
     expect(evidence.cadence).toEqual({ status: 'no-evidence', reason: 'not-emitted' })
+  })
+
+  it('never mistakes an image the abort cut short for a seek that timed out', async () => {
+    const ctx = stubCanvas2DContext()
+    const { video } = seekableVideo()
+    const controller = new AbortController()
+    // Aborted on the LAST draw of a metric's last image: the metric is not finished in the sense
+    // a caller may keep, because the pass was abandoned before it could be reported.
+    ctx.drawImage.mockImplementation(() => controller.abort())
+    const onMetricExtracted = vi.fn()
+
+    const evidence = await extractPlannedFrames(
+      video,
+      planWith({ footStrikePattern: [SINGLE] }),
+      { signal: controller.signal },
+      { onMetricExtracted },
+    )
+
+    // Its one image drew in full, and is still not offered: the abort arrived before the metric
+    // could be reported, and "drawn" is not "finished" until the pass that drew it says so.
+    expect(ctx.drawImage).toHaveBeenCalledTimes(1)
+    expect(onMetricExtracted).not.toHaveBeenCalled()
+    expect(evidence.footStrikePattern).toEqual({
+      status: 'no-evidence',
+      reason: 'extraction-failed',
+    })
+  })
+
+  it('reports each metric the moment it finishes, and not the one the abort lands in', async () => {
+    const ctx = stubCanvas2DContext()
+    const { video } = seekableVideo()
+    const controller = new AbortController()
+    let drawn = 0
+    ctx.drawImage.mockImplementation(() => {
+      drawn += 1
+      // SINGLE (footStrikePattern) is one draw; abort on the base of the PAIR that follows.
+      if (drawn === 2) controller.abort()
+    })
+    const finished: Array<[MetricId, unknown]> = []
+
+    // Plan key order is `ALL_METRICS`'s: trunkLean precedes footStrikePattern, so this plan puts
+    // the single first by naming it under a metric that comes earlier.
+    await extractPlannedFrames(
+      video,
+      planWith({ verticalOscillation: [SINGLE], trunkLean: [PAIR] }),
+      { signal: controller.signal },
+      { onMetricExtracted: (metric, evidence) => finished.push([metric, evidence]) },
+    )
+
+    // The single finished whole before the abort, so the caller may keep it even though this
+    // pass's own verdict is all-failed; the pair it was abandoned inside is not offered.
+    expect(finished).toEqual([
+      [
+        'verticalOscillation',
+        { status: 'extracted', items: [{ plan: SINGLE, canvas: expect.any(HTMLCanvasElement) }] },
+      ],
+    ])
   })
 
   it('changes nothing when no signal is supplied', async () => {
@@ -1008,5 +1071,171 @@ describe('abandoning an in-flight clip', () => {
     ])
     expect(evidence.trunkLean.status).toBe('extracted')
     expect(evidence.footStrikePattern.status).toBe('extracted')
+  })
+})
+
+describe('reusing evidence the caller already holds (strides-zm8)', () => {
+  it('offers a metric for keeping only when every planned image was produced', async () => {
+    stubCanvas2DContext()
+    const { video } = seekableVideo()
+    // A second footstrike whose seek never completes: `seeked` is withheld for its instant only.
+    const LATE: EvidenceFramePlan = { ...SINGLE, base: { ...SINGLE.base, timestamp: 3 } }
+    const descriptor = Object.getOwnPropertyDescriptor(video, 'currentTime')!
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      get: descriptor.get,
+      set: (value: number) => {
+        if (value === drawnTimeOf(LATE.base)) return
+        descriptor.set!.call(video, value)
+      },
+    })
+    const onMetricExtracted = vi.fn()
+
+    const evidence = await extractPlannedFrames(
+      video,
+      planWith({ verticalOscillation: [SINGLE], footStrikePattern: [SINGLE, LATE] }),
+      { seekTimeoutMs: 5 },
+      { onMetricExtracted },
+    )
+
+    // The pass's own verdict keeps the image it got — that part is unchanged ...
+    expect(evidence.footStrikePattern.status).toBe('extracted')
+    expect(
+      evidence.footStrikePattern.status === 'extracted' && evidence.footStrikePattern.items,
+    ).toHaveLength(1)
+    // ... but only the whole metric is offered for reuse, so a later pass retries the timeout.
+    expect(onMetricExtracted.mock.calls.map(([metric]) => metric)).toEqual([
+      'verticalOscillation',
+    ])
+  })
+
+  it('draws nothing when the abort lands during a seek', async () => {
+    const ctx = stubCanvas2DContext()
+    const { video } = seekableVideo()
+    const controller = new AbortController()
+    const descriptor = Object.getOwnPropertyDescriptor(video, 'currentTime')!
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      get: descriptor.get,
+      set: (value: number) => {
+        controller.abort()
+        descriptor.set!.call(video, value)
+      },
+    })
+
+    await extractPlannedFrames(video, planWith({ footStrikePattern: [SINGLE] }), {
+      signal: controller.signal,
+    })
+
+    expect(ctx.drawImage).not.toHaveBeenCalled()
+  })
+
+  it('passes a reused metric through by reference and never seeks it', async () => {
+    const ctx = stubCanvas2DContext()
+    const { video } = seekableVideo()
+    const draws = recordDraws(ctx, video)
+    const held = {
+      status: 'extracted' as const,
+      items: [{ plan: PAIR, canvas: document.createElement('canvas') }],
+    }
+    const onMetricExtracted = vi.fn()
+
+    const evidence = await extractPlannedFrames(
+      video,
+      planWith({ trunkLean: [PAIR], footStrikePattern: [SINGLE] }),
+      {},
+      { reuse: { trunkLean: held }, onMetricExtracted },
+    )
+
+    // The SAME object, so the same canvas element — not an equivalent re-decode.
+    expect(evidence.trunkLean).toBe(held)
+    // Only the metric that was not held reached the decoder: one draw, at the single's instant.
+    expect(draws.filter((draw) => draw.call === 'drawImage').map((draw) => draw.sourceTime)).toEqual([
+      drawnTimeOf(SINGLE.base),
+    ])
+    expect(evidence.footStrikePattern.status).toBe('extracted')
+    // A held metric is not news to the caller that handed it over.
+    expect(onMetricExtracted.mock.calls.map(([metric]) => metric)).toEqual(['footStrikePattern'])
+  })
+
+  it('merges in plan key order, identical in shape to a full extraction', async () => {
+    stubCanvas2DContext()
+    const plan = planWith({ trunkLean: [PAIR], footStrikePattern: [SINGLE] })
+    const full = await extractPlannedFrames(seekableVideo().video, plan)
+
+    stubCanvas2DContext()
+    const partial = await extractPlannedFrames(seekableVideo().video, plan, {}, {
+      reuse: { trunkLean: full.trunkLean },
+    })
+
+    expect(Object.keys(partial)).toEqual(Object.keys(full))
+    expect(partial.trunkLean).toBe(full.trunkLean)
+    expect(partial).toEqual(full)
+  })
+
+  it('ignores a reused entry for a metric the plan did not ask images of', async () => {
+    stubCanvas2DContext()
+    const stale = {
+      status: 'extracted' as const,
+      items: [{ plan: SINGLE, canvas: document.createElement('canvas') }],
+    }
+
+    const evidence = await extractPlannedFrames(
+      seekableVideo().video,
+      planWith({ trunkLean: [PAIR] }),
+      {},
+      { reuse: { cadence: stale } },
+    )
+
+    // The plan's own verdict stands: a picture for a metric the plan says has none would be an
+    // image of something this run never measured.
+    expect(evidence.cadence).toEqual({ status: 'no-evidence', reason: 'not-emitted' })
+  })
+
+  it('opens no decoder for a clip whose every planned metric is held', async () => {
+    stubCanvas2DContext()
+    const decoders = bracketDecoders()
+    const held = {
+      status: 'extracted' as const,
+      items: [{ plan: PAIR, canvas: document.createElement('canvas') }],
+    }
+
+    const [evidence] = await extractSessionEvidence(
+      [{ ...clip(), reuse: { trunkLean: held } }],
+      { loadTimeoutMs: 5 },
+    )
+
+    expect(decoders.log).toEqual([])
+    expect(evidence.trunkLean).toBe(held)
+    decoders.restore()
+  })
+
+  it('keeps held metrics when the clip itself cannot be decoded', async () => {
+    stubCanvas2DContext()
+    const decoders = bracketDecoders()
+    const held = {
+      status: 'extracted' as const,
+      items: [{ plan: PAIR, canvas: document.createElement('canvas') }],
+    }
+
+    // jsdom never decodes, so `loadTimeoutMs` expires and the clip is undecodable.
+    const [evidence] = await extractSessionEvidence(
+      [
+        {
+          ...clip(planWith({ trunkLean: [PAIR], footStrikePattern: [SINGLE] })),
+          reuse: { trunkLean: held },
+        },
+      ],
+      { loadTimeoutMs: 5 },
+    )
+
+    expect(decoders.log).toEqual(['open:1', 'close:1'])
+    // Only what needed THIS decoder failed with it; an image already held is not un-made by it.
+    expect(evidence.trunkLean).toBe(held)
+    expect(evidence.footStrikePattern).toEqual({
+      status: 'no-evidence',
+      reason: 'extraction-failed',
+    })
+    decoders.restore()
   })
 })
