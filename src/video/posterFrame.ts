@@ -255,7 +255,7 @@ async function decodePosterFrame(
     () => null,
   )
   const doneAt = performance.now()
-  logPerfTimings('poster', {
+  if (import.meta.env.DEV) logPerfTimings('poster', {
     bytes: sourceBlob.size,
     queueWaitMs: roundMs(startedAt - requestedAt),
     videoLoadMs: decodedAt === null ? null : roundMs(decodedAt - startedAt),

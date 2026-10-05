@@ -381,12 +381,6 @@ export async function extractPlannedFrames(
   return evidence
 }
 
-/**
- * One clip, one detached decoder, torn down before returning. The element, its object URL and the
- * teardown are `withDecodedVideo`'s (`videoElement.ts`) — identical plumbing to the poster path's,
- * because it is literally the same code rather than a second copy of it. A clip whose element never
- * decodes degrades every planned metric to `'extraction-failed'`.
- */
 /** Seeks a plan asks for: one per instant, so two for a ghosted pair. Dev-only instrumentation. */
 function countPlannedInstants(plan: ClipEvidencePlan): number {
   let instants = 0
@@ -405,6 +399,12 @@ function countExtractedImages(evidence: ClipEvidence): number {
   return images
 }
 
+/**
+ * One clip, one detached decoder, torn down before returning. The element, its object URL and the
+ * teardown are `withDecodedVideo`'s (`videoElement.ts`) — identical plumbing to the poster path's,
+ * because it is literally the same code rather than a second copy of it. A clip whose element never
+ * decodes degrades every planned metric to `'extraction-failed'`.
+ */
 async function decodeClipEvidence(
   sourceBlob: Blob,
   plan: ClipEvidencePlan,
@@ -448,7 +448,7 @@ async function decodeClipEvidence(
     () => extractionFailed(plan),
   )
   const doneAt = performance.now()
-  logPerfTimings('evidence-extraction', {
+  if (import.meta.env.DEV) logPerfTimings('evidence-extraction', {
     bytes: sourceBlob.size,
     queueWaitMs: roundMs(startedAt - requestedAt),
     calibrationMs: roundMs(calibratedAt - startedAt),

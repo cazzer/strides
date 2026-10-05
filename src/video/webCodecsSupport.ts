@@ -40,6 +40,14 @@ async function looksLikeIsoBmff(blob: Blob): Promise<boolean> {
   return FTYP_FOURCC.every((byte, i) => header[FTYP_OFFSET + i] === byte)
 }
 
+/** Where `canUseSequentialDecode`'s time goes, filled in as each stage completes — a stage the
+ * probe never reached stays absent. Dev-only `[perf-timings]` instrumentation. */
+export interface SequentialDecodeProbeTimings {
+  arrayBufferMs?: number
+  demuxMs?: number
+  isConfigSupportedMs?: number
+}
+
 /**
  * Decides whether `blob` can go through the WebCodecs sequential-decode sampling path
  * (`sampleClipSequential.ts`) instead of the `<video>`-playback path (`sampleClip.ts`). Eight
@@ -71,14 +79,6 @@ async function looksLikeIsoBmff(blob: Blob): Promise<boolean> {
  * see its doc) lives one layer up, in `useVideoAnalysis.ts` — this function is never even called
  * while the plane is disabled, so it has no gate of its own for it.
  */
-/** Where `canUseSequentialDecode`'s time goes, filled in as each stage completes — a stage the
- * probe never reached stays absent. Dev-only `[perf-timings]` instrumentation. */
-export interface SequentialDecodeProbeTimings {
-  arrayBufferMs?: number
-  demuxMs?: number
-  isConfigSupportedMs?: number
-}
-
 export async function canUseSequentialDecode(
   blob: Blob | null,
   timings?: SequentialDecodeProbeTimings,

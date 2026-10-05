@@ -795,7 +795,8 @@ function flattenPerfLines(lines) {
     const key = `perf.${stage}${pass ? `.${pass}` : ''}`
     const occurrence = seen.get(key) ?? 0
     seen.set(key, occurrence + 1)
-    Object.assign(fields, flatten(`${key}[${occurrence}].`, rest))
+    // `atMs` is emission time on the page clock, not a duration — skipped as a noise row.
+    Object.assign(fields, flatten(`${key}[${occurrence}].`, rest, ['atMs']))
   }
   return fields
 }

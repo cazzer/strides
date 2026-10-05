@@ -29,8 +29,9 @@ export interface SampleClipOptions {
    * attempt so a hang degrades into a normal counted error instead of a silent full stop.
    * Default 5000ms. */
   detectionTimeoutMs?: number
-  /** Called once, just before the promise RESOLVES (never on an abort), with what the sampler
-   * measured about its own run — dev-only `[perf-timings]` instrumentation (`perfTimings.ts`). */
+  /** Called once, right AFTER the promise resolves on a natural end only — never on `stop()` or
+   * an abort — with what the sampler measured about its own run. Dev-only `[perf-timings]`
+   * instrumentation (`perfTimings.ts`); called after settling so it can never hang a run. */
   onTimings?: (timings: SamplerTimings) => void
 }
 
@@ -117,7 +118,17 @@ export function sampleClip(
 
   const handlePause = () => onPausedChange?.(true)
   const handlePlay = () => onPausedChange?.(false)
-  const handleEnded = () => finish()
+  const handleEnded = () => {
+    if (settled) return
+    finish()
+    onTimings?.({
+      path: 'playback',
+      totalMs: roundMs(performance.now() - startedAt),
+      detectMs: summarizeDurations(detectMs),
+      frameCallbacks,
+      droppedWhileInFlight,
+    })
+  }
 
   const cleanupListeners = () => {
     video.removeEventListener('pause', handlePause)
@@ -141,13 +152,6 @@ export function sampleClip(
     cancelled = true
     cancelPendingCallback()
     cleanupListeners()
-    onTimings?.({
-      path: 'playback',
-      totalMs: roundMs(performance.now() - startedAt),
-      detectMs: summarizeDurations(detectMs),
-      frameCallbacks,
-      droppedWhileInFlight,
-    })
     resolvePromise(samples)
   }
 
@@ -169,8 +173,9 @@ export function sampleClip(
     if (cancelled) return
     frameCallbacks += 1
 
-    if (inFlight) droppedWhileInFlight += 1
-    if (!inFlight) {
+    if (inFlight) {
+      droppedWhileInFlight += 1
+    } else {
       const t = metadata.mediaTime
       const source = videoFrameSource(video, t)
       const detectStartedAt = performance.now()

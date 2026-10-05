@@ -121,7 +121,12 @@ async function runTrial(launchArgs, baseURL, scenario) {
       const text = message.text()
       const now = Date.now()
       if (text.startsWith(PERF_PREFIX)) {
-        perfLines.push(JSON.parse(text.slice(PERF_PREFIX.length).trim()))
+        try {
+          perfLines.push(JSON.parse(text.slice(PERF_PREFIX.length).trim()))
+        } catch {
+          // A throw in a Playwright listener kills the process; a malformed line costs its rows.
+          process.stderr.write(`\n  WARNING: unparseable ${PERF_PREFIX} line\n`)
+        }
       } else if (text.startsWith(SCALE_PASS_PREFIX)) {
         scalePassLines += 1
         lastScalePassAtMs = now - startedAt
@@ -133,8 +138,9 @@ async function runTrial(launchArgs, baseURL, scenario) {
     })
 
     await page.goto(baseURL)
-    // Settles before the clock starts so detector load is not charged to the first stage that
-    // happens to wait on it — it is reported separately as `detectorReadyMs` below.
+    // The clock starts right after this, while the app's MoveNet detector (created at App mount)
+    // is still cold-loading in this fresh process — so the primary pass's start time includes
+    // whatever of that load is left. Deliberate: a real first upload pays it too.
     const renderer = assertHardwareRenderer(await page.evaluate(readRendererInPage))
     // The page's own clock at the trigger, so each line's `atMs` can be rebased onto it.
     const triggerAtMs = await page.evaluate(() => performance.now())

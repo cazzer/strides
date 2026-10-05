@@ -215,7 +215,9 @@ export function sampleClipSequential(
       }
     } finally {
       source.stop()
-      if (!settled) {
+      const naturalEnd = !settled
+      finish()
+      if (naturalEnd) {
         onTimings?.({
           path: 'sequential',
           totalMs: roundMs(performance.now() - startedAt),
@@ -227,7 +229,6 @@ export function sampleClipSequential(
           decodeWaitMs: summarizeDurations(decodeWaitMs),
         })
       }
-      finish()
     }
   })()
 

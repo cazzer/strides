@@ -199,7 +199,7 @@ export function useVideoAnalysis(
       : Promise.resolve(false)
     void probe.then(settle)
     // Chained after `settle`, so the line can never delay the result reaching auto-start.
-    void probe.then((supported) =>
+    if (import.meta.env.DEV) void probe.then((supported) =>
       logPerfTimings('sequential-probe', {
         ...perfClipIdentity(probedFor, sourceBlob),
         enabled: probeEnabled,
@@ -290,9 +290,11 @@ export function useVideoAnalysis(
         },
         maxConsecutiveErrors: samplingRobustnessConfig.maxConsecutiveErrors,
         detectionTimeoutMs: samplingRobustnessConfig.detectionTimeoutMs,
-        onTimings: (timings) => {
-          samplerTimings = timings
-        },
+        onTimings: import.meta.env.DEV
+          ? (timings) => {
+              samplerTimings = timings
+            }
+          : undefined,
       },
       samplingRobustnessConfig.sequentialSampling,
     )
@@ -409,7 +411,7 @@ export function useVideoAnalysis(
         })
         const readyAt = performance.now()
         primaryReadyAtRef.current = readyAt
-        logPerfTimings('analysis-pass', {
+        if (import.meta.env.DEV) logPerfTimings('analysis-pass', {
           pass: 'primary',
           path: usesSequentialDecode ? 'sequential' : 'playback',
           ...perfClipIdentity(metadata, sourceBlob),
@@ -610,9 +612,11 @@ export function useVideoAnalysis(
               abortPassRef('Video playback was paused before the scale pass finished.')
             }
           },
-          onTimings: (timings) => {
-            samplerTimings = timings
-          },
+          onTimings: import.meta.env.DEV
+            ? (timings) => {
+                samplerTimings = timings
+              }
+            : undefined,
         },
         samplingRobustnessConfig.sequentialSampling,
       )
@@ -733,7 +737,7 @@ export function useVideoAnalysis(
           },
         }))
         const doneAt = performance.now()
-        logPerfTimings('analysis-pass', {
+        if (import.meta.env.DEV) logPerfTimings('analysis-pass', {
           pass: 'scale',
           path: usesSequentialDecode ? 'sequential' : 'playback',
           ...perfClipIdentity(metadata, sourceBlob),
