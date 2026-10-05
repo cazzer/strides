@@ -248,12 +248,16 @@ function resolveOptions(options: EvidenceExtractionOptions): ResolvedOptions {
  * The `currentTime` one planned instant is seeked to. Computed once per instant, and the schedule
  * in `extractPlannedFrames` dedupes on this exact number: two instants share a seek only when they
  * would each have asked the element for the identical `currentTime`.
+ *
+ * `null` for a target that is not a finite number, which fails the image before anything is
+ * seeked. The schedule keys targets in a `Map`, which treats `NaN` as equal to itself, but matches
+ * them with `===`, which does not — a `NaN` target would be chosen and then never drawn.
  */
 function seekTargetOf(
   instant: EvidenceInstantPlan,
   video: HTMLVideoElement,
   options: ResolvedOptions,
-): number {
+): number | null {
   // Edit-list shift FIRST, then the midpoint. The shift converts a media-clock frame START to a
   // presentation-clock frame START; only after that is "add half an interval" the middle of the
   // interval `currentTime` will be compared against. Both terms are additive so the order does not
@@ -264,12 +268,13 @@ function seekTargetOf(
   // beyond a duration the element will refuse. Clamped only against a duration it actually
   // reports: jsdom gives `NaN` and a webcam recording gives `Infinity`, and comparing against
   // either would poison the target or never fire.
-  return Math.max(
+  const target = Math.max(
     0,
     Number.isFinite(video.duration)
       ? Math.min(requested, video.duration)
       : requested,
   )
+  return Number.isFinite(target) ? target : null
 }
 
 /**
@@ -357,7 +362,8 @@ interface ImageInFlight {
   state: 'pending' | 'done' | 'failed'
 }
 
-/** A canvas for one planned image, or `null` where the element offers no 2D context. */
+/** A canvas for one planned image, or `null` where the element offers no 2D context or an
+ * instant has no finite seek target. */
 function openImage(
   metric: MetricId,
   item: EvidenceFramePlan,
@@ -373,6 +379,12 @@ function openImage(
   const ctx = canvas.getContext('2d')
   if (ctx === null) return null
   const instants = item.ghost === null ? [item.base] : [item.base, item.ghost]
+  const targets: number[] = []
+  for (const instant of instants) {
+    const target = seekTargetOf(instant, video, options)
+    if (target === null) return null
+    targets.push(target)
+  }
   return {
     metric,
     plan: item,
@@ -380,7 +392,7 @@ function openImage(
     ctx,
     side,
     instants,
-    targets: instants.map((instant) => seekTargetOf(instant, video, options)),
+    targets,
     drawn: 0,
     state: 'pending',
   }
@@ -446,11 +458,9 @@ function nextSeekTarget(images: readonly ImageInFlight[]): number | null {
     if (earliestDrawable === null || next < earliestDrawable) earliestDrawable = next
     for (let index = image.drawn; index < image.targets.length; index += 1) {
       const target = image.targets[index]
-      // Drawable on a visit to `target` only if nothing of this image is still owed before it —
-      // which, past its next instant, means every instant in between shares this target.
-      const drawable = image.targets
-        .slice(image.drawn, index + 1)
-        .every((earlier) => earlier === target)
+      // Drawable on a visit to `target` only if nothing of this image is still owed before it. An
+      // image has at most two instants, so past its next one that means the next one is here too.
+      const drawable = index === image.drawn || image.targets[image.drawn] === target
       drawableNow.set(target, (drawableNow.get(target) ?? true) && drawable)
     }
   }
@@ -624,6 +634,12 @@ async function extractPlannedFramesCounted(
     // frame is being drawn must not let the metric those draws finished be offered for keeping.
     // Both this check and the reports below run synchronously, so a caller that aborts and then
     // reads its own cache cannot be written to behind its back.
+    // Every visit draws or fails at least one image: `nextSeekTarget` only returns a target some
+    // pending image's next instant is at. Asserted rather than assumed, because a visit that
+    // changed nothing would be chosen again, forever.
+    if (touched.size === 0) {
+      throw new Error(`evidence schedule made no progress at seek target ${target}`)
+    }
     if (resolved.signal?.aborted) return extractionFailed(plan, reuse)
     for (const metric of touched) settle(metric)
   }

@@ -1532,6 +1532,52 @@ describe('one seek per distinct frame (strides-e4c.5)', () => {
     expect(seeked).toEqual([2.6 + 0.25 + 0.05, 3.1])
   })
 
+  it('draws a pair whose base and ghost share a target from one seek, base first', async () => {
+    const { video } = seekableVideo()
+    Object.defineProperty(video, 'duration', { configurable: true, value: 3.1 })
+    const logs = recordPerCanvas(video)
+    const seeked = seekLog(video)
+    // Both instants run past the clip end, so both clamp to the same target.
+    const clamped: EvidenceFramePlan = {
+      ...PAIR,
+      base: { ...PAIR.base, timestamp: 3.2 },
+      ghost: { ...PAIR.ghost!, timestamp: 3.3 },
+    }
+
+    const evidence = await extractPlannedFrames(video, planWith({ trunkLean: [clamped] }), {
+      seekOffsetSeconds: 0,
+      midpointOffsetSeconds: 0,
+    })
+
+    expect(seeked).toEqual([3.1])
+    expect(evidence.trunkLean.status).toBe('extracted')
+    const [log] = [...logs.values()]
+    expect(log.filter((draw) => draw.call === 'drawImage').map((draw) => draw.alpha)).toEqual([
+      EVIDENCE_BASE_OPACITY,
+      EVIDENCE_GHOST_BLEND_ALPHA,
+    ])
+  })
+
+  it('fails an image whose seek target is not a finite number, without seeking it', async () => {
+    const { video } = seekableVideo()
+    recordPerCanvas(video)
+    const seeked = seekLog(video)
+    const nan: EvidenceFramePlan = { ...SINGLE, base: { ...SINGLE.base, timestamp: Number.NaN } }
+
+    const evidence = await extractPlannedFrames(
+      video,
+      planWith({ footStrikePattern: [nan], kneeDrive: [SINGLE] }),
+    )
+
+    // A NaN target would be picked forever and never matched; it fails up front instead.
+    expect(seeked).toEqual([drawnTimeOf(SINGLE.base)])
+    expect(evidence.footStrikePattern).toEqual({
+      status: 'no-evidence',
+      reason: 'extraction-failed',
+    })
+    expect(evidence.kneeDrive.status).toBe('extracted')
+  })
+
   it('abandons the clip at the next seek, keeping only metrics finished before it', async () => {
     const { video } = seekableVideo()
     recordPerCanvas(video)
@@ -1559,7 +1605,7 @@ describe('one seek per distinct frame (strides-e4c.5)', () => {
     }
   })
 
-  it('drops only the images waiting on a frame whose seek timed out, and tries it once', async () => {
+  it('drops only the images waiting on a timed-out frame, seeking a target with nothing owed before it once', async () => {
     const { video } = seekableVideo()
     recordPerCanvas(video)
     // The ghost `verticalOscillation` and `verticalRatio` share never lands.
