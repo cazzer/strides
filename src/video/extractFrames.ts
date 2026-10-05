@@ -194,7 +194,9 @@ export interface ClipEvidenceInput {
   reuse?: ReusedMetricEvidence
   /**
    * Told each metric's evidence the moment that metric is FINISHED — every one of its planned
-   * images attempted, and the pass not abandoned at any point up to and including the last one.
+   * images PRODUCED, and the pass not abandoned at any point up to and including the last one. A
+   * metric that lost any image (a seek timeout) is never offered: it is a verdict for this pass,
+   * not something a later pass should inherit instead of retrying.
    *
    * This is what lets a caller keep the work of a pass it is about to supersede. The scale-pass
    * graft supersedes the primary pass's extraction on every single-clip run, typically more than
@@ -277,6 +279,9 @@ async function drawInstant(
   )
   const outcome = await seekTo(video, target, options.seekTimeoutMs)
   if (outcome === 'timed-out') return false
+  // An abort that arrived DURING the seek skips the presentation wait and the draw: the image is
+  // already destined for the bin, and `extractPlannedFrames` reads the signal, not this `false`.
+  if (options.signal?.aborted) return false
   // `'already-there'` skips the wait rather than shortening it: the short-circuit means the element
   // is ALREADY showing this instant, so no new frame is coming and every arm but the backstop would
   // be dead. Waiting there could only burn the timeout and then draw the identical pixels.
@@ -457,9 +462,15 @@ export async function extractPlannedFrames(
         ? { status: 'extracted', items }
         : { status: 'no-evidence', reason: 'extraction-failed' }
     evidence[metric] = finished
-    // Reached only with the signal clear after this metric's LAST image (checked just above), so
-    // a finished metric is reported exactly when it is a whole answer.
-    hooks.onMetricExtracted?.(metric, finished)
+    // Reached only with the signal clear after this metric's LAST image (checked just above). And
+    // only a COMPLETE answer is offered for keeping: a metric that lost an image to a seek timeout
+    // — or lost all of them — is a fine verdict for this pass, but a caller that kept it would
+    // reuse it for as long as the plan entry stays the same, and the primary pass that produces
+    // most harvests runs exactly while the scale pass contends for the GPU. Not keeping it lets the
+    // next pass try again, as the whole-clip re-extraction used to.
+    if (finished.status === 'extracted' && items.length === entry.items.length) {
+      hooks.onMetricExtracted?.(metric, finished)
+    }
   }
   return evidence
 }
@@ -493,10 +504,18 @@ function countReusedImages(plan: ClipEvidencePlan, reuse: ReusedMetricEvidence):
   return images
 }
 
-function countExtractedImages(evidence: ClipEvidence): number {
+/** Images this pass actually DECODED — a reused metric's images are counted by
+ * `countReusedImages` instead, so the line reports decode work rather than its result's size. */
+function countExtractedImages(
+  evidence: ClipEvidence,
+  plan: ClipEvidencePlan,
+  reuse: ReusedMetricEvidence,
+): number {
   let images = 0
-  for (const entry of Object.values(evidence)) {
-    if (entry.status === 'extracted') images += entry.items.length
+  for (const [metric, entry] of metricEntries(plan)) {
+    if (reusedFor(reuse, metric, entry) !== undefined) continue
+    const produced = evidence[metric]
+    if (produced.status === 'extracted') images += produced.items.length
   }
   return images
 }
@@ -553,7 +572,7 @@ async function decodeClipEvidence(
     videoLoadMs: decodedAt === null ? null : roundMs(decodedAt - calibratedAt),
     seekAndDrawMs: decodedAt === null ? null : roundMs(doneAt - decodedAt),
     plannedSeeks: countPlannedInstants(plan, reuse),
-    images: countExtractedImages(evidence),
+    images: countExtractedImages(evidence, plan, reuse),
     reusedImages: countReusedImages(plan, reuse),
     aborted: options.signal?.aborted === true,
     totalMs: roundMs(doneAt - startedAt),

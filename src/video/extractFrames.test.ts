@@ -1075,6 +1075,61 @@ describe('abandoning an in-flight clip', () => {
 })
 
 describe('reusing evidence the caller already holds (strides-zm8)', () => {
+  it('offers a metric for keeping only when every planned image was produced', async () => {
+    stubCanvas2DContext()
+    const { video } = seekableVideo()
+    // A second footstrike whose seek never completes: `seeked` is withheld for its instant only.
+    const LATE: EvidenceFramePlan = { ...SINGLE, base: { ...SINGLE.base, timestamp: 3 } }
+    const descriptor = Object.getOwnPropertyDescriptor(video, 'currentTime')!
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      get: descriptor.get,
+      set: (value: number) => {
+        if (value === drawnTimeOf(LATE.base)) return
+        descriptor.set!.call(video, value)
+      },
+    })
+    const onMetricExtracted = vi.fn()
+
+    const evidence = await extractPlannedFrames(
+      video,
+      planWith({ verticalOscillation: [SINGLE], footStrikePattern: [SINGLE, LATE] }),
+      { seekTimeoutMs: 5 },
+      { onMetricExtracted },
+    )
+
+    // The pass's own verdict keeps the image it got — that part is unchanged ...
+    expect(evidence.footStrikePattern.status).toBe('extracted')
+    expect(
+      evidence.footStrikePattern.status === 'extracted' && evidence.footStrikePattern.items,
+    ).toHaveLength(1)
+    // ... but only the whole metric is offered for reuse, so a later pass retries the timeout.
+    expect(onMetricExtracted.mock.calls.map(([metric]) => metric)).toEqual([
+      'verticalOscillation',
+    ])
+  })
+
+  it('draws nothing when the abort lands during a seek', async () => {
+    const ctx = stubCanvas2DContext()
+    const { video } = seekableVideo()
+    const controller = new AbortController()
+    const descriptor = Object.getOwnPropertyDescriptor(video, 'currentTime')!
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      get: descriptor.get,
+      set: (value: number) => {
+        controller.abort()
+        descriptor.set!.call(video, value)
+      },
+    })
+
+    await extractPlannedFrames(video, planWith({ footStrikePattern: [SINGLE] }), {
+      signal: controller.signal,
+    })
+
+    expect(ctx.drawImage).not.toHaveBeenCalled()
+  })
+
   it('passes a reused metric through by reference and never seeks it', async () => {
     const ctx = stubCanvas2DContext()
     const { video } = seekableVideo()

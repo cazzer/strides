@@ -59,7 +59,8 @@ export interface EvidenceSection {
  *
  * `pending` names the metrics this run's plan says WILL have imagery and that have none on screen
  * yet — every planned metric on a first extraction, and on a re-extraction only the ones the graft
- * newly planned. It is what lets a card distinguish "still decoding" from "this metric has no
+ * newly planned. Since `strides-zm8` a run that already HOLDS a metric's final image (finished by
+ * the pass it superseded) shows it in `sections` straight away rather than listing it here. It is what lets a card distinguish "still decoding" from "this metric has no
  * picture", which are otherwise the same empty space for the several seconds a decode takes.
  */
 export type SessionEvidenceState =
@@ -121,8 +122,10 @@ interface CachedMetricEvidence {
  * them. Per metric, the same comparison that made the whole-clip reuse sound (`reusableEvidence`)
  * now admits every metric whose own entry is unchanged, and only the rest reach a decoder.
  *
- * Entries arrive two ways: a run that settles writes every planned metric it produced, and a run
- * still in flight writes each metric the moment it finishes (`ClipEvidenceInput.onMetricExtracted`).
+ * Entries arrive two ways: a run that settles writes every planned metric it produced IN FULL, and a
+ * run still in flight writes each metric the moment it finishes whole
+ * (`ClipEvidenceInput.onMetricExtracted`). A failed or partial metric is never an entry
+ * (`isCompleteEvidence`), so the next pass retries it.
  * The second is what keeps a SUPERSEDED pass's finished work — which on every single-clip run is
  * most of the primary-pass extraction, abandoned when the scale-pass graft lands.
  */
@@ -247,6 +250,25 @@ function reusableEvidence(
 }
 
 /**
+ * Whether a metric's evidence is a COMPLETE answer to its plan entry, and so safe to keep for reuse:
+ * extracted, with every planned image present.
+ *
+ * A failed metric, or one that lost an image to a seek timeout, is a correct verdict for the pass
+ * that produced it and is rendered as such — but it is never cached. Reuse is keyed by the plan
+ * entry, so a cached failure would be reused for as long as that entry stays the same, where the
+ * whole-clip re-extraction this replaced retried it on the next pass. That matters because the pass
+ * most likely to time out is the primary-pass extraction, which runs exactly while the scale pass
+ * contends for the GPU.
+ */
+function isCompleteEvidence(evidence: MetricEvidence, entry: MetricEvidencePlan): boolean {
+  return (
+    evidence.status === 'extracted' &&
+    entry.status === 'planned' &&
+    evidence.items.length === entry.items.length
+  )
+}
+
+/**
  * Records one metric's finished evidence. A clip whose bytes changed starts a fresh entry rather
  * than mixing images decoded from two different blobs under one.
  */
@@ -334,6 +356,36 @@ function plannedMetrics(
   return metrics
 }
 
+/**
+ * What an extracting run shows: everything carried forward, plus the images this run already HOLDS
+ * (`strides-zm8`) for metrics with nothing on screen — typically the metrics a superseded pass
+ * finished before the graft landed, which would otherwise sit behind placeholders until the run
+ * settles although their pixels are final.
+ *
+ * A carried section always wins: replacing an on-screen image before the run settles is exactly what
+ * "Evidence already on screen survives a re-extraction" forbids, even with an image that would
+ * replace it at settle anyway. Held sections are complete answers to THIS run's plan read at each
+ * metric's winning clip (`buildSections`). The caller still applies them only while the clip set is
+ * unchanged, the same condition carrying is under.
+ *
+ * Ordered by the plan's own key order — `FormHeuristicsResult`'s declaration order, the order
+ * `buildSections` and therefore every settled and carried list already use.
+ */
+function withHeldSections(
+  carried: EvidenceSection[],
+  held: EvidenceSection[],
+  order: MetricId[],
+): EvidenceSection[] {
+  if (held.length === 0) return carried
+  const additions = held.filter(
+    (section) => !carried.some((existing) => existing.metric === section.metric),
+  )
+  if (additions.length === 0) return carried
+  return [...carried, ...additions].sort(
+    (a, b) => order.indexOf(a.metric) - order.indexOf(b.metric),
+  )
+}
+
 function buildSections(
   evidenceByClip: ClipEvidence[],
   sourceIndices: Record<MetricId, number>,
@@ -369,6 +421,8 @@ function startRun(
 ): {
   batch: ClipEvidenceInput[]
   planned: MetricId[]
+  held: EvidenceSection[]
+  order: MetricId[]
   finish: (extracted: ClipEvidence[]) => SessionEvidenceState
 } {
   for (const key of [...cache.keys()]) {
@@ -420,6 +474,7 @@ function startRun(
       onMetricExtracted: (metric, evidence) => {
         const planKey = planKeys[index].get(metric)
         if (!isCurrent() || planKey === undefined) return
+        if (!isCompleteEvidence(evidence, plans[index][metric])) return
         rememberMetric(cache, input.clipId, input.sourceBlob, metric, { planKey, evidence })
       },
     })
@@ -437,6 +492,7 @@ function startRun(
       // than retained for the rest of the session.
       const metrics = new Map<MetricId, CachedMetricEvidence>()
       for (const [metric, planKey] of planKeys[index]) {
+        if (!isCompleteEvidence(evidence[metric], plans[index][metric])) continue
         metrics.set(metric, { planKey, evidence: evidence[metric] })
       }
       cache.set(input.clipId, { sourceBlob: input.sourceBlob, metrics })
@@ -446,7 +502,16 @@ function startRun(
     return { status: 'settled', sections: buildSections(evidenceByClip, sourceIndices) }
   }
 
-  return { batch, planned: plannedMetrics(plans, sourceIndices), finish }
+  return {
+    batch,
+    planned: plannedMetrics(plans, sourceIndices),
+    held: buildSections(
+      reuse.map((held, index) => unextractedEvidence(plans[index], held)),
+      sourceIndices,
+    ),
+    order: plans[0] === undefined ? [] : (Object.keys(plans[0]) as MetricId[]),
+    finish,
+  }
 }
 
 /**
@@ -511,9 +576,15 @@ export function useSessionEvidence(
     // whenever the clip SET is unchanged — the common case, and the one this guard exists for: the
     // scale-pass graft supersedes a run that has already settled, and blanking every card for the
     // length of a decode is the thing that made a correct re-extraction look like a bug.
-    const carried = sameClipSet(previousInputs, inputs ?? []) && sourceIndices !== null
+    const sameClips = sameClipSet(previousInputs, inputs ?? []) && sourceIndices !== null
+    const carried = sameClips
       ? sectionsRef.current.filter((section) => sourceIndices[section.metric] === section.clipIndex)
       : NO_SECTIONS
+    // Held images are shown early under the SAME condition carried ones are, even though their
+    // attribution is the current run's: a changed clip set withholds evidence until the run
+    // settles, and that rule is stated about the clip set, not about where an image came from.
+    const shown =
+      run === null || !sameClips ? carried : withHeldSections(carried, run.held, run.order)
 
     commit(
       run === null
@@ -522,12 +593,13 @@ export function useSessionEvidence(
           ? run.finish([])
           : {
               status: 'extracting',
-              sections: carried,
+              sections: shown,
               // Only what has nothing on screen. A metric whose previous image was carried
-              // forward keeps showing it; putting a placeholder over a picture that is already
-              // correct would be a downgrade, not a progress report.
+              // forward keeps showing it, and one whose image this run already holds shows that;
+              // putting a placeholder over a picture that is already correct would be a downgrade,
+              // not a progress report.
               pending: run.planned.filter(
-                (metric) => !carried.some((section) => section.metric === metric),
+                (metric) => !shown.some((section) => section.metric === metric),
               ),
             },
     )

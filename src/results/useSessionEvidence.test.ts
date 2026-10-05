@@ -515,5 +515,118 @@ describe('useSessionEvidence', () => {
       expect(canvasOf(result.current, 'cadence')).toBe(cadence)
       expect(canvasOf(result.current, 'trunkLean')).toBe(lean)
     })
+
+    it('re-decodes a metric whose previous pass lost an image, rather than reusing the loss', async () => {
+      const blob = new Blob(['a'])
+      plansByHeuristics.set('primary', twoMetricPlan(0.5, 0.5))
+      // The graft moves cadence; trunkLean's plan entry is unchanged.
+      plansByHeuristics.set('grafted', twoMetricPlan(0.9, 0.5))
+
+      const { result, rerender } = renderHook(
+        ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+        { initialProps: { clips: [makeClip('c1', 'primary', blob)] } },
+      )
+      // trunkLean's only image timed out on its seek: a correct verdict for that pass.
+      await act(async () => {
+        pending.shift()?.([
+          {
+            cadence: metricWithCanvas('cadence', {} as HTMLCanvasElement),
+            trunkLean: { status: 'no-evidence', reason: 'extraction-failed' },
+          } as ClipEvidence,
+        ])
+      })
+      await waitFor(() => expect(result.current.status).toBe('settled'))
+
+      rerender({ clips: [makeClip('c1', 'grafted', blob)] })
+
+      // Its plan entry still matches, and it is decoded again anyway: a failure is not an image,
+      // and caching it would pin the loss for as long as the entry stays the same — where the
+      // whole-clip re-extraction this replaced would have retried it.
+      expect(calls[1].batch[0].reuse).toEqual({})
+    })
+
+    it('never keeps a metric that finished with fewer images than it planned', async () => {
+      const blob = new Blob(['a'])
+      const twoImages = (quality: number) => () =>
+        ({
+          cadence: {
+            status: 'planned',
+            items: [
+              { metric: 'cadence', kind: 'bounceCycle', quality },
+              { metric: 'cadence', kind: 'bounceCycle', quality },
+            ],
+          },
+        }) as unknown as ClipEvidencePlan
+      plansByHeuristics.set('primary', twoImages(0.5))
+      plansByHeuristics.set('grafted', twoImages(0.5))
+
+      const { rerender } = renderHook(
+        ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+        { initialProps: { clips: [makeClip('c1', 'primary', blob)] } },
+      )
+      // One of its two images lost to a seek timeout, reported through the harvest channel.
+      calls[0].batch[0].onMetricExtracted?.('cadence', metricWithCanvas('cadence', {} as HTMLCanvasElement))
+
+      rerender({ clips: [makeClip('c1', 'grafted', blob)] })
+
+      // Same plan, but the partial answer was not kept, so a decoder opens for the whole metric.
+      expect(extractSessionEvidence).toHaveBeenCalledTimes(2)
+      expect(calls[1].batch[0].reuse).toEqual({})
+    })
+
+    it('shows held images straight away instead of placeholders while the rest decodes', async () => {
+      const blob = new Blob(['a'])
+      const cadence = {} as HTMLCanvasElement
+      plansByHeuristics.set('primary', twoMetricPlan(0.5, 0.5))
+      plansByHeuristics.set('grafted', twoMetricPlan(0.5, 0.9))
+
+      const { result, rerender } = renderHook(
+        ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+        { initialProps: { clips: [makeClip('c1', 'primary', blob)] } },
+      )
+      calls[0].batch[0].onMetricExtracted?.('cadence', metricWithCanvas('cadence', cadence))
+
+      rerender({ clips: [makeClip('c1', 'grafted', blob)] })
+
+      // The superseded pass never landed, so nothing was carried — but cadence's image is final
+      // for this run's plan, so it goes up now and only trunkLean waits behind a placeholder.
+      expect(result.current.status).toBe('extracting')
+      expect(canvasOf(result.current, 'cadence')).toBe(cadence)
+      expect(result.current.status === 'extracting' && result.current.pending).toEqual([
+        'trunkLean',
+      ])
+    })
+
+    it('never replaces an image already on screen with a held one before the run settles', async () => {
+      const blob = new Blob(['a'])
+      const onScreen = {} as HTMLCanvasElement
+      const held = {} as HTMLCanvasElement
+      plansByHeuristics.set('primary', twoMetricPlan(0.5, 0.5))
+      plansByHeuristics.set('grafted', twoMetricPlan(0.9, 0.5))
+      plansByHeuristics.set('regrafted', twoMetricPlan(0.7, 0.5))
+
+      const { result, rerender } = renderHook(
+        ({ clips }: { clips: ClipSession[] }) => useSessionEvidence(clips, SOURCE_INDICES),
+        { initialProps: { clips: [makeClip('c1', 'primary', blob)] } },
+      )
+      await act(async () => {
+        pending.shift()?.([
+          {
+            cadence: metricWithCanvas('cadence', onScreen),
+            trunkLean: metricWithCanvas('trunkLean', {} as HTMLCanvasElement),
+          } as ClipEvidence,
+        ])
+      })
+      await waitFor(() => expect(result.current.status).toBe('settled'))
+
+      // A pass for a moved cadence finishes it, then is itself superseded by a further move.
+      rerender({ clips: [makeClip('c1', 'grafted', blob)] })
+      calls[1].batch[0].onMetricExtracted?.('cadence', metricWithCanvas('cadence', held))
+      rerender({ clips: [makeClip('c1', 'regrafted', blob)] })
+
+      // The carried image stays until settle, whatever the cache holds.
+      expect(canvasOf(result.current, 'cadence')).toBe(onScreen)
+    })
   })
 })
+
