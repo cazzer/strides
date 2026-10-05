@@ -7,6 +7,7 @@ import type {
   ClipEvidenceInput,
   ExtractedEvidenceFrame,
   MetricEvidence,
+  ReusedMetricEvidence,
 } from '../video/extractFrames'
 import { planClipEvidence, summarizeEvidenceCoverage } from './evidenceFrames'
 import type {
@@ -33,7 +34,9 @@ import type { ClipSession } from './multiClipAnalysis'
  * display: extraction at most once per clip per input signature, a per-clip cache keyed by
  * `clipId`, a run-id guard that drops a superseded run's canvases rather than parenting them, the
  * sequential one-decoder-at-a-time batch inside `extractSessionEvidence`, and a teardown that
- * forgets everything on unmount or session reset.
+ * forgets everything on unmount or session reset. (The cache has since gone per metric within each
+ * clip, so a superseded run's FINISHED metrics are kept and only a moved plan entry re-decodes —
+ * `strides-zm8`. The run-id guard still drops everything a superseded run would have committed.)
  */
 
 /** One metric's worth of evidence: the images, and which clip they were pulled from. */
@@ -73,7 +76,7 @@ const NO_SECTIONS: EvidenceSection[] = []
  * Compared by reference, field by field, as the CHEAP outer layer of a two-layer comparison
  * (`sameClipInputs`). It answers "did anything upstream move at all", which is asked on every
  * render; whether the extraction may actually be REUSED is a separate, structural question about
- * the resulting plan, answered by `canReuseCachedEvidence`.
+ * the resulting plan, answered per metric by `reusableEvidence`.
  */
 interface ClipEvidenceInputs {
   clipId: string
@@ -90,7 +93,7 @@ interface ClipEvidenceInputs {
    * does — they are written in one literal — so this adds a guard, not a re-plan.
    *
    * Note it no longer decides whether the extraction RE-RUNS. It reaches that decision only
-   * through the plan it produces, which is what `canReuseCachedEvidence` compares.
+   * through the plan it produces, which is what `reusableEvidence` compares.
    */
   graftedFrames: RobustPoseFrame[] | null
   frameSize: EvidenceFrameSize
@@ -98,17 +101,34 @@ interface ClipEvidenceInputs {
 }
 
 /**
- * One clip's extraction cache entry: what it was extracted from, and what came out.
+ * One metric's finished evidence, and the plan entry it was extracted for.
  *
- * `plan` is stored rather than re-derived from `evidence` because it is what the reuse decision
- * compares against, and it is the exact object the batch was built from. Reconstructing it with
- * `settledPlan` would round-trip through the extraction RESULT, which equals the plan only where
- * every planned metric actually produced pixels.
+ * `planKey` is that entry serialised, stored rather than re-derived from `evidence` because it is
+ * what the reuse decision compares against. Reconstructing it from the RESULT would round-trip
+ * through `settledPlan`, which equals the plan only where every planned image actually produced
+ * pixels.
+ */
+interface CachedMetricEvidence {
+  planKey: string
+  evidence: MetricEvidence
+}
+
+/**
+ * One clip's extraction cache: the bytes its images were decoded from, and every metric's finished
+ * evidence, PER METRIC (`strides-zm8`).
+ *
+ * It was per clip — one plan, one result — so a graft that moved one metric's plan re-decoded all of
+ * them. Per metric, the same comparison that made the whole-clip reuse sound (`reusableEvidence`)
+ * now admits every metric whose own entry is unchanged, and only the rest reach a decoder.
+ *
+ * Entries arrive two ways: a run that settles writes every planned metric it produced, and a run
+ * still in flight writes each metric the moment it finishes (`ClipEvidenceInput.onMetricExtracted`).
+ * The second is what keeps a SUPERSEDED pass's finished work — which on every single-clip run is
+ * most of the primary-pass extraction, abandoned when the scale-pass graft lands.
  */
 interface CachedClipEvidence {
-  inputs: ClipEvidenceInputs
-  plan: ClipEvidencePlan
-  evidence: ClipEvidence
+  sourceBlob: Blob | null
+  metrics: Map<MetricId, CachedMetricEvidence>
 }
 
 /**
@@ -192,12 +212,14 @@ function sameClipSet(a: ClipEvidenceInputs[] | null, b: ClipEvidenceInputs[]): b
 }
 
 /**
- * Whether a clip's cached evidence can be reused for a freshly computed plan.
+ * A metric's cached evidence, if it can be reused for that metric's freshly computed plan entry.
  *
- * This compares what DETERMINES THE PIXELS, and it is sufficient rather than heuristic:
- * `extractSessionEvidence` receives `ClipEvidenceInput`, which is exactly `{ sourceBlob, plan }`,
- * so its output is a pure function of those two and equality of both means the extraction would
- * reproduce the images already held.
+ * This compares what DETERMINES THE PIXELS, and it is sufficient rather than heuristic: a metric's
+ * images are a pure function of the clip's bytes and that metric's own plan entry — its instants,
+ * crops, opacities and annotation inputs. Nothing about one metric's extraction reads another's
+ * (each image is seeked, drawn and annotated from its own item alone, and the seek calibration is
+ * derived from the blob), so per-metric equality is exactly as sufficient as the per-clip equality
+ * this check used to make.
  *
  * It deliberately does NOT compare `heuristics`, `frames`, `graftedFrames` or `frameSize`. Those
  * are upstream of the plan, not inputs to the extractor: `frameSize` reaches it only through the
@@ -213,32 +235,53 @@ function sameClipSet(a: ClipEvidenceInputs[] | null, b: ClipEvidenceInputs[]): b
  * serialise lossily, which can only make the check more permissive; neither is producible in a
  * plan, and a plan carrying either would be reusing an identical image anyway.
  */
-function canReuseCachedEvidence(
-  cached: CachedClipEvidence,
-  input: ClipEvidenceInputs,
-  plan: ClipEvidencePlan,
-): boolean {
-  return (
-    cached.inputs.sourceBlob === input.sourceBlob &&
-    JSON.stringify(cached.plan) === JSON.stringify(plan)
-  )
+function reusableEvidence(
+  cached: CachedClipEvidence | undefined,
+  sourceBlob: Blob | null,
+  metric: MetricId,
+  planKey: string,
+): MetricEvidence | undefined {
+  if (cached === undefined || cached.sourceBlob !== sourceBlob) return undefined
+  const entry = cached.metrics.get(metric)
+  return entry !== undefined && entry.planKey === planKey ? entry.evidence : undefined
+}
+
+/**
+ * Records one metric's finished evidence. A clip whose bytes changed starts a fresh entry rather
+ * than mixing images decoded from two different blobs under one.
+ */
+function rememberMetric(
+  cache: Map<string, CachedClipEvidence>,
+  clipId: string,
+  sourceBlob: Blob | null,
+  metric: MetricId,
+  entry: CachedMetricEvidence,
+): void {
+  let cached = cache.get(clipId)
+  if (cached === undefined || cached.sourceBlob !== sourceBlob) {
+    cached = { sourceBlob, metrics: new Map() }
+    cache.set(clipId, cached)
+  }
+  cached.metrics.set(metric, entry)
 }
 
 function planEntries(plan: ClipEvidencePlan): Array<[MetricId, MetricEvidencePlan]> {
   return Object.entries(plan) as Array<[MetricId, MetricEvidencePlan]>
 }
 
-function hasPlannedItems(plan: ClipEvidencePlan): boolean {
-  return planEntries(plan).some(([, entry]) => entry.status === 'planned')
-}
-
-/** A clip nothing was planned for never opens a decoder: its plan is already its verdict. */
-function unextractedEvidence(plan: ClipEvidencePlan): ClipEvidence {
+/**
+ * A clip that needs no decoder — nothing planned, or every planned metric reused — already knows its
+ * whole result: the plan's own verdicts, with each reused metric's held evidence in its place.
+ */
+function unextractedEvidence(
+  plan: ClipEvidencePlan,
+  reuse: ReusedMetricEvidence,
+): ClipEvidence {
   const evidence = {} as ClipEvidence
   for (const [metric, entry] of planEntries(plan)) {
     evidence[metric] =
       entry.status === 'planned'
-        ? { status: 'no-evidence', reason: 'extraction-failed' }
+        ? (reuse[metric] ?? { status: 'no-evidence', reason: 'extraction-failed' })
         : entry
   }
   return evidence
@@ -322,6 +365,7 @@ function startRun(
   inputs: ClipEvidenceInputs[],
   cache: Map<string, CachedClipEvidence>,
   sourceIndices: Record<MetricId, number>,
+  isCurrent: () => boolean,
 ): {
   batch: ClipEvidenceInput[]
   planned: MetricId[]
@@ -339,30 +383,63 @@ function startRun(
       input.graftedFrames,
     ),
   )
-  const reused = inputs.map((input, index) => {
+  // Serialised once per planned metric per run: the key both the reuse check below and every cache
+  // write this run makes are stated in.
+  const planKeys = plans.map((plan) => {
+    const keys = new Map<MetricId, string>()
+    for (const [metric, entry] of planEntries(plan)) {
+      if (entry.status === 'planned') keys.set(metric, JSON.stringify(entry))
+    }
+    return keys
+  })
+  const reuse = inputs.map((input, index) => {
     const cached = cache.get(input.clipId)
-    return cached !== undefined && canReuseCachedEvidence(cached, input, plans[index])
-      ? cached.evidence
-      : null
+    const held: ReusedMetricEvidence = {}
+    for (const [metric, planKey] of planKeys[index]) {
+      const evidence = reusableEvidence(cached, input.sourceBlob, metric, planKey)
+      if (evidence !== undefined) held[metric] = evidence
+    }
+    return held
   })
 
-  // Clip index → position in the extraction batch. A clip reused from cache, or with nothing
-  // planned, never opens a decoder and never occupies a slot in the result array.
+  // Clip index → position in the extraction batch. A clip with nothing left to decode — nothing
+  // planned, or every planned metric held — never opens a decoder and never occupies a slot.
   const batchPosition = new Map<number, number>()
   const batch: ClipEvidenceInput[] = []
   inputs.forEach((input, index) => {
-    if (reused[index] !== null || !hasPlannedItems(plans[index])) return
+    const needsDecoder = [...planKeys[index].keys()].some((metric) => !(metric in reuse[index]))
+    if (!needsDecoder) return
     batchPosition.set(index, batch.length)
-    batch.push({ sourceBlob: input.sourceBlob, plan: plans[index] })
+    batch.push({
+      sourceBlob: input.sourceBlob,
+      plan: plans[index],
+      reuse: reuse[index],
+      // Keeps each metric this run finishes, even if the run itself is then superseded. Guarded on
+      // the run still being current as well as by the extractor's own abort check, so the cache
+      // cannot be written by a run this hook has already let go of — whatever the extractor does.
+      onMetricExtracted: (metric, evidence) => {
+        const planKey = planKeys[index].get(metric)
+        if (!isCurrent() || planKey === undefined) return
+        rememberMetric(cache, input.clipId, input.sourceBlob, metric, { planKey, evidence })
+      },
+    })
   })
 
   const finish = (extracted: ClipEvidence[]): SessionEvidenceState => {
     const evidenceByClip = inputs.map((input, index) => {
       const position = batchPosition.get(index)
       const evidence =
-        reused[index] ??
-        (position === undefined ? unextractedEvidence(plans[index]) : extracted[position])
-      cache.set(input.clipId, { inputs: input, plan: plans[index], evidence })
+        position === undefined
+          ? unextractedEvidence(plans[index], reuse[index])
+          : extracted[position]
+      // Replaced wholesale rather than merged into: the cache holds exactly what the current plan
+      // produced, so an image for a plan entry nothing asks for any more is released here rather
+      // than retained for the rest of the session.
+      const metrics = new Map<MetricId, CachedMetricEvidence>()
+      for (const [metric, planKey] of planKeys[index]) {
+        metrics.set(metric, { planKey, evidence: evidence[metric] })
+      }
+      cache.set(input.clipId, { sourceBlob: input.sourceBlob, metrics })
       return evidence
     })
     emitCoverage(inputs, evidenceByClip, sourceIndices)
@@ -393,9 +470,9 @@ export function useSessionEvidence(
   const runIdRef = useRef(0)
   const inputsRef = useRef<ClipEvidenceInputs[] | null>(null)
   const sourceIndicesRef = useRef<Record<MetricId, number> | null>(null)
-  // Per-clip, so adding a second clip re-extracts only the new one rather than re-decoding a 4K
-  // clip that has not changed — and, since `canReuseCachedEvidence`, so does any change that
-  // leaves an existing clip's plan intact.
+  // Per clip AND per metric, so adding a second clip re-extracts only the new one rather than
+  // re-decoding a 4K clip that has not changed, and a graft that moves one metric's plan re-decodes
+  // only that metric (`strides-zm8`).
   const cacheRef = useRef(new Map<string, CachedClipEvidence>())
   const abortRef = useRef<AbortController | null>(null)
   // The sections currently on screen, mirrored out of state so a run starting inside the effect
@@ -428,7 +505,7 @@ export function useSessionEvidence(
     const run =
       inputs === null || sourceIndices === null
         ? null
-        : startRun(inputs, cacheRef.current, sourceIndices)
+        : startRun(inputs, cacheRef.current, sourceIndices, () => runIdRef.current === runId)
 
     // Whether the sections already on screen may stay there while this run works. They may
     // whenever the clip SET is unchanged — the common case, and the one this guard exists for: the
