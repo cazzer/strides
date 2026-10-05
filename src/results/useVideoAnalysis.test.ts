@@ -21,12 +21,14 @@ const {
   computeFormHeuristicsMock,
   getScalePassDetectorMock,
   canUseSequentialDecodeMock,
+  sampleClipSequentialMock,
 } = vi.hoisted(() => ({
   sampleClipMock: vi.fn(),
   applyRobustnessMock: vi.fn(),
   computeFormHeuristicsMock: vi.fn(),
   getScalePassDetectorMock: vi.fn(),
   canUseSequentialDecodeMock: vi.fn(),
+  sampleClipSequentialMock: vi.fn(),
 }))
 
 vi.mock('./sampleClip', () => ({
@@ -36,6 +38,12 @@ vi.mock('./sampleClip', () => ({
   // real values sampleClip.ts itself exports.
   DEFAULT_MAX_CONSECUTIVE_ERRORS: 30,
   DEFAULT_DETECTION_TIMEOUT_MS: 5000,
+}))
+
+// Mocked so a test can drive the sequential (WebCodecs) dispatch in jsdom, which has no
+// VideoDecoder. Unreached by every test that leaves canUseSequentialDecode resolving false.
+vi.mock('./sampleClipSequential', () => ({
+  sampleClipSequential: sampleClipSequentialMock,
 }))
 
 vi.mock('../pose/robustness/interpolate', () => ({
@@ -391,6 +399,7 @@ beforeEach(() => {
   computeFormHeuristicsMock.mockReset()
   getScalePassDetectorMock.mockReset()
   canUseSequentialDecodeMock.mockReset()
+  sampleClipSequentialMock.mockReset()
   applyRobustnessMock.mockReturnValue(FAKE_ROBUST_FRAMES)
   computeFormHeuristicsMock.mockReturnValue(FAKE_HEURISTICS)
   getScalePassDetectorMock.mockResolvedValue(makeFakeDetector())
@@ -1542,6 +1551,127 @@ describe('useVideoAnalysis', () => {
 
         logSpy.mockRestore()
       })
+    })
+  })
+
+  describe('scale-pass detector warm-up (strides-e4c.2)', () => {
+    afterEach(() => {
+      delete window.__STRIDES_POSE_BACKEND_OVERRIDE__
+    })
+
+    // A deferred primary pass, so a test can assert what happened BEFORE the primary result
+    // arrived and then let it through.
+    function deferPrimary(mock: typeof sampleClipMock) {
+      let resolvePrimary!: (samples: unknown[]) => void
+      mock.mockImplementationOnce(() => ({
+        promise: new Promise((resolve) => {
+          resolvePrimary = resolve
+        }),
+        handle: makeFakeHandle(),
+      }))
+      return (samples: unknown[]) => resolvePrimary(samples)
+    }
+
+    function useSequentialPath() {
+      canUseSequentialDecodeMock.mockResolvedValue(true)
+      sampleClipSequentialMock.mockImplementation(() => ({
+        promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+        handle: makeFakeHandle(),
+      }))
+    }
+
+    const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+
+    it('starts creating the scale-pass detector before the primary result arrives on the sequential path', async () => {
+      useSequentialPath()
+      const releasePrimary = deferPrimary(sampleClipSequentialMock)
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1))
+      expect(result.current.phase).toBe('sampling')
+      expect(getScalePassDetectorMock).toHaveBeenCalledTimes(1)
+      expect(getScalePassDetectorMock.mock.invocationCallOrder[0]).toBeLessThan(
+        sampleClipSequentialMock.mock.invocationCallOrder[0],
+      )
+      await waitFor(() => {
+        const warmupLine = logSpy.mock.calls.find(
+          (args) =>
+            args[0] === '[perf-timings]' &&
+            (JSON.parse(args[1] as string) as { stage: string }).stage === 'scale-detector-warmup',
+        )
+        expect(warmupLine).toBeDefined()
+        expect(JSON.parse(warmupLine![1] as string)).toMatchObject({
+          startedAtMs: expect.any(Number),
+          durationMs: expect.any(Number),
+          created: true,
+        })
+      })
+      logSpy.mockRestore()
+
+      await act(async () => {
+        releasePrimary([{ timestamp: 0, frame: null }])
+      })
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      await waitFor(() =>
+        expect(['done', 'failed', 'skipped']).toContain(result.current.scalePass.status),
+      )
+      // The pass makes its own call; the real module de-duplicates.
+      expect(getScalePassDetectorMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not create the scale-pass detector before ready on the playback path', async () => {
+      // canUseSequentialDecode resolves false (this suite's default), so sampleClip runs.
+      const releasePrimary = deferPrimary(sampleClipMock)
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
+      expect(result.current.phase).toBe('sampling')
+      expect(getScalePassDetectorMock).not.toHaveBeenCalled()
+
+      await act(async () => {
+        releasePrimary([{ timestamp: 0, frame: null }])
+      })
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      // Created lazily by the pass itself, as before.
+      await waitFor(() => expect(getScalePassDetectorMock).toHaveBeenCalledTimes(1))
+      expect(sampleClipSequentialMock).not.toHaveBeenCalled()
+    })
+
+    it('never creates the scale-pass detector when the scale pass is disabled', async () => {
+      window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__ = { enabled: false }
+      useSequentialPath()
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1)
+      expect(result.current.scalePass.reason).toBe('disabled')
+      expect(getScalePassDetectorMock).not.toHaveBeenCalled()
+    })
+
+    it('never creates the scale-pass detector when the primary backend is MediaPipe', async () => {
+      window.__STRIDES_POSE_BACKEND_OVERRIDE__ = { backend: 'mediapipePoseLandmarker' }
+      useSequentialPath()
+      // A MediaPipe primary measures its own scale, which is what skips the pass at 'ready'.
+      computeFormHeuristicsMock.mockReturnValue(FAKE_SCALE_HEURISTICS)
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1)
+      expect(result.current.scalePass.reason).toBe('primary-scale')
+      expect(getScalePassDetectorMock).not.toHaveBeenCalled()
     })
   })
 })

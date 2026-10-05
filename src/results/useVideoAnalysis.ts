@@ -16,6 +16,7 @@ import {
 } from './scalePassGraft'
 import { assessScalePassSubjectAgreement } from './scalePassSubjectAgreement'
 import { getScalePassDetector } from '../pose/scalePassDetector'
+import { resolvePoseDetectorConfig } from '../pose/poseBackendConfig'
 import type { ScalePassState, VideoAnalysisState } from './types'
 import { logPerfTimings, roundMs } from './perfTimings'
 import type { SamplerTimings } from './perfTimings'
@@ -269,6 +270,29 @@ export function useVideoAnalysis(
     // computed, and diagnostics must report the path THIS run actually took, not whatever the
     // state says by the time the run finishes.
     const usesSequentialDecode = sequentialDecodeSupported === true
+    // Create the scale pass's detector now, overlapping this primary pass, instead of at 'ready'.
+    // Sequential path only: the playback sampler drops real-time frames under the main-thread/GPU
+    // contention creation causes (strides-gyl), where the sequential one only runs slower. The
+    // backend check stands in for the 'primary-scale' skip below: only MediaPipe emits
+    // `pixelsPerMeter`, so only a MediaPipe primary can carry the calibration that skips the pass.
+    if (
+      usesSequentialDecode &&
+      resolveScalePassConfig().enabled &&
+      resolvePoseDetectorConfig().backend !== 'mediapipePoseLandmarker'
+    ) {
+      const warmupStartedAt = performance.now()
+      const warmup = getScalePassDetector()
+      // Settle time on the page clock (`atMs`), so a driver can see a creation still in flight
+      // while a later clip samples — e.g. clip 1 errors before 'ready' and clip 2 takes over.
+      if (import.meta.env.DEV) void warmup.then((scaleDetector) =>
+        logPerfTimings('scale-detector-warmup', {
+          ...perfClipIdentity(metadata, sourceBlob),
+          startedAtMs: roundMs(warmupStartedAt),
+          durationMs: roundMs(performance.now() - warmupStartedAt),
+          created: scaleDetector !== null,
+        }),
+      )
+    }
     const startedAt = performance.now()
     let samplerTimings: SamplerTimings | null = null
     const { promise, handle } = sampleClipAdaptive(
