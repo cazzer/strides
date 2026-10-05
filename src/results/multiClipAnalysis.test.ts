@@ -98,7 +98,6 @@ describe('computeAggregateAnalysisState', () => {
   it('is idle with no clips', () => {
     const agg = computeAggregateAnalysisState([])
     expect(agg.phase).toBe('idle')
-    expect(agg.progress).toBe(0)
     expect(agg.heuristics).toBeNull()
     expect(agg.error).toBeNull()
   })
@@ -161,9 +160,10 @@ describe('computeAggregateAnalysisState', () => {
     expect(agg.heuristics!.trunkLean.confidence).toBe(0.9)
   })
 
-  it('averages progress across clips', () => {
+  it('carries no session-level progress — progress is per clip (strides-e4c.3)', () => {
+    // The session ignores progress changes, so an average here would be a stale snapshot.
     const clips = [makeClip('a', { progress: 0.2 }), makeClip('b', { progress: 0.6 })]
-    expect(computeAggregateAnalysisState(clips).progress).toBeCloseTo(0.4)
+    expect('progress' in computeAggregateAnalysisState(clips)).toBe(false)
   })
 
   it('isPausedMidAnalysis is true if any clip is paused', () => {

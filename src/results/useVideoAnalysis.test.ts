@@ -10,6 +10,7 @@ import type {
 import type { SampleClipHandle } from './sampleClip'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 import { DEFAULT_SAMPLING_ROBUSTNESS_CONFIG } from './samplingRobustnessConfig'
+import { progressPercent } from './progressPercent'
 import {
   SCALE_PASS_PROVENANCE_CAVEAT,
   SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT,
@@ -581,6 +582,62 @@ describe('useVideoAnalysis', () => {
     expect(computeFormHeuristicsMock).toHaveBeenCalledWith(FAKE_ROBUST_FRAMES)
     expect(result.current.robustFrames).toBe(FAKE_ROBUST_FRAMES)
     expect(result.current.heuristics).toBe(FAKE_HEURISTICS)
+    expect(result.current.progress).toBe(1)
+  })
+
+  it('publishes sampling progress only when its displayed whole percent moves (strides-e4c.3)', async () => {
+    let resolveSampling!: (samples: unknown[]) => void
+    sampleClipMock.mockImplementation(() => ({
+      promise: new Promise((resolve) => {
+        resolveSampling = resolve
+      }),
+      handle: makeFakeHandle(),
+    }))
+
+    const videoSource = makeVideoSource()
+    const detector = makeFakeDetector()
+    let renders = 0
+    const { result } = renderHook(() => {
+      renders += 1
+      return useVideoAnalysis(videoSource, detector)
+    })
+
+    await waitFor(() => expect(result.current.phase).toBe('sampling'))
+    // `sampleClip(video, detector, durationSec, options)` — the one sampler callback under test.
+    const { onProgress } = sampleClipMock.mock.calls[0][3] as {
+      onProgress: (fraction: number) => void
+    }
+
+    // A long clip's worth of sampled frames, one onProgress per frame, as the samplers report it.
+    const FRAMES = 2000
+    const published: number[] = [result.current.progress]
+    const displayMismatches: number[] = []
+    const rendersBefore = renders
+    for (let k = 1; k <= FRAMES; k += 1) {
+      act(() => onProgress(k / FRAMES))
+      if (published.at(-1) !== result.current.progress) published.push(result.current.progress)
+      // What the clip strip would label this frame, throttled vs. unthrottled.
+      if (progressPercent(result.current.progress) !== progressPercent(k / FRAMES)) {
+        displayMismatches.push(k)
+      }
+    }
+    const samplingRenders = renders - rendersBefore
+
+    // The starting 0, then one publish per whole percent 1..100 — never one per frame. Before
+    // this change both counts were FRAMES.
+    expect(published).toHaveLength(101)
+    expect(samplingRenders).toBeLessThanOrEqual(101)
+    // The displayed percent is what an unthrottled stream would show, at every single frame...
+    expect(displayMismatches).toEqual([])
+    // ...including the end: the last publish already reads 100%. The fraction it carries is the
+    // first frame to round there (0.995), not 1 — nothing reads progress except through
+    // `progressPercent`, and the exact 1 arrives with 'ready', below.
+    expect(progressPercent(result.current.progress)).toBe(100)
+
+    await act(async () => {
+      resolveSampling([{ timestamp: 0, frame: null }])
+    })
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
     expect(result.current.progress).toBe(1)
   })
 

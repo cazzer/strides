@@ -1,3 +1,4 @@
+import { Profiler } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PoseDetector } from '../pose/detector'
@@ -238,6 +239,73 @@ describe('MultiClipVideoSession', () => {
 
     await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
     expect(sampleClipMock).toHaveBeenCalled()
+  })
+
+  it('commits about once per displayed percent while a clip samples, and never re-renders the session for it (strides-e4c.3)', async () => {
+    // Clip 1 finishes (results view, evidence and all mounted); clip 2's primary pass then hangs
+    // so the test can drive its progress by hand — the shape where per-frame progress was most
+    // expensive, since every update re-rendered clip 1's finished results too.
+    sampleClipMock
+      .mockImplementationOnce(() => ({
+        promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+        handle: { stop: vi.fn() },
+      }))
+    const commits = { count: 0 }
+    render(
+      <Profiler id="session" onRender={() => (commits.count += 1)}>
+        <MultiClipVideoSession detector={makeFakeDetector()} />
+      </Profiler>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run1.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
+
+    sampleClipMock.mockImplementation(() => ({
+      promise: new Promise(() => {}),
+      handle: { stop: vi.fn() },
+    }))
+    await addAnotherClip(new File(['y'], 'run2.mp4', { type: 'video/mp4' }))
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
+    markVideoReady(canonicalVideos()[1])
+
+    // The primary pass is the one call carrying onProgress; a scale pass passes none.
+    const progressCalls = () =>
+      sampleClipMock.mock.calls.filter(
+        (call) => typeof (call[3] as { onProgress?: unknown })?.onProgress === 'function',
+      )
+    await waitFor(() => expect(progressCalls()).toHaveLength(2))
+    const { onProgress } = progressCalls()[1][3] as { onProgress: (fraction: number) => void }
+    await act(async () => {})
+
+    // `useSessionEvidence` is called exactly once per render of the session component, so its
+    // passthrough spy (bottom of this file) counts SESSION renders, as distinct from commits that
+    // only re-render the sampling clip's own `ClipSlot`.
+    const sessionHook = vi.mocked((await import('./useSessionEvidence')).useSessionEvidence)
+    const strip = screen.getByRole('list', { name: /clips/i })
+    const clip2Entry = () => strip.querySelectorAll('[data-clip-condition]')[1]
+
+    // Far more sampled frames than displayed percents, so a per-frame regression cannot hide
+    // inside the bound.
+    const FRAMES = 2000
+    const commitsBefore = commits.count
+    const sessionRendersBefore = sessionHook.mock.calls.length
+    for (let k = 1; k <= FRAMES; k += 1) {
+      act(() => onProgress(k / FRAMES))
+      // The strip still advances while the session above it stays put.
+      if (k === FRAMES / 2) expect(clip2Entry().textContent).toMatch(/50%/)
+    }
+    const sampledCommits = commits.count - commitsBefore
+    const sessionRenders = sessionHook.mock.calls.length - sessionRendersBefore
+
+    // Measured in this test, 2000 frames (commits / session renders): 6000 / 4000 with neither
+    // change (every frame published, every publish re-rendering the session); 300 / 200 with the
+    // whole-percent throttle alone; 100 / 0 with `sameClipSession` also ignoring progress — the
+    // 100 being the sampling clip's own `ClipSlot`, which is the strip entry that shows it.
+    expect(sampledCommits).toBeLessThanOrEqual(400)
+    expect(sessionRenders).toBe(0)
+    expect(clip2Entry().textContent).toMatch(/100%/)
   })
 
   it('one source, one clip: selecting several files at once creates one clip per file', async () => {

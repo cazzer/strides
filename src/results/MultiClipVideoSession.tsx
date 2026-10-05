@@ -47,6 +47,12 @@ function makeClipId(): string {
  * on every single render, forever. Comparing the fields that actually matter for rendering lets
  * `setClipStates`'s updater return the previous state object unchanged when nothing meaningful
  * moved, which React treats as a no-op (no re-render), breaking the loop.
+ *
+ * `analysis.progress` is deliberately NOT compared (strides-e4c.3). Nothing at session level reads
+ * it — each clip's strip entry renders its own progress inside `ClipSlot`, off that clip's own
+ * state — and comparing it re-rendered this whole tree, finished clips' results included, once per
+ * displayed percent while a clip sampled, on the main thread the sampler shares. The aggregate has
+ * no `progress` field (`AggregateAnalysisState`) so a stale one cannot be rendered by mistake.
  */
 function sameClipSession(previous: ClipSession | undefined, next: ClipSession): boolean {
   if (!previous) return false
@@ -55,7 +61,6 @@ function sameClipSession(previous: ClipSession | undefined, next: ClipSession): 
     previous.videoSource.metadata === next.videoSource.metadata &&
     previous.videoSource.error === next.videoSource.error &&
     previous.analysis.phase === next.analysis.phase &&
-    previous.analysis.progress === next.analysis.progress &&
     previous.analysis.isPausedMidAnalysis === next.analysis.isPausedMidAnalysis &&
     previous.analysis.robustFrames === next.analysis.robustFrames &&
     previous.analysis.heuristics === next.analysis.heuristics &&

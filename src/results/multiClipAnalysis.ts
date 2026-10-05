@@ -2,6 +2,7 @@ import type { MetricId } from '../heuristics/types'
 import type { ClipPoster } from '../video/posterFrame'
 import type { VideoSource } from '../video/types'
 import type {
+  AggregateAnalysisState,
   AnalysisPhase,
   ScalePassStatus,
   VideoAnalysisError,
@@ -79,16 +80,12 @@ function allClipsReady(clips: ClipSession[]): boolean {
  * `MetricsPanel` only read `heuristics`, and the skeleton overlay is rendered per-clip inside
  * `ClipSlot` off that clip's own `analysis.robustFrames`.
  */
-export function computeAggregateAnalysisState(clips: ClipSession[]): VideoAnalysisState {
+export function computeAggregateAnalysisState(clips: ClipSession[]): AggregateAnalysisState {
   const phase = aggregatePhase(clips)
   const allReady = allClipsReady(clips)
 
   return {
     phase,
-    progress:
-      clips.length === 0
-        ? 0
-        : clips.reduce((sum, c) => sum + c.analysis.progress, 0) / clips.length,
     isPausedMidAnalysis: clips.some((c) => c.analysis.isPausedMidAnalysis),
     robustFrames: null,
     heuristics: allReady

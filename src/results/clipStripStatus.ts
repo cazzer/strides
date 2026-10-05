@@ -1,5 +1,6 @@
 import type { VideoSourceStatus } from '../video/types'
 import type { AnalysisPhase, ScalePassStatus } from './types'
+import { progressPercent } from './progressPercent'
 
 /**
  * What one clip strip entry is currently reporting.
@@ -108,7 +109,7 @@ export function describeClipStripStatus(input: ClipStripStatusInput): ClipStripS
   }
 
   if (phase === 'sampling') {
-    const percent = Math.round(clamp01(progress) * 100)
+    const percent = progressPercent(progress)
     return {
       condition: 'sampling',
       percent,
@@ -184,10 +185,4 @@ export function describeClipStripStatus(input: ClipStripStatusInput): ClipStripS
     glyph: '⋯',
     announcement: 'Loading video…',
   }
-}
-
-/** Progress arrives from a sampler, so a stray NaN or an out-of-range value must not reach a label. */
-function clamp01(value: number): number {
-  if (!Number.isFinite(value)) return 0
-  return Math.min(1, Math.max(0, value))
 }
