@@ -94,7 +94,7 @@ export function ClipSlot({
   onRemove,
 }: ClipSlotProps) {
   const videoSource = useVideoSource()
-  const analysis = useVideoAnalysis(videoSource, detector, isPresented)
+  const analysis = useVideoAnalysis(videoSource, detector, isPresented, !isActiveClip)
   // Reads `videoSource`'s blob and metadata only, never its `videoRef` — the poster is decoded on
   // a detached element, so it cannot move the playback position `sampleClip` is reading from (see
   // `useClipPoster`). Released by that hook's own cleanup when this slot unmounts.

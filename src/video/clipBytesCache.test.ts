@@ -2,13 +2,14 @@
 // Node types for the real-clip case only (reading a demo clip off disk) — see mp4Demux.test.ts.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ContainerTimingProbe } from './containerTiming'
 import type { DemuxedTrack } from './mp4Demux'
 
-const { demuxMp4Mock, probeContainerTimingMock } = vi.hoisted(() => ({
+const { demuxMp4Mock, probeContainerTimingMock, logPerfTimingsMock } = vi.hoisted(() => ({
   demuxMp4Mock: vi.fn(),
   probeContainerTimingMock: vi.fn(),
+  logPerfTimingsMock: vi.fn(),
 }))
 
 vi.mock('./mp4Demux', async () => {
@@ -18,6 +19,12 @@ vi.mock('./mp4Demux', async () => {
 vi.mock('./containerTiming', async () => {
   const actual = await vi.importActual<typeof import('./containerTiming')>('./containerTiming')
   return { ...actual, probeContainerTiming: probeContainerTimingMock }
+})
+
+vi.mock('../results/perfTimings', async () => {
+  const actual =
+    await vi.importActual<typeof import('../results/perfTimings')>('../results/perfTimings')
+  return { ...actual, logPerfTimings: logPerfTimingsMock }
 })
 
 import {
@@ -56,8 +63,15 @@ beforeEach(() => {
   __resetForTests()
   demuxMp4Mock.mockReset()
   probeContainerTimingMock.mockReset()
+  logPerfTimingsMock.mockReset()
   demuxMp4Mock.mockImplementation(async () => makeTrack())
   probeContainerTimingMock.mockResolvedValue(OK_PROBE)
+})
+
+// The demux's container probe runs a macrotask after the demux settles; let any a test left
+// queued finish before the next test resets the mocks it would otherwise count against.
+afterEach(async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0))
 })
 
 describe('demuxClip', () => {
@@ -114,6 +128,7 @@ describe('demuxClip', () => {
     expect(demuxMp4Mock).toHaveBeenCalledTimes(2)
     expect(arrayBuffer).toHaveBeenCalledTimes(2)
     // The container probe the first attempt took is still good — the bytes did not change.
+    await probeClipContainerTiming(blob)
     expect(probeContainerTimingMock).toHaveBeenCalledTimes(1)
   })
 
@@ -138,6 +153,69 @@ describe('demuxClip', () => {
 
     expect(arrayBuffer).toHaveBeenCalledTimes(1)
     expect(probeContainerTimingMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('parses the container only after the demux has settled and its callers have resumed', async () => {
+    const { blob, bytes } = makeBlob()
+    let finishDemux!: (track: DemuxedTrack) => void
+    demuxMp4Mock.mockImplementationOnce(
+      () => new Promise<DemuxedTrack>((resolve) => (finishDemux = resolve)),
+    )
+
+    const demuxed = demuxClip(blob)
+    // Asked for mid-demux: shares the one read rather than starting its own.
+    const probed = probeClipContainerTiming(blob)
+    await vi.waitFor(() => expect(demuxMp4Mock).toHaveBeenCalledTimes(1))
+    expect(probeContainerTimingMock).not.toHaveBeenCalled()
+
+    finishDemux(makeTrack())
+    await demuxed
+    expect(probeContainerTimingMock).not.toHaveBeenCalled()
+
+    await expect(probed).resolves.toBe(OK_PROBE)
+    expect(probeContainerTimingMock).toHaveBeenCalledTimes(1)
+    expect(probeContainerTimingMock).toHaveBeenCalledWith(bytes)
+    expect(blob.arrayBuffer).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports the container probe on its own perf line, naming which read it came from', async () => {
+    const seeded = makeBlob()
+    const own = makeBlob()
+
+    await demuxClip(seeded.blob)
+    await probeClipContainerTiming(seeded.blob)
+    await probeClipContainerTiming(own.blob)
+
+    expect(logPerfTimingsMock).toHaveBeenCalledTimes(2)
+    expect(logPerfTimingsMock).toHaveBeenCalledWith('container-probe', {
+      bytes: 4,
+      source: 'demux-read',
+      containerProbeMs: expect.any(Number),
+    })
+    expect(logPerfTimingsMock).toHaveBeenCalledWith('container-probe', {
+      bytes: 4,
+      source: 'own-read',
+      containerProbeMs: expect.any(Number),
+    })
+  })
+
+  it('a demux released mid-flight that later rejects does not evict the newer entry', async () => {
+    const { blob } = makeBlob()
+    let failFirst!: (error: Error) => void
+    demuxMp4Mock.mockImplementationOnce(
+      () => new Promise<DemuxedTrack>((_resolve, reject) => (failFirst = reject)),
+    )
+
+    const first = demuxClip(blob)
+    await vi.waitFor(() => expect(demuxMp4Mock).toHaveBeenCalledTimes(1))
+    releaseClipDemux(blob)
+    const second = await demuxClip(blob)
+
+    failFirst(new Error('stale'))
+    await expect(first).rejects.toThrow('stale')
+
+    await expect(demuxClip(blob)).resolves.toBe(second)
+    expect(demuxMp4Mock).toHaveBeenCalledTimes(2)
   })
 
   it('release drops the track so the next demux reads afresh, while the container probe stays', async () => {
@@ -177,11 +255,10 @@ describe('demuxClip', () => {
     await demuxClip(blob, miss)
     await demuxClip(blob, hit)
 
-    for (const stage of ['arrayBufferMs', 'containerProbeMs', 'demuxMs'] as const) {
+    for (const stage of ['arrayBufferMs', 'demuxMs'] as const) {
       expect(miss[stage]).toBeGreaterThanOrEqual(0)
     }
     expect(hit.arrayBufferMs).toBe(0)
-    expect(hit.containerProbeMs).toBe(0)
     expect(hit.demuxMs).toBeGreaterThanOrEqual(0)
   })
 })

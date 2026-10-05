@@ -188,7 +188,6 @@ describe('canUseSequentialDecode', () => {
       expect(first.isConfigSupportedMs).toBeGreaterThanOrEqual(0)
       expect(second).toEqual({
         arrayBufferMs: 0,
-        containerProbeMs: 0,
         demuxMs: expect.any(Number),
         isConfigSupportedMs: 0,
       })

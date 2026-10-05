@@ -74,6 +74,12 @@ async function looksLikeIsoBmff(blob: Blob): Promise<boolean> {
  * goes through `clipBytesCache.ts`, so a `true` answer leaves the track there for the samplers to
  * reuse, and a `false` one releases it at once — no sequential pass will ever want it.
  *
+ * Every answer is memoised for the Blob's lifetime, `false` included — and that includes a
+ * `false` that came from a TRANSIENT failure (the blob's read rejecting once). Such a clip
+ * samples on the `<video>`-playback path for the rest of the session rather than being re-probed;
+ * the alternative would let the evidence calibration's later question get a different answer
+ * than the one the samplers actually ran under.
+ *
  * Note: this probe's own `enabled: false`-by-default kill switch (`SequentialSamplingConfig`,
  * see its doc) lives one layer up, in `useVideoAnalysis.ts` — this function is never even called
  * while the plane is disabled, so it has no gate of its own for it.
@@ -102,7 +108,6 @@ export async function canUseSequentialDecode(
     const answer = await memoised
     if (timings) {
       timings.arrayBufferMs = 0
-      timings.containerProbeMs = 0
       timings.demuxMs = performance.now() - waitStartedAt
       timings.isConfigSupportedMs = 0
     }

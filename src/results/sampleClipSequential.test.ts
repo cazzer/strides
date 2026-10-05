@@ -291,7 +291,6 @@ describe('sampleClipSequential', () => {
       openSequentialFrameSourceMock.mock.calls[0][0],
     )
     expect(second.arrayBufferMs).toBe(0)
-    expect(second.containerProbeMs).toBe(0)
     expect(second.demuxMs).toBeTypeOf('number')
   })
 })

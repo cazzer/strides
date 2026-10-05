@@ -1612,6 +1612,78 @@ describe('useVideoAnalysis', () => {
       expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob)
     })
 
+    it('releases a queued clip once its probe has settled, since its turn may be a whole run away', async () => {
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+      canUseSequentialDecodeMock.mockResolvedValue(true)
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      renderHook(() => useVideoAnalysis(videoSource, null, false, true))
+
+      await waitFor(() => expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob))
+    })
+
+    it('keeps the demux for the active clip while it waits for the model to load', async () => {
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+      let answer!: (supported: boolean) => void
+      canUseSequentialDecodeMock.mockReturnValue(new Promise((resolve) => (answer = resolve)))
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      renderHook(() => useVideoAnalysis(videoSource, null, false, false))
+      await waitFor(() => expect(canUseSequentialDecodeMock).toHaveBeenCalled())
+
+      await act(async () => {
+        answer(true)
+      })
+      await act(async () => {})
+
+      expect(releaseClipDemuxMock).not.toHaveBeenCalled()
+    })
+
+    it('releases when the probe answers yes only after its timeout already fell back to playback', async () => {
+      // waitFor polls with setTimeout, so this test flushes with bounded act() loops instead.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+        let answer!: (supported: boolean) => void
+        canUseSequentialDecodeMock.mockReturnValue(new Promise((resolve) => (answer = resolve)))
+
+        const videoSource = makeVideoSource({ sourceBlob })
+        const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+        await act(async () => {})
+
+        await act(async () => {
+          vi.advanceTimersByTime(3000)
+        })
+        for (let i = 0; i < 10 && result.current.phase !== 'sampling'; i += 1) {
+          await act(async () => {})
+        }
+        expect(result.current.phase).toBe('sampling')
+        expect(releaseClipDemuxMock).not.toHaveBeenCalled()
+
+        await act(async () => {
+          answer(true)
+        })
+
+        expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('releases on reset(), which is how a clip is removed', async () => {
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+      await waitFor(() => expect(result.current.phase).toBe('sampling'))
+
+      act(() => {
+        result.current.reset()
+      })
+
+      expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob)
+    })
+
     it('does not release while the primary run is still sampling', async () => {
       const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
 

@@ -221,7 +221,6 @@ export function sampleClipSequential(
           path: 'sequential',
           totalMs: roundMs(performance.now() - startedAt),
           arrayBufferMs: roundOptionalMs(demuxTimings.arrayBufferMs),
-          containerProbeMs: roundOptionalMs(demuxTimings.containerProbeMs),
           demuxMs: roundOptionalMs(demuxTimings.demuxMs),
           decoderOpenMs: roundOptionalMs(decoderOpenMs),
           drawMs: summarizeDurations(drawMs),

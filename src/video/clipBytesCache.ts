@@ -2,6 +2,7 @@ import { probeContainerTiming } from './containerTiming'
 import type { ContainerTimingProbe } from './containerTiming'
 import { demuxMp4 } from './mp4Demux'
 import type { DemuxedTrack } from './mp4Demux'
+import { logPerfTimings, roundMs } from '../results/perfTimings'
 
 /**
  * One read and one demux of a clip's bytes per session, shared by every stage that needs them
@@ -19,8 +20,11 @@ import type { DemuxedTrack } from './mp4Demux'
  *
  * - the demuxed track — the expensive one, since `demuxMp4` retains the whole compressed
  *   bitstream. Held only while a pass may still sample it; `releaseClipDemux` drops it.
- * - the container-timing probe — a few numbers per track, kept for the clip's lifetime. Seeded
- *   from the SAME bytes the demux reads, so evidence calibration never reads the blob again.
+ * - the container-timing probe — a few numbers per track, kept for the clip's lifetime. Taken
+ *   from the SAME bytes the demux read, so evidence calibration never reads the blob again — but
+ *   only after the demux has settled and its waiting callers have resumed, because nothing needs
+ *   it before evidence and the feasibility probe gating auto-start should not wait on it. Its time
+ *   is reported on its own `[perf-timings]` line, stage `container-probe`.
  *
  * Sharing one `ArrayBuffer` between the two parses is safe because mp4box copies its input
  * (`MP4BoxBuffer.fromArrayBuffer` allocates a fresh buffer and `set`s the bytes into it), so
@@ -32,12 +36,11 @@ import type { DemuxedTrack } from './mp4Demux'
  * still intercepts the demux reached through here.
  */
 
-/** Where one `demuxClip` call's time went. On a cache hit the read and container-probe stages
- * are `0` — that call did neither — and `demuxMs` is the time spent waiting on the shared result,
- * which is `~0` once it has settled. */
+/** Where one `demuxClip` call's time went. On a cache hit the read stage is `0` — that call did
+ * no read — and `demuxMs` is the time spent waiting on the shared result, which is `~0` once it
+ * has settled. */
 export interface ClipDemuxTimings {
   arrayBufferMs?: number
-  containerProbeMs?: number
   demuxMs?: number
 }
 
@@ -64,21 +67,44 @@ function cacheContainerProbe(
 
 async function readAndDemux(
   read: Promise<ArrayBuffer>,
-  seededProbe: Promise<ContainerTimingProbe> | null,
   timings: ClipDemuxTimings | undefined,
 ): Promise<DemuxedTrack> {
   const readStartedAt = performance.now()
   const bytes = await read
-  const probeStartedAt = performance.now()
-  if (timings) timings.arrayBufferMs = probeStartedAt - readStartedAt
-  // Settled before the demux starts so the two parses never hold their copies of the bytes at
-  // the same time.
-  if (seededProbe !== null) await seededProbe
   const demuxStartedAt = performance.now()
-  if (timings) timings.containerProbeMs = demuxStartedAt - probeStartedAt
+  if (timings) timings.arrayBufferMs = demuxStartedAt - readStartedAt
   const track = await demuxMp4(bytes)
   if (timings) timings.demuxMs = performance.now() - demuxStartedAt
   return track
+}
+
+async function probeAndReport(
+  blob: Blob,
+  bytes: ArrayBuffer,
+  source: 'demux-read' | 'own-read',
+): Promise<ContainerTimingProbe> {
+  const startedAt = performance.now()
+  const probe = await probeContainerTiming(bytes)
+  logPerfTimings('container-probe', {
+    bytes: blob.size,
+    source,
+    containerProbeMs: roundMs(performance.now() - startedAt),
+  })
+  return probe
+}
+
+/** The container probe for a clip `demuxClip` is reading: the same bytes, parsed once the demux
+ * has settled either way (so the two mp4box parses never run at once), and one macrotask later
+ * still, so every caller awaiting the track resumes before this parse takes the thread. */
+async function probeAfterDemux(
+  blob: Blob,
+  read: Promise<ArrayBuffer>,
+  demuxed: Promise<DemuxedTrack>,
+): Promise<ContainerTimingProbe> {
+  const bytes = await read
+  await demuxed.catch(() => undefined)
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  return probeAndReport(blob, bytes, 'demux-read')
 }
 
 /**
@@ -95,21 +121,20 @@ export async function demuxClip(blob: Blob, timings?: ClipDemuxTimings): Promise
     } finally {
       if (timings) {
         timings.arrayBufferMs = 0
-        timings.containerProbeMs = 0
         timings.demuxMs = performance.now() - waitStartedAt
       }
     }
   }
 
   const read = readClipBytes(blob)
-  const seededProbe = containerProbes.has(blob)
-    ? null
-    : cacheContainerProbe(blob, read.then(probeContainerTiming))
-  const pending = readAndDemux(read, seededProbe, timings)
+  const pending = readAndDemux(read, timings)
   demuxes.set(blob, pending)
   pending.catch(() => {
     if (demuxes.get(blob) === pending) demuxes.delete(blob)
   })
+  // Cached now, not once the demux settles, so a probe asked for mid-read or mid-demux shares
+  // this read instead of starting another.
+  if (!containerProbes.has(blob)) cacheContainerProbe(blob, probeAfterDemux(blob, read, pending))
   return pending
 }
 
@@ -122,7 +147,10 @@ export async function demuxClip(blob: Blob, timings?: ClipDemuxTimings): Promise
 export function probeClipContainerTiming(blob: Blob): Promise<ContainerTimingProbe> {
   const cached = containerProbes.get(blob)
   if (cached !== undefined) return cached
-  return cacheContainerProbe(blob, readClipBytes(blob).then(probeContainerTiming))
+  return cacheContainerProbe(
+    blob,
+    readClipBytes(blob).then((bytes) => probeAndReport(blob, bytes, 'own-read')),
+  )
 }
 
 /** Drops the clip's demuxed track — the large entry — once no pass will sample it again. The

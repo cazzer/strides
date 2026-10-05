@@ -74,6 +74,13 @@ export function useVideoAnalysis(
    * which is what every caller that has no presentation concept gets.
    */
   presented = false,
+  /**
+   * Whether this clip is waiting for ANOTHER clip to finish with the shared detector. Only used to
+   * release this clip's cached demux (`clipBytesCache.ts`) while it waits, since its turn may be a
+   * whole primary + scale pass away. Not derivable from `detector`: that is also `null` for the
+   * active clip while the model loads (see `ClipSlot`'s `isActiveClip`).
+   */
+  queued = false,
 ): VideoAnalysisState {
   const { videoRef, metadata, sourceBlob } = videoSource
 
@@ -172,14 +179,15 @@ export function useVideoAnalysis(
     setSequentialDecodeSupported(null)
     const probedFor = metadata
     let settled = false
-    const settle = (supported: boolean) => {
-      if (settled) return
+    /** Whether this call committed `supported` as the clip's answer. */
+    const settle = (supported: boolean): boolean => {
+      if (settled) return false
       settled = true
       // A newer clip may have loaded (and re-triggered this effect) while this was resolving —
       // only commit the result if it's still the clip this probe was actually run for.
-      if (sequentialDecodeProbedForRef.current === probedFor) {
-        setSequentialDecodeSupported(supported)
-      }
+      if (sequentialDecodeProbedForRef.current !== probedFor) return false
+      setSequentialDecodeSupported(supported)
+      return true
     }
 
     // The sequential-decode plane is a no-op unless explicitly enabled (default `false` — see
@@ -198,7 +206,12 @@ export function useVideoAnalysis(
     const probe = probeEnabled
       ? canUseSequentialDecode(sourceBlob, probeTimings)
       : Promise.resolve(false)
-    void probe.then(settle)
+    const probedBlob = sourceBlob
+    void probe.then((supported) => {
+      // An answer that never reached auto-start (the timeout below won, or a newer clip replaced
+      // this one) serves no sampler, so the track the probe demuxed for it would sit unused.
+      if (!settle(supported) && probedBlob) releaseClipDemux(probedBlob)
+    })
     // Chained after `settle`, so the line can never delay the result reaching auto-start.
     void probe.then((supported) =>
       logPerfTimings('sequential-probe', {
@@ -220,7 +233,10 @@ export function useVideoAnalysis(
   const reset = useCallback(() => {
     abandonActiveRun()
     setState(idleState())
-  }, [])
+    // Clip removal goes through here, so the bitstream is dropped explicitly rather than left to
+    // the Blob becoming unreachable.
+    if (sourceBlob) releaseClipDemux(sourceBlob)
+  }, [sourceBlob])
 
   const start = useCallback(() => {
     const video = videoRef.current
@@ -501,9 +517,11 @@ export function useVideoAnalysis(
   }, [presented, state.phase, state.scalePass.status, videoRef])
 
   // Drops this clip's cached demuxed track (`clipBytesCache.ts`) — the whole compressed bitstream —
-  // once neither pass can sample it again: the run failed, or it is 'ready' and the scale pass
-  // has reached a terminal status. Releasing early is only ever a cost, never a wrong answer: a
-  // later run simply reads and demuxes afresh.
+  // whenever no pass will sample it soon: the run failed, or it is 'ready' and the scale pass has
+  // reached a terminal status, or the probe has settled while this clip is queued behind another
+  // (whose primary + scale pass may take many seconds, with N clips each holding a track).
+  // Releasing early is only ever a cost, never a wrong answer: a later run reads and demuxes
+  // afresh.
   useEffect(() => {
     if (!sourceBlob) return
     const passesDone =
@@ -511,8 +529,10 @@ export function useVideoAnalysis(
       (state.phase === 'ready' &&
         state.scalePass.status !== 'pending' &&
         state.scalePass.status !== 'running')
-    if (passesDone) releaseClipDemux(sourceBlob)
-  }, [sourceBlob, state.phase, state.scalePass.status])
+    const waitingBehindAnotherClip =
+      queued && state.phase === 'idle' && sequentialDecodeSupported !== null
+    if (passesDone || waitingBehindAnotherClip) releaseClipDemux(sourceBlob)
+  }, [sourceBlob, state.phase, state.scalePass.status, queued, sequentialDecodeSupported])
 
   // Drives the background scale pass (add-background-scale-pass, D1): once the primary run is
   // 'ready' with the pass 'pending', replay the same clip through a dedicated MediaPipe detector
