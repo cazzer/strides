@@ -1,6 +1,8 @@
 import type { PoseDetector, PoseFrameSource } from '../pose/detector'
 import type { PoseSample } from '../pose/robustness/types'
-import { demuxMp4 } from '../video/mp4Demux'
+import { demuxClip } from '../video/clipBytesCache'
+import type { ClipDemuxTimings } from '../video/clipBytesCache'
+import type { DemuxedTrack } from '../video/mp4Demux'
 import { openSequentialFrameSource } from '../video/sequentialFrameSource'
 import type { SelectedVideoFrame } from '../video/sequentialFrameSource'
 import { createFrameSelector } from './sequentialSamplingStep'
@@ -35,6 +37,10 @@ import { roundMs, summarizeDurations } from './perfTimings'
  * resolves. This is `sequentialFrameSource.ts`'s own memory-discipline contract propagated one
  * layer up; see that module's doc comments for the full reasoning.
  */
+function roundOptionalMs(ms: number | undefined): number | undefined {
+  return ms === undefined ? undefined : roundMs(ms)
+}
+
 export function sampleClipSequential(
   sourceBlob: Blob,
   detector: PoseDetector,
@@ -51,8 +57,9 @@ export function sampleClipSequential(
 
   // Dev-only `[perf-timings]` instrumentation (`perfTimings.ts`): plain clock reads, no awaits.
   const startedAt = performance.now()
-  let arrayBufferMs: number | undefined
-  let demuxMs: number | undefined
+  // Filled by `demuxClip`: the real read and demux on the run that pays for them, `0` and the
+  // wait on the shared track for a run that reuses one (the scale pass, after the primary).
+  const demuxTimings: ClipDemuxTimings = {}
   let decoderOpenMs: number | undefined
   const drawMs: number[] = []
   const detectMs: number[] = []
@@ -107,15 +114,9 @@ export function sampleClipSequential(
   }
 
   void (async () => {
-    let track: Awaited<ReturnType<typeof demuxMp4>>
+    let track: DemuxedTrack
     try {
-      const readStartedAt = performance.now()
-      const bytes = await sourceBlob.arrayBuffer()
-      const demuxStartedAt = performance.now()
-      arrayBufferMs = demuxStartedAt - readStartedAt
-      if (cancelled) return
-      track = await demuxMp4(bytes)
-      demuxMs = performance.now() - demuxStartedAt
+      track = await demuxClip(sourceBlob, demuxTimings)
     } catch (err) {
       abort(
         err instanceof Error ? err : new Error('Failed to demux the clip for sequential sampling.'),
@@ -221,9 +222,9 @@ export function sampleClipSequential(
         onTimings?.({
           path: 'sequential',
           totalMs: roundMs(performance.now() - startedAt),
-          arrayBufferMs: arrayBufferMs === undefined ? undefined : roundMs(arrayBufferMs),
-          demuxMs: demuxMs === undefined ? undefined : roundMs(demuxMs),
-          decoderOpenMs: decoderOpenMs === undefined ? undefined : roundMs(decoderOpenMs),
+          arrayBufferMs: roundOptionalMs(demuxTimings.arrayBufferMs),
+          demuxMs: roundOptionalMs(demuxTimings.demuxMs),
+          decoderOpenMs: roundOptionalMs(decoderOpenMs),
           drawMs: summarizeDurations(drawMs),
           detectMs: summarizeDurations(detectMs),
           decodeWaitMs: summarizeDurations(decodeWaitMs),
