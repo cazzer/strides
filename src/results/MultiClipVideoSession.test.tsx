@@ -12,12 +12,16 @@ const {
   computeFormHeuristicsMock,
   getScalePassDetectorMock,
   deriveClipPosterMock,
+  canUseSequentialDecodeMock,
+  sampleClipSequentialMock,
 } = vi.hoisted(() => ({
   sampleClipMock: vi.fn(),
   applyRobustnessMock: vi.fn(),
   computeFormHeuristicsMock: vi.fn(),
   getScalePassDetectorMock: vi.fn(),
   deriveClipPosterMock: vi.fn(),
+  canUseSequentialDecodeMock: vi.fn(),
+  sampleClipSequentialMock: vi.fn(),
 }))
 
 vi.mock('./sampleClip', () => ({
@@ -28,6 +32,16 @@ vi.mock('./sampleClip', () => ({
 vi.mock('../pose/robustness/interpolate', () => ({ applyRobustness: applyRobustnessMock }))
 vi.mock('../heuristics/index', () => ({ computeFormHeuristics: computeFormHeuristicsMock }))
 vi.mock('../pose/scalePassDetector', () => ({ getScalePassDetector: getScalePassDetectorMock }))
+// jsdom has no VideoDecoder, so the real probe always answers no and every clip samples on the
+// playback path; `beforeEach` keeps that answer. The scale-pass schedule case below answers yes
+// to drive the sequential path, whose sampler is mocked for the same reason.
+vi.mock('../video/webCodecsSupport', () => ({ canUseSequentialDecode: canUseSequentialDecodeMock }))
+vi.mock('./sampleClipSequential', () => ({ sampleClipSequential: sampleClipSequentialMock }))
+// A PASSTHROUGH spy, so the schedule case can read which clip was handed the scale-pass lane.
+vi.mock('./useVideoAnalysis', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./useVideoAnalysis')>()
+  return { ...actual, useVideoAnalysis: vi.fn(actual.useVideoAnalysis) }
+})
 // Only the decode is mocked — jsdom decodes nothing, and `releaseClipPoster` must stay REAL, since
 // what the two release tests below check is that this component calls it on the right canvas at the
 // right moment. Mocking it would let them pass against a component that never released anything.
@@ -40,6 +54,7 @@ import type { ClipPoster } from '../video/posterFrame'
 import type { EvidenceFramePlan } from './evidenceFrames'
 import type { SessionEvidenceState } from './useSessionEvidence'
 import { MultiClipVideoSession } from './MultiClipVideoSession'
+import { useVideoAnalysis } from './useVideoAnalysis'
 
 function makeFakeDetector(): PoseDetector {
   return { estimatePose: vi.fn(), dispose: vi.fn() }
@@ -201,6 +216,9 @@ beforeEach(() => {
   getScalePassDetectorMock.mockResolvedValue(makeFakeDetector())
   deriveClipPosterMock.mockReset()
   deriveClipPosterMock.mockResolvedValue(null)
+  canUseSequentialDecodeMock.mockReset()
+  canUseSequentialDecodeMock.mockResolvedValue(false)
+  sampleClipSequentialMock.mockReset()
   // Resolves every sampling call (primary or scale pass, either clip) immediately with one
   // null-frame sample -- with FAKE_HEURISTICS' calibration: null, every scale pass concludes
   // 'failed' ("measured no real-world scale"), a terminal status, same as
@@ -572,7 +590,9 @@ describe('MultiClipVideoSession', () => {
     expect(video.currentTime).toBe(before.currentTime)
   })
 
-  it('serializes the shared detector: the second clip stays queued until the first clip fully finishes', async () => {
+  it('serializes the shared detector: on the playback path the second clip stays queued until the first clip fully finishes', async () => {
+    // jsdom's probe answers no, so both clips sample on the PLAYBACK path, which keeps the old
+    // rule: a clip's scale pass replays its own element and finishes before the next clip starts.
     // Clip 1's primary sampling pass hangs until resolved manually -- every OTHER sampleClip
     // call (clip 1's scale pass, clip 2's primary and scale pass) resolves immediately, so the
     // only thing gating progress is this one controlled promise.
@@ -626,6 +646,71 @@ describe('MultiClipVideoSession', () => {
     await waitFor(() => expect(sampleClipMock.mock.calls.length).toBeGreaterThanOrEqual(3))
 
     // Both clips eventually finish; the aggregate reaches ready.
+    await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
+  })
+
+  it('on the sequential path runs every primary before any scale pass — P1 P2 P3 S1 S2 S3 — one pass at a time', async () => {
+    canUseSequentialDecodeMock.mockResolvedValue(true)
+    const scaleDetector = makeFakeDetector()
+    getScalePassDetectorMock.mockResolvedValue(scaleDetector)
+    const detector = makeFakeDetector()
+    // Every sampling pass hangs until the test resolves it, so what is in flight at each step is
+    // exactly what the session started.
+    const inFlight: { label: string; resolve: () => void }[] = []
+    sampleClipSequentialMock.mockImplementation((blob: Blob, passDetector: PoseDetector) => {
+      const clipNumber = /\d/.exec((blob as File).name)![0]
+      const label = `${passDetector === scaleDetector ? 'S' : 'P'}${clipNumber}`
+      let resolve!: () => void
+      const promise = new Promise((settle) => {
+        resolve = () => settle([{ timestamp: 0, frame: null }])
+      })
+      inFlight.push({ label, resolve })
+      return { promise, handle: { stop: vi.fn() } }
+    })
+    const analysisHook = vi.mocked(useVideoAnalysis)
+    analysisHook.mockClear()
+    /** How many clips' latest render was handed the scale-pass lane (`scalePassAllowed`). */
+    const clipsHoldingTheScaleLane = () => {
+      const latest = new Map<string, boolean>()
+      for (const [videoSource, , options] of analysisHook.mock.calls) {
+        const name = (videoSource.sourceBlob as File | null)?.name
+        if (name) latest.set(name, options?.scalePassAllowed ?? true)
+      }
+      return [...latest.values()].filter(Boolean).length
+    }
+
+    render(<MultiClipVideoSession detector={detector} />)
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
+      target: {
+        files: [
+          new File(['a'], 'run1.mp4', { type: 'video/mp4' }),
+          new File(['b'], 'run2.mp4', { type: 'video/mp4' }),
+          new File(['c'], 'run3.mp4', { type: 'video/mp4' }),
+        ],
+      },
+    })
+    await act(async () => {})
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(3))
+    for (const video of canonicalVideos()) markVideoReady(video)
+
+    const order: string[] = []
+    for (let step = 0; step < 6; step += 1) {
+      await waitFor(() => expect(inFlight).toHaveLength(1))
+      await act(async () => {})
+      // Never a primary and a scale pass at once, never two scale passes, and never more than one
+      // clip allowed to start one.
+      expect(inFlight).toHaveLength(1)
+      expect(clipsHoldingTheScaleLane()).toBeLessThanOrEqual(1)
+      const { label, resolve } = inFlight.shift()!
+      order.push(label)
+      await act(async () => {
+        resolve()
+      })
+    }
+
+    expect(order).toEqual(['P1', 'P2', 'P3', 'S1', 'S2', 'S3'])
+    expect(inFlight).toHaveLength(0)
     await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
   })
 
