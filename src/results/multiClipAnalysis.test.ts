@@ -8,6 +8,7 @@ import {
   computeFusionSourceIndices,
   nextActiveClipIndex,
   nextScalePassClipIndex,
+  scalePassLeaseIndex,
 } from './multiClipAnalysis'
 import type { ClipSession } from './multiClipAnalysis'
 
@@ -574,5 +575,58 @@ describe('the two lanes together (schedule-scale-passes-after-primaries)', () =>
 
   it('runs a lone clip as P1 S1', () => {
     expect(simulate(['sequential'])).toEqual(['P1', 'S1'])
+  })
+})
+
+describe('the scale-pass lease and clips that cannot run (review round 1)', () => {
+  const pending = (id: string) => makePrimaryDoneClip(id, 'pending')
+
+  function failedLoad(id: string): ClipSession {
+    const clip = makeClip(id)
+    clip.videoSource = { ...clip.videoSource, status: 'error' }
+    return clip
+  }
+
+  it('does not advance into a clip added after the lane was granted, while the granted pass still reads pending', () => {
+    // The lane went to clip a; clip c was added before a's 'running' reached the session.
+    const clips = [pending('a'), makePrimaryDoneClip('b', 'done'), makeClip('c')]
+    const lease = scalePassLeaseIndex(clips, 'a')
+    expect(lease).toBe(0)
+    expect(nextActiveClipIndex(clips, 1, lease)).toBe(1)
+    // ...and the lease keeps the lane, although c's primary now counts as outstanding.
+    expect(nextScalePassClipIndex(clips, 1, lease)).toBe(0)
+    // Without the lease, both would have moved on.
+    expect(nextActiveClipIndex(clips, 1)).toBe(2)
+    expect(nextScalePassClipIndex(clips, 1)).toBeNull()
+  })
+
+  it('resolves a lease only while the granted clip is there and its pass is due or running', () => {
+    const clips = [pending('a'), makePrimaryDoneClip('b', 'running'), makePrimaryDoneClip('c', 'done')]
+    expect(scalePassLeaseIndex(clips, null)).toBeNull()
+    expect(scalePassLeaseIndex(clips, 'gone')).toBeNull()
+    expect(scalePassLeaseIndex(clips, 'a')).toBe(0)
+    expect(scalePassLeaseIndex(clips, 'b')).toBe(1)
+    expect(scalePassLeaseIndex(clips, 'c')).toBeNull()
+    expect(scalePassLeaseIndex([makeClip('a')], 'a')).toBeNull()
+  })
+
+  it('A clip that cannot run does not hold up the passes: the active index walks past a failed load', () => {
+    // Before this, the active index stopped on a clip whose video never loaded, so clip c's
+    // primary never ran, it stayed an outstanding primary, and clip a's pass waited forever.
+    const clips = [pending('a'), failedLoad('b'), makeClip('c')]
+    const active = nextActiveClipIndex(clips, 1)
+    expect(active).toBe(2)
+    expect(nextScalePassClipIndex(clips, active)).toBeNull()
+
+    const afterC = [pending('a'), failedLoad('b'), pending('c')]
+    expect(nextActiveClipIndex(afterC, active)).toBe(2)
+    expect(nextScalePassClipIndex(afterC, 2)).toBe(0)
+  })
+
+  it('a failed load as the last clip does not count as an outstanding primary', () => {
+    const clips = [pending('a'), failedLoad('b')]
+    const active = nextActiveClipIndex(clips, 0)
+    expect(active).toBe(1)
+    expect(nextScalePassClipIndex(clips, active)).toBe(0)
   })
 })

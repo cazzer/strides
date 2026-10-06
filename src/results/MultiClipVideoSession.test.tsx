@@ -672,9 +672,9 @@ describe('MultiClipVideoSession', () => {
     /** How many clips' latest render was handed the scale-pass lane (`scalePassAllowed`). */
     const clipsHoldingTheScaleLane = () => {
       const latest = new Map<string, boolean>()
-      for (const [videoSource, , , , scalePassAllowed] of analysisHook.mock.calls) {
+      for (const [videoSource, , options] of analysisHook.mock.calls) {
         const name = (videoSource.sourceBlob as File | null)?.name
-        if (name) latest.set(name, scalePassAllowed ?? true)
+        if (name) latest.set(name, options?.scalePassAllowed ?? true)
       }
       return [...latest.values()].filter(Boolean).length
     }

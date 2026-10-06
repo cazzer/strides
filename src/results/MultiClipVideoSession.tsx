@@ -20,6 +20,7 @@ import {
   computeFusionSourceIndices,
   nextActiveClipIndex,
   nextScalePassClipIndex,
+  scalePassLeaseIndex,
 } from './multiClipAnalysis'
 import type { ClipSession } from './multiClipAnalysis'
 
@@ -115,6 +116,10 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   const [pendingLoads, setPendingLoads] = useState<Record<string, ClipPendingLoad>>({})
   const [clipStates, setClipStates] = useState<Record<string, ClipSession>>({})
   const [activeClipIndex, setActiveClipIndex] = useState(0)
+  // Which clip the scale-pass lane was last granted to (`nextScalePassClipIndex`). Only read
+  // through `scalePassLeaseIndex`, which drops it once that clip's pass is terminal or the clip is
+  // gone, so it never needs clearing by hand.
+  const [scalePassLeaseClipId, setScalePassLeaseClipId] = useState<string | null>(null)
   // Which clip's preview is open, or `null`. Session-level rather than per-slot because it is a
   // mutually exclusive choice: exactly one clip can be presented at a time, and "presented" is the
   // third conjunct of every clip's loop condition (design.md D1), so two open previews would mean
@@ -209,17 +214,24 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   // https://react.dev/reference/react/useState#storing-information-from-previous-renders):
   // computed fresh every render so this pass's JSX below is always consistent even while the
   // state update above is still propagating.
-  const desiredActiveIndex = nextActiveClipIndex(clips, activeClipIndex)
+  //
+  // The scale-pass lease goes in FIRST: while the lane is granted to a clip whose pass is still
+  // due, the active clip must not advance into a newly added one — even on a render where that
+  // clip has not yet reported its pass 'running' (schedule-scale-passes-after-primaries).
+  const leaseIndex = scalePassLeaseIndex(clips, scalePassLeaseClipId)
+  const desiredActiveIndex = nextActiveClipIndex(clips, activeClipIndex, leaseIndex)
   if (desiredActiveIndex !== activeClipIndex) {
     setActiveClipIndex(desiredActiveIndex)
   }
   const activeClipId = clips[desiredActiveIndex]?.clipId ?? null
-  // The scale-pass lane: which ONE clip may run its background scale pass now. Pure and computed
-  // fresh every render, like the active index above — a pass that has started keeps the lane
-  // until it is terminal, so nothing needs to be remembered across renders.
-  const scalePassClipIndex = nextScalePassClipIndex(clips, desiredActiveIndex)
+  // The scale-pass lane: which ONE clip may run its background scale pass now. Remembered as a
+  // lease from the grant until that pass is terminal, by the same during-render adjustment.
+  const scalePassClipIndex = nextScalePassClipIndex(clips, desiredActiveIndex, leaseIndex)
   const scalePassClipId =
     scalePassClipIndex === null ? null : (clips[scalePassClipIndex]?.clipId ?? null)
+  if (scalePassClipId !== scalePassLeaseClipId) {
+    setScalePassLeaseClipId(scalePassClipId)
+  }
 
   const aggregate = computeAggregateAnalysisState(clips)
   const anyClipVideoReady = clips.some((c) => c.videoSource.status === 'ready')
@@ -277,6 +289,7 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
     setPendingLoads({})
     setClipStates({})
     setActiveClipIndex(0)
+    setScalePassLeaseClipId(null)
     setPresentedClipId(null)
     headingRef.current?.focus()
   }, [clipStates, headingRef])

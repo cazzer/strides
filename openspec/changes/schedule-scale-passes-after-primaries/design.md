@@ -28,12 +28,15 @@ chosen, with no flag.
 
 ## Decisions
 
-### D1. Two lanes, both pure and recomputed every render
+### D1. Two lanes, both pure, plus a remembered lease
 
 `MultiClipVideoSession` already recomputes `nextActiveClipIndex` on every render. It now also
-computes `nextScalePassClipIndex(clips, activeIndex)` and passes `scalePassAllowed` to exactly the
-one clip it names. Nothing is remembered across renders: a started pass is reported as `'running'`,
-and a running pass keeps the lane by rule 1 of the function, so the lease needs no state of its own.
+computes `nextScalePassClipIndex(clips, activeIndex, leaseIndex)` and passes `scalePassAllowed` to
+exactly the one clip it names. It remembers that clip's id (`scalePassLeaseClipId`, adjusted during
+render like the active index), and `scalePassLeaseIndex` resolves it back to an index only while that
+clip's pass is still `'pending'` or `'running'`. The lease keeps the lane, and blocks the active
+index, from the grant until the pass is terminal. It does not depend on when the clip gets round to
+reporting `'running'` (see D3).
 
 ### D2. The shared detector is released at primary ready, except on the playback path
 
@@ -43,12 +46,28 @@ the clip's own `<video>` element. To keep that clip from deadlocking the session
 index, and later primaries count as outstanding), the lane serves a waiting playback-path clip before
 it checks for outstanding primaries. A playback session therefore still runs P1 S1 P2 S2 P3 S3.
 
-### D3. No advance into a new clip while a pass runs
+### D3. No advance into a new clip while the lane is held
 
 Once every primary is done the active index sits on the last clip. If a clip is added while a pass
 runs, advancing would start its primary on top of that pass. `nextActiveClipIndex` returns the
-current index unchanged while any pass is `'running'`. The new clip's primary then counts as
-outstanding, so the queued passes wait behind it.
+current index unchanged while any pass is `'running'` or the lease (D1) is held. The new clip's
+primary then counts as outstanding, so the queued passes wait behind it.
+
+Review round 1 found that `'running'` alone left a real window. The claim (`'pending'` →
+`'running'`) was a `setState` in a passive effect, which lands on the default lane. A click that
+adds a clip is a sync-lane update, so it could render, have the new `ClipSlot` report through its
+layout effect, and re-render the session before the claim landed. The session then saw the granted
+pass still `'pending'`, advanced into the new clip, and started its primary alongside MediaPipe. If
+that clip is a WebM or a webcam recording, its playback sampler loses real-time frames to the
+contention; this costs samples, not just time. Two fixes, either of which closes it:
+
+- The claim moved to a `useLayoutEffect`. It is now a sync update flushed at the end of the commit
+  that granted the lane, so `ClipSlot`'s layout-effect report carries `'running'` before the browser
+  can deliver any event. The sampling body stays in the passive effect, keyed on `'running'` plus a
+  once-per-run latch.
+- The lease (D1) blocks the active index from the grant itself, so the session no longer depends on
+  that ordering at all. `multiClipAnalysis.test.ts` pins the race state: lane granted to A, A still
+  `'pending'`, idle C added, and the active index does not advance.
 
 ### D4. "Outstanding" ignores idle clips before the active index
 
@@ -80,7 +99,30 @@ earlier clips' passes run. That holds at most one track.
 The loop-restart requirement ("Clip playback loops only while that clip is presented") is unchanged:
 a `'pending'` pass still blocks the loop, so presentation stays purely observational.
 
-### D6. `pending` outranks `done` in the aggregate
+### D6. A playback primary waits for an in-flight scale-detector creation
+
+`strides-e4c.2` creates the scale-pass detector while a sequential primary runs, and only then,
+because the playback sampler drops real-time frames under the contention creation causes
+(`strides-gyl`). Before this change the next clip could not start until clip 1's scale pass had
+finished, so creation had always settled by then. Now the active clip advances at clip 1's
+`'ready'`, so with clip 1 sequential and clip 2 a WebM, creation can still be running when clip 2
+starts playback sampling.
+
+`useVideoAnalysis` records the warm-up's promise in its own module scope
+(`scaleDetectorCreationInFlight`, cleared once it settles either way). `start()` on the playback path
+waits for it before sampling, re-checking the run id afterwards. The sequential path never reads it.
+`src/pose/scalePassDetector.ts` is not touched, because the unmerged `feat/eager-model-prefetch`
+branch rewrites it. The run shows `'sampling'` during the wait, and its playback starts muted outside
+any click's call stack. That is the same state every auto-started run is already in.
+
+### D7. A clip whose video failed to load is skipped
+
+`isDoneWithSharedDetector` checks `videoSource.status === 'error'` first. Before this, the active
+index stopped on such a clip forever. Every later clip's primary then never ran, stayed an
+outstanding primary under rule 4, and held back every queued scale pass, including those of clips
+before it. Rule 4 already ignored a failed source, so the lane needed no change of its own.
+
+### D8. `pending` outranks `done` in the aggregate
 
 With the old order (`running > done > failed > skipped`), clip 1 `'done'` and clip 2 `'pending'`
 aggregated to `'done'`. The status line would then say a second look "added N more metrics" while a
@@ -96,10 +138,12 @@ pass was still to come.
 - **More grafts land after evidence starts.** Evidence extraction starts when every clip is
   `'ready'`, so on a three-clip session all three grafts arrive during or after it. Per-metric reuse
   (`strides-zm8`) limits each re-extraction to the metrics whose plan moved.
-- **A narrow race on a late-added clip.** The lane is granted in one render, and the clip reports
-  `'running'` a render later. A clip added within that window could see the pass as `'pending'` and
-  advance the active index. The two passes use different detectors, so the cost is GPU contention,
-  not shared tracking state. It needs a user action inside one React commit.
+- **"Try again" leaves the queued passes waiting until the reader restarts.** "Try again" resets an
+  errored clip to `'idle'` and does not start it, because auto-start fires only once per loaded
+  clip. If that clip sits at or after the active index (for example, the last clip), it counts as an
+  outstanding primary, so every `'pending'` scale pass waits until the reader presses Analyze. The
+  fused base metrics are already on screen; only the centimetre grafts wait. A clip reset behind the
+  active index is ignored (D4). Making "Try again" restart the run is a separate change.
 - **Pre-existing spec drift, left alone.** "Aggregate multi-clip analysis state" still says
   `progress` is the mean of clip progress (the aggregate has had no `progress` since `strides-e4c.3`)
   and that mixed ready/idle reads `'idle'` (the code reads `'sampling'`). The MODIFIED block restates

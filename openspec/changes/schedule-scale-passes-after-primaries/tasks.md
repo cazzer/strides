@@ -38,3 +38,13 @@
 - [x] 4.2 `openspec validate schedule-scale-passes-after-primaries --strict`
 - [ ] 4.3 Live (run by the verifier): three-clip demo time to fused results, last graft and settled
   evidence against T0; per-clip fields against fresh single-clip runs; single-clip A/B bit-identical
+
+## 5. Review round 1
+
+- [x] 5.1 Claim the lane synchronously (`useLayoutEffect`), and remember the grant as a lease that
+  blocks the active index until the pass is terminal; pin the race state in a pure test
+- [x] 5.2 `useVideoAnalysis` takes an options object, so a spy on its arguments cannot silently
+  read the wrong position
+- [x] 5.3 A playback primary waits for an in-flight scale-detector creation; a sequential one never
+  does
+- [x] 5.4 A clip whose video failed to load is skipped by the active index

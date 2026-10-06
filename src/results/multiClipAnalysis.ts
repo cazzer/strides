@@ -162,6 +162,10 @@ function isWaitingForScalePass(clip: ClipSession): boolean {
 }
 
 function isDoneWithSharedDetector(clip: ClipSession): boolean {
+  // A clip whose video never loaded will never run anything. Without this the active index would
+  // stop on it for good, and every later clip's primary — and so every queued scale pass, which
+  // waits for those primaries — would wait behind it forever.
+  if (clip.videoSource.status === 'error') return true
   // An errored clip's primary pass never reached 'ready', so `useVideoAnalysis.ts`'s scale-pass
   // effect (gated on `state.phase === 'ready'`) never fires for it -- its `scalePass.status`
   // stays 'idle' forever (see `idleState()`/`start()`'s error branches, both of which spread
@@ -180,16 +184,18 @@ function isDoneWithSharedDetector(clip: ClipSession): boolean {
 
 /**
  * The shared-detector serialization rule (see the change's design.md, D5): a clip is skipped
- * past once its primary pass is terminal ('ready' or 'error') -- and, for a clip sampled on the
- * playback path, once its background scale pass is terminal too. Only one clip ever holds a live
- * detector at a time; every other clip must receive `null` (see `MultiClipVideoSession`). For a
- * single clip this is a permanent no-op — the loop's bound (`clips.length - 1`) never lets it
- * advance past the only clip there is, done or not.
+ * past once its video failed to load, or its primary pass is terminal ('ready' or 'error') -- and,
+ * for a clip sampled on the playback path, once its background scale pass is terminal too. Only
+ * one clip ever holds a live detector at a time; every other clip must receive `null` (see
+ * `MultiClipVideoSession`). For a single clip this is a permanent no-op — the loop's bound
+ * (`clips.length - 1`) never lets it advance past the only clip there is, done or not.
  *
- * Never advances while any scale pass is 'running' (schedule-scale-passes-after-primaries): a clip
- * added after every primary finished would otherwise start its primary on top of that pass. The
- * running pass keeps its lease, the new clip's primary starts once it is terminal, and the passes
- * still queued wait behind that primary (`nextScalePassClipIndex`).
+ * Never advances while the scale-pass lane is held — a pass 'running', or `scalePassLeaseIndex`,
+ * the clip the lane was last granted to while its pass is still due (schedule-scale-passes-after-
+ * primaries). A clip added after every primary finished would otherwise start its primary on top
+ * of that pass. The lease covers the moment between the grant and the clip reporting 'running':
+ * a session that saw only 'pending' there would advance. The pass finishes, the new clip's primary
+ * runs, and the passes still queued wait behind that primary (`nextScalePassClipIndex`).
  *
  * `currentActiveIndex` is clamped into range first so a clip removal (shrinking the array) can't
  * leave the index pointing past the end.
@@ -197,14 +203,33 @@ function isDoneWithSharedDetector(clip: ClipSession): boolean {
 export function nextActiveClipIndex(
   clips: ClipSession[],
   currentActiveIndex: number,
+  scalePassLeaseIndex: number | null = null,
 ): number {
   if (clips.length === 0) return 0
   let index = Math.min(Math.max(currentActiveIndex, 0), clips.length - 1)
+  if (scalePassLeaseIndex !== null) return index
   if (clips.some((c) => c.analysis.scalePass.status === 'running')) return index
   while (index < clips.length - 1 && isDoneWithSharedDetector(clips[index])) {
     index += 1
   }
   return index
+}
+
+/**
+ * The clip the scale-pass lane was last granted to, as an index into `clips`, while that grant is
+ * still live: the clip is still there and its pass is 'pending' or 'running'. `null` otherwise.
+ * `MultiClipVideoSession` remembers the granted clip's id across renders and resolves it here.
+ */
+export function scalePassLeaseIndex(
+  clips: ClipSession[],
+  grantedClipId: string | null,
+): number | null {
+  if (grantedClipId === null) return null
+  const index = clips.findIndex((c) => c.clipId === grantedClipId)
+  if (index === -1) return null
+  const { phase, scalePass } = clips[index].analysis
+  const live = phase === 'ready' && (scalePass.status === 'pending' || scalePass.status === 'running')
+  return live ? index : null
 }
 
 /**
@@ -215,7 +240,8 @@ export function nextActiveClipIndex(
  * result waits on — runs first.
  *
  * In order:
- *   1. a clip whose pass is already 'running' keeps the lane (a started pass is never cancelled);
+ *   1. a clip whose pass is already 'running' keeps the lane (a started pass is never cancelled),
+ *      and so does the clip holding the lease (`scalePassLeaseIndex`) while its pass is still due;
  *   2. nothing, while any primary is sampling or processing;
  *   3. the lowest-index waiting clip sampled on the PLAYBACK path: it still holds the shared
  *      detector until its pass is terminal (`isDoneWithSharedDetector`), so every later primary
@@ -228,9 +254,11 @@ export function nextActiveClipIndex(
 export function nextScalePassClipIndex(
   clips: ClipSession[],
   activeClipIndex: number,
+  leaseIndex: number | null = null,
 ): number | null {
   const running = clips.findIndex((c) => c.analysis.scalePass.status === 'running')
   if (running !== -1) return running
+  if (leaseIndex !== null && isWaitingForScalePass(clips[leaseIndex])) return leaseIndex
   if (clips.some((c) => c.analysis.phase === 'sampling' || c.analysis.phase === 'processing')) {
     return null
   }
