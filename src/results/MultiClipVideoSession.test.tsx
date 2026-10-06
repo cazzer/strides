@@ -714,6 +714,62 @@ describe('MultiClipVideoSession', () => {
     await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
   })
 
+  it('a webm after a sequential clip keeps the reference order — P1 S1 P2 S2 — one pass at a time', async () => {
+    // design.md D9: the playback primary starts only once the earlier clip's pass is terminal.
+    canUseSequentialDecodeMock.mockImplementation(
+      async (blob: Blob) => (blob as File).name === 'run1.mp4',
+    )
+    const scaleDetector = makeFakeDetector()
+    getScalePassDetectorMock.mockResolvedValue(scaleDetector)
+    const detector = makeFakeDetector()
+    const inFlight: { label: string; resolve: () => void }[] = []
+    const track = (clipNumber: string, passDetector: PoseDetector) => {
+      const label = `${passDetector === scaleDetector ? 'S' : 'P'}${clipNumber}`
+      let resolve!: () => void
+      const promise = new Promise((settle) => {
+        resolve = () => settle([{ timestamp: 0, frame: null }])
+      })
+      inFlight.push({ label, resolve })
+      return { promise, handle: { stop: vi.fn() } }
+    }
+    sampleClipSequentialMock.mockImplementation((_blob: Blob, passDetector: PoseDetector) =>
+      track('1', passDetector),
+    )
+    // Only clip 2 samples on the playback path.
+    sampleClipMock.mockImplementation((_video: HTMLVideoElement, passDetector: PoseDetector) =>
+      track('2', passDetector),
+    )
+
+    render(<MultiClipVideoSession detector={detector} />)
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    fireEvent.change(screen.getByLabelText(/choose a video file/i), {
+      target: {
+        files: [
+          new File(['a'], 'run1.mp4', { type: 'video/mp4' }),
+          new File(['b'], 'run2.webm', { type: 'video/webm' }),
+        ],
+      },
+    })
+    await act(async () => {})
+    await waitFor(() => expect(canonicalVideos()).toHaveLength(2))
+    for (const video of canonicalVideos()) markVideoReady(video)
+
+    const order: string[] = []
+    for (let step = 0; step < 4; step += 1) {
+      await waitFor(() => expect(inFlight).toHaveLength(1))
+      await act(async () => {})
+      expect(inFlight).toHaveLength(1)
+      const { label, resolve } = inFlight.shift()!
+      order.push(label)
+      await act(async () => {
+        resolve()
+      })
+    }
+
+    expect(order).toEqual(['P1', 'S1', 'P2', 'S2'])
+    await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
+  })
+
   it('removes clips one by one, and removing the last one returns to the picker', async () => {
     render(<MultiClipVideoSession detector={null} />)
 

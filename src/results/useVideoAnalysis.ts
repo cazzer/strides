@@ -73,11 +73,11 @@ function idleState(): Omit<VideoAnalysisState, 'start' | 'reset'> {
 /**
  * Settles once the scale-pass detector creation that a sequential primary's warm-up started has
  * settled either way, or `null` when none is in flight. Module scope because the warm-up is
- * shared by every clip in the page, and a creation a sequential clip started can still be running
- * when the NEXT clip's primary begins — which, since the active clip advances at 'ready'
- * (schedule-scale-passes-after-primaries), nothing else waits for. A playback-path primary awaits
- * it before sampling, since that sampler drops real-time frames under the contention creation
- * causes (strides-gyl).
+ * shared by every clip in the page. A playback-path primary awaits it before sampling, since that
+ * sampler drops real-time frames under the contention creation causes (strides-gyl). The session
+ * already starts a playback primary only after every earlier clip's scale pass is terminal
+ * (`nextActiveClipIndex`, design.md D9), which settles creation whenever a pass actually ran; this
+ * is the safety net for creation left in flight by a clip that errored or whose pass failed.
  */
 let scaleDetectorCreationInFlight: Promise<void> | null = null
 
@@ -1029,5 +1029,13 @@ export function useVideoAnalysis(
     )
   }, [state.scalePass])
 
-  return { ...state, start, reset }
+  // The same predicate `start()` uses to pick its sampler, so the session's schedule and the run
+  // cannot disagree about the path.
+  const primarySamplingPath =
+    sequentialDecodeSupported === null
+      ? null
+      : sequentialDecodeSupported
+        ? 'sequential'
+        : 'playback'
+  return { ...state, primarySamplingPath, start, reset }
 }

@@ -68,6 +68,15 @@ export interface VideoAnalysisState {
    * phase reaches 'ready'. */
   scalePass: ScalePassState
   error: VideoAnalysisError | null
+  /**
+   * Which path this clip's primary run samples on: `'sequential'` once its sequential-decode probe
+   * said yes, `'playback'` once it said no (or the plane is off), `null` (or absent) while the
+   * probe is unsettled or no clip is loaded. Known before the run starts, which is the point: the
+   * session schedules a playback-path primary differently (schedule-scale-passes-after-primaries)
+   * and has to know before handing it the detector. Once the run is `'ready'`,
+   * `diagnostics.sampling.path` records the path it actually took.
+   */
+  primarySamplingPath?: 'sequential' | 'playback' | null
   start: () => void
   reset: () => void
 }
