@@ -9,7 +9,7 @@ import {
   EVIDENCE_BASE_OPACITY,
   EVIDENCE_GHOST_BLEND_ALPHA,
 } from '../results/evidenceFrames'
-import { stubCanvas2DContext } from '../test/canvasTestUtils'
+import { stubCanvas2DContext, stubPerCanvas2DContexts } from '../test/canvasTestUtils'
 import type { FakeCanvasRenderingContext2D } from '../test/canvasTestUtils'
 import { makeVideoSeekable } from '../test/videoTestUtils'
 import { stubRequestVideoFrameCallback } from '../test/videoFrameCallbackTestUtils'
@@ -64,6 +64,9 @@ const ALL_METRICS: MetricId[] = [
   'footStrikePattern',
   'stepWidth',
   'stepWidthCm',
+  'kneeDrive',
+  'armSwingAmplitude',
+  'swingFootLateralExcursion',
 ]
 
 /**
@@ -792,6 +795,37 @@ describe('extractClipEvidence', () => {
     }
   })
 
+  it('counts the seeks it issued beside the instants it was asked for (strides-e4c.5)', async () => {
+    stubCanvas2DContext()
+    const { restore } = makeAllVideosSeekable()
+    const createSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:evidence')
+    const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    // A shared bounce pair: four planned instants, two distinct frames.
+    const bounce = (metric: MetricId): EvidenceFramePlan => ({ ...PAIR, metric })
+
+    try {
+      await extractClipEvidence({
+        sourceBlob: new Blob(['x']),
+        plan: planWith({
+          verticalOscillation: [bounce('verticalOscillation')],
+          verticalRatio: [bounce('verticalRatio')],
+        }),
+      })
+
+      const line = logSpy.mock.calls
+        .filter(([prefix]) => prefix === '[perf-timings]')
+        .map(([, json]) => JSON.parse(json as string))
+        .find((payload) => payload.stage === 'evidence-extraction')
+      expect(line).toMatchObject({ plannedSeeks: 4, seeks: 2, images: 2 })
+    } finally {
+      restore()
+      createSpy.mockRestore()
+      revokeSpy.mockRestore()
+      logSpy.mockRestore()
+    }
+  })
+
   it('extracts clips strictly one at a time', async () => {
     const revokeSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
     const results = await extractSessionEvidence(
@@ -968,9 +1002,13 @@ describe('abandoning an in-flight clip', () => {
     })
     const onMetricExtracted = vi.fn()
 
+    // The single sits AFTER both of the pair's instants, so the time-ordered schedule visits the
+    // pair's base first (`strides-e4c.5`).
+    const LATE: EvidenceFramePlan = { ...SINGLE, base: { ...SINGLE.base, timestamp: 3 } }
+
     const evidence = await extractPlannedFrames(
       video,
-      planWith({ trunkLean: [PAIR], footStrikePattern: [SINGLE] }),
+      planWith({ trunkLean: [PAIR], footStrikePattern: [LATE] }),
       { signal: controller.signal },
       { onMetricExtracted },
     )
@@ -1062,12 +1100,14 @@ describe('abandoning an in-flight clip', () => {
       planWith({ trunkLean: [PAIR], footStrikePattern: [SINGLE] }),
     )
 
+    // In seek order, which is time order (`strides-e4c.5`): the single at 0.75 s, then the pair's
+    // base at 1.5 s and its ghost at 2.25 s.
     expect(
       draws.filter((draw) => draw.call === 'drawImage').map((draw) => draw.alpha),
     ).toEqual([
       EVIDENCE_BASE_OPACITY,
-      EVIDENCE_GHOST_BLEND_ALPHA,
       EVIDENCE_BASE_OPACITY,
+      EVIDENCE_GHOST_BLEND_ALPHA,
     ])
     expect(evidence.trunkLean.status).toBe('extracted')
     expect(evidence.footStrikePattern.status).toBe('extracted')
@@ -1237,5 +1277,415 @@ describe('reusing evidence the caller already holds (strides-zm8)', () => {
       reason: 'extraction-failed',
     })
     decoders.restore()
+  })
+})
+
+/**
+ * The four clips' real plans (`strides-e4c.5`): every image's base and ghost instant as the kept
+ * pass's `[evidence-coverage]` line reports them on the zm8 reference build
+ * (`scripts/ab-person-selection.mjs --evidence`, fresh process, real GPU). Timestamps are the
+ * report's six significant figures, so instants that are the same sampled frame stay equal here
+ * exactly as they are equal in the app.
+ */
+type RealPlan = Array<[MetricId, number, number | null]>
+const REAL_PLANS: Record<string, RealPlan> = {
+  'side-landscape': [
+    ['verticalOscillation', 2.65, 2.83333],
+    ['verticalRatio', 2.65, 2.83333],
+    ['verticalOscillationCm', 2.66667, 2.48333],
+    ['trunkLean', 2.8, 2.56667],
+    ['kneeFlexion', 2.5, 2.63333],
+    ['footStrikePattern', 3.08333, null],
+    ['footStrikePattern', 3.43333, null],
+    ['kneeDrive', 2.26667, null],
+  ],
+  'side-portrait': [
+    ['verticalOscillation', 6.43333, 5.13333],
+    ['verticalRatio', 6.43333, 5.13333],
+    ['trunkLean', 8.16667, 10.3667],
+    ['overstriding', 7.06667, 4.5],
+    ['kneeFlexion', 5.7, 6.86667],
+    ['footStrikePattern', 1.93333, null],
+    ['footStrikePattern', 4.5, null],
+    ['kneeDrive', 5.46667, 5.66667],
+  ],
+  'front-approach': [
+    ['verticalOscillation', 1.01768, 0.85085],
+    ['verticalOscillationCm', 1.01768, 0.85085],
+    ['stepWidth', 1.1011, 1.41808],
+    ['armSwingAmplitude', 0.917583, 0.583917],
+    ['armSwingAmplitude', 0.583917, 0.917583],
+    ['swingFootLateralExcursion', 0.8008, 0.95095],
+  ],
+  multiperson: [
+    ['verticalOscillation', 3, 3.16667],
+    ['verticalRatio', 3, 3.16667],
+    ['verticalOscillationCm', 2.66667, 2.5],
+    ['trunkLean', 2.18333, 2.65],
+    ['overstriding', 3.08333, 2.73333],
+    ['kneeFlexion', 3.15, 3.4],
+    ['footStrikePattern', 2.4, null],
+    ['footStrikePattern', 2.73333, null],
+    ['kneeDrive', 3.35, null],
+  ],
+}
+
+/** One image of a real plan, each with its own crop so its draws are told apart by argument. */
+function realItem(
+  [metric, base, ghost]: [MetricId, number, number | null],
+  index: number,
+): EvidenceFramePlan {
+  const template = ghost === null ? SINGLE : PAIR
+  return {
+    ...template,
+    metric,
+    base: { ...template.base, timestamp: base },
+    ghost: ghost === null ? null : { ...PAIR.ghost!, timestamp: ghost },
+    crop: { x: 10 * index, y: 20 * index, side: 400 + index },
+  }
+}
+
+function realPlan(images: RealPlan): ClipEvidencePlan {
+  const items: Partial<Record<MetricId, EvidenceFramePlan[]>> = {}
+  images.forEach((image, index) => {
+    ;(items[image[0]] ??= []).push(realItem(image, index))
+  })
+  return planWith(items)
+}
+
+interface CanvasDraw {
+  call: string
+  args?: unknown[]
+  alpha: number
+  composite: string
+  sourceTime: number
+}
+
+/**
+ * Every canvas's own ordered log. The fake context cannot hold pixels, so pixel identity is
+ * asserted as the only thing that decides them: the exact sequence of photographic calls each
+ * canvas receives — source element, crop rect, destination, `globalAlpha`, composite mode, and the
+ * frame the element was showing — with nothing else drawn on it in between.
+ */
+function recordPerCanvas(video: HTMLVideoElement): Map<HTMLCanvasElement, CanvasDraw[]> {
+  const logs = new Map<HTMLCanvasElement, CanvasDraw[]>()
+  stubPerCanvas2DContexts((ctx, canvas) => {
+    const log: CanvasDraw[] = []
+    logs.set(canvas, log)
+    const record =
+      (call: string) =>
+      (...args: unknown[]) => {
+        log.push({
+          call,
+          args: call === 'drawImage' ? args : undefined,
+          alpha: ctx.globalAlpha,
+          composite: ctx.globalCompositeOperation,
+          sourceTime: video.currentTime,
+        })
+      }
+    ctx.drawImage.mockImplementation(record('drawImage'))
+    ctx.clearRect.mockImplementation(record('clearRect'))
+    ctx.fill.mockImplementation(record('fill'))
+  })
+  return logs
+}
+
+/** What one-seek-per-instant drew onto an image's canvas: base, then ghost, straight from the
+ * element through the plan's crop. Derived from the plan, independently of any schedule. */
+function referenceDraws(video: HTMLVideoElement, item: EvidenceFramePlan): CanvasDraw[] {
+  const side = Math.min(item.crop.side, EVIDENCE_OUTPUT_MAX_SIDE_PX)
+  const instants = item.ghost === null ? [item.base] : [item.base, item.ghost]
+  return instants.map((instant) => ({
+    call: 'drawImage',
+    args: [video, item.crop.x, item.crop.y, item.crop.side, item.crop.side, 0, 0, side, side],
+    alpha: instant.opacity,
+    composite: 'source-over',
+    sourceTime: drawnTimeOf(instant),
+  }))
+}
+
+function seekLog(video: HTMLVideoElement): number[] {
+  const seeked: number[] = []
+  video.addEventListener('seeked', () => seeked.push(video.currentTime))
+  return seeked
+}
+
+/** Records every `currentTime` assignment, and lets a test intercept one before it lands. */
+function interceptSeeks(
+  video: HTMLVideoElement,
+  intercept: (time: number, count: number) => 'land' | 'withhold',
+): number[] {
+  const descriptor = Object.getOwnPropertyDescriptor(video, 'currentTime')!
+  const requested: number[] = []
+  Object.defineProperty(video, 'currentTime', {
+    configurable: true,
+    get: descriptor.get,
+    set: (value: number) => {
+      requested.push(value)
+      if (intercept(value, requested.length) === 'land') descriptor.set!.call(video, value)
+    },
+  })
+  return requested
+}
+
+describe('one seek per distinct frame (strides-e4c.5)', () => {
+  const EXPECTED_SEEKS: Record<string, { instants: number; distinct: number; seeks: number }> = {
+    'side-landscape': { instants: 13, distinct: 11, seeks: 11 },
+    'side-portrait': { instants: 14, distinct: 11, seeks: 11 },
+    // `armSwingAmplitude`'s two images are the same two instants with base and ghost swapped — a
+    // cycle no direct-draw order can satisfy in one visit each, so one target is visited twice.
+    'front-approach': { instants: 12, distinct: 8, seeks: 9 },
+    multiperson: { instants: 15, distinct: 12, seeks: 12 },
+  }
+
+  for (const [clip, images] of Object.entries(REAL_PLANS)) {
+    it(`draws every ${clip} canvas exactly as one seek per instant did, from fewer seeks`, async () => {
+      const { video } = seekableVideo()
+      const logs = recordPerCanvas(video)
+      const seeked = seekLog(video)
+      const plan = realPlan(images)
+
+      const evidence = await extractPlannedFrames(video, plan)
+
+      const expected = EXPECTED_SEEKS[clip]
+      const instants = images.reduce((sum, [, , ghost]) => sum + (ghost === null ? 1 : 2), 0)
+      expect(instants).toBe(expected.instants)
+      expect(new Set(seeked).size).toBe(expected.distinct)
+      expect(seeked).toHaveLength(expected.seeks)
+
+      for (const [metric, entry] of Object.entries(plan) as Array<
+        [MetricId, ClipEvidencePlan[MetricId]]
+      >) {
+        if (entry.status !== 'planned') continue
+        const produced = evidence[metric]
+        expect(produced.status).toBe('extracted')
+        if (produced.status !== 'extracted') continue
+        expect(produced.items.map((item) => item.plan)).toEqual(entry.items)
+        for (const { plan: item, canvas } of produced.items) {
+          const log = logs.get(canvas)!
+          const photographic = referenceDraws(video, item)
+          // The photographic prefix is exactly the reference, and no further photographic draw
+          // lands on the canvas after it.
+          expect(log.slice(0, photographic.length)).toEqual(photographic)
+          expect(log.slice(photographic.length).some((draw) => draw.call === 'drawImage')).toBe(
+            false,
+          )
+        }
+      }
+    })
+  }
+
+  it('visits targets in ascending time wherever a ghost does not precede its own base', async () => {
+    const { video } = seekableVideo()
+    recordPerCanvas(video)
+    const seeked = seekLog(video)
+
+    await extractPlannedFrames(video, realPlan(REAL_PLANS['side-landscape']))
+
+    // `verticalOscillationCm`'s ghost (2.48333) and `trunkLean`'s (2.56667) each sit before their
+    // own base, so each is visited straight after that base — the only two steps backward.
+    expect(seeked).toEqual([
+      2.26667, 2.5, 2.63333, 2.65, 2.66667, 2.48333, 2.8, 2.56667, 2.83333, 3.08333, 3.43333,
+    ])
+  })
+
+  it('breaks a base/ghost cycle with one revisit, never by drawing a ghost before its base', async () => {
+    const { video } = seekableVideo()
+    const logs = recordPerCanvas(video)
+    const seeked = seekLog(video)
+    const swapped: RealPlan = [
+      ['armSwingAmplitude', 0.917583, 0.583917],
+      ['armSwingAmplitude', 0.583917, 0.917583],
+    ]
+
+    const evidence = await extractPlannedFrames(video, realPlan(swapped))
+
+    expect(seeked).toEqual([0.583917, 0.917583, 0.583917])
+    expect(evidence.armSwingAmplitude.status).toBe('extracted')
+    for (const log of logs.values()) {
+      const photographic = log.filter((draw) => draw.call === 'drawImage')
+      expect(photographic.map((draw) => draw.alpha)).toEqual([
+        EVIDENCE_BASE_OPACITY,
+        EVIDENCE_GHOST_BLEND_ALPHA,
+      ])
+    }
+  })
+
+  it('dedupes on the exact seek target, offsets and clamp included', async () => {
+    const { video } = seekableVideo()
+    Object.defineProperty(video, 'duration', { configurable: true, value: 3.1 })
+    recordPerCanvas(video)
+    const seeked = seekLog(video)
+
+    // Two different instants that both clamp to the clip end are ONE target; the earlier instant,
+    // shifted onto a target no other instant has, is its own.
+    const at = (timestamp: number): EvidenceFramePlan => ({
+      ...SINGLE,
+      base: { ...SINGLE.base, timestamp },
+    })
+    await extractPlannedFrames(
+      video,
+      planWith({ footStrikePattern: [at(3.2), at(3.3)], kneeDrive: [at(2.6)] }),
+      { seekOffsetSeconds: 0.25, midpointOffsetSeconds: 0.05 },
+    )
+
+    expect(seeked).toEqual([2.6 + 0.25 + 0.05, 3.1])
+  })
+
+  it('draws a pair whose base and ghost share a target from one seek, base first', async () => {
+    const { video } = seekableVideo()
+    Object.defineProperty(video, 'duration', { configurable: true, value: 3.1 })
+    const logs = recordPerCanvas(video)
+    const seeked = seekLog(video)
+    // Both instants run past the clip end, so both clamp to the same target.
+    const clamped: EvidenceFramePlan = {
+      ...PAIR,
+      base: { ...PAIR.base, timestamp: 3.2 },
+      ghost: { ...PAIR.ghost!, timestamp: 3.3 },
+    }
+
+    const evidence = await extractPlannedFrames(video, planWith({ trunkLean: [clamped] }), {
+      seekOffsetSeconds: 0,
+      midpointOffsetSeconds: 0,
+    })
+
+    expect(seeked).toEqual([3.1])
+    expect(evidence.trunkLean.status).toBe('extracted')
+    const [log] = [...logs.values()]
+    expect(log.filter((draw) => draw.call === 'drawImage').map((draw) => draw.alpha)).toEqual([
+      EVIDENCE_BASE_OPACITY,
+      EVIDENCE_GHOST_BLEND_ALPHA,
+    ])
+  })
+
+  it('fails an image whose seek target is not a finite number, without seeking it', async () => {
+    const { video } = seekableVideo()
+    recordPerCanvas(video)
+    const seeked = seekLog(video)
+    const nan: EvidenceFramePlan = { ...SINGLE, base: { ...SINGLE.base, timestamp: Number.NaN } }
+
+    const evidence = await extractPlannedFrames(
+      video,
+      planWith({ footStrikePattern: [nan], kneeDrive: [SINGLE] }),
+    )
+
+    // A NaN target would be picked forever and never matched; it fails up front instead.
+    expect(seeked).toEqual([drawnTimeOf(SINGLE.base)])
+    expect(evidence.footStrikePattern).toEqual({
+      status: 'no-evidence',
+      reason: 'extraction-failed',
+    })
+    expect(evidence.kneeDrive.status).toBe('extracted')
+  })
+
+  it('abandons the clip at the next seek, keeping only metrics finished before it', async () => {
+    const { video } = seekableVideo()
+    recordPerCanvas(video)
+    const controller = new AbortController()
+    const requested = interceptSeeks(video, (_, count) => {
+      // The fourth seek is the one the abort lands inside.
+      if (count === 4) controller.abort()
+      return 'land'
+    })
+    const finished: MetricId[] = []
+
+    const evidence = await extractPlannedFrames(
+      video,
+      realPlan(REAL_PLANS['side-landscape']),
+      { signal: controller.signal },
+      { onMetricExtracted: (metric) => finished.push(metric) },
+    )
+
+    // No seek after the one the abort landed in.
+    expect(requested).toEqual([2.26667, 2.5, 2.63333, 2.65])
+    // Reported in the order they finished: kneeDrive at its only instant, kneeFlexion at its ghost.
+    expect(finished).toEqual(['kneeDrive', 'kneeFlexion'])
+    for (const metric of ['kneeDrive', 'kneeFlexion', 'verticalOscillation'] as MetricId[]) {
+      expect(evidence[metric]).toEqual({ status: 'no-evidence', reason: 'extraction-failed' })
+    }
+  })
+
+  it('drops only the images waiting on a timed-out frame, seeking a target with nothing owed before it once', async () => {
+    const { video } = seekableVideo()
+    recordPerCanvas(video)
+    // The ghost `verticalOscillation` and `verticalRatio` share never lands.
+    const requested = interceptSeeks(video, (time) => (time === 2.83333 ? 'withhold' : 'land'))
+    const finished: MetricId[] = []
+
+    const evidence = await extractPlannedFrames(
+      video,
+      realPlan(REAL_PLANS['side-landscape']),
+      { seekTimeoutMs: 5 },
+      { onMetricExtracted: (metric) => finished.push(metric) },
+    )
+
+    expect(requested.filter((time) => time === 2.83333)).toHaveLength(1)
+    // Both bases drew before the ghost failed, and both images are dropped whole: a pair shorn of
+    // its ghost would read as a single still.
+    expect(evidence.verticalOscillation).toEqual({
+      status: 'no-evidence',
+      reason: 'extraction-failed',
+    })
+    expect(evidence.verticalRatio).toEqual({
+      status: 'no-evidence',
+      reason: 'extraction-failed',
+    })
+    const unaffected: MetricId[] = [
+      'footStrikePattern',
+      'kneeDrive',
+      'kneeFlexion',
+      'trunkLean',
+      'verticalOscillationCm',
+    ]
+    for (const metric of unaffected) expect(evidence[metric].status).toBe('extracted')
+    expect([...finished].sort()).toEqual(unaffected)
+  })
+
+  it('drops an image whose base timed out without ever seeking its ghost', async () => {
+    const { video } = seekableVideo()
+    recordPerCanvas(video)
+    const requested = interceptSeeks(video, (time) => (time === 2.8 ? 'withhold' : 'land'))
+
+    const evidence = await extractPlannedFrames(
+      video,
+      realPlan(REAL_PLANS['side-landscape']),
+      { seekTimeoutMs: 5 },
+    )
+
+    // `trunkLean`'s ghost (2.56667) is wanted by nothing else, so it is never seeked at all.
+    expect(requested).not.toContain(2.56667)
+    expect(evidence.trunkLean).toEqual({ status: 'no-evidence', reason: 'extraction-failed' })
+    expect(evidence.verticalOscillationCm.status).toBe('extracted')
+  })
+
+  it('reports each complete metric once, the moment its last instant is drawn', async () => {
+    const { video } = seekableVideo()
+    recordPerCanvas(video)
+    const finished: Array<[MetricId, number]> = []
+    const reported = new Map<MetricId, unknown>()
+
+    const evidence = await extractPlannedFrames(
+      video,
+      realPlan(REAL_PLANS['side-landscape']),
+      {},
+      {
+        onMetricExtracted: (metric, value) => {
+          finished.push([metric, video.currentTime])
+          reported.set(metric, value)
+        },
+      },
+    )
+
+    expect(finished).toEqual([
+      ['kneeDrive', 2.26667],
+      ['kneeFlexion', 2.63333],
+      ['verticalOscillationCm', 2.48333],
+      ['trunkLean', 2.56667],
+      ['verticalOscillation', 2.83333],
+      ['verticalRatio', 2.83333],
+      ['footStrikePattern', 3.43333],
+    ])
+    // The object reported is the object returned, so what a caller kept IS the pass's answer.
+    for (const [metric, value] of reported) expect(evidence[metric]).toBe(value)
   })
 })

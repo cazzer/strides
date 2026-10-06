@@ -23,7 +23,7 @@ import type {
  *
  * ### The `globalAlpha` trap
  *
- * `drawInstant` sets `ctx.globalAlpha = instant.opacity` (`extractFrames.ts`) and `extractFrame`
+ * `drawInstant` sets `ctx.globalAlpha = instant.opacity` (`extractFrames.ts`) and `drawPresentedInstants`
  * never resets it, so this function is handed a context sitting at the ghost's PHOTOGRAPHIC blend
  * alpha (`EVIDENCE_GHOST_BLEND_ALPHA`) on every ghosted pair — which is neither the ghost's mark
  * opacity nor a half. Inheriting it would scale the BASE marks by it too — a silent,
@@ -589,7 +589,7 @@ const OP_ORDER: ReadonlyArray<EvidenceAnnotationOp['kind']> = [
 /**
  * Strokes one exemplar's annotation over its already-composited image.
  *
- * The context is expected to arrive dirty — `extractFrame` leaves `globalAlpha` at the last
+ * The context is expected to arrive dirty — `drawPresentedInstants` leaves `globalAlpha` at the last
  * instant's blend value — so the pass opens by resetting every piece of state it depends on and
  * closes by leaving the context in that same clean state for whoever holds it next. Nothing here
  * reads a value it did not set.
