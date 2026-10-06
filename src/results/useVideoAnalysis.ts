@@ -100,6 +100,14 @@ function trackScaleDetectorCreation(creation: Promise<unknown>): void {
  * skipped and left to that clip's own `start()` (by which time the session has moved past the
  * playback clip). Primaries only: a scale pass samples with the very detector this warm-up
  * creates, so it is already created by the time any scale pass samples.
+ *
+ * Counted only once sampling LAUNCHES, so it does not cover a playback primary that has not
+ * started yet. With [WebM clip 1, MP4 clip 2] loaded together, clip 2's probe can settle `true`
+ * and start creation before clip 1's primary is counted (clip 1 is still waiting on the MoveNet
+ * load). Clip 1's `start()` then sees the creation in flight and waits out its remaining time,
+ * bounded at `SCALE_DETECTOR_CREATION_WAIT_MS`, before sampling, so it never samples under the
+ * contention. That wait is a net gain rather than a cost: clip 1's own scale pass needs the same
+ * detector anyway, and would otherwise create it later.
  */
 let playbackPrimariesSampling = 0
 
@@ -267,6 +275,14 @@ export function useVideoAnalysis(
   // its sequential probe settling `true` (strides-e4c.7), or at its `start()` when that was
   // skipped. See `warmScaleDetector`.
   const scaleWarmupStartedForRef = useRef<VideoMetadata | null>(null)
+  // Cancel a probe-time warm-up whose clip went away during the ~50 ms the probe takes: removal
+  // calls `reset()` (bumps the generation) and then unmounts (clears `mountedRef`). NOT a flag set
+  // in the probe effect's own cleanup: under StrictMode (dev, where the live gates run) that
+  // cleanup runs on the simulated unmount, and the effect's re-run returns early on its
+  // once-per-clip guard, so the flag would never clear and the warm-up would never fire in dev.
+  // `mountedRef`'s own effect re-runs its setup, so it reads `true` again after the remount.
+  const mountedRef = useRef(false)
+  const warmupGenerationRef = useRef(0)
 
   const abandonActiveRun = () => {
     handleRef.current?.stop()
@@ -298,6 +314,13 @@ export function useVideoAnalysis(
       abandonActiveRun()
     }
   }, [metadata])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   // Kicks off the sequential-decode feasibility probe as early as possible for a freshly loaded
   // clip — see `sequentialDecodeSupported`'s doc above for why this has to happen ahead of time
@@ -337,6 +360,7 @@ export function useVideoAnalysis(
       ? canUseSequentialDecode(sourceBlob, probeTimings)
       : Promise.resolve(false)
     const probedBlob = sourceBlob
+    const warmupGeneration = warmupGenerationRef.current
     void probe.then((supported) => {
       // An answer that never reached auto-start (the timeout below won, or a newer clip replaced
       // this one) serves no sampler, so the track the probe demuxed for it would sit unused.
@@ -348,7 +372,12 @@ export function useVideoAnalysis(
       // settles ~50 ms after the clip is ready, while start() waits on the cold MoveNet load
       // (~1.1 s) — on a short clip the primary otherwise finishes before creation (~2 s) does.
       // Only a committed `true`: that is the answer start() will sample sequentially on.
-      if (supported && warmScaleDetector(probedFor, probedBlob)) {
+      if (
+        supported &&
+        mountedRef.current &&
+        warmupGenerationRef.current === warmupGeneration &&
+        warmScaleDetector(probedFor, probedBlob)
+      ) {
         scaleWarmupStartedForRef.current = probedFor
       }
     })
@@ -373,6 +402,10 @@ export function useVideoAnalysis(
   const reset = useCallback(() => {
     abandonActiveRun()
     setState(idleState())
+    // Lets the next start() warm the scale-pass detector again — after a failed creation that is
+    // the early retry — and cancels a probe-time warm-up still waiting on this clip's probe.
+    scaleWarmupStartedForRef.current = null
+    warmupGenerationRef.current += 1
     // Clip removal goes through here, so the bitstream is dropped explicitly rather than left to
     // the Blob becoming unreachable.
     if (sourceBlob) releaseClipDemux(sourceBlob)
@@ -484,7 +517,13 @@ export function useVideoAnalysis(
         // Settles on a natural end, an error and `stop()` alike (SampleClipHandle's doc).
         playbackPrimariesSampling += 1
         const released = () => {
-          playbackPrimariesSampling = Math.max(0, playbackPrimariesSampling - 1)
+          playbackPrimariesSampling -= 1
+          if (import.meta.env.DEV) {
+            console.assert(
+              playbackPrimariesSampling >= 0,
+              'playbackPrimariesSampling went negative: a playback primary was released twice',
+            )
+          }
         }
         void promise.then(released, released)
       }

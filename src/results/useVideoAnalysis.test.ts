@@ -1893,6 +1893,58 @@ describe('useVideoAnalysis', () => {
       )
     })
 
+    it('still starts at probe-true under StrictMode, which the dev app renders in', async () => {
+      useSequentialPath()
+      const videoSource = makeVideoSource({ sourceBlob })
+      renderHook(() => useVideoAnalysis(videoSource, null), { reactStrictMode: true })
+
+      await waitFor(() => expect(getScalePassDetectorMock).toHaveBeenCalledTimes(1))
+    })
+
+    it('does not start when the clip is reset or unmounted before its probe answers', async () => {
+      const answers: ((supported: boolean) => void)[] = []
+      canUseSequentialDecodeMock.mockImplementation(
+        () => new Promise((resolve) => answers.push(resolve)),
+      )
+
+      const resetSource = makeVideoSource({ sourceBlob })
+      const resetHook = renderHook(() => useVideoAnalysis(resetSource, null))
+      const unmountSource = makeVideoSource({ sourceBlob: new Blob([new Uint8Array([7])]) })
+      const unmountHook = renderHook(() => useVideoAnalysis(unmountSource, null))
+      await waitFor(() => expect(answers).toHaveLength(2))
+
+      act(() => {
+        resetHook.result.current.reset()
+      })
+      unmountHook.unmount()
+      await act(async () => {
+        answers.forEach((answer) => answer(true))
+      })
+
+      expect(getScalePassDetectorMock).not.toHaveBeenCalled()
+    })
+
+    it('lets start() warm again after reset(), so a failed creation gets an early retry', async () => {
+      useSequentialPath()
+      deferPrimary(sampleClipSequentialMock)
+      const videoSource = makeVideoSource({ sourceBlob })
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+      await waitFor(() => expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1))
+      expect(getScalePassDetectorMock).toHaveBeenCalledTimes(1)
+
+      deferPrimary(sampleClipSequentialMock)
+      act(() => {
+        result.current.reset()
+      })
+      act(() => {
+        result.current.start()
+      })
+
+      expect(sampleClipSequentialMock).toHaveBeenCalledTimes(2)
+      expect(getScalePassDetectorMock).toHaveBeenCalledTimes(2)
+    })
+
     it('makes a playback primary wait for a creation an earlier sequential clip started, but never a sequential one', async () => {
       // schedule-scale-passes-after-primaries: the active clip now advances at clip 1's 'ready',
       // so clip 1's warm-up can still be creating MediaPipe when clip 2 starts. A playback sampler
