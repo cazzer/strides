@@ -77,7 +77,11 @@ vi.mock('../video/clipBytesCache', () => ({
   releaseClipDemux: releaseClipDemuxMock,
 }))
 
-import { isWaitingForScalePassLane, useVideoAnalysis } from './useVideoAnalysis'
+import {
+  __resetScaleDetectorCreationForTests,
+  isWaitingForScalePassLane,
+  useVideoAnalysis,
+} from './useVideoAnalysis'
 
 function makeMetadata(overrides: Partial<VideoMetadata> = {}): VideoMetadata {
   return { durationSec: 10, width: 640, height: 480, frameRate: 30, ...overrides }
@@ -430,6 +434,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs()
+  // A test may leave a scale-detector creation unresolved on purpose; without this, every later
+  // playback primary in the file would wait on it.
+  __resetScaleDetectorCreationForTests()
   delete window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__
   delete window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__
 })
@@ -1778,6 +1785,50 @@ describe('useVideoAnalysis', () => {
         finishCreation(makeFakeDetector())
       })
       await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
+    })
+
+    it('stops waiting for a creation that never settles, and samples after the bound', async () => {
+      // A stalled WASM or model fetch leaves creation pending forever; the playback primary must
+      // still run. waitFor polls with setTimeout, so this flushes with bounded act() loops.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const sequentialBlob = new Blob([new Uint8Array([1])])
+        const playbackBlob = new Blob([new Uint8Array([3])])
+        canUseSequentialDecodeMock.mockImplementation(async (blob: Blob) => blob === sequentialBlob)
+        sampleClipSequentialMock.mockImplementation(() => ({
+          promise: new Promise(() => {}),
+          handle: makeFakeHandle(),
+        }))
+        getScalePassDetectorMock.mockReturnValue(new Promise(() => {}))
+        const flush = async () => {
+          for (let i = 0; i < 10; i += 1) await act(async () => {})
+        }
+
+        const sequentialSource = makeVideoSource({ sourceBlob: sequentialBlob })
+        renderHook(() => useVideoAnalysis(sequentialSource, makeFakeDetector()))
+        await flush()
+        expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1)
+
+        const playbackSource = makeVideoSource({ sourceBlob: playbackBlob })
+        const { result } = renderHook(() => useVideoAnalysis(playbackSource, makeFakeDetector()))
+        await flush()
+        expect(result.current.phase).toBe('sampling')
+        expect(sampleClipMock).not.toHaveBeenCalled()
+
+        await act(async () => {
+          vi.advanceTimersByTime(7999)
+        })
+        await flush()
+        expect(sampleClipMock).not.toHaveBeenCalled()
+
+        await act(async () => {
+          vi.advanceTimersByTime(1)
+        })
+        await flush()
+        expect(sampleClipMock).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('starts a playback primary at once when no creation is in flight', async () => {

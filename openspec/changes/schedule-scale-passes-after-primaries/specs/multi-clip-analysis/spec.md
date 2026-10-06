@@ -19,14 +19,16 @@ outstanding-primary rule because it keeps the shared detector until its own pass
 "Serialized shared-detector access across concurrently mounted clips"), so every later primary waits
 for it. A primary pass that samples on the playback path SHALL NOT begin sampling while the
 scale-pass detector is still being created, since that sampler loses real-time frames under the
-contention creation causes; a primary on the sequential path SHALL NOT wait for it.
+contention creation causes — but SHALL wait no longer than a fixed bound of a few seconds, after
+which it samples anyway, so a creation that never settles cannot hang the run; a primary on the
+sequential path SHALL NOT wait for it.
 
 #### Scenario: A playback primary waits for a scale-pass detector still being created
 
 - **WHEN** a sequential-path clip's primary has started creating the scale-pass detector, and the
   next clip — which samples on the playback path — becomes active before that creation settles
-- **THEN** the playback clip begins sampling only once the creation has settled, while a
-  sequential-path clip in the same position begins at once
+- **THEN** the playback clip begins sampling once the creation has settled or the bounded wait has
+  elapsed, whichever comes first, while a sequential-path clip in the same position begins at once
 
 #### Scenario: Three sequential-path clips run every primary first
 

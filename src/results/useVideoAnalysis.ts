@@ -50,6 +50,13 @@ function roundProbeTimings(timings: SequentialDecodeProbeTimings) {
  * on — see `sequentialDecodeSupported`'s doc for why auto-start waits at all. */
 const SEQUENTIAL_DECODE_PROBE_TIMEOUT_MS = 3000
 
+/** Longest a playback-path primary waits for an in-flight scale-pass detector creation
+ * (`scaleDetectorCreationInFlight`) before sampling anyway. Creation normally settles in well
+ * under a second, but a stalled WASM or model fetch can leave it pending forever (the scale pass
+ * races it against its own watchdog for the same reason), and an unbounded wait would hang the
+ * primary run. Past this bound, losing some frames to contention beats never analysing the clip. */
+const SCALE_DETECTOR_CREATION_WAIT_MS = 8000
+
 function idleState(): Omit<VideoAnalysisState, 'start' | 'reset'> {
   return {
     phase: 'idle',
@@ -83,6 +90,12 @@ function trackScaleDetectorCreation(creation: Promise<unknown>): void {
   void settled.then(() => {
     if (scaleDetectorCreationInFlight === settled) scaleDetectorCreationInFlight = null
   })
+}
+
+/** Test-only: forgets any tracked creation, so a test that leaves one unresolved cannot make a
+ * later test's playback primary wait for it. */
+export function __resetScaleDetectorCreationForTests(): void {
+  scaleDetectorCreationInFlight = null
 }
 
 /**
@@ -565,7 +578,14 @@ export function useVideoAnalysis(
     if (creationInFlight === null) {
       launchSampling()
     } else {
-      void creationInFlight.then(() => {
+      let waitDeadline: ReturnType<typeof setTimeout> | undefined
+      void Promise.race([
+        creationInFlight,
+        new Promise<void>((resolve) => {
+          waitDeadline = setTimeout(resolve, SCALE_DETECTOR_CREATION_WAIT_MS)
+        }),
+      ]).then(() => {
+        clearTimeout(waitDeadline)
         if (runIdRef.current === runId) launchSampling()
       })
     }

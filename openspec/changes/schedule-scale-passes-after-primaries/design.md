@@ -110,7 +110,10 @@ starts playback sampling.
 
 `useVideoAnalysis` records the warm-up's promise in its own module scope
 (`scaleDetectorCreationInFlight`, cleared once it settles either way). `start()` on the playback path
-waits for it before sampling, re-checking the run id afterwards. The sequential path never reads it.
+waits for it before sampling, re-checking the run id afterwards. The wait is bounded by
+`SCALE_DETECTOR_CREATION_WAIT_MS` (8 s): a stalled WASM or model fetch can leave creation pending
+forever, which is why the scale pass races it against its watchdog, and an unbounded wait would hang
+the primary. Past the bound the run samples anyway and accepts the contention. The sequential path never reads it.
 `src/pose/scalePassDetector.ts` is not touched, because the unmerged `feat/eager-model-prefetch`
 branch rewrites it. The run shows `'sampling'` during the wait, and its playback starts muted outside
 any click's call stack. That is the same state every auto-started run is already in.
