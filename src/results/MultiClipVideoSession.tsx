@@ -72,6 +72,9 @@ function sameClipSession(previous: ClipSession | undefined, next: ClipSession): 
     previous.analysis.scalePass.diagnostics === next.analysis.scalePass.diagnostics &&
     previous.analysis.scalePass.error === next.analysis.scalePass.error &&
     previous.analysis.scalePass.reason === next.analysis.scalePass.reason &&
+    // Read by the schedule before a clip's run starts (`nextActiveClipIndex`), and it settles on
+    // its own, with nothing else moving.
+    previous.analysis.primarySamplingPath === next.analysis.primarySamplingPath &&
     // A poster arrives asynchronously, long after the fields above have stopped moving — leaving it
     // out would make its arrival invisible to this comparison and `setClipStates` would keep
     // returning the previous state, so the poster would never reach anything that renders it.

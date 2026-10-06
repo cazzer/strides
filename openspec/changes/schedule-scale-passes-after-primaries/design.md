@@ -125,6 +125,40 @@ index stopped on such a clip forever. Every later clip's primary then never ran,
 outstanding primary under rule 4, and held back every queued scale pass, including those of clips
 before it. Rule 4 already ignored a failed source, so the lane needed no change of its own.
 
+### D9. A playback-path primary sees exactly the reference order
+
+Gate 4 (integration `68ee714`) passed the all-MP4 checks, and the three-clip demo's fused results
+moved from 13.0 s to 7.8 s. But it failed the epic's "never reduce sample count" constraint on a
+mixed session: `park-approach.mp4` plus a VP9 WebM of it, two fresh-process trials per arm, each arm
+identical across its trials.
+
+| arm | order | WebM primary detected / total |
+|---|---|---|
+| reference | P-seq, S-seq, P-webm, S-webm | **99 / 99** |
+| integration | P-seq, P-webm (after the warm-up settled, ~200 ms wait), S-webm, S-seq | **93 / 97** |
+
+The likely cause: the real-time playback primary now ran right after MediaPipe detector creation,
+instead of after a whole MediaPipe pass had run. CLAUDE.md records how warmth-sensitive that path
+is, and the D6 wait on creation alone was not enough.
+
+Decision (the coordinator's, decided by the epic's constraint): a playback-path clip sees EXACTLY
+the reference ordering.
+
+- `nextActiveClipIndex` advances into a clip whose primary may sample on the playback path only once
+  every earlier clip's scale pass is terminal and none is running.
+- A clip's path is known from its sequential-decode probe, which every clip runs at load. It reaches
+  the session as `VideoAnalysisState.primarySamplingPath`, from the same predicate `start()` uses. A
+  clip whose probe has not answered counts as playback, the conservative reading.
+- Rule 4 of the lane counts only the NEXT primary to run, and only if it is sequential. A playback
+  primary waiting on the gate does not block the lane, or the session would deadlock. The lane
+  drains the earlier passes in index order, and the playback clip's own pass then follows its
+  primary (rule 3), as at reference.
+- All-sequential sessions are unchanged: P1 P2 P3 S1 S2 S3. Mixed sessions run [seq, webm] as P1 S1
+  P2 S2, and [seq, seq, webm] as P1 P2 S1 S2 P3 S3.
+- The D6 creation wait is now implied whenever an earlier pass actually ran, since running a pass
+  settles creation. It stays as a bounded safety net for creation left in flight by a clip that
+  errored, or whose pass failed or was skipped.
+
 ### D8. `pending` outranks `done` in the aggregate
 
 With the old order (`running > done > failed > skipped`), clip 1 `'done'` and clip 2 `'pending'`

@@ -3,25 +3,30 @@
 ### Requirement: At most one scale pass runs, and none while a primary is outstanding
 
 The system SHALL allow at most one clip in a session to run its background scale pass at any time,
-and SHALL NOT start a clip's scale pass while any clip's primary analysis is still outstanding, so
-that every primary pass — the work the fused result waits on — runs before any scale pass, and a
+and SHALL NOT start a clip's scale pass while a primary pass is outstanding, so that every
+sequential-path primary — the work the fused result waits on — runs before any scale pass, and a
 primary pass and a scale pass never contend for the GPU. A primary pass is outstanding while a clip
-is `'sampling'` or `'processing'`, or while a clip at or after the shared detector's active index is
-`'idle'` with a video source that has not failed to load. The allowance SHALL be decided in this
-order: a clip already allowed its pass keeps the allowance until that pass is terminal (a started
-pass is never cancelled, and an allowance outlives any delay before the clip reports its pass
-`'running'`); otherwise none, while any primary is `'sampling'` or `'processing'`;
-otherwise the lowest-index `'ready'` clip with a `'pending'` pass whose primary sampled on the
-playback path; otherwise none, while any primary is outstanding; otherwise the lowest-index
-`'ready'` clip with a `'pending'` pass. The scale-pass detector is one stateful MediaPipe instance
-shared by every clip, which is why passes never overlap. A playback-path clip is served ahead of the
-outstanding-primary rule because it keeps the shared detector until its own pass is terminal (see
-"Serialized shared-detector access across concurrently mounted clips"), so every later primary waits
-for it. A primary pass that samples on the playback path SHALL NOT begin sampling while the
+is `'sampling'` or `'processing'`, or while the next primary to run — the first clip at or after
+the shared detector's active index that is `'idle'` with a video source that has not failed to
+load — samples on the sequential path. A next primary that samples, or may sample, on the playback
+path is NOT outstanding for this purpose: it is itself waiting for the earlier clips' passes to
+finish (see "Serialized shared-detector access across concurrently mounted clips"), and the passes
+SHALL be allowed to drain, in index order, so that it can start. The allowance SHALL be decided in
+this order: a clip already allowed its pass keeps the allowance until that pass is terminal (a
+started pass is never cancelled, and an allowance outlives any delay before the clip reports its
+pass `'running'`); otherwise none, while any primary is `'sampling'` or `'processing'`; otherwise
+the lowest-index `'ready'` clip with a `'pending'` pass whose primary sampled on the playback path;
+otherwise none, while a primary is outstanding; otherwise the lowest-index `'ready'` clip with a
+`'pending'` pass. The scale-pass detector is one stateful MediaPipe instance shared by every clip,
+which is why passes never overlap. A playback-path clip is served ahead of the outstanding-primary
+rule because it keeps the shared detector until its own pass is terminal, so every later primary
+waits for it. A primary pass that samples on the playback path SHALL NOT begin sampling while the
 scale-pass detector is still being created, since that sampler loses real-time frames under the
 contention creation causes — but SHALL wait no longer than a fixed bound of a few seconds, after
 which it samples anyway, so a creation that never settles cannot hang the run; a primary on the
-sequential path SHALL NOT wait for it.
+sequential path SHALL NOT wait for it. Since a playback primary now starts only after every earlier
+pass is terminal, this wait is a safety bound for creation left in flight by a clip that errored or
+whose pass failed.
 
 #### Scenario: A playback primary waits for a scale-pass detector still being created
 
@@ -39,8 +44,18 @@ sequential path SHALL NOT wait for it.
 #### Scenario: No scale pass starts while a primary is outstanding
 
 - **WHEN** one clip is `'ready'` with its scale pass `'pending'` and another clip is `'sampling'`,
-  or is `'idle'` at or after the active index with a source that has not failed
+  or is the next primary to run and samples on the sequential path
 - **THEN** no clip is allowed a scale pass, and the `'ready'` clip's pass stays `'pending'`
+
+#### Scenario: A sequential clip followed by a playback clip keeps the reference order
+
+- **WHEN** a sequential-path clip and then a playback-path clip are loaded together
+- **THEN** the passes run in the order primary 1, scale 1, primary 2, scale 2
+
+#### Scenario: Sequential primaries run first, then the passes drain before a playback primary
+
+- **WHEN** two sequential-path clips and then a playback-path clip are loaded together
+- **THEN** the passes run in the order primary 1, primary 2, scale 1, scale 2, primary 3, scale 3
 
 #### Scenario: The lowest-index pending pass goes first
 
@@ -121,7 +136,12 @@ run, and stopping on it would starve every later clip). A clip whose primary run
 by playing its own `<video>` element, as a WebM, a webcam recording, or an MP4 the sequential-decode
 probe declined does — SHALL additionally keep the detector until its background scale pass has
 reached a terminal state (`scalePass.status` is `'done'`, `'failed'`, or `'skipped'`), because that
-pass replays the same element. The active clip SHALL NOT advance while any clip holds the
+pass replays the same element. The active clip SHALL advance into a clip whose primary samples,
+or may sample, on the playback path — its sequential-decode probe said no, or has not answered —
+only once every earlier clip's scale pass is terminal, so that a playback primary always runs after
+a whole scale pass has finished and never right after scale-pass detector creation; a real-time
+playback sampler is that sensitive to what ran on the GPU just before it. The active clip SHALL NOT
+advance while any clip holds the
 scale-pass allowance — its pass `'running'`, or allowed and not yet reported as started. A
 sequential-path clip's scale pass uses its own detector and is scheduled separately
 (see "At most one scale pass runs, and none while a primary is outstanding"). This exists because
@@ -154,6 +174,13 @@ frames.
 - **WHEN** every primary is terminal, one clip has been allowed its scale pass — whether or not it
   has yet reported that pass `'running'` — and a new clip is added
 - **THEN** the new clip does not receive the detector until that scale pass is terminal
+
+#### Scenario: A playback-path clip is not handed the detector while an earlier pass is due
+
+- **WHEN** the active clip sampled on the sequential path and is `'ready'` with its scale pass
+  `'pending'`, and the next clip's probe said it will sample on the playback path (or has not
+  answered)
+- **THEN** the next clip does not receive the detector until that scale pass is terminal
 
 #### Scenario: A clip whose video failed to load is skipped
 

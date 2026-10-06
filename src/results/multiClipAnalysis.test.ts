@@ -78,6 +78,8 @@ function makeAnalysis(overrides: Partial<VideoAnalysisState> = {}): VideoAnalysi
     diagnostics: null,
     scalePass: { status: 'idle', diagnostics: null },
     error: null,
+    // The default MP4 case. A playback-path (or not-yet-probed) clip says so explicitly.
+    primarySamplingPath: 'sequential',
     start: vi.fn(),
     reset: vi.fn(),
     ...overrides,
@@ -521,7 +523,9 @@ describe('the two lanes together (schedule-scale-passes-after-primaries)', () =>
    * never run at once and that at most one scale pass runs.
    */
   function simulate(paths: ('sequential' | 'playback')[]): string[] {
-    let clips: ClipSession[] = paths.map((_, i) => makeClip(String(i + 1)))
+    let clips: ClipSession[] = paths.map((path, i) =>
+      makeClip(String(i + 1), { primarySamplingPath: path }),
+    )
     let active = 0
     const order: string[] = []
     const set = (index: number, overrides: Partial<VideoAnalysisState>) => {
@@ -567,9 +571,28 @@ describe('the two lanes together (schedule-scale-passes-after-primaries)', () =>
     ])
   })
 
-  it('mixes the two rules without deadlocking', () => {
+  // A playback-path primary sees exactly the reference order: it starts only once every earlier
+  // clip's pass is terminal (design.md D9 — measured, a WebM primary started right after MediaPipe
+  // detector creation detected 93/97 where the reference order detected 99/99).
+  it('[seq, webm] keeps the reference order: P1 S1 P2 S2', () => {
+    expect(simulate(['sequential', 'playback'])).toEqual(['P1', 'S1', 'P2', 'S2'])
+  })
+
+  it('[seq, seq, webm] runs the sequential primaries first, then drains before the webm: P1 P2 S1 S2 P3 S3', () => {
+    expect(simulate(['sequential', 'sequential', 'playback'])).toEqual([
+      'P1', 'P2', 'S1', 'S2', 'P3', 'S3',
+    ])
+  })
+
+  it('[seq, webm, seq] mixes the two rules without deadlocking', () => {
     expect(simulate(['sequential', 'playback', 'sequential'])).toEqual([
-      'P1', 'P2', 'S2', 'P3', 'S1', 'S3',
+      'P1', 'S1', 'P2', 'S2', 'P3', 'S3',
+    ])
+  })
+
+  it('[webm, seq, seq] runs the webm pair first, then the sequential schedule', () => {
+    expect(simulate(['playback', 'sequential', 'sequential'])).toEqual([
+      'P1', 'S1', 'P2', 'P3', 'S2', 'S3',
     ])
   })
 
@@ -628,5 +651,53 @@ describe('the scale-pass lease and clips that cannot run (review round 1)', () =
     const active = nextActiveClipIndex(clips, 0)
     expect(active).toBe(1)
     expect(nextScalePassClipIndex(clips, active)).toBe(0)
+  })
+})
+
+describe('a playback-path primary waits for earlier passes (design.md D9)', () => {
+  const pending = (id: string) => makePrimaryDoneClip(id, 'pending')
+  const idle = (id: string, primarySamplingPath: 'sequential' | 'playback' | null) =>
+    makeClip(id, { primarySamplingPath })
+
+  it('is not advanced into while an earlier pass is pending, and the lane drains that pass meanwhile', () => {
+    const clips = [pending('a'), idle('b', 'playback')]
+    const active = nextActiveClipIndex(clips, 0)
+    expect(active).toBe(0)
+    expect(nextScalePassClipIndex(clips, active)).toBe(0)
+  })
+
+  it('is advanced into once every earlier pass is terminal', () => {
+    const clips = [makePrimaryDoneClip('a', 'failed'), idle('b', 'playback')]
+    expect(nextActiveClipIndex(clips, 0)).toBe(1)
+  })
+
+  it('treats a clip whose probe has not answered as playback', () => {
+    const clips = [pending('a'), idle('b', null)]
+    expect(nextActiveClipIndex(clips, 0)).toBe(0)
+    expect(nextScalePassClipIndex(clips, 0)).toBe(0)
+  })
+
+  it('does not hold back a sequential primary, which still runs before any pass', () => {
+    const clips = [pending('a'), idle('b', 'sequential')]
+    const active = nextActiveClipIndex(clips, 0)
+    expect(active).toBe(1)
+    expect(nextScalePassClipIndex(clips, active)).toBeNull()
+  })
+
+  it('drains the earlier passes in index order before the playback primary', () => {
+    const clips = [pending('a'), pending('b'), idle('c', 'playback')]
+    const active = nextActiveClipIndex(clips, 1)
+    expect(active).toBe(1)
+    expect(nextScalePassClipIndex(clips, active)).toBe(0)
+    const afterA = [makePrimaryDoneClip('a', 'done'), pending('b'), idle('c', 'playback')]
+    expect(nextActiveClipIndex(afterA, 1)).toBe(1)
+    expect(nextScalePassClipIndex(afterA, 1)).toBe(1)
+  })
+
+  it('ignores a failed load or an errored clip ahead of it', () => {
+    const failedLoad = idle('b', 'playback')
+    failedLoad.videoSource = { ...failedLoad.videoSource, status: 'error' }
+    const clips = [makePrimaryDoneClip('a', 'done'), failedLoad, idle('c', 'playback')]
+    expect(nextActiveClipIndex(clips, 0)).toBe(2)
   })
 })

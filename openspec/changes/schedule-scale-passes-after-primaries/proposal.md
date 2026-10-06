@@ -15,7 +15,9 @@ the next clip's primary (bead `strides-4vu`).
   none while any primary is outstanding.
 - **Playback-path clips keep today's rule.** A clip that sampled by playing its own `<video>` (WebM,
   webcam, or an MP4 the probe declined) still keeps the detector until its scale pass is terminal,
-  and gets the lane straight after its own primary.
+  and gets the lane straight after its own primary. It also starts its primary only once every
+  earlier clip's scale pass is terminal, so it sees exactly the reference order. Without that, a
+  WebM primary in a mixed session detected 93/97 frames instead of 99/99 (design.md D9).
 - **A started pass is never cancelled.** It keeps the lane until it is terminal, and the active clip
   does not advance into a newly added clip while any pass is running.
 - **The aggregate scale-pass status ranks `pending` above every terminal status.** Without this, a
