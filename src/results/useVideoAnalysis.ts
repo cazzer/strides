@@ -92,66 +92,10 @@ function trackScaleDetectorCreation(creation: Promise<unknown>): void {
   })
 }
 
-/**
- * How many PLAYBACK-path primaries are sampling right now, page-wide. The probe-time warm-up below
- * starts MediaPipe creation as soon as a clip's sequential probe settles — which, for a clip added
- * to a session, can land while ANOTHER clip's playback primary is mid-sampling, the exact
- * contention strides-gyl measured as dropped frames. While this is non-zero the warm-up is
- * skipped and left to that clip's own `start()` (by which time the session has moved past the
- * playback clip). Primaries only: a scale pass samples with the very detector this warm-up
- * creates, so it is already created by the time any scale pass samples.
- *
- * Counted only once sampling LAUNCHES, so it does not cover a playback primary that has not
- * started yet. With [WebM clip 1, MP4 clip 2] loaded together, clip 2's probe can settle `true`
- * and start creation before clip 1's primary is counted (clip 1 is still waiting on the MoveNet
- * load). Clip 1's `start()` then sees the creation in flight and waits out its remaining time,
- * bounded at `SCALE_DETECTOR_CREATION_WAIT_MS`, before sampling, so it never samples under the
- * contention. That wait is a net gain rather than a cost: clip 1's own scale pass needs the same
- * detector anyway, and would otherwise create it later.
- */
-let playbackPrimariesSampling = 0
-
 /** Test-only: forgets any tracked creation, so a test that leaves one unresolved cannot make a
- * later test's playback primary wait for it. Also zeroes the playback-sampler count a test's
- * never-settling sampler mock would otherwise leak into the next test. */
+ * later test's playback primary wait for it. */
 export function __resetScaleDetectorCreationForTests(): void {
   scaleDetectorCreationInFlight = null
-  playbackPrimariesSampling = 0
-}
-
-/**
- * Starts creating the scale pass's MediaPipe detector ahead of that pass (strides-e4c.2), on the
- * shared tracked promise so a playback primary's wait (`scaleDetectorCreationInFlight`) sees it.
- * Returns whether it started one. Callers pass only clips whose primary samples SEQUENTIALLY: the
- * playback sampler drops real-time frames under the main-thread/GPU contention creation causes
- * (strides-gyl), where the sequential one only runs slower — and for the same reason nothing is
- * started while any other clip's playback primary samples (`playbackPrimariesSampling`). The
- * backend check stands in for the 'primary-scale' skip at 'ready': only MediaPipe emits
- * `pixelsPerMeter`, so only a MediaPipe primary can carry the calibration that skips the pass.
- * `getScalePassDetector` de-duplicates, so a second clip calling this costs one cache hit.
- */
-function warmScaleDetector(metadata: VideoMetadata, sourceBlob: Blob | null): boolean {
-  if (
-    playbackPrimariesSampling > 0 ||
-    !resolveScalePassConfig().enabled ||
-    resolvePoseDetectorConfig().backend === 'mediapipePoseLandmarker'
-  ) {
-    return false
-  }
-  const warmupStartedAt = performance.now()
-  const warmup = getScalePassDetector()
-  trackScaleDetectorCreation(warmup)
-  // Settle time on the page clock (`atMs`), so a driver can see a creation still in flight
-  // while a later clip samples — e.g. clip 1 errors before 'ready' and clip 2 takes over.
-  if (import.meta.env.DEV) void warmup.then((scaleDetector) =>
-    logPerfTimings('scale-detector-warmup', {
-      ...perfClipIdentity(metadata, sourceBlob),
-      startedAtMs: roundMs(warmupStartedAt),
-      durationMs: roundMs(performance.now() - warmupStartedAt),
-      created: scaleDetector !== null,
-    }),
-  )
-  return true
 }
 
 /**
@@ -271,18 +215,6 @@ export function useVideoAnalysis(
   // `sequentialDecodeSupported` itself: this is read-and-written only inside the effect that owns
   // it, never needs to trigger a render on its own.
   const sequentialDecodeProbedForRef = useRef<VideoMetadata | null>(null)
-  // Which clip's `metadata` has already started the scale-detector warm-up — once per clip, at
-  // its sequential probe settling `true` (strides-e4c.7), or at its `start()` when that was
-  // skipped. See `warmScaleDetector`.
-  const scaleWarmupStartedForRef = useRef<VideoMetadata | null>(null)
-  // Cancel a probe-time warm-up whose clip went away during the ~50 ms the probe takes: removal
-  // calls `reset()` (bumps the generation) and then unmounts (clears `mountedRef`). NOT a flag set
-  // in the probe effect's own cleanup: under StrictMode (dev, where the live gates run) that
-  // cleanup runs on the simulated unmount, and the effect's re-run returns early on its
-  // once-per-clip guard, so the flag would never clear and the warm-up would never fire in dev.
-  // `mountedRef`'s own effect re-runs its setup, so it reads `true` again after the remount.
-  const mountedRef = useRef(false)
-  const warmupGenerationRef = useRef(0)
 
   const abandonActiveRun = () => {
     handleRef.current?.stop()
@@ -314,13 +246,6 @@ export function useVideoAnalysis(
       abandonActiveRun()
     }
   }, [metadata])
-
-  useEffect(() => {
-    mountedRef.current = true
-    return () => {
-      mountedRef.current = false
-    }
-  }, [])
 
   // Kicks off the sequential-decode feasibility probe as early as possible for a freshly loaded
   // clip — see `sequentialDecodeSupported`'s doc above for why this has to happen ahead of time
@@ -360,26 +285,10 @@ export function useVideoAnalysis(
       ? canUseSequentialDecode(sourceBlob, probeTimings)
       : Promise.resolve(false)
     const probedBlob = sourceBlob
-    const warmupGeneration = warmupGenerationRef.current
     void probe.then((supported) => {
       // An answer that never reached auto-start (the timeout below won, or a newer clip replaced
       // this one) serves no sampler, so the track the probe demuxed for it would sit unused.
-      if (!settle(supported)) {
-        if (probedBlob) releaseClipDemux(probedBlob)
-        return
-      }
-      // strides-e4c.7: start the scale-pass detector here rather than at start(). The probe
-      // settles ~50 ms after the clip is ready, while start() waits on the cold MoveNet load
-      // (~1.1 s) — on a short clip the primary otherwise finishes before creation (~2 s) does.
-      // Only a committed `true`: that is the answer start() will sample sequentially on.
-      if (
-        supported &&
-        mountedRef.current &&
-        warmupGenerationRef.current === warmupGeneration &&
-        warmScaleDetector(probedFor, probedBlob)
-      ) {
-        scaleWarmupStartedForRef.current = probedFor
-      }
+      if (!settle(supported) && probedBlob) releaseClipDemux(probedBlob)
     })
     // Chained after `settle`, so the line can never delay the result reaching auto-start.
     if (import.meta.env.DEV) void probe.then((supported) =>
@@ -402,10 +311,6 @@ export function useVideoAnalysis(
   const reset = useCallback(() => {
     abandonActiveRun()
     setState(idleState())
-    // Lets the next start() warm the scale-pass detector again — after a failed creation that is
-    // the early retry — and cancels a probe-time warm-up still waiting on this clip's probe.
-    scaleWarmupStartedForRef.current = null
-    warmupGenerationRef.current += 1
     // Clip removal goes through here, so the bitstream is dropped explicitly rather than left to
     // the Blob becoming unreachable.
     if (sourceBlob) releaseClipDemux(sourceBlob)
@@ -459,15 +364,29 @@ export function useVideoAnalysis(
     // computed, and diagnostics must report the path THIS run actually took, not whatever the
     // state says by the time the run finishes.
     const usesSequentialDecode = sequentialDecodeSupported === true
-    // The scale-pass detector warm-up normally started when this clip's probe settled
-    // (strides-e4c.7); this is only the fallback for a clip whose probe-time warm-up was skipped
-    // because another clip's playback primary was sampling then.
+    // Create the scale pass's detector now, overlapping this primary pass, instead of at 'ready'.
+    // Sequential path only: the playback sampler drops real-time frames under the main-thread/GPU
+    // contention creation causes (strides-gyl), where the sequential one only runs slower. The
+    // backend check stands in for the 'primary-scale' skip below: only MediaPipe emits
+    // `pixelsPerMeter`, so only a MediaPipe primary can carry the calibration that skips the pass.
     if (
       usesSequentialDecode &&
-      scaleWarmupStartedForRef.current !== metadata &&
-      warmScaleDetector(metadata, sourceBlob)
+      resolveScalePassConfig().enabled &&
+      resolvePoseDetectorConfig().backend !== 'mediapipePoseLandmarker'
     ) {
-      scaleWarmupStartedForRef.current = metadata
+      const warmupStartedAt = performance.now()
+      const warmup = getScalePassDetector()
+      trackScaleDetectorCreation(warmup)
+      // Settle time on the page clock (`atMs`), so a driver can see a creation still in flight
+      // while a later clip samples — e.g. clip 1 errors before 'ready' and clip 2 takes over.
+      if (import.meta.env.DEV) void warmup.then((scaleDetector) =>
+        logPerfTimings('scale-detector-warmup', {
+          ...perfClipIdentity(metadata, sourceBlob),
+          startedAtMs: roundMs(warmupStartedAt),
+          durationMs: roundMs(performance.now() - warmupStartedAt),
+          created: scaleDetector !== null,
+        }),
+      )
     }
     // Everything from here samples. Wrapped so a PLAYBACK run can wait for a scale-pass detector
     // creation still in flight from an earlier clip (see `scaleDetectorCreationInFlight`).
@@ -513,20 +432,6 @@ export function useVideoAnalysis(
         samplingRobustnessConfig.sequentialSampling,
       )
       handleRef.current = handle
-      if (!usesSequentialDecode) {
-        // Settles on a natural end, an error and `stop()` alike (SampleClipHandle's doc).
-        playbackPrimariesSampling += 1
-        const released = () => {
-          playbackPrimariesSampling -= 1
-          if (import.meta.env.DEV) {
-            console.assert(
-              playbackPrimariesSampling >= 0,
-              'playbackPrimariesSampling went negative: a playback primary was released twice',
-            )
-          }
-        }
-        void promise.then(released, released)
-      }
 
       // sampleClip deliberately doesn't call play() itself (see its docstring) — it must happen
       // here, but only on the playback path. Muted unconditionally regardless: a manual "Analyze"
