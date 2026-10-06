@@ -1625,7 +1625,7 @@ describe('useVideoAnalysis', () => {
     })
   })
 
-  describe('scale-pass detector warm-up (strides-e4c.2)', () => {
+  describe('scale-pass detector warm-up (strides-e4c.2, started at probe-true since strides-e4c.7)', () => {
     afterEach(() => {
       delete window.__STRIDES_POSE_BACKEND_OVERRIDE__
     })
@@ -1744,6 +1744,207 @@ describe('useVideoAnalysis', () => {
       expect(result.current.scalePass.reason).toBe('primary-scale')
       expect(getScalePassDetectorMock).not.toHaveBeenCalled()
     })
+    it('starts at the sequential probe settling true, before start(), while the primary detector is still loading', async () => {
+      useSequentialPath()
+      // Held open, so the scale pass's own call at 'ready' cannot be mistaken for a second warm-up.
+      deferPrimary(sampleClipSequentialMock)
+      const videoSource = makeVideoSource({ sourceBlob })
+      const { result, rerender } = renderHook(
+        ({ detector }: { detector: PoseDetector | null }) => useVideoAnalysis(videoSource, detector),
+        { initialProps: { detector: null as PoseDetector | null } },
+      )
+
+      // No primary detector yet (the cold MoveNet load), so start() cannot have run.
+      await waitFor(() => expect(getScalePassDetectorMock).toHaveBeenCalledTimes(1))
+      expect(result.current.phase).toBe('idle')
+      expect(sampleClipSequentialMock).not.toHaveBeenCalled()
+
+      const detector = makeFakeDetector()
+      rerender({ detector })
+      await waitFor(() => expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1))
+      // start() does not start a second warm-up for the same clip.
+      expect(getScalePassDetectorMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not start at all when the probe settles false', async () => {
+      const videoSource = makeVideoSource({ sourceBlob })
+      renderHook(() => useVideoAnalysis(videoSource, null))
+
+      await waitFor(() => expect(canUseSequentialDecodeMock).toHaveBeenCalled())
+      await act(async () => {})
+      await act(async () => {})
+      expect(getScalePassDetectorMock).not.toHaveBeenCalled()
+    })
+
+    it('does not start at probe-true when the scale pass is disabled or the primary is MediaPipe', async () => {
+      useSequentialPath()
+      window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__ = { enabled: false }
+      const disabledSource = makeVideoSource({ sourceBlob })
+      renderHook(() => useVideoAnalysis(disabledSource, null))
+      await waitFor(() => expect(canUseSequentialDecodeMock).toHaveBeenCalledTimes(1))
+      await act(async () => {})
+
+      delete window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__
+      window.__STRIDES_POSE_BACKEND_OVERRIDE__ = { backend: 'mediapipePoseLandmarker' }
+      const mediapipeSource = makeVideoSource({ sourceBlob: new Blob([new Uint8Array([9])]) })
+      renderHook(() => useVideoAnalysis(mediapipeSource, null))
+      await waitFor(() => expect(canUseSequentialDecodeMock).toHaveBeenCalledTimes(2))
+      await act(async () => {})
+
+      expect(getScalePassDetectorMock).not.toHaveBeenCalled()
+    })
+
+    it('does not start when the probe answers true only after its timeout fell back to playback', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        let answer!: (supported: boolean) => void
+        canUseSequentialDecodeMock.mockReturnValue(new Promise((resolve) => (answer = resolve)))
+
+        const videoSource = makeVideoSource({ sourceBlob })
+        const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+        await act(async () => {})
+        await act(async () => {
+          vi.advanceTimersByTime(3000)
+        })
+        for (let i = 0; i < 10 && result.current.phase !== 'sampling'; i += 1) {
+          await act(async () => {})
+        }
+        expect(sampleClipMock).toHaveBeenCalledTimes(1)
+
+        await act(async () => {
+          answer(true)
+        })
+        expect(getScalePassDetectorMock).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it("starts for a queued clip whose probe settles while another clip's sequential primary samples", async () => {
+      const firstBlob = new Blob([new Uint8Array([1])])
+      const queuedBlob = new Blob([new Uint8Array([2])])
+      canUseSequentialDecodeMock.mockResolvedValue(true)
+      sampleClipSequentialMock.mockImplementation(() => ({
+        promise: new Promise(() => {}),
+        handle: makeFakeHandle(),
+      }))
+      getScalePassDetectorMock.mockReturnValue(new Promise(() => {}))
+
+      const firstSource = makeVideoSource({ sourceBlob: firstBlob })
+      const firstDetector = makeFakeDetector()
+      renderHook(() => useVideoAnalysis(firstSource, firstDetector))
+      await waitFor(() => expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1))
+      expect(getScalePassDetectorMock).toHaveBeenCalledTimes(1)
+
+      const queuedSource = makeVideoSource({ sourceBlob: queuedBlob })
+      renderHook(() => useVideoAnalysis(queuedSource, null, { queued: true }))
+      // Same singleton in the real module; the call is what is asserted.
+      await waitFor(() => expect(getScalePassDetectorMock).toHaveBeenCalledTimes(2))
+    })
+
+    it("defers to start() while another clip's playback primary samples (strides-gyl)", async () => {
+      const playbackBlob = new Blob([new Uint8Array([3])])
+      const sequentialBlob = new Blob([new Uint8Array([4])])
+      canUseSequentialDecodeMock.mockImplementation(async (blob: Blob) => blob === sequentialBlob)
+      sampleClipSequentialMock.mockImplementation(() => ({
+        promise: new Promise(() => {}),
+        handle: makeFakeHandle(),
+      }))
+      let finishPlayback!: (samples: unknown[]) => void
+      sampleClipMock.mockImplementationOnce(() => ({
+        promise: new Promise((resolve) => {
+          finishPlayback = resolve
+        }),
+        handle: makeFakeHandle(),
+      }))
+
+      const playbackSource = makeVideoSource({ sourceBlob: playbackBlob })
+      const playbackDetector = makeFakeDetector()
+      const playback = renderHook(() => useVideoAnalysis(playbackSource, playbackDetector))
+      await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
+
+      const sequentialSource = makeVideoSource({ sourceBlob: sequentialBlob })
+      const sequentialDetector = makeFakeDetector()
+      const { rerender } = renderHook(
+        ({ detector }: { detector: PoseDetector | null }) =>
+          useVideoAnalysis(sequentialSource, detector, { queued: true }),
+        { initialProps: { detector: null as PoseDetector | null } },
+      )
+      await waitFor(() => expect(canUseSequentialDecodeMock).toHaveBeenCalledTimes(2))
+      await act(async () => {})
+      await act(async () => {})
+      expect(getScalePassDetectorMock).not.toHaveBeenCalled()
+
+      // The playback primary finishes; its own scale pass would create the detector lazily, so
+      // stop it from reaching one to keep this test about the sequential clip's fallback.
+      window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__ = { enabled: false }
+      await act(async () => {
+        finishPlayback([{ timestamp: 0, frame: null }])
+      })
+      await waitFor(() => expect(playback.result.current.phase).toBe('ready'))
+      delete window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__
+      expect(getScalePassDetectorMock).not.toHaveBeenCalled()
+
+      rerender({ detector: sequentialDetector })
+      await waitFor(() => expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1))
+      expect(getScalePassDetectorMock).toHaveBeenCalledTimes(1)
+      expect(getScalePassDetectorMock.mock.invocationCallOrder[0]).toBeLessThan(
+        sampleClipSequentialMock.mock.invocationCallOrder[0],
+      )
+    })
+
+    it('still starts at probe-true under StrictMode, which the dev app renders in', async () => {
+      useSequentialPath()
+      const videoSource = makeVideoSource({ sourceBlob })
+      renderHook(() => useVideoAnalysis(videoSource, null), { reactStrictMode: true })
+
+      await waitFor(() => expect(getScalePassDetectorMock).toHaveBeenCalledTimes(1))
+    })
+
+    it('does not start when the clip is reset or unmounted before its probe answers', async () => {
+      const answers: ((supported: boolean) => void)[] = []
+      canUseSequentialDecodeMock.mockImplementation(
+        () => new Promise((resolve) => answers.push(resolve)),
+      )
+
+      const resetSource = makeVideoSource({ sourceBlob })
+      const resetHook = renderHook(() => useVideoAnalysis(resetSource, null))
+      const unmountSource = makeVideoSource({ sourceBlob: new Blob([new Uint8Array([7])]) })
+      const unmountHook = renderHook(() => useVideoAnalysis(unmountSource, null))
+      await waitFor(() => expect(answers).toHaveLength(2))
+
+      act(() => {
+        resetHook.result.current.reset()
+      })
+      unmountHook.unmount()
+      await act(async () => {
+        answers.forEach((answer) => answer(true))
+      })
+
+      expect(getScalePassDetectorMock).not.toHaveBeenCalled()
+    })
+
+    it('lets start() warm again after reset(), so a failed creation gets an early retry', async () => {
+      useSequentialPath()
+      deferPrimary(sampleClipSequentialMock)
+      const videoSource = makeVideoSource({ sourceBlob })
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+      await waitFor(() => expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1))
+      expect(getScalePassDetectorMock).toHaveBeenCalledTimes(1)
+
+      deferPrimary(sampleClipSequentialMock)
+      act(() => {
+        result.current.reset()
+      })
+      act(() => {
+        result.current.start()
+      })
+
+      expect(sampleClipSequentialMock).toHaveBeenCalledTimes(2)
+      expect(getScalePassDetectorMock).toHaveBeenCalledTimes(2)
+    })
+
     it('makes a playback primary wait for a creation an earlier sequential clip started, but never a sequential one', async () => {
       // schedule-scale-passes-after-primaries: the active clip now advances at clip 1's 'ready',
       // so clip 1's warm-up can still be creating MediaPipe when clip 2 starts. A playback sampler
