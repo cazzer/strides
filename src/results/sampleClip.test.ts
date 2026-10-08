@@ -113,6 +113,33 @@ describe('sampleClip', () => {
     expect(samples.map((s) => s.timestamp)).toEqual([0.1, 0.3])
   })
 
+  it('reports its timings once on a natural end, counting dropped frames', async () => {
+    const video = document.createElement('video')
+    const controller = stubRequestVideoFrameCallback(video)
+    const { detector, resolveNext } = makeQueuedDetector()
+    const onTimings = vi.fn()
+
+    const { promise } = sampleClip(video, detector, 10, { onTimings })
+
+    controller.fire(0.1)
+    controller.fire(0.2) // dropped while #1 is in flight
+    await flush()
+    resolveNext(makeFrame(0.1))
+    await flush()
+    expect(onTimings).not.toHaveBeenCalled()
+
+    video.dispatchEvent(new Event('ended'))
+    await promise
+
+    expect(onTimings).toHaveBeenCalledTimes(1)
+    expect(onTimings.mock.calls[0][0]).toMatchObject({
+      path: 'playback',
+      frameCallbacks: 2,
+      droppedWhileInFlight: 1,
+      detectMs: { count: 1 },
+    })
+  })
+
   it('records a per-frame detection error as frame: null and keeps sampling', async () => {
     const video = document.createElement('video')
     const controller = stubRequestVideoFrameCallback(video)

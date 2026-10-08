@@ -10,6 +10,7 @@ import type {
 import type { SampleClipHandle } from './sampleClip'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 import { DEFAULT_SAMPLING_ROBUSTNESS_CONFIG } from './samplingRobustnessConfig'
+import { progressPercent } from './progressPercent'
 import {
   SCALE_PASS_PROVENANCE_CAVEAT,
   SCALE_PASS_SUBJECT_DIVERGENCE_CAVEAT,
@@ -21,12 +22,16 @@ const {
   computeFormHeuristicsMock,
   getScalePassDetectorMock,
   canUseSequentialDecodeMock,
+  sampleClipSequentialMock,
+  releaseClipDemuxMock,
 } = vi.hoisted(() => ({
   sampleClipMock: vi.fn(),
   applyRobustnessMock: vi.fn(),
   computeFormHeuristicsMock: vi.fn(),
   getScalePassDetectorMock: vi.fn(),
   canUseSequentialDecodeMock: vi.fn(),
+  sampleClipSequentialMock: vi.fn(),
+  releaseClipDemuxMock: vi.fn(),
 }))
 
 vi.mock('./sampleClip', () => ({
@@ -36,6 +41,12 @@ vi.mock('./sampleClip', () => ({
   // real values sampleClip.ts itself exports.
   DEFAULT_MAX_CONSECUTIVE_ERRORS: 30,
   DEFAULT_DETECTION_TIMEOUT_MS: 5000,
+}))
+
+// Mocked so a test can drive the sequential (WebCodecs) dispatch in jsdom, which has no
+// VideoDecoder. Unreached by every test that leaves canUseSequentialDecode resolving false.
+vi.mock('./sampleClipSequential', () => ({
+  sampleClipSequential: sampleClipSequentialMock,
 }))
 
 vi.mock('../pose/robustness/interpolate', () => ({
@@ -62,7 +73,15 @@ vi.mock('../video/webCodecsSupport', () => ({
   canUseSequentialDecode: canUseSequentialDecodeMock,
 }))
 
-import { useVideoAnalysis } from './useVideoAnalysis'
+vi.mock('../video/clipBytesCache', () => ({
+  releaseClipDemux: releaseClipDemuxMock,
+}))
+
+import {
+  __resetScaleDetectorCreationForTests,
+  isWaitingForScalePassLane,
+  useVideoAnalysis,
+} from './useVideoAnalysis'
 
 function makeMetadata(overrides: Partial<VideoMetadata> = {}): VideoMetadata {
   return { durationSec: 10, width: 640, height: 480, frameRate: 30, ...overrides }
@@ -391,6 +410,8 @@ beforeEach(() => {
   computeFormHeuristicsMock.mockReset()
   getScalePassDetectorMock.mockReset()
   canUseSequentialDecodeMock.mockReset()
+  sampleClipSequentialMock.mockReset()
+  releaseClipDemuxMock.mockReset()
   applyRobustnessMock.mockReturnValue(FAKE_ROBUST_FRAMES)
   computeFormHeuristicsMock.mockReturnValue(FAKE_HEURISTICS)
   getScalePassDetectorMock.mockResolvedValue(makeFakeDetector())
@@ -413,6 +434,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs()
+  // A test may leave a scale-detector creation unresolved on purpose; without this, every later
+  // playback primary in the file would wait on it.
+  __resetScaleDetectorCreationForTests()
   delete window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__
   delete window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__
 })
@@ -575,6 +599,62 @@ describe('useVideoAnalysis', () => {
     expect(result.current.progress).toBe(1)
   })
 
+  it('publishes sampling progress only when its displayed whole percent moves (strides-e4c.3)', async () => {
+    let resolveSampling!: (samples: unknown[]) => void
+    sampleClipMock.mockImplementation(() => ({
+      promise: new Promise((resolve) => {
+        resolveSampling = resolve
+      }),
+      handle: makeFakeHandle(),
+    }))
+
+    const videoSource = makeVideoSource()
+    const detector = makeFakeDetector()
+    let renders = 0
+    const { result } = renderHook(() => {
+      renders += 1
+      return useVideoAnalysis(videoSource, detector)
+    })
+
+    await waitFor(() => expect(result.current.phase).toBe('sampling'))
+    // `sampleClip(video, detector, durationSec, options)` — the one sampler callback under test.
+    const { onProgress } = sampleClipMock.mock.calls[0][3] as {
+      onProgress: (fraction: number) => void
+    }
+
+    // A long clip's worth of sampled frames, one onProgress per frame, as the samplers report it.
+    const FRAMES = 2000
+    const published: number[] = [result.current.progress]
+    const displayMismatches: number[] = []
+    const rendersBefore = renders
+    for (let k = 1; k <= FRAMES; k += 1) {
+      act(() => onProgress(k / FRAMES))
+      if (published.at(-1) !== result.current.progress) published.push(result.current.progress)
+      // What the clip strip would label this frame, throttled vs. unthrottled.
+      if (progressPercent(result.current.progress) !== progressPercent(k / FRAMES)) {
+        displayMismatches.push(k)
+      }
+    }
+    const samplingRenders = renders - rendersBefore
+
+    // The starting 0, then one publish per whole percent 1..100 — never one per frame. Before
+    // this change both counts were FRAMES.
+    expect(published).toHaveLength(101)
+    expect(samplingRenders).toBeLessThanOrEqual(101)
+    // The displayed percent is what an unthrottled stream would show, at every single frame...
+    expect(displayMismatches).toEqual([])
+    // ...including the end: the last publish already reads 100%. The fraction it carries is the
+    // first frame to round there (0.995), not 1 — nothing reads progress except through
+    // `progressPercent`, and the exact 1 arrives with 'ready', below.
+    expect(progressPercent(result.current.progress)).toBe(100)
+
+    await act(async () => {
+      resolveSampling([{ timestamp: 0, frame: null }])
+    })
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
+    expect(result.current.progress).toBe(1)
+  })
+
   it('reports a detection-stalled error when sampleClip rejects', async () => {
     let rejectSampling!: (error: Error) => void
     sampleClipMock.mockImplementation(() => ({
@@ -661,7 +741,7 @@ describe('useVideoAnalysis', () => {
     const detector = makeFakeDetector()
     // Presented: the third conjunct of the loop condition. Without it 'ready' alone arms nothing
     // -- see 'reaching ready while not presented leaves the clip paused' below.
-    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, true))
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, { presented: true }))
 
     await waitFor(() => expect(result.current.phase).toBe('ready'))
     // With the default fixtures the scale pass runs and concludes 'failed' (no scale measured)
@@ -707,7 +787,7 @@ describe('useVideoAnalysis', () => {
     const detector = makeFakeDetector()
     const { result, rerender } = renderHook(
       ({ presented }: { presented: boolean }) =>
-        useVideoAnalysis(videoSource, detector, presented),
+        useVideoAnalysis(videoSource, detector, { presented }),
       { initialProps: { presented: false } },
     )
 
@@ -741,7 +821,7 @@ describe('useVideoAnalysis', () => {
     const detector = makeFakeDetector()
     const { result, rerender } = renderHook(
       ({ presented }: { presented: boolean }) =>
-        useVideoAnalysis(videoSource, detector, presented),
+        useVideoAnalysis(videoSource, detector, { presented }),
       { initialProps: { presented: false } },
     )
 
@@ -784,7 +864,7 @@ describe('useVideoAnalysis', () => {
 
     const videoSource = makeVideoSource({ videoRef: { current: video } })
     const detector = makeFakeDetector()
-    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, true))
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, { presented: true }))
 
     await waitFor(() => expect(result.current.phase).toBe('ready'))
     // Three play() calls per run now: primary sampling's own (auto-start on mount), the scale
@@ -808,7 +888,7 @@ describe('useVideoAnalysis', () => {
     // Presented throughout, so the clear below is genuinely unconditional rather than a side
     // effect of the presentation conjunct dropping: `start()` clears the loop regardless, because
     // a looping video never fires the `ended` event sampling resolves on.
-    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, true))
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, { presented: true }))
 
     await waitFor(() => expect(result.current.phase).toBe('ready'))
     // The loop arms once the scale pass concludes ('failed' with these default fixtures).
@@ -1137,7 +1217,7 @@ describe('useVideoAnalysis', () => {
       const video = document.createElement('video')
       const videoSource = makeVideoSource({ videoRef: { current: video } })
       const detector = makeFakeDetector()
-      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, true))
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, { presented: true }))
 
       await waitFor(() => expect(result.current.phase).toBe('ready'))
 
@@ -1158,7 +1238,7 @@ describe('useVideoAnalysis', () => {
       const video = document.createElement('video')
       const videoSource = makeVideoSource({ videoRef: { current: video } })
       const detector = makeFakeDetector()
-      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, true))
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, { presented: true }))
 
       await waitFor(() => expect(result.current.phase).toBe('ready'))
 
@@ -1316,7 +1396,7 @@ describe('useVideoAnalysis', () => {
       const detector = makeFakeDetector()
       // Presented throughout: it is the SCALE PASS, not the absence of a preview, that must keep
       // the loop un-armed here.
-      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, true))
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector, { presented: true }))
 
       await waitFor(() => expect(result.current.scalePass.status).toBe('running'))
       // The pass replays the clip for sampling: muted, and NOT looping (sampleClip needs the
@@ -1542,6 +1622,491 @@ describe('useVideoAnalysis', () => {
 
         logSpy.mockRestore()
       })
+    })
+  })
+
+  describe('scale-pass detector warm-up (strides-e4c.2)', () => {
+    afterEach(() => {
+      delete window.__STRIDES_POSE_BACKEND_OVERRIDE__
+    })
+
+    // A deferred primary pass, so a test can assert what happened BEFORE the primary result
+    // arrived and then let it through.
+    function deferPrimary(mock: typeof sampleClipMock) {
+      let resolvePrimary!: (samples: unknown[]) => void
+      mock.mockImplementationOnce(() => ({
+        promise: new Promise((resolve) => {
+          resolvePrimary = resolve
+        }),
+        handle: makeFakeHandle(),
+      }))
+      return (samples: unknown[]) => resolvePrimary(samples)
+    }
+
+    function useSequentialPath() {
+      canUseSequentialDecodeMock.mockResolvedValue(true)
+      sampleClipSequentialMock.mockImplementation(() => ({
+        promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+        handle: makeFakeHandle(),
+      }))
+    }
+
+    const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+
+    it('starts creating the scale-pass detector before the primary result arrives on the sequential path', async () => {
+      useSequentialPath()
+      const releasePrimary = deferPrimary(sampleClipSequentialMock)
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1))
+      expect(result.current.phase).toBe('sampling')
+      expect(getScalePassDetectorMock).toHaveBeenCalledTimes(1)
+      expect(getScalePassDetectorMock.mock.invocationCallOrder[0]).toBeLessThan(
+        sampleClipSequentialMock.mock.invocationCallOrder[0],
+      )
+      await waitFor(() => {
+        const warmupLine = logSpy.mock.calls.find(
+          (args) =>
+            args[0] === '[perf-timings]' &&
+            (JSON.parse(args[1] as string) as { stage: string }).stage === 'scale-detector-warmup',
+        )
+        expect(warmupLine).toBeDefined()
+        expect(JSON.parse(warmupLine![1] as string)).toMatchObject({
+          startedAtMs: expect.any(Number),
+          durationMs: expect.any(Number),
+          created: true,
+        })
+      })
+      logSpy.mockRestore()
+
+      await act(async () => {
+        releasePrimary([{ timestamp: 0, frame: null }])
+      })
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      await waitFor(() =>
+        expect(['done', 'failed', 'skipped']).toContain(result.current.scalePass.status),
+      )
+      // The pass makes its own call; the real module de-duplicates.
+      expect(getScalePassDetectorMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not create the scale-pass detector before ready on the playback path', async () => {
+      // canUseSequentialDecode resolves false (this suite's default), so sampleClip runs.
+      const releasePrimary = deferPrimary(sampleClipMock)
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
+      expect(result.current.phase).toBe('sampling')
+      expect(getScalePassDetectorMock).not.toHaveBeenCalled()
+
+      await act(async () => {
+        releasePrimary([{ timestamp: 0, frame: null }])
+      })
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      // Created lazily by the pass itself, as before.
+      await waitFor(() => expect(getScalePassDetectorMock).toHaveBeenCalledTimes(1))
+      expect(sampleClipSequentialMock).not.toHaveBeenCalled()
+    })
+
+    it('never creates the scale-pass detector when the scale pass is disabled', async () => {
+      window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__ = { enabled: false }
+      useSequentialPath()
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1)
+      expect(result.current.scalePass.reason).toBe('disabled')
+      expect(getScalePassDetectorMock).not.toHaveBeenCalled()
+    })
+
+    it('never creates the scale-pass detector when the primary backend is MediaPipe', async () => {
+      window.__STRIDES_POSE_BACKEND_OVERRIDE__ = { backend: 'mediapipePoseLandmarker' }
+      useSequentialPath()
+      // A MediaPipe primary measures its own scale, which is what skips the pass at 'ready'.
+      computeFormHeuristicsMock.mockReturnValue(FAKE_SCALE_HEURISTICS)
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const detector = makeFakeDetector()
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1)
+      expect(result.current.scalePass.reason).toBe('primary-scale')
+      expect(getScalePassDetectorMock).not.toHaveBeenCalled()
+    })
+    it('makes a playback primary wait for a creation an earlier sequential clip started, but never a sequential one', async () => {
+      // schedule-scale-passes-after-primaries: the active clip now advances at clip 1's 'ready',
+      // so clip 1's warm-up can still be creating MediaPipe when clip 2 starts. A playback sampler
+      // drops real-time frames under that contention (strides-gyl); a sequential one only slows.
+      const sequentialBlob = new Blob([new Uint8Array([1])])
+      const laterSequentialBlob = new Blob([new Uint8Array([2])])
+      const playbackBlob = new Blob([new Uint8Array([3])])
+      canUseSequentialDecodeMock.mockImplementation(
+        async (blob: Blob) => blob === sequentialBlob || blob === laterSequentialBlob,
+      )
+      sampleClipSequentialMock.mockImplementation(() => ({
+        promise: new Promise(() => {}),
+        handle: makeFakeHandle(),
+      }))
+      let finishCreation!: (detector: PoseDetector) => void
+      getScalePassDetectorMock.mockReturnValue(
+        new Promise((resolve) => {
+          finishCreation = resolve
+        }),
+      )
+
+      const sequentialSource = makeVideoSource({ sourceBlob: sequentialBlob })
+      renderHook(() => useVideoAnalysis(sequentialSource, makeFakeDetector()))
+      await waitFor(() => expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1))
+      expect(getScalePassDetectorMock).toHaveBeenCalledTimes(1)
+
+      const playbackSource = makeVideoSource({ sourceBlob: playbackBlob })
+      const { result } = renderHook(() => useVideoAnalysis(playbackSource, makeFakeDetector()))
+      await waitFor(() => expect(result.current.phase).toBe('sampling'))
+      await act(async () => {})
+      expect(sampleClipMock).not.toHaveBeenCalled()
+
+      const laterSequentialSource = makeVideoSource({ sourceBlob: laterSequentialBlob })
+      renderHook(() => useVideoAnalysis(laterSequentialSource, makeFakeDetector()))
+      await waitFor(() => expect(sampleClipSequentialMock).toHaveBeenCalledTimes(2))
+      expect(sampleClipMock).not.toHaveBeenCalled()
+
+      await act(async () => {
+        finishCreation(makeFakeDetector())
+      })
+      await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
+    })
+
+    it('stops waiting for a creation that never settles, and samples after the bound', async () => {
+      // A stalled WASM or model fetch leaves creation pending forever; the playback primary must
+      // still run. waitFor polls with setTimeout, so this flushes with bounded act() loops.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const sequentialBlob = new Blob([new Uint8Array([1])])
+        const playbackBlob = new Blob([new Uint8Array([3])])
+        canUseSequentialDecodeMock.mockImplementation(async (blob: Blob) => blob === sequentialBlob)
+        sampleClipSequentialMock.mockImplementation(() => ({
+          promise: new Promise(() => {}),
+          handle: makeFakeHandle(),
+        }))
+        getScalePassDetectorMock.mockReturnValue(new Promise(() => {}))
+        const flush = async () => {
+          for (let i = 0; i < 10; i += 1) await act(async () => {})
+        }
+
+        const sequentialSource = makeVideoSource({ sourceBlob: sequentialBlob })
+        renderHook(() => useVideoAnalysis(sequentialSource, makeFakeDetector()))
+        await flush()
+        expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1)
+
+        const playbackSource = makeVideoSource({ sourceBlob: playbackBlob })
+        const { result } = renderHook(() => useVideoAnalysis(playbackSource, makeFakeDetector()))
+        await flush()
+        expect(result.current.phase).toBe('sampling')
+        expect(sampleClipMock).not.toHaveBeenCalled()
+
+        await act(async () => {
+          vi.advanceTimersByTime(7999)
+        })
+        await flush()
+        expect(sampleClipMock).not.toHaveBeenCalled()
+
+        await act(async () => {
+          vi.advanceTimersByTime(1)
+        })
+        await flush()
+        expect(sampleClipMock).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('starts a playback primary at once when no creation is in flight', async () => {
+      const videoSource = makeVideoSource({ sourceBlob })
+      renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+      await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
+    })
+  })
+
+  describe("releasing the clip's cached demux (strides-dt9)", () => {
+    it('holds the demux while the scale pass may still sample it, and releases it once the pass is terminal', async () => {
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+      let resolveScale!: (samples: { timestamp: number; frame: null }[]) => void
+      sampleClipMock
+        .mockImplementationOnce(() => ({
+          promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+          handle: makeFakeHandle(),
+        }))
+        .mockImplementationOnce(() => ({
+          promise: new Promise((resolve) => {
+            resolveScale = resolve
+          }),
+          handle: makeFakeHandle(),
+        }))
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+
+      await waitFor(() => expect(result.current.scalePass.status).toBe('running'))
+      expect(releaseClipDemuxMock).not.toHaveBeenCalled()
+
+      await act(async () => {
+        resolveScale([{ timestamp: 0, frame: null }])
+      })
+      await waitFor(() =>
+        expect(['done', 'failed']).toContain(result.current.scalePass.status),
+      )
+      expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob)
+    })
+
+    it('releases at ready when there is no scale pass to wait for', async () => {
+      window.__STRIDES_SCALE_PASS_CONFIG_OVERRIDE__ = { enabled: false }
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+      sampleClipMock.mockImplementation(() => ({
+        promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+        handle: makeFakeHandle(),
+      }))
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+
+      await waitFor(() => expect(result.current.scalePass.status).toBe('skipped'))
+      expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob)
+    })
+
+    it('releases when the run fails', async () => {
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+      sampleClipMock.mockImplementation(() => ({
+        promise: Promise.reject(new Error('broken detector')),
+        handle: makeFakeHandle(),
+      }))
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+
+      await waitFor(() => expect(result.current.phase).toBe('error'))
+      expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob)
+    })
+
+    it('releases a queued clip once its probe has settled, since its turn may be a whole run away', async () => {
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+      canUseSequentialDecodeMock.mockResolvedValue(true)
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      renderHook(() => useVideoAnalysis(videoSource, null, { queued: true }))
+
+      await waitFor(() => expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob))
+    })
+
+    it('keeps the demux for the active clip while it waits for the model to load', async () => {
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+      let answer!: (supported: boolean) => void
+      canUseSequentialDecodeMock.mockReturnValue(new Promise((resolve) => (answer = resolve)))
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      renderHook(() => useVideoAnalysis(videoSource, null, { queued: false }))
+      await waitFor(() => expect(canUseSequentialDecodeMock).toHaveBeenCalled())
+
+      await act(async () => {
+        answer(true)
+      })
+      await act(async () => {})
+
+      expect(releaseClipDemuxMock).not.toHaveBeenCalled()
+    })
+
+    it('releases when the probe answers yes only after its timeout already fell back to playback', async () => {
+      // waitFor polls with setTimeout, so this test flushes with bounded act() loops instead.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+        let answer!: (supported: boolean) => void
+        canUseSequentialDecodeMock.mockReturnValue(new Promise((resolve) => (answer = resolve)))
+
+        const videoSource = makeVideoSource({ sourceBlob })
+        const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+        await act(async () => {})
+
+        await act(async () => {
+          vi.advanceTimersByTime(3000)
+        })
+        for (let i = 0; i < 10 && result.current.phase !== 'sampling'; i += 1) {
+          await act(async () => {})
+        }
+        expect(result.current.phase).toBe('sampling')
+        expect(releaseClipDemuxMock).not.toHaveBeenCalled()
+
+        await act(async () => {
+          answer(true)
+        })
+
+        expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('releases on reset(), which is how a clip is removed', async () => {
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+      await waitFor(() => expect(result.current.phase).toBe('sampling'))
+
+      act(() => {
+        result.current.reset()
+      })
+
+      expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob)
+    })
+
+    it('does not release while the primary run is still sampling', async () => {
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+
+      const videoSource = makeVideoSource({ sourceBlob })
+      const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+
+      await waitFor(() => expect(result.current.phase).toBe('sampling'))
+      expect(releaseClipDemuxMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('the scale-pass lane (schedule-scale-passes-after-primaries)', () => {
+    interface LaneProps {
+      queued: boolean
+      scalePassAllowed: boolean
+    }
+
+    function renderLaneHook(videoSource: VideoSource, detector: PoseDetector, initial: LaneProps) {
+      return renderHook(
+        (props: LaneProps) =>
+          useVideoAnalysis(videoSource, detector, props),
+        { initialProps: initial },
+      )
+    }
+
+    it('holds a due pass at pending while not allowed, and starts it once allowed', async () => {
+      sampleClipMock.mockImplementation(() => ({
+        promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+        handle: makeFakeHandle(),
+      }))
+      const scaleDetector = makeFakeDetector()
+      getScalePassDetectorMock.mockResolvedValue(scaleDetector)
+
+      const { result, rerender } = renderLaneHook(makeVideoSource(), makeFakeDetector(), {
+        queued: true,
+        scalePassAllowed: false,
+      })
+
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      await act(async () => {})
+      expect(result.current.scalePass.status).toBe('pending')
+      expect(sampleClipMock).toHaveBeenCalledTimes(1)
+
+      rerender({ queued: true, scalePassAllowed: true })
+      await waitFor(() =>
+        expect(['done', 'failed']).toContain(result.current.scalePass.status),
+      )
+      expect(sampleClipMock).toHaveBeenCalledTimes(2)
+      expect(sampleClipMock.mock.calls[1][1]).toBe(scaleDetector)
+    })
+
+    it('never cancels a pass that has started when the lane is withdrawn', async () => {
+      const scaleHandle = makeFakeHandle()
+      let resolveScale!: (samples: { timestamp: number; frame: null }[]) => void
+      sampleClipMock
+        .mockImplementationOnce(() => ({
+          promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+          handle: makeFakeHandle(),
+        }))
+        .mockImplementationOnce(() => ({
+          promise: new Promise((resolve) => {
+            resolveScale = resolve
+          }),
+          handle: scaleHandle,
+        }))
+
+      const { result, rerender } = renderLaneHook(makeVideoSource(), makeFakeDetector(), {
+        queued: false,
+        scalePassAllowed: true,
+      })
+      await waitFor(() => expect(result.current.scalePass.status).toBe('running'))
+
+      rerender({ queued: true, scalePassAllowed: false })
+      await act(async () => {})
+      expect(scaleHandle.stop).not.toHaveBeenCalled()
+      expect(result.current.scalePass.status).toBe('running')
+
+      await act(async () => {
+        resolveScale([{ timestamp: 0, frame: null }])
+      })
+      await waitFor(() =>
+        expect(['done', 'failed']).toContain(result.current.scalePass.status),
+      )
+      expect(sampleClipMock).toHaveBeenCalledTimes(2)
+    })
+
+    it("releases a queued clip's demux while its pass waits for the lane", async () => {
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+      sampleClipMock.mockImplementation(() => ({
+        promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+        handle: makeFakeHandle(),
+      }))
+
+      const { result } = renderLaneHook(makeVideoSource({ sourceBlob }), makeFakeDetector(), {
+        queued: true,
+        scalePassAllowed: false,
+      })
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      expect(result.current.scalePass.status).toBe('pending')
+      expect(releaseClipDemuxMock).toHaveBeenCalledWith(sourceBlob)
+    })
+
+    it('keeps the demux of a clip that still holds the detector, even before the lane reaches it', async () => {
+      // The session learns of 'ready' one render after the clip does, so a lone clip reads
+      // `scalePassAllowed: false` for that render. Releasing then would make its pass re-read
+      // and re-demux the clip for nothing.
+      const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+      sampleClipMock
+        .mockImplementationOnce(() => ({
+          promise: Promise.resolve([{ timestamp: 0, frame: null }]),
+          handle: makeFakeHandle(),
+        }))
+        .mockImplementationOnce(() => ({ promise: new Promise(() => {}), handle: makeFakeHandle() }))
+
+      const { result, rerender } = renderLaneHook(
+        makeVideoSource({ sourceBlob }),
+        makeFakeDetector(),
+        { queued: false, scalePassAllowed: false },
+      )
+      await waitFor(() => expect(result.current.phase).toBe('ready'))
+      await act(async () => {})
+      expect(releaseClipDemuxMock).not.toHaveBeenCalled()
+
+      rerender({ queued: false, scalePassAllowed: true })
+      await waitFor(() => expect(result.current.scalePass.status).toBe('running'))
+      expect(releaseClipDemuxMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('isWaitingForScalePassLane', () => {
+    it('is true only for a ready clip, pass pending, queued behind the detector, lane elsewhere', () => {
+      expect(isWaitingForScalePassLane('ready', 'pending', true, false)).toBe(true)
+      expect(isWaitingForScalePassLane('ready', 'pending', true, true)).toBe(false)
+      expect(isWaitingForScalePassLane('ready', 'pending', false, false)).toBe(false)
+      expect(isWaitingForScalePassLane('ready', 'running', true, false)).toBe(false)
+      expect(isWaitingForScalePassLane('ready', 'done', true, false)).toBe(false)
+      expect(isWaitingForScalePassLane('idle', 'idle', true, false)).toBe(false)
     })
   })
 })

@@ -6,7 +6,7 @@ import { VideoInputPanel } from '../video/VideoInputPanel'
 import { ClipStripEntry } from './ClipStripEntry'
 import { clipHostsLiveElement, describeClipStripStatus } from './clipStripStatus'
 import { SkeletonOverlay } from './SkeletonOverlay'
-import { useVideoAnalysis } from './useVideoAnalysis'
+import { isWaitingForScalePassLane, useVideoAnalysis } from './useVideoAnalysis'
 import type { ClipSession } from './multiClipAnalysis'
 
 export interface ClipPendingLoad {
@@ -42,6 +42,12 @@ export interface ClipSlotProps {
    * passed down rather than a new one being derived (design.md D3, "No new plumbing").
    */
   isActiveClip?: boolean
+  /**
+   * Whether this clip's background scale pass may start now — `true` for at most one clip, the one
+   * `nextScalePassClipIndex` names. Passed straight through to `useVideoAnalysis`. Defaulted to
+   * `true` so a slot rendered in isolation behaves like a lone clip.
+   */
+  scalePassAllowed?: boolean
   /**
    * Whether this clip's preview is currently open. The session owns it (at most one clip is
    * presented at a time) and it reaches three places from here: the loop condition inside
@@ -87,6 +93,7 @@ export function ClipSlot({
   index = 0,
   total = 1,
   isActiveClip = false,
+  scalePassAllowed = true,
   isPresented = false,
   onPresent,
   onDismiss,
@@ -94,7 +101,11 @@ export function ClipSlot({
   onRemove,
 }: ClipSlotProps) {
   const videoSource = useVideoSource()
-  const analysis = useVideoAnalysis(videoSource, detector, isPresented)
+  const analysis = useVideoAnalysis(videoSource, detector, {
+    presented: isPresented,
+    queued: !isActiveClip,
+    scalePassAllowed,
+  })
   // Reads `videoSource`'s blob and metadata only, never its `videoRef` — the poster is decoded on
   // a detached element, so it cannot move the playback position `sampleClip` is reading from (see
   // `useClipPoster`). Released by that hook's own cleanup when this slot unmounts.
@@ -142,7 +153,16 @@ export function ClipSlot({
 
   // The correctness predicate, not a display preference: while this is true, something is reading
   // frames off the element and concealing it costs ~20-24% of them (`clipHostsLiveElement`).
-  const hostsLiveElement = clipHostsLiveElement(analysis.phase, analysis.scalePass.status)
+  const hostsLiveElement = clipHostsLiveElement(
+    analysis.phase,
+    analysis.scalePass.status,
+    isWaitingForScalePassLane(
+      analysis.phase,
+      analysis.scalePass.status,
+      !isActiveClip,
+      scalePassAllowed,
+    ),
+  )
 
   const status = describeClipStripStatus({
     videoStatus: videoSource.status,

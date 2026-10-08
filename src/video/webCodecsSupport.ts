@@ -1,4 +1,6 @@
-import { demuxMp4, isIdentityMatrix } from './mp4Demux'
+import { demuxClip, releaseClipDemux } from './clipBytesCache'
+import type { ClipDemuxTimings } from './clipBytesCache'
+import { isIdentityMatrix } from './mp4Demux'
 
 /** `ftyp`, ASCII, as it appears at byte offset 4 of every ISO-BMFF file (the box's fourcc,
  * immediately after its 4-byte size field) — the standard, cheap magic-byte check for "this is
@@ -9,10 +11,10 @@ const FTYP_OFFSET = 4
 /**
  * Upper bound on the blob size this probe (and, transitively, `sampleClipSequential.ts`) will
  * attempt to demux. `demuxMp4` retains a per-sample byte copy of the entire compressed bitstream
- * in memory, and today's pipeline runs a full `blob.arrayBuffer()` + demux pass up to 3 times per
- * analysis run (this feasibility probe, the primary sampler, and the background scale pass) —
- * with `<input accept="video/*">` imposing no upload size limit of its own, an uncapped path here
- * would let an unusually large upload multiply that cost with no ceiling. 200MB comfortably
+ * in memory, and `clipBytesCache.ts` holds that demuxed track from this probe until the clip's
+ * last sequential pass (primary, then the background scale pass) is done with it — with
+ * `<input accept="video/*">` imposing no upload size limit of its own, an uncapped path here
+ * would let an unusually large upload hold that much memory with no ceiling. 200MB comfortably
  * covers the real clips this repo's own CLAUDE.md workflow produces (the demo clips are single-
  * digit-to-tens of MB) while still rejecting a pathological upload cheaply, before any bytes are
  * even read — a rejection here just falls back to the existing, proven `<video>`-playback path,
@@ -39,6 +41,16 @@ async function looksLikeIsoBmff(blob: Blob): Promise<boolean> {
 
   return FTYP_FOURCC.every((byte, i) => header[FTYP_OFFSET + i] === byte)
 }
+
+/** Where `canUseSequentialDecode`'s time goes, filled in as each stage completes — a stage the
+ * probe never reached stays absent. Dev-only `[perf-timings]` instrumentation. A call answered
+ * from the per-Blob memo reports `0` for every stage except `demuxMs`, which carries the time
+ * spent waiting on the memoised answer. */
+export interface SequentialDecodeProbeTimings extends ClipDemuxTimings {
+  isConfigSupportedMs?: number
+}
+
+let answers = new WeakMap<Blob, Promise<boolean>>()
 
 /**
  * Decides whether `blob` can go through the WebCodecs sequential-decode sampling path
@@ -67,30 +79,74 @@ async function looksLikeIsoBmff(blob: Blob): Promise<boolean> {
  * Never throws — every failure mode above degrades to `false` so a caller can use this as a plain
  * feature-detection boolean without its own try/catch.
  *
+ * Answered once per Blob (`strides-dt9`): the analysis run asks before sampling and the evidence
+ * seek calibration asks again afterwards, and a Blob's bytes cannot change in between. The demux
+ * goes through `clipBytesCache.ts`, so a `true` answer leaves the track there for the samplers to
+ * reuse, and a `false` one releases it at once — no sequential pass will ever want it.
+ *
+ * Every answer is memoised for the Blob's lifetime, `false` included — and that includes a
+ * `false` that came from a TRANSIENT failure (the blob's read rejecting once). Such a clip
+ * samples on the `<video>`-playback path for the rest of the session rather than being re-probed;
+ * the alternative would let the evidence calibration's later question get a different answer
+ * than the one the samplers actually ran under.
+ *
  * Note: this probe's own `enabled: false`-by-default kill switch (`SequentialSamplingConfig`,
  * see its doc) lives one layer up, in `useVideoAnalysis.ts` — this function is never even called
  * while the plane is disabled, so it has no gate of its own for it.
  */
-export async function canUseSequentialDecode(blob: Blob | null): Promise<boolean> {
+export async function canUseSequentialDecode(
+  blob: Blob | null,
+  timings?: SequentialDecodeProbeTimings,
+): Promise<boolean> {
   if (typeof VideoDecoder === 'undefined') return false
   if (blob === null) return false
   if (blob.size > MAX_SEQUENTIAL_DECODE_BLOB_BYTES) return false
 
+  const memoised = answers.get(blob)
+  if (memoised !== undefined) {
+    const waitStartedAt = performance.now()
+    const answer = await memoised
+    if (timings) {
+      timings.arrayBufferMs = 0
+      timings.demuxMs = performance.now() - waitStartedAt
+      timings.isConfigSupportedMs = 0
+    }
+    return answer
+  }
+
+  const pending = decideSequentialDecode(blob, timings).then((supported) => {
+    if (!supported) releaseClipDemux(blob)
+    return supported
+  })
+  answers.set(blob, pending)
+  return pending
+}
+
+/** The async gates (4-8 above), never rejecting. */
+async function decideSequentialDecode(
+  blob: Blob,
+  timings: SequentialDecodeProbeTimings | undefined,
+): Promise<boolean> {
   try {
     if (!(await looksLikeIsoBmff(blob))) return false
 
-    const bytes = await blob.arrayBuffer()
-    const track = await demuxMp4(bytes)
+    const track = await demuxClip(blob, timings)
 
     if (!isIdentityMatrix(track.matrix)) return false
 
+    const configStartedAt = performance.now()
     const support = await VideoDecoder.isConfigSupported({
       codec: track.codec,
       codedWidth: track.width,
       codedHeight: track.height,
     })
+    if (timings) timings.isConfigSupportedMs = performance.now() - configStartedAt
     return support.supported === true
   } catch {
     return false
   }
+}
+
+export function __resetForTests(): void {
+  answers = new WeakMap()
 }

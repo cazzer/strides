@@ -19,6 +19,8 @@ import {
   computeAggregateAnalysisState,
   computeFusionSourceIndices,
   nextActiveClipIndex,
+  nextScalePassClipIndex,
+  scalePassLeaseIndex,
 } from './multiClipAnalysis'
 import type { ClipSession } from './multiClipAnalysis'
 
@@ -47,6 +49,12 @@ function makeClipId(): string {
  * on every single render, forever. Comparing the fields that actually matter for rendering lets
  * `setClipStates`'s updater return the previous state object unchanged when nothing meaningful
  * moved, which React treats as a no-op (no re-render), breaking the loop.
+ *
+ * `analysis.progress` is deliberately NOT compared (strides-e4c.3). Nothing at session level reads
+ * it — each clip's strip entry renders its own progress inside `ClipSlot`, off that clip's own
+ * state — and comparing it re-rendered this whole tree, finished clips' results included, once per
+ * displayed percent while a clip sampled, on the main thread the sampler shares. The aggregate has
+ * no `progress` field (`AggregateAnalysisState`) so a stale one cannot be rendered by mistake.
  */
 function sameClipSession(previous: ClipSession | undefined, next: ClipSession): boolean {
   if (!previous) return false
@@ -55,7 +63,6 @@ function sameClipSession(previous: ClipSession | undefined, next: ClipSession): 
     previous.videoSource.metadata === next.videoSource.metadata &&
     previous.videoSource.error === next.videoSource.error &&
     previous.analysis.phase === next.analysis.phase &&
-    previous.analysis.progress === next.analysis.progress &&
     previous.analysis.isPausedMidAnalysis === next.analysis.isPausedMidAnalysis &&
     previous.analysis.robustFrames === next.analysis.robustFrames &&
     previous.analysis.heuristics === next.analysis.heuristics &&
@@ -65,6 +72,9 @@ function sameClipSession(previous: ClipSession | undefined, next: ClipSession): 
     previous.analysis.scalePass.diagnostics === next.analysis.scalePass.diagnostics &&
     previous.analysis.scalePass.error === next.analysis.scalePass.error &&
     previous.analysis.scalePass.reason === next.analysis.scalePass.reason &&
+    // Read by the schedule before a clip's run starts (`nextActiveClipIndex`), and it settles on
+    // its own, with nothing else moving.
+    previous.analysis.primarySamplingPath === next.analysis.primarySamplingPath &&
     // A poster arrives asynchronously, long after the fields above have stopped moving — leaving it
     // out would make its arrival invisible to this comparison and `setClipStates` would keep
     // returning the previous state, so the poster would never reach anything that renders it.
@@ -109,6 +119,10 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   const [pendingLoads, setPendingLoads] = useState<Record<string, ClipPendingLoad>>({})
   const [clipStates, setClipStates] = useState<Record<string, ClipSession>>({})
   const [activeClipIndex, setActiveClipIndex] = useState(0)
+  // Which clip the scale-pass lane was last granted to (`nextScalePassClipIndex`). Only read
+  // through `scalePassLeaseIndex`, which drops it once that clip's pass is terminal or the clip is
+  // gone, so it never needs clearing by hand.
+  const [scalePassLeaseClipId, setScalePassLeaseClipId] = useState<string | null>(null)
   // Which clip's preview is open, or `null`. Session-level rather than per-slot because it is a
   // mutually exclusive choice: exactly one clip can be presented at a time, and "presented" is the
   // third conjunct of every clip's loop condition (design.md D1), so two open previews would mean
@@ -203,11 +217,24 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   // https://react.dev/reference/react/useState#storing-information-from-previous-renders):
   // computed fresh every render so this pass's JSX below is always consistent even while the
   // state update above is still propagating.
-  const desiredActiveIndex = nextActiveClipIndex(clips, activeClipIndex)
+  //
+  // The scale-pass lease goes in FIRST: while the lane is granted to a clip whose pass is still
+  // due, the active clip must not advance into a newly added one — even on a render where that
+  // clip has not yet reported its pass 'running' (schedule-scale-passes-after-primaries).
+  const leaseIndex = scalePassLeaseIndex(clips, scalePassLeaseClipId)
+  const desiredActiveIndex = nextActiveClipIndex(clips, activeClipIndex, leaseIndex)
   if (desiredActiveIndex !== activeClipIndex) {
     setActiveClipIndex(desiredActiveIndex)
   }
   const activeClipId = clips[desiredActiveIndex]?.clipId ?? null
+  // The scale-pass lane: which ONE clip may run its background scale pass now. Remembered as a
+  // lease from the grant until that pass is terminal, by the same during-render adjustment.
+  const scalePassClipIndex = nextScalePassClipIndex(clips, desiredActiveIndex, leaseIndex)
+  const scalePassClipId =
+    scalePassClipIndex === null ? null : (clips[scalePassClipIndex]?.clipId ?? null)
+  if (scalePassClipId !== scalePassLeaseClipId) {
+    setScalePassLeaseClipId(scalePassClipId)
+  }
 
   const aggregate = computeAggregateAnalysisState(clips)
   const anyClipVideoReady = clips.some((c) => c.videoSource.status === 'ready')
@@ -265,6 +292,7 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
     setPendingLoads({})
     setClipStates({})
     setActiveClipIndex(0)
+    setScalePassLeaseClipId(null)
     setPresentedClipId(null)
     headingRef.current?.focus()
   }, [clipStates, headingRef])
@@ -328,6 +356,7 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
                   index={index}
                   total={clipIds.length}
                   isActiveClip={id === activeClipId}
+                  scalePassAllowed={id === scalePassClipId}
                   isPresented={id === presentedClipId}
                   onPresent={setPresentedClipId}
                   onDismiss={dismissPreview}

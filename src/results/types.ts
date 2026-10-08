@@ -68,6 +68,27 @@ export interface VideoAnalysisState {
    * phase reaches 'ready'. */
   scalePass: ScalePassState
   error: VideoAnalysisError | null
+  /**
+   * Which path this clip's primary run samples on: `'sequential'` once its sequential-decode probe
+   * said yes, `'playback'` once it said no (or the plane is off), `null` (or absent) while the
+   * probe is unsettled or no clip is loaded. Known before the run starts, which is the point: the
+   * session schedules a playback-path primary differently (schedule-scale-passes-after-primaries)
+   * and has to know before handing it the detector. Once the run is `'ready'`,
+   * `diagnostics.sampling.path` records the path it actually took.
+   */
+  primarySamplingPath?: 'sequential' | 'playback' | null
   start: () => void
   reset: () => void
 }
+
+/**
+ * The session-wide composition of every clip's `VideoAnalysisState`
+ * (`computeAggregateAnalysisState`), which is what the results views and the motion story render.
+ *
+ * It has NO `progress`, on purpose (strides-e4c.3). Progress is shown per clip, by each clip's own
+ * strip entry off its own state, and the session deliberately does not re-render as a clip's
+ * progress moves (`sameClipSession` ignores it), so any session-level progress would be a stale
+ * snapshot from the clip's last OTHER change. Removing the field makes rendering one a type error
+ * rather than a quiet bug.
+ */
+export type AggregateAnalysisState = Omit<VideoAnalysisState, 'progress'>

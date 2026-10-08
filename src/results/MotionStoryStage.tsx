@@ -7,14 +7,14 @@ import { SKELETON_EDGES } from './skeletonGeometry'
 import { METRIC_LABELS } from './metricConfidence'
 import type { MetricCardEvidence } from './MetricsPanel'
 import type { ClipSession } from './multiClipAnalysis'
-import type { VideoAnalysisState } from './types'
+import type { AggregateAnalysisState } from './types'
 import {
   REFERENCE_POINTS, REFERENCE_POINTS_SECOND, buildMotionSequence, mixPoints, pointsAtTimestamp,
 } from './motionStoryGeometry'
 import type { StoryPoints } from './motionStoryGeometry'
 
 export interface MotionStoryStageProps {
-  analysis: VideoAnalysisState
+  analysis: AggregateAnalysisState
   clips: ClipSession[]
   sourceIndices: Record<MetricId, number> | null
   evidence: readonly MetricCardEvidence[]

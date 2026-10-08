@@ -1,5 +1,5 @@
-import type { ContainerVideoTrackTiming } from './containerTiming'
-import { probeContainerTiming } from './containerTiming'
+import type { ContainerTimingProbe, ContainerVideoTrackTiming } from './containerTiming'
+import { probeClipContainerTiming } from './clipBytesCache'
 import { canUseSequentialDecode } from './webCodecsSupport'
 import { resolveSamplingRobustnessConfig } from '../results/samplingRobustnessConfig'
 
@@ -104,8 +104,7 @@ const NO_CALIBRATION: EvidenceSeekCalibration = {
 
 /** A Blob is stable for a clip's lifetime, so one derivation per clip is enough — and the session
  * evidence pass legitimately re-runs extraction mid-session when the scale pass grafts
- * `verticalOscillationCm` in, which would otherwise pay for a second full demux to reach the same
- * answer. */
+ * `verticalOscillationCm` in, which would otherwise re-derive the same answer. */
 const cache = new WeakMap<Blob, Promise<EvidenceSeekCalibration>>()
 
 /**
@@ -187,9 +186,9 @@ async function deriveEditListOffset(
   // container detail can matter.
   if (!resolveSamplingRobustnessConfig().sequentialSampling.enabled) return 0
   const offset = editListSeekOffsetSeconds(track)
-  // The expensive gate is deliberately last: it is the only one that costs a full demux, and it is
-  // only ever reachable on an MP4 that actually carries a shifting edit list. A clip with no
-  // correction to make never pays for it.
+  // Deliberately last. The analysis run already asked this exact question of this Blob, so it is
+  // answered from `canUseSequentialDecode`'s per-Blob memo — but a clip with no correction to make
+  // still has no reason to ask at all.
   if (offset === 0) return 0
   if (!(await canUseSequentialDecode(blob))) return 0
   return -offset
@@ -198,15 +197,14 @@ async function deriveEditListOffset(
 async function derive(blob: Blob): Promise<EvidenceSeekCalibration> {
   // The probe now runs FIRST, where the `sequentialSampling` early return used to sit: the frame
   // duration is only reachable through it, and the midpoint needs that whatever the sampler was.
-  // One `arrayBuffer()` and one parse yield both terms — measured at 25.2 ms on the 4K clip and
-  // 8.1 ms on the front-approach one, against extraction's ~3.5 s, and cached per blob.
-  let probeBytes: ArrayBuffer
+  // On the WebCodecs path the analysis run's demux already took this probe from the same bytes
+  // (`clipBytesCache.ts`), so this reads nothing; any other clip pays one read and one parse here.
+  let probe: ContainerTimingProbe
   try {
-    probeBytes = await blob.arrayBuffer()
+    probe = await probeClipContainerTiming(blob)
   } catch {
     return NO_CALIBRATION
   }
-  const probe = await probeContainerTiming(probeBytes)
   if (probe.parseStatus !== 'ok') return NO_CALIBRATION
   const track = probe.videoTracks[0]
   if (track === undefined) return NO_CALIBRATION

@@ -6,6 +6,7 @@ import {
   withDecodedVideo,
 } from './videoElement'
 import type { VideoMetadata } from './types'
+import { logPerfTimings, roundMs } from '../results/perfTimings'
 
 /**
  * One still frame per clip, decoded once and held in memory for the session — the thing a clip
@@ -236,17 +237,33 @@ export async function drawPosterFrame(
  * because it is literally the same code rather than a second copy of it. An element that never
  * decodes yields no poster, the same `null` every other failure yields.
  */
-function decodePosterFrame(
+async function decodePosterFrame(
   sourceBlob: Blob,
   metadata: VideoMetadata,
   options: PosterDerivationOptions,
+  requestedAt: number,
 ): Promise<ClipPoster | null> {
-  return withDecodedVideo(
+  const startedAt = performance.now()
+  let decodedAt: number | null = null
+  const poster = await withDecodedVideo(
     sourceBlob,
     options.loadTimeoutMs ?? LOAD_TIMEOUT_MS,
-    (video) => drawPosterFrame(video, metadata, options),
+    (video) => {
+      decodedAt = performance.now()
+      return drawPosterFrame(video, metadata, options)
+    },
     () => null,
   )
+  const doneAt = performance.now()
+  if (import.meta.env.DEV) logPerfTimings('poster', {
+    bytes: sourceBlob.size,
+    queueWaitMs: roundMs(startedAt - requestedAt),
+    videoLoadMs: decodedAt === null ? null : roundMs(decodedAt - startedAt),
+    seekAndDrawMs: decodedAt === null ? null : roundMs(doneAt - decodedAt),
+    derived: poster !== null,
+    totalMs: roundMs(doneAt - startedAt),
+  })
+  return poster
 }
 
 /**
@@ -288,8 +305,9 @@ export function deriveClipPoster(
   options: PosterDerivationOptions = {},
 ): Promise<ClipPoster | null> {
   if (sourceBlob === null || metadata === null) return Promise.resolve(null)
+  const requestedAt = performance.now()
   return queueDetachedDecode(() =>
-    decodePosterFrame(sourceBlob, metadata, options),
+    decodePosterFrame(sourceBlob, metadata, options, requestedAt),
   )
 }
 

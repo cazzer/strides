@@ -12,7 +12,9 @@ vi.mock('./mp4Demux', async () => {
   return { ...actual, demuxMp4: demuxMp4Mock }
 })
 
-import { canUseSequentialDecode } from './webCodecsSupport'
+import { __resetForTests as resetClipBytesCache, demuxClip } from './clipBytesCache'
+import { __resetForTests as resetSequentialDecodeAnswers, canUseSequentialDecode } from './webCodecsSupport'
+import type { SequentialDecodeProbeTimings } from './webCodecsSupport'
 
 function makeTrack(overrides: Partial<DemuxedTrack> = {}): DemuxedTrack {
   return {
@@ -37,6 +39,8 @@ function makeMp4Blob(): Blob {
 const isConfigSupportedMock = vi.fn()
 
 beforeEach(() => {
+  resetClipBytesCache()
+  resetSequentialDecodeAnswers()
   demuxMp4Mock.mockReset()
   isConfigSupportedMock.mockReset()
   isConfigSupportedMock.mockResolvedValue({ supported: true })
@@ -114,5 +118,79 @@ describe('canUseSequentialDecode', () => {
     isConfigSupportedMock.mockResolvedValue({ supported: false })
 
     await expect(canUseSequentialDecode(makeMp4Blob())).resolves.toBe(false)
+  })
+
+  describe('answering once per clip (strides-dt9)', () => {
+    it('answers a repeated question about the same blob without demuxing it again', async () => {
+      demuxMp4Mock.mockResolvedValue(makeTrack())
+      const blob = makeMp4Blob()
+
+      await expect(canUseSequentialDecode(blob)).resolves.toBe(true)
+      await expect(canUseSequentialDecode(blob)).resolves.toBe(true)
+
+      expect(demuxMp4Mock).toHaveBeenCalledTimes(1)
+      expect(isConfigSupportedMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('shares one answer between concurrent callers', async () => {
+      demuxMp4Mock.mockResolvedValue(makeTrack())
+      const blob = makeMp4Blob()
+
+      const answers = await Promise.all([canUseSequentialDecode(blob), canUseSequentialDecode(blob)])
+
+      expect(answers).toEqual([true, true])
+      expect(demuxMp4Mock).toHaveBeenCalledTimes(1)
+    })
+
+    it('memoises a false answer too, without demuxing again', async () => {
+      demuxMp4Mock.mockRejectedValue(new Error('malformed'))
+      const blob = makeMp4Blob()
+
+      await expect(canUseSequentialDecode(blob)).resolves.toBe(false)
+      await expect(canUseSequentialDecode(blob)).resolves.toBe(false)
+
+      expect(demuxMp4Mock).toHaveBeenCalledTimes(1)
+    })
+
+    it('leaves a usable track cached for the samplers when the answer is yes', async () => {
+      const track = makeTrack()
+      demuxMp4Mock.mockResolvedValue(track)
+      const blob = makeMp4Blob()
+
+      await canUseSequentialDecode(blob)
+
+      await expect(demuxClip(blob)).resolves.toBe(track)
+      expect(demuxMp4Mock).toHaveBeenCalledTimes(1)
+    })
+
+    it('releases the demuxed track when the answer is no — no sequential pass will want it', async () => {
+      demuxMp4Mock.mockResolvedValue(makeTrack())
+      isConfigSupportedMock.mockResolvedValue({ supported: false })
+      const blob = makeMp4Blob()
+
+      await expect(canUseSequentialDecode(blob)).resolves.toBe(false)
+      await demuxClip(blob)
+
+      expect(demuxMp4Mock).toHaveBeenCalledTimes(2)
+    })
+
+    it('reports a memoised answer as a near-zero wait rather than omitting the stages', async () => {
+      demuxMp4Mock.mockResolvedValue(makeTrack())
+      const blob = makeMp4Blob()
+      const first: SequentialDecodeProbeTimings = {}
+      const second: SequentialDecodeProbeTimings = {}
+
+      await canUseSequentialDecode(blob, first)
+      await canUseSequentialDecode(blob, second)
+
+      expect(first.arrayBufferMs).toBeGreaterThanOrEqual(0)
+      expect(first.demuxMs).toBeGreaterThanOrEqual(0)
+      expect(first.isConfigSupportedMs).toBeGreaterThanOrEqual(0)
+      expect(second).toEqual({
+        arrayBufferMs: 0,
+        demuxMs: expect.any(Number),
+        isConfigSupportedMs: 0,
+      })
+    })
   })
 })

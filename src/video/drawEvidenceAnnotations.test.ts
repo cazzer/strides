@@ -256,7 +256,7 @@ describe('drawEvidenceAnnotation', () => {
   })
 
   describe('the globalAlpha trap', () => {
-    // `extractFrame` never resets `ctx.globalAlpha`, so on a ghosted pair this module is handed a
+    // `drawPresentedInstants` never resets `ctx.globalAlpha`, so on a ghosted pair this module is handed a
     // context sitting at the ghost's PHOTOGRAPHIC blend alpha — a different number from the ghost's
     // mark opacity. Inheriting it would weaken the BASE marks too.
     it('is unaffected by the alpha the context arrives carrying', () => {

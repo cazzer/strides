@@ -2,6 +2,7 @@ import type { MetricId } from '../heuristics/types'
 import type { ClipPoster } from '../video/posterFrame'
 import type { VideoSource } from '../video/types'
 import type {
+  AggregateAnalysisState,
   AnalysisPhase,
   ScalePassStatus,
   VideoAnalysisError,
@@ -32,7 +33,16 @@ export interface ClipSession {
   poster: ClipPoster | null
 }
 
-const SCALE_PASS_STATUS_PRIORITY: ScalePassStatus[] = ['running', 'done', 'failed', 'skipped']
+// `pending` outranks every terminal status: with scale passes queued behind every primary
+// (`nextScalePassClipIndex`), one clip can be 'done' while another still waits its turn, and the
+// session has not finished measuring until the last one has run.
+const SCALE_PASS_STATUS_PRIORITY: ScalePassStatus[] = [
+  'running',
+  'pending',
+  'done',
+  'failed',
+  'skipped',
+]
 
 function aggregatePhase(clips: ClipSession[]): AnalysisPhase {
   if (clips.length === 0) return 'idle'
@@ -79,16 +89,12 @@ function allClipsReady(clips: ClipSession[]): boolean {
  * `MetricsPanel` only read `heuristics`, and the skeleton overlay is rendered per-clip inside
  * `ClipSlot` off that clip's own `analysis.robustFrames`.
  */
-export function computeAggregateAnalysisState(clips: ClipSession[]): VideoAnalysisState {
+export function computeAggregateAnalysisState(clips: ClipSession[]): AggregateAnalysisState {
   const phase = aggregatePhase(clips)
   const allReady = allClipsReady(clips)
 
   return {
     phase,
-    progress:
-      clips.length === 0
-        ? 0
-        : clips.reduce((sum, c) => sum + c.analysis.progress, 0) / clips.length,
     isPausedMidAnalysis: clips.some((c) => c.analysis.isPausedMidAnalysis),
     robustFrames: null,
     heuristics: allReady
@@ -138,35 +144,83 @@ export function computeFusionSourceIndices(
   return fusionSourceIndices(clips.map((c) => c.analysis.heuristics!))
 }
 
+function isScalePassTerminal(status: ScalePassStatus): boolean {
+  return status === 'done' || status === 'failed' || status === 'skipped'
+}
+
+/** Whether this clip's primary run sampled by playing its `<video>` (a WebM, a webcam recording,
+ * or an MP4 the sequential-decode probe turned down). Its scale pass replays that same element, so
+ * it keeps the old rule: the pass runs straight after its own primary, before any other clip moves.
+ * `diagnostics` is written in the same literal that commits `'ready'`, so it is never null on a
+ * clip this is asked about. */
+function sampledOnPlaybackPath(clip: ClipSession): boolean {
+  return clip.analysis.diagnostics?.sampling.path === 'playback'
+}
+
+function isWaitingForScalePass(clip: ClipSession): boolean {
+  return clip.analysis.phase === 'ready' && clip.analysis.scalePass.status === 'pending'
+}
+
 function isDoneWithSharedDetector(clip: ClipSession): boolean {
+  // A clip whose video never loaded will never run anything. Without this the active index would
+  // stop on it for good, and every later clip's primary — and so every queued scale pass, which
+  // waits for those primaries — would wait behind it forever.
+  if (clip.videoSource.status === 'error') return true
   // An errored clip's primary pass never reached 'ready', so `useVideoAnalysis.ts`'s scale-pass
   // effect (gated on `state.phase === 'ready'`) never fires for it -- its `scalePass.status`
   // stays 'idle' forever (see `idleState()`/`start()`'s error branches, both of which spread
-  // `idleState()` verbatim). Waiting for that scale pass to reach a terminal status is waiting
-  // for something structurally incapable of happening: an errored clip's scale pass isn't "not
-  // yet terminal", it never had the chance to start. Treat 'error' as immediately, fully
-  // terminal -- releasing both the primary and scale-pass detector claims -- without requiring
-  // `scalePass.status` to move at all.
+  // `idleState()` verbatim). Waiting for it would be waiting for something structurally incapable
+  // of happening, so 'error' is immediately terminal.
   if (clip.analysis.phase === 'error') return true
   if (clip.analysis.phase !== 'ready') return false
-  // The 'ready' path is unchanged: the primary pass succeeded, and its background scale pass --
-  // which uses its OWN separately-shared, module-cached MediaPipe detector -- genuinely needs to
-  // finish before that scale-pass detector is safe to reuse for the next clip.
+  // The shared detector is the PRIMARY one, and a 'ready' clip is finished with it. Its scale pass
+  // uses a separate, module-cached MediaPipe detector and is scheduled on its own lane
+  // (`nextScalePassClipIndex`), after every primary -- except on the playback path, where the
+  // pass replays the clip's own element and keeps the old rule of finishing before the next clip
+  // starts.
+  if (!sampledOnPlaybackPath(clip)) return true
+  return isScalePassTerminal(clip.analysis.scalePass.status)
+}
+
+/** Whether this clip's primary run is still to come: idle, with a source that has not failed. */
+function isPrimaryToCome(clip: ClipSession): boolean {
+  return clip.analysis.phase === 'idle' && clip.videoSource.status !== 'error'
+}
+
+/** Whether this clip's primary may sample on the playback path: its probe said no, or has not
+ * answered yet. Unknown counts as playback, the conservative reading. */
+function primaryMaySampleOnPlaybackPath(clip: ClipSession): boolean {
+  return clip.analysis.primarySamplingPath !== 'sequential'
+}
+
+/** Whether this clip still has a scale pass to run or running. */
+function hasScalePassAhead(clip: ClipSession): boolean {
   return (
-    clip.analysis.scalePass.status === 'done' ||
-    clip.analysis.scalePass.status === 'failed' ||
-    clip.analysis.scalePass.status === 'skipped'
+    clip.analysis.phase === 'ready' &&
+    (clip.analysis.scalePass.status === 'pending' || clip.analysis.scalePass.status === 'running')
   )
 }
 
 /**
  * The shared-detector serialization rule (see the change's design.md, D5): a clip is skipped
- * past once EITHER (a) it errored -- its primary pass never reached 'ready', so it never started
- * a scale pass and never will, making it terminal on the spot -- or (b) its ENTIRE pipeline --
- * primary analysis run AND background scale pass -- has reached a terminal state. Only one clip
- * ever holds a live detector at a time; every other clip must receive `null` (see
+ * past once its video failed to load, or its primary pass is terminal ('ready' or 'error') -- and,
+ * for a clip sampled on the playback path, once its background scale pass is terminal too. Only
+ * one clip ever holds a live detector at a time; every other clip must receive `null` (see
  * `MultiClipVideoSession`). For a single clip this is a permanent no-op — the loop's bound
  * (`clips.length - 1`) never lets it advance past the only clip there is, done or not.
+ *
+ * A clip whose primary may sample on the PLAYBACK path is advanced into only once every earlier
+ * clip's scale pass is terminal (schedule-scale-passes-after-primaries, design.md D9). The
+ * real-time playback sampler is sensitive to what ran on the GPU just before it — measured, a
+ * WebM primary started right after MediaPipe detector creation detected 93/97 frames where the
+ * reference order (after a whole scale pass) detected 99/99 — so it must see exactly the order it
+ * always did. While it waits, `nextScalePassClipIndex` drains those earlier passes.
+ *
+ * Never advances while the scale-pass lane is held — a pass 'running', or `scalePassLeaseIndex`,
+ * the clip the lane was last granted to while its pass is still due. A clip added after every
+ * primary finished would otherwise start its primary on top of that pass. The lease covers the
+ * moment between the grant and the clip reporting 'running': a session that saw only 'pending'
+ * there would advance.
  *
  * `currentActiveIndex` is clamped into range first so a clip removal (shrinking the array) can't
  * leave the index pointing past the end.
@@ -174,11 +228,75 @@ function isDoneWithSharedDetector(clip: ClipSession): boolean {
 export function nextActiveClipIndex(
   clips: ClipSession[],
   currentActiveIndex: number,
+  scalePassLeaseIndex: number | null = null,
 ): number {
   if (clips.length === 0) return 0
   let index = Math.min(Math.max(currentActiveIndex, 0), clips.length - 1)
+  if (scalePassLeaseIndex !== null) return index
+  if (clips.some((c) => c.analysis.scalePass.status === 'running')) return index
   while (index < clips.length - 1 && isDoneWithSharedDetector(clips[index])) {
+    const next = clips[index + 1]
+    const playbackPrimaryMustWait =
+      isPrimaryToCome(next) &&
+      primaryMaySampleOnPlaybackPath(next) &&
+      clips.slice(0, index + 1).some(hasScalePassAhead)
+    if (playbackPrimaryMustWait) break
     index += 1
   }
   return index
+}
+
+/**
+ * The clip the scale-pass lane was last granted to, as an index into `clips`, while that grant is
+ * still live: the clip is still there and its pass is 'pending' or 'running'. `null` otherwise.
+ * `MultiClipVideoSession` remembers the granted clip's id across renders and resolves it here.
+ */
+export function scalePassLeaseIndex(
+  clips: ClipSession[],
+  grantedClipId: string | null,
+): number | null {
+  if (grantedClipId === null) return null
+  const index = clips.findIndex((c) => c.clipId === grantedClipId)
+  if (index === -1) return null
+  return hasScalePassAhead(clips[index]) ? index : null
+}
+
+/**
+ * Which clip may run its background scale pass now, or `null` for none — the scale-pass lane
+ * (schedule-scale-passes-after-primaries). At most one pass runs at a time, because the scale-pass
+ * detector is one stateful, module-cached MediaPipe instance; and none starts while a primary pass
+ * could still sample, so the two never contend for the GPU.
+ *
+ * In order:
+ *   1. a clip whose pass is already 'running' keeps the lane (a started pass is never cancelled),
+ *      and so does the clip holding the lease (`scalePassLeaseIndex`) while its pass is still due;
+ *   2. nothing, while any primary is sampling or processing;
+ *   3. the lowest-index waiting clip sampled on the PLAYBACK path: it still holds the shared
+ *      detector until its pass is terminal (`isDoneWithSharedDetector`), so every later primary
+ *      waits for it, and withholding its lane would deadlock the session;
+ *   4. nothing, while the NEXT primary to run — the first idle clip at or after the active index
+ *      whose source has not failed — samples on the sequential path: sequential primaries all run
+ *      before any scale pass. A next primary that may sample on the playback path does not block:
+ *      it is itself waiting for the earlier passes to drain (`nextActiveClipIndex`), so blocking
+ *      here would deadlock. An idle clip BEFORE the active index (reset after an error) can never
+ *      be handed the detector again, so it is never the next primary;
+ *   5. otherwise the lowest-index clip that is 'ready' with its pass 'pending'.
+ */
+export function nextScalePassClipIndex(
+  clips: ClipSession[],
+  activeClipIndex: number,
+  leaseIndex: number | null = null,
+): number | null {
+  const running = clips.findIndex((c) => c.analysis.scalePass.status === 'running')
+  if (running !== -1) return running
+  if (leaseIndex !== null && isWaitingForScalePass(clips[leaseIndex])) return leaseIndex
+  if (clips.some((c) => c.analysis.phase === 'sampling' || c.analysis.phase === 'processing')) {
+    return null
+  }
+  const playback = clips.findIndex((c) => isWaitingForScalePass(c) && sampledOnPlaybackPath(c))
+  if (playback !== -1) return playback
+  const nextPrimary = clips.find((c, index) => index >= activeClipIndex && isPrimaryToCome(c))
+  if (nextPrimary !== undefined && !primaryMaySampleOnPlaybackPath(nextPrimary)) return null
+  const next = clips.findIndex(isWaitingForScalePass)
+  return next === -1 ? null : next
 }

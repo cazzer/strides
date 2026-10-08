@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MetricId } from '../heuristics/types'
-import type { ClipEvidencePlan } from '../results/evidenceFrames'
+import type { ClipEvidencePlan, EvidenceFramePlan } from '../results/evidenceFrames'
 import { METRIC_LABELS } from '../results/metricConfidence'
 import { stubCanvas2DContext } from '../test/canvasTestUtils'
 import { makeVideoSeekable } from '../test/videoTestUtils'
@@ -139,12 +139,21 @@ function metadata(): VideoMetadata {
   return { durationSec: 10, width: 1920, height: 1080, frameRate: null }
 }
 
-/** Every metric no-evidence. Total by construction — `METRIC_LABELS` is the app's own exhaustive
- * `Record<MetricId, …>`, so a metric added later cannot leave a hole here. */
-function emptyPlan(): ClipEvidencePlan {
+/** Every metric no-evidence but one, which plans a single image. Total by construction —
+ * `METRIC_LABELS` is the app's own exhaustive `Record<MetricId, …>`, so a metric added later cannot
+ * leave a hole here.
+ *
+ * One image is planned because a plan with NOTHING planned no longer opens a decoder at all
+ * (`strides-zm8`) — it has nothing to seek, so it would take no turn in the queue this suite
+ * observes. The image itself is never reached: the decoder times out on load first. */
+function onePlannedImagePlan(): ClipEvidencePlan {
   const plan = {} as ClipEvidencePlan
   for (const metric of Object.keys(METRIC_LABELS) as MetricId[]) {
     plan[metric] = { status: 'no-evidence', reason: 'not-emitted' }
+  }
+  plan.trunkLean = {
+    status: 'planned',
+    items: [{ metric: 'trunkLean' } as unknown as EvidenceFramePlan],
   }
   return plan
 }
@@ -184,7 +193,7 @@ function poster() {
  * calibration rather than deriving it from a blob that carries no container at all. */
 function evidence() {
   return extractClipEvidence(
-    { sourceBlob: new Blob(['evidence']), plan: emptyPlan() },
+    { sourceBlob: new Blob(['evidence']), plan: onePlannedImagePlan() },
     { loadTimeoutMs: 5, seekOffsetSeconds: 0 },
   )
 }
@@ -254,7 +263,12 @@ describe('queueDetachedDecode, across both consumers', () => {
     // feature's unforeseen failure would wedge the OTHER feature's decodes, which is a way for
     // these two to break each other that neither had while their queues were separate.
     await expect(poster()).rejects.toThrow('no object URL')
-    await expect(evidence()).resolves.toEqual(emptyPlan())
+    await expect(evidence()).resolves.toEqual({
+      ...onePlannedImagePlan(),
+      trunkLean: { status: 'no-evidence', reason: 'extraction-failed' },
+    })
+    // It really did take a turn and open a decoder, rather than resolving without one.
+    expect(createSpy).toHaveBeenCalledTimes(2)
 
     createSpy.mockRestore()
     revokeSpy.mockRestore()

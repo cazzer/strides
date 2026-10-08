@@ -1,5 +1,6 @@
 import type { VideoSourceStatus } from '../video/types'
 import type { AnalysisPhase, ScalePassStatus } from './types'
+import { progressPercent } from './progressPercent'
 
 /**
  * What one clip strip entry is currently reporting.
@@ -77,13 +78,21 @@ const PAUSED_SUFFIX = ' — paused, resume playback to continue analyzing'
  * On the default WebCodecs path neither reader touches the element, so this is simply harmless
  * there; nothing in the UI can tell the two paths apart, and being visible is never the wrong
  * answer.
+ *
+ * The one exception is a scale pass that is `'pending'` only because it is waiting for the
+ * session's scale-pass lane behind other clips (`isWaitingForScalePassLane`) — possibly for several
+ * other clips' whole primary passes. Nothing reads the element then, so it goes back to its poster
+ * until the lane reaches it. A playback-path clip is never in that state: it keeps the shared
+ * detector until its pass is terminal, and gets the lane straight after its own primary.
  */
 export function clipHostsLiveElement(
   phase: AnalysisPhase,
   scalePassStatus: ScalePassStatus,
+  scalePassWaitingForLane = false,
 ): boolean {
   if (phase === 'sampling' || phase === 'processing') return true
-  return scalePassStatus === 'pending' || scalePassStatus === 'running'
+  if (scalePassStatus === 'pending') return !scalePassWaitingForLane
+  return scalePassStatus === 'running'
 }
 
 /**
@@ -108,7 +117,7 @@ export function describeClipStripStatus(input: ClipStripStatusInput): ClipStripS
   }
 
   if (phase === 'sampling') {
-    const percent = Math.round(clamp01(progress) * 100)
+    const percent = progressPercent(progress)
     return {
       condition: 'sampling',
       percent,
@@ -184,10 +193,4 @@ export function describeClipStripStatus(input: ClipStripStatusInput): ClipStripS
     glyph: '⋯',
     announcement: 'Loading video…',
   }
-}
-
-/** Progress arrives from a sampler, so a stray NaN or an out-of-range value must not reach a label. */
-function clamp01(value: number): number {
-  if (!Number.isFinite(value)) return 0
-  return Math.min(1, Math.max(0, value))
 }
