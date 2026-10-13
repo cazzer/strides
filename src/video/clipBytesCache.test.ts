@@ -29,6 +29,7 @@ vi.mock('../results/perfTimings', async () => {
 
 import {
   __resetForTests,
+  borrowClipDemux,
   demuxClip,
   probeClipContainerTiming,
   releaseClipDemux,
@@ -260,6 +261,30 @@ describe('demuxClip', () => {
     }
     expect(hit.arrayBufferMs).toBe(0)
     expect(hit.demuxMs).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe('borrowClipDemux (strides-6i6.4)', () => {
+  it('shares the cached track while a sampling pass still holds it', async () => {
+    const { blob, arrayBuffer } = makeBlob()
+    const cached = await demuxClip(blob)
+    expect(await borrowClipDemux(blob)).toBe(cached)
+    expect(arrayBuffer).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads its own after releaseClipDemux, and does not put the entry back', async () => {
+    const { blob, arrayBuffer } = makeBlob()
+    await demuxClip(blob)
+    releaseClipDemux(blob)
+
+    const borrowed = await borrowClipDemux(blob)
+    expect(arrayBuffer).toHaveBeenCalledTimes(2)
+    // A later borrow reads AGAIN: the first one was never cached.
+    expect(await borrowClipDemux(blob)).not.toBe(borrowed)
+    expect(arrayBuffer).toHaveBeenCalledTimes(3)
+    // And a sampling pass after the release demuxes afresh rather than receiving the borrowed one.
+    expect(await demuxClip(blob)).not.toBe(borrowed)
+    expect(arrayBuffer).toHaveBeenCalledTimes(4)
   })
 })
 

@@ -56,6 +56,82 @@ export interface DemuxedTrack {
   matrix: readonly number[]
   /** Decode order — see the field's own doc above. */
   samples: DemuxedSample[]
+  /**
+   * The colour space the sample entry's `colr` box declares (`containerColorSpace`). Read for a
+   * consumer that must decode the frames a `<video>` element would paint — the element honours the
+   * container's declaration, so such a consumer hands the same one to its decoder. Absent on a
+   * hand-built track, which reads as `{ kind: 'absent' }`.
+   */
+  colorSpace?: ContainerColorSpace
+}
+
+/**
+ * What a sample entry's `colr` box says about colour: nothing (`'absent'`), an `nclx` declaration
+ * expressible as a WebCodecs `VideoColorSpaceInit` (`'nclx'`), or anything else — an ICC profile, a
+ * QuickTime `nclc`, or an `nclx` naming a code WebCodecs has no name for (`'unsupported'`), which a
+ * consumer that must match the element's colours has to refuse rather than approximate.
+ */
+export type ContainerColorSpace =
+  | { kind: 'absent' }
+  | { kind: 'nclx'; init: VideoColorSpaceInit }
+  | { kind: 'unsupported' }
+
+/** ISO/IEC 23091-2 code points WebCodecs names. Code 2 ("unspecified") declares nothing and leaves
+ * the member unset. */
+const COLOUR_PRIMARIES: Record<number, string> = {
+  1: 'bt709',
+  5: 'bt470bg',
+  6: 'smpte170m',
+  9: 'bt2020',
+  12: 'smpte432',
+}
+const TRANSFER_CHARACTERISTICS: Record<number, string> = {
+  1: 'bt709',
+  6: 'smpte170m',
+  8: 'linear',
+  13: 'iec61966-2-1',
+  16: 'pq',
+  18: 'hlg',
+}
+const MATRIX_COEFFICIENTS: Record<number, string> = {
+  0: 'rgb',
+  1: 'bt709',
+  5: 'bt470bg',
+  6: 'smpte170m',
+  9: 'bt2020-ncl',
+}
+const UNSPECIFIED_CODE = 2
+
+/** The fields of mp4box's parsed `colr` box this module reads. */
+export interface ColrBox {
+  colour_type?: string
+  colour_primaries?: number
+  transfer_characteristics?: number
+  matrix_coefficients?: number
+  full_range_flag?: number | boolean
+}
+
+/** PURE. Reduces a sample entry's `colr` box (as mp4box parses it) to a `ContainerColorSpace`. */
+export function containerColorSpace(colr: ColrBox | undefined): ContainerColorSpace {
+  if (colr === undefined) return { kind: 'absent' }
+  if (colr.colour_type !== 'nclx') return { kind: 'unsupported' }
+  const primaries = lookup(colr.colour_primaries, COLOUR_PRIMARIES)
+  const transfer = lookup(colr.transfer_characteristics, TRANSFER_CHARACTERISTICS)
+  const matrix = lookup(colr.matrix_coefficients, MATRIX_COEFFICIENTS)
+  if (primaries === null || transfer === null || matrix === null) return { kind: 'unsupported' }
+  // Built untyped and cast once: this TypeScript's DOM lib predates the BT.2020/PQ/HLG members the
+  // WebCodecs spec (and Chromium) define, and the names here are the spec's own.
+  const init: Record<string, string | boolean> = { fullRange: Boolean(colr.full_range_flag) }
+  if (primaries !== undefined) init.primaries = primaries
+  if (transfer !== undefined) init.transfer = transfer
+  if (matrix !== undefined) init.matrix = matrix
+  return { kind: 'nclx', init: init as VideoColorSpaceInit }
+}
+
+/** `undefined` for a code that declares nothing, `null` for one WebCodecs cannot name. */
+function lookup<T>(code: number | undefined, names: Record<number, T>): T | undefined | null {
+  if (code === undefined || code === UNSPECIFIED_CODE) return undefined
+  return names[code] ?? null
 }
 
 /**
@@ -96,6 +172,7 @@ export class Mp4DemuxError extends Error {
  * present on a real video sample entry, and probing all four is simpler than a codec-string
  * switch. */
 type VideoConfigSampleEntry = SampleEntry & {
+  colr?: ColrBox
   avcC?: { write(stream: DataStream): void }
   hvcC?: { write(stream: DataStream): void }
   vpcC?: { write(stream: DataStream): void }
@@ -193,9 +270,11 @@ export function demuxMp4(bytes: ArrayBuffer): Promise<DemuxedTrack> {
       const width = videoTrack.video?.width ?? videoTrack.track_width
       const height = videoTrack.video?.height ?? videoTrack.track_height
 
+      const entries = trak.mdia.minf.stbl.stsd.entries
       succeed({
         codec: videoTrack.codec,
-        description: extractDescription(trak.mdia.minf.stbl.stsd.entries),
+        description: extractDescription(entries),
+        colorSpace: containerColorSpace((entries[0] as VideoConfigSampleEntry | undefined)?.colr),
         width,
         height,
         fps: samples.length / durationSec,

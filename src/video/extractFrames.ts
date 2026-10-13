@@ -10,6 +10,8 @@ import { evidenceOutputSide } from '../results/evidenceFrames'
 import { planEvidenceAnnotations } from '../results/evidenceAnnotations'
 import { drawEvidenceAnnotation } from './drawEvidenceAnnotations'
 import { resolveEvidenceSeekCalibration } from './evidenceSeekOffset'
+import { decodeFramesForward, frameShownAt, openDecodedFrameSource } from './decodedFrames'
+import type { DecodedFrameSource } from './decodedFrames'
 import { logPerfTimings, roundMs } from '../results/perfTimings'
 import {
   FRAME_PRESENTATION_TIMEOUT_MS,
@@ -255,7 +257,7 @@ function resolveOptions(options: EvidenceExtractionOptions): ResolvedOptions {
  */
 function seekTargetOf(
   instant: EvidenceInstantPlan,
-  video: HTMLVideoElement,
+  durationSec: number,
   options: ResolvedOptions,
 ): number | null {
   // Edit-list shift FIRST, then the midpoint. The shift converts a media-clock frame START to a
@@ -270,8 +272,8 @@ function seekTargetOf(
   // either would poison the target or never fire.
   const target = Math.max(
     0,
-    Number.isFinite(video.duration)
-      ? Math.min(requested, video.duration)
+    Number.isFinite(durationSec)
+      ? Math.min(requested, durationSec)
       : requested,
   )
   return Number.isFinite(target) ? target : null
@@ -313,14 +315,14 @@ async function presentTarget(
  */
 function drawInstant(
   ctx: CanvasRenderingContext2D,
-  video: HTMLVideoElement,
+  source: CanvasImageSource,
   instant: EvidenceInstantPlan,
   crop: EvidenceFramePlan['crop'],
   outputSide: number,
 ): void {
   ctx.globalAlpha = instant.opacity
   ctx.drawImage(
-    video,
+    source,
     crop.x,
     crop.y,
     crop.side,
@@ -367,7 +369,7 @@ interface ImageInFlight {
 function openImage(
   metric: MetricId,
   item: EvidenceFramePlan,
-  video: HTMLVideoElement,
+  durationSec: number,
   options: ResolvedOptions,
 ): ImageInFlight | null {
   // Shared with the pure layer rather than restated: annotation geometry has to land on the same
@@ -381,7 +383,7 @@ function openImage(
   const instants = item.ghost === null ? [item.base] : [item.base, item.ghost]
   const targets: number[] = []
   for (const instant of instants) {
-    const target = seekTargetOf(instant, video, options)
+    const target = seekTargetOf(instant, durationSec, options)
     if (target === null) return null
     targets.push(target)
   }
@@ -405,12 +407,12 @@ function openImage(
  */
 function drawPresentedInstants(
   image: ImageInFlight,
-  video: HTMLVideoElement,
+  source: CanvasImageSource,
   target: number,
   maxOutputSidePx: number,
 ): void {
   while (image.drawn < image.targets.length && image.targets[image.drawn] === target) {
-    drawInstant(image.ctx, video, image.instants[image.drawn], image.plan.crop, image.side)
+    drawInstant(image.ctx, source, image.instants[image.drawn], image.plan.crop, image.side)
     image.drawn += 1
   }
   if (image.drawn < image.targets.length) return
@@ -550,23 +552,40 @@ export function extractPlannedFrames(
   options: EvidenceExtractionOptions = {},
   hooks: ClipExtractionHooks = {},
 ): Promise<ClipEvidence> {
-  return extractPlannedFramesCounted(video, plan, options, hooks, { seeks: 0 })
+  return extractPlannedFramesCounted(video, plan, options, hooks, { seeks: 0, decodePasses: 0 })
 }
 
 /** What a pass actually did, beyond its result. Dev-only instrumentation. */
 interface ExtractionStats {
   /** Seeks issued — one per distinct target, plus one per base/ghost cycle the schedule broke. */
   seeks: number
+  /** Forward decode passes run instead of seeks (`strides-6i6.4`) — one, plus one more wherever a
+   * ghost precedes its own base. */
+  decodePasses: number
 }
 
-async function extractPlannedFramesCounted(
-  video: HTMLVideoElement,
+/**
+ * One clip's images in flight, and the bookkeeping that turns them into a result — shared by the
+ * seek driver (`extractPlannedFramesCounted`) and the forward-decode driver (`extractByDecoding`),
+ * which differ only in where the frame each instant is drawn from comes from.
+ */
+interface ExtractionRun {
+  inFlight: ImageInFlight[]
+  /** Settles `metric` if none of its images is still pending, reporting it when complete. */
+  settle: (metric: MetricId) => void
+  /** The merged result, in plan key order. Only valid once nothing is pending. */
+  result: () => ClipEvidence
+  /** The caller's reuse plus every metric this run has already settled COMPLETE — what a
+   * fallback to the seek path may reuse instead of drawing again. */
+  completed: () => ReusedMetricEvidence
+}
+
+function openExtractionRun(
   plan: ClipEvidencePlan,
-  options: EvidenceExtractionOptions,
+  durationSec: number,
+  resolved: ResolvedOptions,
   hooks: ClipExtractionHooks,
-  stats: ExtractionStats,
-): Promise<ClipEvidence> {
-  const resolved = resolveOptions(options)
+): ExtractionRun {
   const reuse = hooks.reuse ?? {}
 
   const decoded = metricEntries(plan).filter(
@@ -578,7 +597,7 @@ async function extractPlannedFramesCounted(
   const images: Array<ImageInFlight | null> = []
   const imagesOf = new Map<MetricId, Array<ImageInFlight | null>>()
   for (const [metric, entry] of decoded) {
-    const opened = entry.items.map((item) => openImage(metric, item, video, resolved))
+    const opened = entry.items.map((item) => openImage(metric, item, durationSec, resolved))
     imagesOf.set(metric, opened)
     images.push(...opened)
   }
@@ -587,6 +606,7 @@ async function extractPlannedFramesCounted(
   // Each decoded metric's verdict, settled the moment none of its images is still pending — and
   // the same object later merged into the result, so what a caller kept IS what the pass returned.
   const settled = new Map<MetricId, MetricEvidence>()
+  const complete = new Set<MetricId>()
   const settle = (metric: MetricId) => {
     const own = imagesOf.get(metric) ?? []
     if (settled.has(metric) || own.some((image) => image?.state === 'pending')) return
@@ -604,12 +624,46 @@ async function extractPlannedFramesCounted(
     // most harvests runs exactly while the scale pass contends for the GPU. Not keeping it lets the
     // next pass try again, as the whole-clip re-extraction used to.
     if (verdict.status === 'extracted' && items.length === own.length) {
+      complete.add(metric)
       hooks.onMetricExtracted?.(metric, verdict)
     }
   }
   // A metric with nothing left to seek — no items, or no canvas for any of them — is settled up
   // front; it can never be complete, so this offers nothing.
   for (const [metric] of decoded) settle(metric)
+
+  return {
+    inFlight,
+    settle,
+    result: () => {
+      const evidence = {} as ClipEvidence
+      for (const [metric, entry] of metricEntries(plan)) {
+        evidence[metric] =
+          entry.status !== 'planned'
+            ? entry
+            : (reusedFor(reuse, metric, entry) ?? settled.get(metric)!)
+      }
+      return evidence
+    },
+    completed: () => {
+      const kept: ReusedMetricEvidence = { ...reuse }
+      for (const metric of complete) kept[metric] = settled.get(metric)
+      return kept
+    },
+  }
+}
+
+async function extractPlannedFramesCounted(
+  video: HTMLVideoElement,
+  plan: ClipEvidencePlan,
+  options: EvidenceExtractionOptions,
+  hooks: ClipExtractionHooks,
+  stats: ExtractionStats,
+): Promise<ClipEvidence> {
+  const resolved = resolveOptions(options)
+  const reuse = hooks.reuse ?? {}
+  const run = openExtractionRun(plan, video.duration, resolved, hooks)
+  const { inFlight, settle } = run
 
   for (;;) {
     const target = nextSeekTarget(inFlight)
@@ -644,14 +698,109 @@ async function extractPlannedFramesCounted(
     for (const metric of touched) settle(metric)
   }
 
-  const evidence = {} as ClipEvidence
-  for (const [metric, entry] of metricEntries(plan)) {
-    evidence[metric] =
-      entry.status !== 'planned'
-        ? entry
-        : (reusedFor(reuse, metric, entry) ?? settled.get(metric)!)
+  return run.result()
+}
+
+/**
+ * How a forward-decode attempt ended. `'unavailable'` hands the clip to the seek path, carrying the
+ * metrics the attempt already finished whole — each was already reported through
+ * `onMetricExtracted`, so the seek path reuses rather than redraws them.
+ */
+type DecodeAttempt =
+  | { kind: 'done'; evidence: ClipEvidence }
+  | { kind: 'unavailable'; completed: ReusedMetricEvidence }
+
+/**
+ * The same plan, drawn from `VideoFrame`s out of forward decode passes instead of seeks
+ * (`strides-6i6.4`, `decodedFrames.ts`). Identical in everything but the frame source:
+ *
+ * - **Which frame.** Each instant's `currentTime` target is computed exactly as the seek path
+ *   computes it (`seekTargetOf`, both offsets included), then mapped to the frame a `<video>` shows
+ *   there (`frameShownAt`). A target that mapping will not vouch for sends the WHOLE clip to the
+ *   seek path before a single pixel is drawn. The duration clamp is not applied: a target at or past
+ *   the presented end is one `frameShownAt` refuses, so the clamp's only effect is reached by the
+ *   seek path instead.
+ * - **Which pixels.** Every instant is drawn by the same `drawInstant` — the same nine-argument
+ *   `drawImage`, the same crop, the same `globalAlpha` — straight from the decoded frame, never via
+ *   an intermediate canvas, and annotated by the same `drawPresentedInstants`.
+ * - **Which order.** A canvas still takes its base before its ghost. A pass draws each image's NEXT
+ *   instant as its frame arrives, in presentation order; a ghost that precedes its own base in time
+ *   is drawn by the next pass. Every pass advances every pending image by at least one instant, so
+ *   a plan needs at most two.
+ *
+ * Abandonment is checked as each frame arrives and between passes, with the seek path's semantics:
+ * an aborted clip is all `'extraction-failed'`, and a metric finished before the abort was already
+ * reported whole.
+ */
+async function extractByDecoding(
+  source: DecodedFrameSource,
+  plan: ClipEvidencePlan,
+  options: EvidenceExtractionOptions,
+  hooks: ClipExtractionHooks,
+  stats: ExtractionStats,
+): Promise<DecodeAttempt> {
+  const resolved = resolveOptions(options)
+  const reuse = hooks.reuse ?? {}
+  const run = openExtractionRun(plan, Number.NaN, resolved, hooks)
+  const { inFlight, settle } = run
+
+  // Re-key every instant from a `currentTime` target to the decoder timestamp of the frame that
+  // target shows — before anything is drawn, so a refusal costs nothing.
+  for (const image of inFlight) {
+    for (let index = 0; index < image.targets.length; index += 1) {
+      const key = frameShownAt(source.timeline, image.targets[index])
+      if (key === null) return { kind: 'unavailable', completed: run.completed() }
+      image.targets[index] = key
+    }
   }
-  return evidence
+
+  const { width, height } = source.track
+  for (;;) {
+    const pending = inFlight.filter((image) => image.state === 'pending')
+    if (pending.length === 0) break
+    if (resolved.signal?.aborted) return { kind: 'done', evidence: extractionFailed(plan, reuse) }
+    const wanted = new Set<number>()
+    for (const image of pending) {
+      for (let index = image.drawn; index < image.targets.length; index += 1) {
+        wanted.add(image.targets[index])
+      }
+    }
+    stats.decodePasses += 1
+    let progressed = false
+    const outcome = await decodeFramesForward(
+      source.track,
+      wanted,
+      (frame, key) => {
+        // The plan's crop rect is in the pixel space the `<video>` path draws from; a frame
+        // reporting any other size would put the same rect somewhere else.
+        if (frame.displayWidth !== width || frame.displayHeight !== height) {
+          throw new Error('decoded frame size differs from the track')
+        }
+        const touched = new Set<MetricId>()
+        for (const image of inFlight) {
+          if (image.state !== 'pending' || image.targets[image.drawn] !== key) continue
+          touched.add(image.metric)
+          drawPresentedInstants(image, frame, key, resolved.maxOutputSidePx)
+        }
+        if (touched.size > 0) progressed = true
+        // Same discipline as the seek driver: nothing is reported once the pass is abandoned.
+        if (resolved.signal?.aborted) return
+        for (const metric of touched) settle(metric)
+      },
+      { signal: resolved.signal, stallTimeoutMs: resolved.loadTimeoutMs },
+    )
+    if (outcome === 'aborted' || resolved.signal?.aborted) {
+      return { kind: 'done', evidence: extractionFailed(plan, reuse) }
+    }
+    // A pass that drew every image still pending is done whatever the decoder did afterwards —
+    // `decodeFramesForward` already reports that case as `'completed'`; this is the same rule held
+    // at the level that owns the images, so no finished image is ever redrawn by the seek path.
+    if (inFlight.every((image) => image.state !== 'pending')) break
+    if (outcome === 'failed' || !progressed) {
+      return { kind: 'unavailable', completed: run.completed() }
+    }
+  }
+  return { kind: 'done', evidence: run.result() }
 }
 
 /** Instants a plan asks for: one per instant, so two for a ghosted pair. Dev-only instrumentation —
@@ -695,6 +844,27 @@ function countExtractedImages(
 }
 
 /**
+ * Opens the clip for forward decoding and runs the plan through it, or `null` where the clip is
+ * not one forward decoding takes. A function of its own so the `DecodedFrameSource` — which may hold
+ * a private demux of the whole compressed clip (`borrowClipDemux`) — is unreachable the moment it
+ * returns, before any fallback opens a 4K `<video>` beside it.
+ */
+async function attemptDecoding(
+  sourceBlob: Blob,
+  plan: ClipEvidencePlan,
+  options: EvidenceExtractionOptions,
+  hooks: ClipExtractionHooks,
+  stats: ExtractionStats,
+  timings: { sourceOpenedAt: number; tried: boolean },
+): Promise<DecodeAttempt | null> {
+  const source = await openDecodedFrameSource(sourceBlob)
+  timings.sourceOpenedAt = performance.now()
+  timings.tried = source !== null
+  if (source === null || options.signal?.aborted) return null
+  return extractByDecoding(source, plan, options, hooks, stats)
+}
+
+/**
  * One clip, one detached decoder, torn down before returning. The element, its object URL and the
  * teardown are `withDecodedVideo`'s (`videoElement.ts`) — identical plumbing to the poster path's,
  * because it is literally the same code rather than a second copy of it. A clip whose element never
@@ -733,24 +903,47 @@ async function decodeClipEvidence(
   }
   const resolved = resolveOptions(calibrated)
   const calibratedAt = performance.now()
-  const stats: ExtractionStats = { seeks: 0 }
-  let decodedAt: number | null = null
+  const stats: ExtractionStats = { seeks: 0, decodePasses: 0 }
 
-  const evidence = await withDecodedVideo(
-    sourceBlob,
-    resolved.loadTimeoutMs,
-    (video) => {
-      decodedAt = performance.now()
-      return extractPlannedFramesCounted(video, plan, calibrated, hooks, stats)
-    },
-    () => extractionFailed(plan, reuse),
-  )
+  // Forward decoding first, where the clip allows it (`strides-6i6.4`); the seek path below is the
+  // fallback for everything it declines, and for whatever it could not finish.
+  let evidence: ClipEvidence | null = null
+  let seekHooks = hooks
+  let frameSource: 'decode' | 'seek' = 'seek'
+  const decodeTimings = { sourceOpenedAt: 0, tried: false }
+  const attempt = await attemptDecoding(sourceBlob, plan, calibrated, hooks, stats, decodeTimings)
+  if (attempt?.kind === 'done') {
+    evidence = attempt.evidence
+    frameSource = 'decode'
+  } else if (attempt?.kind === 'unavailable') {
+    seekHooks = { ...hooks, reuse: attempt.completed }
+  }
+  const { sourceOpenedAt, tried: triedDecode } = decodeTimings
+  const decodeDoneAt = performance.now()
+
+  let decodedAt: number | null = null
+  if (evidence === null) {
+    const fallbackReuse = seekHooks.reuse ?? {}
+    evidence = await withDecodedVideo(
+      sourceBlob,
+      resolved.loadTimeoutMs,
+      (video) => {
+        decodedAt = performance.now()
+        return extractPlannedFramesCounted(video, plan, calibrated, seekHooks, stats)
+      },
+      () => extractionFailed(plan, fallbackReuse),
+    )
+  }
   const doneAt = performance.now()
   if (import.meta.env.DEV) logPerfTimings('evidence-extraction', {
     bytes: sourceBlob.size,
     queueWaitMs: roundMs(startedAt - requestedAt),
     calibrationMs: roundMs(calibratedAt - startedAt),
-    videoLoadMs: decodedAt === null ? null : roundMs(decodedAt - calibratedAt),
+    frameSource,
+    decodeSourceMs: roundMs(sourceOpenedAt - calibratedAt),
+    decodeMs: !triedDecode ? null : roundMs(decodeDoneAt - sourceOpenedAt),
+    decodePasses: stats.decodePasses,
+    videoLoadMs: decodedAt === null ? null : roundMs(decodedAt - decodeDoneAt),
     seekAndDrawMs: decodedAt === null ? null : roundMs(doneAt - decodedAt),
     plannedSeeks: countPlannedInstants(plan, reuse),
     seeks: stats.seeks,
