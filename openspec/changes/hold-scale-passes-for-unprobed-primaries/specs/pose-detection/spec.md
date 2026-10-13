@@ -7,7 +7,11 @@ feasibility answer, so that a check that never settles cannot stall the run, and
 bound's fallback — sampling on the `<video>`-playback path — as a stand-in only. If the real answer
 arrives before any primary run of that clip has picked its sampler, the real answer SHALL replace the
 stand-in, and that clip's runs SHALL sample on the path the answer names. Once a run has picked its
-sampler, a later answer SHALL NOT change it. This exists because the check reads the whole clip into
+sampler, a later answer SHALL NOT change it. The stand-in SHALL NOT be reported as the clip's
+sampling path to the multi-clip schedule: the clip SHALL read as undecided until the real answer
+arrives, a run picks its sampler, or a second, longer bound passes, after which the stand-in is
+reported as the playback path so a check that never settles cannot hold the schedule forever. This
+exists because the check reads the whole clip into
 memory, and on a contended device that read can take far longer than the bound while the clip is
 still queued behind another clip's analysis and needs no answer yet: measured on a phone, a queued
 clip's answer took 13 s against a 3 s bound, and the stand-in made that clip sample 153 frames on the
@@ -17,8 +21,14 @@ playback path where the sequential path samples all 345.
 
 - **WHEN** a clip has no detector yet because it is queued behind another clip, its feasibility
   check outlasts the bound, and the check then answers that the clip can be sampled sequentially
-- **THEN** the clip's sampling path reads playback after the bound and sequential after the answer,
-  and once the clip receives the detector its run samples on the sequential path
+- **THEN** the clip's sampling path reads undecided after the bound and sequential after the
+  answer, and once the clip receives the detector its run samples on the sequential path
+
+#### Scenario: A check that never answers stops holding the schedule
+
+- **WHEN** a queued clip's feasibility check never settles
+- **THEN** the clip's sampling path reads undecided until the longer bound passes, and playback
+  after it
 
 #### Scenario: A run that started on the stand-in keeps its sampler
 

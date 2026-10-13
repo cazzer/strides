@@ -9,6 +9,8 @@
 
 - [x] 2.1 `useVideoAnalysis`: the probe timeout's `false` is replaced by a late real answer until a
       run picks its sampler (`samplerChosenForRef`, set in `start()`)
+- [x] 2.1a `useVideoAnalysis`: `primarySamplingPath` stays `null` while only the stand-in is known
+      and no run has acted on it, until `SEQUENTIAL_DECODE_PROBE_GIVE_UP_MS` (30 s)
 - [x] 2.2 `useVideoAnalysis`: the `sequential-probe` perf line reports `fellBack` and `committed`
 - [x] 2.3 `nextScalePassClipIndex` rule 4: an undecided next primary with a loading or ready source
       holds the lane
@@ -19,7 +21,8 @@
       sequential ⇒ P2 next; answers playback ⇒ S1 next; failed and empty sources do not hold the lane;
       a waiting playback clip still takes the lane; render-by-render simulation of slow loads
 - [x] 3.2 `useVideoAnalysis.test.ts`: a queued clip's late answer replaces the stand-in and its run
-      samples sequentially; a run already started on the stand-in keeps it
+      samples sequentially, and reads undecided (not playback) in between; a probe that never
+      answers reads playback after the give-up bound; a run already started on the stand-in keeps it
 - [x] 3.3 `npx tsc -b`, `npm run lint`, `npm test`
 
 ## 4. Verify

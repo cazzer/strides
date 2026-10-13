@@ -2138,8 +2138,9 @@ describe('useVideoAnalysis', () => {
           vi.advanceTimersByTime(3000)
         })
         await flush()
-        // The stand-in: the session may now schedule around it, and no run has started.
-        expect(result.current.primarySamplingPath).toBe('playback')
+        // The stand-in is committed, but the session's schedule does not see it: the clip still
+        // reads as undecided, which keeps the scale-pass lane closed until the real answer.
+        expect(result.current.primarySamplingPath).toBeNull()
         expect(result.current.phase).toBe('idle')
 
         await act(async () => {
@@ -2154,6 +2155,32 @@ describe('useVideoAnalysis', () => {
         expect(result.current.phase).toBe('sampling')
         expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1)
         expect(sampleClipMock).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('reads playback to the session once a probe that never answers passes the give-up bound', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        slowProbe()
+        const videoSource = makeVideoSource({ sourceBlob })
+        const { result } = renderHook(() =>
+          useVideoAnalysis(videoSource, null, { queued: true }),
+        )
+        await flush()
+        await act(async () => {
+          vi.advanceTimersByTime(29_999)
+        })
+        await flush()
+        expect(result.current.primarySamplingPath).toBeNull()
+
+        await act(async () => {
+          vi.advanceTimersByTime(1)
+        })
+        await flush()
+        // Without this the scale-pass lane would wait on this clip forever.
+        expect(result.current.primarySamplingPath).toBe('playback')
       } finally {
         vi.useRealTimers()
       }

@@ -50,6 +50,14 @@ function roundProbeTimings(timings: SequentialDecodeProbeTimings) {
  * on — see `sequentialDecodeSupported`'s doc for why auto-start waits at all. */
 const SEQUENTIAL_DECODE_PROBE_TIMEOUT_MS = 3000
 
+/** How long the session's schedule waits for a probe that has outlasted the timeout above before
+ * treating its playback stand-in as the clip's path (`primarySamplingPath`). Until then the clip
+ * reads as undecided, which holds the scale-pass lane (strides-6i6.5): on a contended phone a
+ * queued clip's probe took 13 s, and a stand-in shown to the session lets an earlier clip's scale
+ * pass run ahead of a primary that will turn out sequential. Only a probe that never answers — a
+ * regression, never observed — waits this long, so the bound only has to guarantee progress. */
+const SEQUENTIAL_DECODE_PROBE_GIVE_UP_MS = 30_000
+
 /** Longest a playback-path primary waits for an in-flight scale-pass detector creation
  * (`scaleDetectorCreationInFlight`) before sampling anyway. Creation normally settles in well
  * under a second, but a stalled WASM or model fetch can leave it pending forever (the scale pass
@@ -220,6 +228,11 @@ export function useVideoAnalysis(
   // (strides-6i6.5): the timeout exists so auto-start cannot stall on a hung probe, not to decide
   // the sampler for a clip still queued behind another, whose probe was merely slow.
   const samplerChosenForRef = useRef<VideoMetadata | null>(null)
+  // Whether `sequentialDecodeSupported` is this clip's settled path for the SESSION's schedule:
+  // the probe answered, a run picked its sampler, or `SEQUENTIAL_DECODE_PROBE_GIVE_UP_MS` passed.
+  // The timeout's stand-in alone does not settle it — auto-start may act on the stand-in, the
+  // schedule may not (`primarySamplingPath` reads `null` until this is true).
+  const [samplingPathSettled, setSamplingPathSettled] = useState(false)
 
   const abandonActiveRun = () => {
     handleRef.current?.stop()
@@ -260,6 +273,7 @@ export function useVideoAnalysis(
     sequentialDecodeProbedForRef.current = metadata
 
     setSequentialDecodeSupported(null)
+    setSamplingPathSettled(false)
     const probedFor = metadata
     let answered = false
     let fellBack = false
@@ -272,6 +286,7 @@ export function useVideoAnalysis(
       answered = true
       if (!isCurrentClip() || samplerChosenForRef.current === probedFor) return false
       setSequentialDecodeSupported(supported)
+      setSamplingPathSettled(true)
       return true
     }
     /** The timeout's stand-in: playback, so auto-start is never stalled by a hung probe. */
@@ -327,10 +342,18 @@ export function useVideoAnalysis(
     // (every gate resolves, nothing awaits an unbounded external operation once a Blob is already
     // in hand) — this exists so a future regression there degrades to "no sequential decode this
     // run" instead of stalling auto-start indefinitely. It does NOT decide the sampler for good:
-    // a slow answer still replaces it for any run that has not started yet (see `answer`). It
-    // also bounds how long the session's scale-pass lane waits on this clip's answer.
+    // a slow answer still replaces it for any run that has not started yet (see `answer`), and the
+    // session's schedule does not see it until the give-up bound below.
     const timeoutId = setTimeout(fallBack, SEQUENTIAL_DECODE_PROBE_TIMEOUT_MS)
-    return () => clearTimeout(timeoutId)
+    // Bounds how long the session's scale-pass lane waits on this clip's answer, so a probe that
+    // never answers cannot hold every queued pass forever.
+    const giveUpId = setTimeout(() => {
+      if (!answered && isCurrentClip()) setSamplingPathSettled(true)
+    }, SEQUENTIAL_DECODE_PROBE_GIVE_UP_MS)
+    return () => {
+      clearTimeout(timeoutId)
+      clearTimeout(giveUpId)
+    }
   }, [metadata, sourceBlob])
 
   const reset = useCallback(() => {
@@ -391,6 +414,7 @@ export function useVideoAnalysis(
     const usesSequentialDecode = sequentialDecodeSupported === true
     // From here on a late probe answer can no longer change this clip's sampler.
     samplerChosenForRef.current = metadata
+    setSamplingPathSettled(true)
     // Create the scale pass's detector now, overlapping this primary pass, instead of at 'ready'.
     // Sequential path only: the playback sampler drops real-time frames under the main-thread/GPU
     // contention creation causes (strides-gyl), where the sequential one only runs slower. The
@@ -1057,9 +1081,10 @@ export function useVideoAnalysis(
   }, [state.scalePass])
 
   // The same predicate `start()` uses to pick its sampler, so the session's schedule and the run
-  // cannot disagree about the path.
+  // cannot disagree about the path. `null` while only the probe timeout's stand-in is known and no
+  // run has acted on it (`samplingPathSettled`): the schedule waits for the real answer.
   const primarySamplingPath =
-    sequentialDecodeSupported === null
+    sequentialDecodeSupported === null || !samplingPathSettled
       ? null
       : sequentialDecodeSupported
         ? 'sequential'

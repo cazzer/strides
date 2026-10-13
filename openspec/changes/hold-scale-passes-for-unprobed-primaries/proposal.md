@@ -25,13 +25,15 @@ pass run. Reproduced on desktop by holding clip 2's `loadedmetadata` for 8 s: P1
 - **The probe timeout's "no" is a stand-in, not a verdict.** It still lets auto-start go ahead
   when a run is waiting on a hung probe. But if the probe's real answer arrives before any run of
   that clip has picked its sampler, the real answer replaces it. A clip queued behind another, whose
-  probe was only slow, now samples on the path its bytes support.
+  probe was only slow, now samples on the path its bytes support. The stand-in is also kept from
+  the multi-clip schedule: the clip reads as undecided until the real answer arrives, a run picks
+  its sampler, or a 30 s give-up bound passes.
 - **An unprobed next primary holds the scale-pass lane.** While the next clip to run is still
   loading its video, or loaded and not yet probed, no scale pass starts. Only a next clip *known* to
   sample on the playback path lets the earlier passes drain ahead of it, as before.
 - This cannot deadlock. The answer needs nothing from either lane: the clip's own video loads (or
   fails, and a failed source is not an outstanding primary), and the probe starts at
-  `loadedmetadata` and is bounded by its timeout. An `'empty'` source has no load in progress and
+  `loadedmetadata` and is bounded by the give-up bound. An `'empty'` source has no load in progress and
   does not hold the lane.
 - The dev-only `sequential-probe` perf line gains `fellBack` and `committed`, so a log shows whether
   the timeout fired and whether the answer was used. Before this, that line read `supported: true`

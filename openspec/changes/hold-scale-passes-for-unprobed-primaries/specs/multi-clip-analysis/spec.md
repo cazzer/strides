@@ -15,8 +15,9 @@ earlier clips' passes to finish (see "Serialized shared-detector access across c
 clips"), and the passes SHALL be allowed to drain, in index order, so that it can start. Waiting for
 an undecided next primary cannot deadlock: its answer depends on neither the shared detector nor
 the scale-pass allowance, only on its own video finishing loading — a source that fails to load is
-not outstanding — and on its probe, which is bounded by a timeout. A source with no load in progress
-has no answer coming and is not outstanding. The allowance SHALL be decided in
+not outstanding — and on its probe, whose answer the clip reports once it arrives or once a fixed
+give-up bound passes (see "A slow feasibility answer still picks the sampler for a run that has not
+started"). A source with no load in progress has no answer coming and is not outstanding. The allowance SHALL be decided in
 this order: a clip already allowed its pass keeps the allowance until that pass is terminal (a
 started pass is never cancelled, and an allowance outlives any delay before the clip reports its
 pass `'running'`); otherwise none, while any primary is `'sampling'` or `'processing'`; otherwise

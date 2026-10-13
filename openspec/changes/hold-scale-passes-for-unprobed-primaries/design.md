@@ -65,6 +65,15 @@ latency for fidelity on a probe we have never seen be slow; that is left open.
 A late answer of `false` also commits, which is a no-op. A late answer of `true` for a clip whose
 run already started is discarded and its demuxed track released, as before.
 
+**The stand-in is hidden from the schedule.** The first version of this change showed the stand-in
+to the session as `primarySamplingPath: 'playback'`. Its slow-probe arm then still ran
+P1 S1 P2 P3 S2 S3 (clip 2 sampled sequentially, 345 samples, but S1 went first): the 5 s probe
+outlasted both the 3 s bound and clip 1's 4.7 s primary, so at P1's `'ready'` clip 2 read as a
+known playback clip. Now `primarySamplingPath` stays `null` while only the stand-in is known, and
+settles when the probe answers, when a run picks its sampler, or when
+`SEQUENTIAL_DECODE_PROBE_GIVE_UP_MS` (30 s) passes. Only a probe that never answers — never observed
+— waits that long, so the bound has to guarantee progress, not be tight.
+
 ### D2. An unprobed next primary holds the lane
 
 Rule 4 now holds the lane while the next primary's sampling path is undecided, as well as while it is
@@ -75,7 +84,7 @@ earlier pass is pending, so both lanes wait for the answer, and the answer depen
 
 - The video loads and fires `loadedmetadata`, which starts the probe, or fails, and a failed source
   is not an outstanding primary.
-- The probe answers, or its timeout commits the stand-in (D1), within 3 s.
+- The probe answers, or the give-up bound settles the clip on the stand-in (D1), within 30 s.
 
 An `'empty'` source has no load in progress, so no answer is coming. It does not hold the lane. In
 practice every clip is created with a pending load, so `'empty'` is momentary.
@@ -111,10 +120,10 @@ practice every clip is created with a pending load, so `'empty'` is momentary.
 - **A video that never loads and never errors** now holds the earlier clips' passes as well as the
   later clips' primaries. Before this change it already held every later primary, because the
   active index would stop on it, so the session was already stalled. No such source has been seen.
-- **A queued clip's probe slower than the whole primary ahead of it** still lets the lane go to the
-  earlier pass: by then the stand-in has been committed and reads playback. Its run still samples
-  on the sequential path if the real answer arrives before the clip gets the detector (D1). The
-  order is then P1 S1 P2 P3 S2 S3, slower but with nothing lost. On the phone the slow probe took
-  13 s against a 29 s primary.
-- **An active clip whose probe outlasts the bound** still samples on the playback path. That is
-  today's behaviour, unchanged, and has not been observed.
+- **A probe that never answers** holds the queued passes for up to 30 s before the clip settles on
+  playback. Never observed; the alternative was an unbounded wait.
+- **An active clip whose probe outlasts the 3 s bound** still samples on the playback path. That
+  includes a clip handed the detector while its probe is still running, which can happen when no
+  earlier pass is due (clip 1 errored, say), since the bound was counted from that clip's
+  `loadedmetadata`, not from when it got the detector. Both are today's behaviour, unchanged, and
+  neither has been observed: on the phone the active clip's probe took 318–435 ms.
