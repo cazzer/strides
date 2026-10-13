@@ -94,7 +94,7 @@ export function guidedHeadlineParts(
 ): GuidedHeadlineParts {
   const { band, metric } = entry
   const value = guidedHeadline(entry, false) ?? formatGuidedValue(metric)
-  // `standalone`: no scale renders beside this headline (the "Running economy" section), so the
+  // `standalone`: no scale renders beside this headline (the "Energy cost" section), so the
   // position must name its range itself rather than say "the range shown".
   const describe = standalone
     ? describeBandPositionStandalone

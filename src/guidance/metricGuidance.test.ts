@@ -1858,7 +1858,8 @@ describe('the economy consequence a headline may state', () => {
         expect(link.summary, `${entry.metric}: ${number}`).toContain(number)
       }
     }
-    expect(checked).toBeGreaterThanOrEqual(4)
+    // Not vacuous: each sentence names its study count.
+    expect(checked).toBeGreaterThanOrEqual(2)
   })
 
   it('states an association across runners, never advice, a cause, a grade or an injury', () => {

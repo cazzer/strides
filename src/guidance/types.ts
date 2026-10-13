@@ -498,7 +498,7 @@ export interface MetricGuidance {
    * What running-economy research found ACROSS RUNNERS for this quantity, and which side of the
    * band that finding points away from — or `null`, which is the answer for every metric but two.
    *
-   * It feeds the guided view's "Running economy" headline and nothing else: it renders only there,
+   * It feeds the guided view's "Energy cost" headline and nothing else: it renders only there,
    * never on a card (narrative-metric-headlines design.md D3).
    *
    * Rules, each pinned by test in `metricGuidance.test.ts`:
@@ -519,7 +519,8 @@ export interface MetricGuidance {
    *    advice to go further out.
    *
    * A headline fires only when the value lies strictly beyond the band's outermost finite bound on
-   * `costlySide` (`pastCostlySide` in `src/results/guidedHeadlines.ts`). The band is still an
+   * `costlySide` (`pastCostlySide` in `src/results/guidedHeadlines.ts`) at the `'normal'` tier;
+   * a caveated reading past that bound is reported in one line instead. The band is still an
    * observed range, not a target, and nothing here gives it a preferred end: the side names where a
    * published association points, not where the runner should be.
    */

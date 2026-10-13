@@ -391,6 +391,12 @@ export function citationText(source: BandSource, derived: boolean): string {
   return citationParts(source, derived).join(' · ')
 }
 
+/** `a, b and c`. */
+export function joinList(parts: string[]): string {
+  if (parts.length <= 1) return parts.join('')
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+}
+
 /** A first sentence this many words long or shorter is quoted whole by {@link noteLead}. */
 const NOTE_LEAD_WHOLE_WORDS = 8
 /** How many words {@link noteLead} keeps of a longer first sentence. */

@@ -618,7 +618,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
      * performance; this is a between-runner association with energy cost, and says so.
      */
     economyConsequence: {
-      text: 'Across runners, a higher step rate goes with a slightly lower energy cost — a correlation of −0.20 over 37 studies, an association rather than the effect of changing it.',
+      text: 'Across runners, a higher step rate goes with a slightly lower energy cost, across 37 studies — an association, not the effect of changing it.',
       url: VAN_HOOREN_2024_LINK.url,
       // A higher step rate goes with a lower cost, so the costly side is below the band.
       costlySide: 'below',
@@ -848,7 +848,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
      * normalised row is normalised to step length, over two studies, and not significant.
      */
     economyConsequence: {
-      text: 'Across runners, less vertical oscillation goes with a lower energy cost — a correlation of 0.35 over 23 studies, measured as a distance.',
+      text: 'Across runners, less vertical oscillation goes with a lower energy cost, across 23 studies, measured as a distance.',
       url: VAN_HOOREN_2024_LINK.url,
       // More bounce goes with a higher cost, so the costly side is above the band.
       costlySide: 'above',

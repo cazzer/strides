@@ -187,3 +187,71 @@ no-grading tests over the whole view and by new ones over the section's own furn
 The first draft expected `park-approach` to be empty; the grafted centimetre bounce (10.49 cm, tier
 `caveated`) now triggers the bounce story, which is what made the confidence deviation above
 necessary.
+
+## Review round 1 (2026-10-13) — decisions, superseding D2's copy, D7 and D9 where they differ
+
+Two reviews (code, UX) of the first implementation; the orchestrator decided item 1 and both
+reviewers concurred. Edited in place because the change is unmerged.
+
+1. **Only a `'normal'`-tier spokesman headlines** (supersedes D7's "banded group" alone, and the
+   confidence-label deviation above). A caveated reading past its point gets one line — "Bounce in
+   centimetres reads above 9.5 cm, but with low confidence — see its card." — linking to the card.
+   *Reason:* leading the page with a low-confidence reading over-weights it; hiding it would drop the
+   one position the section exists to report. Accepted consequence: no demo clip headlines
+   (`park-approach`'s grafted bounce is caveated).
+2. **The bounce introduction's heading takes the cards' scroll margin** below 1024 px
+   (`.guided-results__scroll-target` beside `[data-motion-metric]` in `index.css`). *Reason:* with
+   `scroll-mt-4` the link landed under the sticky header and the motion stage. The cadence card
+   already carries `data-motion-metric`.
+3. **`selectHeadlines` reports a status per story** — `headline`, `inside`, `caveated-past`,
+   `unmeasured`, `pending`, `unbanded` — and the empty state is worded from it. *Reason:* the first
+   version could say "Neither reading is past that point" of a reading that was withheld, unbanded or
+   caveated. `costlyThreshold` reads `renderableBand`, so no position is named against a withheld
+   band and no empty slot can print.
+4. **`scalePassStatus` reaches the section**: while the scale pass is pending or running the
+   centimetre bounce reads "measuring real-world scale with a second look at the clip…", the
+   not-measured group's own words, not "could not be measured".
+5. **The studied-change line comes from `cardReferences(entry).tryLink`** with `tryLineApplies`, so it
+   renders exactly where the card's would.
+6. **Multi-clip provenance**: the headline gets the same `sourceLabel` its card does, from one
+   function in `GuidedMeasurements`.
+7. **Order and density**: value · position (+ pace tag) → source clip → consequence with its source
+   → note lead → studied change → link. The citation line, the caveat and the confidence label are
+   dropped (normal tier only; the card is one link away). Budget pinned at 65 visible words excluding
+   the note lead — measured 65 (step rate) and 59 (bounce). *Reason for 65 rather than ~60:* the
+   remaining words are the reviewer's consequence copy and the record's studied-change text; cutting
+   either means editing a sourced sentence.
+8. **Plain-language consequences**: the correlation coefficients leave the visible sentence (they
+   stay in the link's summary, where the number-in-summary test still holds for "37" and "23").
+9. **Empty state**: secondary text (muted, no frame), reader terms ("step rate", "bounce in
+   centimetres"), "That is a position, not a grade." dropped. Variants, each ≤ 50 words (tested):
+   both inside — "Step rate is not below the 5th percentile of Garmin's table and bounce in
+   centimetres is not above 9.5 cm — the points past which energy-cost research leans one way. The
+   measurements are below."; one inside and one not measured — the inside clause, then "Step rate
+   could not be measured on this clip."; none measured — "Energy-cost research leans one way when
+   step rate reads … or bounce in centimetres reads above 9.5 cm." then the not-measured sentence.
+   The thresholds come from the bands, so "below the 5th percentile of Garmin's table" rather than the
+   suggested "below Garmin's 5th percentile".
+10. **Heading "Energy cost"; link "Go to the Cadence card".**
+11. `joinList` moved to `guidedGroups.ts` and shared; `confidenceLabel` moved to
+    `metricConfidence.ts` (the guided card imports it; the classic panel's private copy is untouched).
+12. Click tests: each headline link moves focus to the cadence card / `#guided-bounce-heading`.
+13. The `role="group"` wrapper is gone; each headline is an h3 under the section's h2.
+
+### Review round 1 verification (2026-10-13)
+
+`tsc -b`, `eslint .`, `vite build` clean; `vitest run` 110 files, 2350 tests passing; no pipeline
+file in the diff against `042dd5b`. Live, same harness (port 5368, identity verified, ANGLE Metal
+M4 Pro, fresh Chromium per clip), same text at 1280 / 390 px, light / dark / forced colours, no
+overflow:
+
+| clip | section |
+|---|---|
+| `park-side-landscape.mp4` | "Step rate is not below the 5th percentile of Garmin's table and bounce in centimetres is not above 9.5 cm — the points past which energy-cost research leans one way. The measurements are below." |
+| `park-side-portrait.mp4` | "Energy-cost research leans one way when step rate reads below the 5th percentile of Garmin's table or bounce in centimetres reads above 9.5 cm. Step rate and bounce in centimetres could not be measured on this clip. The measurements are below." |
+| `park-approach.mp4` | "Step rate is not below the 5th percentile of Garmin's table — the point past which energy-cost research leans one way. Bounce in centimetres reads above 9.5 cm, but with low confidence — see its card. The measurements are below." |
+
+No demo clip headlines, as accepted. At 390 px, "see its card" focuses the centimetre card and
+`#guided-bounce-heading` lands focused and unobscured below the sticky header and motion stage
+(heading top 291 px). This clip has no bounce headline, so the heading was reached by its fragment
+— the same target and hashchange handler the headline's link uses.

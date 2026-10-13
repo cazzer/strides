@@ -3,6 +3,8 @@ import type { FormHeuristicsResult, MetricId } from '../heuristics/types'
 import { METRIC_GUIDANCE } from '../guidance/metricGuidance'
 import type { MetricGuidance } from '../guidance/types'
 import { guidedGroups } from './guidedGroups'
+import type { ScalePassStatus } from './types'
+import type { StoryStatus } from './guidedHeadlines'
 import {
   STORY_SPOKESMEN,
   costlyThreshold,
@@ -48,8 +50,22 @@ function heuristicsWith({
 function select(
   heuristics: FormHeuristicsResult,
   guidance: Record<MetricId, MetricGuidance> = METRIC_GUIDANCE,
+  scalePassStatus: ScalePassStatus = 'done',
 ) {
-  return selectHeadlines(guidedGroups(heuristics, guidance))
+  return selectHeadlines(guidedGroups(heuristics, guidance), scalePassStatus)
+}
+
+function statuses(
+  heuristics: FormHeuristicsResult,
+  guidance: Record<MetricId, MetricGuidance> = METRIC_GUIDANCE,
+  scalePassStatus: ScalePassStatus = 'done',
+): Record<string, StoryStatus> {
+  return Object.fromEntries(
+    select(heuristics, guidance, scalePassStatus).stories.map((s) => [
+      s.story,
+      s.status,
+    ]),
+  )
 }
 
 function spokesmen(heuristics: FormHeuristicsResult): MetricId[] {
@@ -101,7 +117,7 @@ describe('one fixed spokesman per story, with no fallback', () => {
       extra: { overstriding: makeMetric('overstriding', { value: 0.9 }) },
     })
     expect(spokesmen(heuristics)).toEqual([])
-    expect(select(heuristics).unmeasured).toEqual(['cadence'])
+    expect(statuses(heuristics).stepRate).toBe('unmeasured')
   })
 
   it('produces no bounce headline from a large torso-relative bounce when centimetres are null', () => {
@@ -116,7 +132,7 @@ describe('one fixed spokesman per story, with no fallback', () => {
       },
     })
     expect(spokesmen(heuristics)).toEqual([])
-    expect(select(heuristics).unmeasured).toEqual(['verticalOscillationCm'])
+    expect(statuses(heuristics).bounce).toBe('unmeasured')
   })
 
   it('produces none from an excluded spokesman even when its value is past the band', () => {
@@ -126,7 +142,7 @@ describe('one fixed spokesman per story, with no fallback', () => {
       },
     })
     expect(spokesmen(heuristics)).toEqual([])
-    expect(select(heuristics).unmeasured).toEqual(['cadence'])
+    expect(statuses(heuristics).stepRate).toBe('unmeasured')
   })
 
   it('produces none from a spokesman whose band is withheld for missing provenance', () => {
@@ -142,8 +158,10 @@ describe('one fixed spokesman per story, with no fallback', () => {
     }
     const result = select(heuristicsWith({ cadence: 140 }), guidance)
     expect(result.headlines).toEqual([])
-    // Measured, so not "unmeasured" either.
-    expect(result.unmeasured).toEqual([])
+    // Measured, so not "unmeasured" either: there is no shown band to place it against.
+    expect(result.stories[0].status).toBe('unbanded')
+    // And no position is named against a band the page withholds.
+    expect(result.stories[0].threshold).toBeNull()
   })
 })
 
@@ -166,10 +184,12 @@ describe('order is evidence rank, never the readings', () => {
     ])
   })
 
-  it('lists both unmeasured spokesmen in rank order', () => {
-    expect(
-      select(heuristicsWith({ cadence: null, vo: null })).unmeasured,
-    ).toEqual(['cadence', 'verticalOscillationCm'])
+  it('reports both stories in rank order, whatever their status', () => {
+    const { stories } = select(heuristicsWith({ cadence: null, vo: 10.4 }))
+    expect(stories.map((s) => [s.story, s.status])).toEqual([
+      ['stepRate', 'unmeasured'],
+      ['bounce', 'headline'],
+    ])
   })
 })
 
@@ -182,6 +202,20 @@ describe('pastCostlySide and costlyThreshold', () => {
     expect(pastCostlySide(trunk)).toBe(false)
   })
 
+  it('names no position against a band withheld for missing provenance', () => {
+    const withheld: MetricGuidance = {
+      ...METRIC_GUIDANCE.verticalOscillationCm,
+      band: {
+        ...METRIC_GUIDANCE.verticalOscillationCm.band!,
+        source: {
+          ...METRIC_GUIDANCE.verticalOscillationCm.band!.source,
+          title: ' ',
+        },
+      },
+    }
+    expect(costlyThreshold(withheld)).toBeNull()
+  })
+
   it('states each trigger as a position taken from the band itself', () => {
     expect(costlyThreshold(METRIC_GUIDANCE.cadence)).toBe(
       "below the 5th percentile of Garmin's table",
@@ -190,5 +224,60 @@ describe('pastCostlySide and costlyThreshold', () => {
       'above 9.5 cm',
     )
     expect(costlyThreshold(METRIC_GUIDANCE.trunkLean)).toBeNull()
+  })
+})
+
+describe('only a normal-tier reading headlines (review round 1)', () => {
+  it('headlines a normal-tier 10.4 cm', () => {
+    expect(statuses(heuristicsWith({ vo: 10.4 })).bounce).toBe('headline')
+  })
+
+  it('reports a caveated 10.4 cm as past its point at low confidence, without a headline', () => {
+    const heuristics = makeHeuristics({
+      verticalOscillationCm: makeVerticalOscillationCm({
+        value: 10.4,
+        confidence: 0.05,
+      }),
+    })
+    expect(select(heuristics).headlines).toEqual([])
+    expect(statuses(heuristics).bounce).toBe('caveated-past')
+  })
+
+  it('reports a caveated reading inside its point as inside, not as caveated', () => {
+    const heuristics = makeHeuristics({
+      cadence: makeMetric('cadence', { value: 170, confidence: 0.3 }),
+    })
+    expect(statuses(heuristics).stepRate).toBe('inside')
+  })
+})
+
+describe('story status', () => {
+  it('reads an unmeasured centimetre bounce as pending while the scale pass runs', () => {
+    for (const status of ['pending', 'running'] as const) {
+      expect(
+        statuses(heuristicsWith({ vo: null }), METRIC_GUIDANCE, status).bounce,
+        status,
+      ).toBe('pending')
+    }
+    for (const status of ['done', 'failed', 'idle'] as const) {
+      expect(
+        statuses(heuristicsWith({ vo: null }), METRIC_GUIDANCE, status).bounce,
+        status,
+      ).toBe('unmeasured')
+    }
+  })
+
+  it('never reads an unmeasured step rate as pending: it is not a scale-pass metric', () => {
+    expect(
+      statuses(heuristicsWith({ cadence: null }), METRIC_GUIDANCE, 'running')
+        .stepRate,
+    ).toBe('unmeasured')
+  })
+
+  it('reads both inside on an unremarkable clip', () => {
+    expect(statuses(heuristicsWith({ cadence: 174, vo: 4.42 }))).toEqual({
+      stepRate: 'inside',
+      bounce: 'inside',
+    })
   })
 })

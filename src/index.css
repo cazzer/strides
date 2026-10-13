@@ -91,7 +91,7 @@
 .motion-story { top: var(--motion-story-header-height, 88px); }
 .motion-story__dialog { position: fixed; inset: 0; margin: auto; }
 @media (max-width: 63.999rem) {
-  [data-motion-metric] { scroll-margin-top: calc(var(--motion-story-header-height, 88px) + 92px); }
+  [data-motion-metric], .guided-results__scroll-target { scroll-margin-top: calc(var(--motion-story-header-height, 88px) + 92px); }
 }
 
 .motion-story__ghost { opacity: 0.26; }

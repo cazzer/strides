@@ -1,29 +1,25 @@
-import { useEffect, useId, useRef } from 'react'
-import type { MouseEvent } from 'react'
+import { Fragment, useEffect, useId, useRef } from 'react'
+import type { MouseEvent, ReactNode } from 'react'
 import type { FormHeuristicsResult, MetricId } from '../heuristics/types'
 import { METRIC_GUIDANCE } from '../guidance/metricGuidance'
 import type { MetricGuidance } from '../guidance/types'
 import { guidedHeadline, guidedHeadlineParts } from './formatGuidedValue'
-import {
-  CitationLine,
-  ConfidenceLabel,
-  ExternalLink,
-  GuidedMetricCard,
-  TryLine,
-} from './GuidedMetricCard'
+import { ExternalLink, GuidedMetricCard, TryLine } from './GuidedMetricCard'
 import {
   bandWithheld,
   captureHintFor,
+  cardReferences,
   guidedEntryId,
   guidedGroups,
+  joinList,
   notMeasuredReason,
   splitFirstSentence,
   tryLineApplies,
 } from './guidedGroups'
 import type { GuidedEntry, GuidedGroups } from './guidedGroups'
-import { costlyThreshold, selectHeadlines } from './guidedHeadlines'
-import type { GuidedHeadlineStory } from './guidedHeadlines'
-import { METRIC_LABELS, metricTier } from './metricConfidence'
+import { selectHeadlines } from './guidedHeadlines'
+import type { GuidedHeadlineStory, StoryOutcome } from './guidedHeadlines'
+import { METRIC_LABELS, confidenceLabel, metricTier } from './metricConfidence'
 import type { MetricCardEvidence } from './MetricsPanel'
 import type { ResultsViewProps } from './ResultsView'
 import type { ScalePassStatus } from './types'
@@ -299,50 +295,69 @@ const BOUNCE_MEASURES = [
   },
 ] as const
 
-/** Where each headline story's link goes: the bounce introduction, or the step-rate card itself. */
+/** Where the bounce headline's link goes: the shared introduction to the three bounce measures. */
 const BOUNCE_HEADING_ID = 'guided-bounce-heading'
 
-function joinNames(names: string[]): string {
-  if (names.length <= 1) return names.join('')
-  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+function capitalise(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`
+}
+
+/** A link that reveals and focuses its in-page target, like the contents list's. */
+function InPageLink({
+  target,
+  className,
+  children,
+}: {
+  target: string
+  className: string
+  children: ReactNode
+}) {
+  return (
+    <a
+      href={`#${target}`}
+      onClick={(event) => revealMetric(event, target)}
+      className={`${className} underline underline-offset-2 ${FOCUS}`}
+    >
+      {children}
+    </a>
+  )
 }
 
 /**
- * One "Running economy" headline: the spokesman's value and where it sits — named in full, since no
- * scale is beside it — the card's own confidence label and caveat, the band's citation, the cited economy association, the first sentence of
- * each mandatory note, and the card's own studied-change line where it applies.
+ * One "Energy cost" headline, in reading order: the spokesman's value and where it sits — named in
+ * full, since no scale is beside it — with the pace tag; which clip it came from, where there are
+ * several; the cited economy association with its source; the first sentence of each mandatory
+ * note; the card's own studied-change line exactly where the card would show it; and a link on.
  *
- * Every sentence is borrowed from the guidance record or the card; the only words authored here are
- * the link labels. It renders no evidence: canvases belong to the card, and a node has one parent.
+ * Normal-tier readings only (`selectHeadlines`), so there is no confidence label to carry. The
+ * band's citation stays on the card. No evidence: canvases belong to the card, and a node has one
+ * parent.
  */
-function EconomyHeadline({ headline }: { headline: GuidedHeadlineStory }) {
-  const headingId = useId()
+function EconomyHeadline({
+  headline,
+  sourceLabel,
+}: {
+  headline: GuidedHeadlineStory
+  sourceLabel?: string
+}) {
   const { story, entry, consequence } = headline
-  const { metric, guidance, band } = entry
+  const { metric, guidance } = entry
   const label = METRIC_LABELS[metric.metric]
   const parts = guidedHeadlineParts(entry, { standalone: true })
   const consequenceLink = [...guidance.research, ...guidance.remediation].find(
     (link) => link.url === consequence.url,
   )
-  const tryLink =
-    guidance.tryLine === null
-      ? undefined
-      : guidance.remediation.find((link) => link.url === guidance.tryLine!.url)
-  const showsTry = tryLineApplies(entry) && tryLink !== undefined
+  const { tryLink } = cardReferences(entry)
   const target =
     story === 'bounce' ? BOUNCE_HEADING_ID : guidedEntryId(metric.metric)
 
   return (
     <div
-      role="group"
-      aria-labelledby={headingId}
       className="guided-results__headline-story space-y-2 border-t-2 border-black pt-4 first-of-type:border-t-0 first-of-type:pt-0 dark:border-white"
       data-story={story}
       data-metric={metric.metric}
     >
-      <h3 id={headingId} className="font-display text-lg font-bold tracking-tight">
-        {label}
-      </h3>
+      <h3 className="font-display text-lg font-bold tracking-tight">{label}</h3>
       <p className="guided-results__headline-value flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <span className="font-display text-2xl font-bold">{parts.value}</span>
         {parts.position !== null && (
@@ -361,14 +376,11 @@ function EconomyHeadline({ headline }: { headline: GuidedHeadlineStory }) {
           </span>
         )}
       </p>
-      {/* The card's own cautions: a headline must not read more certain than its card. */}
-      {metricTier(metric) === 'caveated' && <ConfidenceLabel metric={metric} />}
-      {metric.caveat !== null && (
-        <p role="note" className={`guided-results__caveat ${MUTED}`}>
-          {metric.caveat}
+      {sourceLabel && (
+        <p className="guided-results__headline-source font-sans text-xs font-semibold text-neutral-600 dark:text-neutral-400">
+          Measured from {sourceLabel}
         </p>
       )}
-      {band !== null && <CitationLine band={band} />}
       <p className={`guided-results__consequence ${BODY}`}>
         {consequence.text}
         {consequenceLink !== undefined && (
@@ -388,7 +400,7 @@ function EconomyHeadline({ headline }: { headline: GuidedHeadlineStory }) {
           </p>
         )
       })}
-      {showsTry && (
+      {tryLineApplies(entry) && tryLink !== null && (
         <TryLine
           text={guidance.tryLine!.text}
           link={tryLink}
@@ -396,58 +408,137 @@ function EconomyHeadline({ headline }: { headline: GuidedHeadlineStory }) {
         />
       )}
       <p className="font-sans text-sm">
-        <a
-          href={`#${target}`}
-          onClick={(event) => revealMetric(event, target)}
-          className={`guided-results__headline-link font-semibold text-black underline underline-offset-2 dark:text-white ${FOCUS}`}
+        <InPageLink
+          target={target}
+          className="guided-results__headline-link font-semibold text-black dark:text-white"
         >
-          {story === 'bounce' ? 'All three bounce measures' : 'Open its card'}
-          {story !== 'bounce' && <span className="sr-only">: {label}</span>}
-        </a>
+          {story === 'bounce' ? 'All three bounce measures' : `Go to the ${label} card`}
+        </InPageLink>
       </p>
     </div>
   )
 }
 
+/** "Bounce in centimetres reads above 9.5 cm, but with low confidence — see its card." */
+function CaveatedPast({ outcome }: { outcome: StoryOutcome }) {
+  const id = guidedEntryId(outcome.entry.metric.metric)
+  return (
+    <>
+      {capitalise(outcome.name)} reads {outcome.threshold}, but with{' '}
+      {confidenceLabel(outcome.entry.metric).toLowerCase()} —{' '}
+      <InPageLink target={id} className="font-semibold text-neutral-800 dark:text-neutral-200">
+        see its card
+        <span className="sr-only">: {METRIC_LABELS[outcome.entry.metric.metric]}</span>
+      </InPageLink>
+      .
+    </>
+  )
+}
+
 /**
- * The "Running economy" section: a headline for each story whose spokesman reads past its band on
- * the side running-economy research associates with a higher cost, or a statement that none does.
+ * What the section says when no story headlines, built from each story's status so it never
+ * claims a reading is "not past that point" when it was not measured, is still being measured,
+ * has no band shown, or is past it at low confidence. Every threshold comes from a shown band.
+ */
+function EnergyCostSummary({ stories }: { stories: StoryOutcome[] }) {
+  const inside = stories.filter(
+    (s) => s.status === 'inside' && s.threshold !== null,
+  )
+  const unmeasured = stories.filter((s) => s.status === 'unmeasured')
+  const sentences: ReactNode[] = []
+  if (inside.length > 0) {
+    const clauses = inside.map((s) => `${s.name} is not ${s.threshold}`)
+    sentences.push(
+      `${capitalise(clauses.join(' and '))} — the ${inside.length === 1 ? 'point' : 'points'} past which energy-cost research leans one way.`,
+    )
+  } else {
+    // Only for stories whose position is not stated anywhere else in this paragraph.
+    const triggers = stories
+      .filter(
+        (s) =>
+          (s.status === 'unmeasured' || s.status === 'pending') &&
+          s.threshold !== null,
+      )
+      .map((s) => `${s.name} reads ${s.threshold}`)
+    if (triggers.length > 0) {
+      sentences.push(
+        `Energy-cost research leans one way when ${triggers.join(' or ')}.`,
+      )
+    }
+  }
+  for (const s of stories) {
+    if (s.status === 'caveated-past') {
+      sentences.push(<CaveatedPast key={s.story} outcome={s} />)
+    } else if (s.status === 'pending') {
+      sentences.push(
+        `${capitalise(s.name)}: measuring real-world scale with a second look at the clip…`,
+      )
+    } else if (s.status === 'unbanded') {
+      sentences.push(`${capitalise(s.name)} has no range shown here to compare it with.`)
+    }
+  }
+  if (unmeasured.length > 0) {
+    sentences.push(
+      `${capitalise(joinList(unmeasured.map((s) => s.name)))} could not be measured on this clip.`,
+    )
+  }
+  sentences.push('The measurements are below.')
+  return (
+    <p className={`guided-results__headlines-empty ${MUTED}`}>
+      {sentences.map((sentence, index) => (
+        <Fragment key={index}>
+          {index > 0 && ' '}
+          {sentence}
+        </Fragment>
+      ))}
+    </p>
+  )
+}
+
+/**
+ * The "Energy cost" section: a headline for each story whose spokesman reads, at the normal tier,
+ * past its band on the side energy-cost research associates with a higher cost — or, with none, a
+ * statement built from where each story stands. Selection and order are `selectHeadlines`'s.
  *
- * Selection and order are `selectHeadlines`'s — fixed spokesmen, banded group only, `displayRank`
- * order. An empty section says why it is empty rather than promoting something else.
+ * Framed only when it carries a headline: an empty section is secondary text, not a finding.
  */
 function EconomyHeadlines({
   groups,
-  guidance,
+  scalePassStatus,
+  sourceLabelFor,
 }: {
   groups: GuidedGroups
-  guidance: Record<MetricId, MetricGuidance>
+  scalePassStatus: ScalePassStatus
+  sourceLabelFor: (metric: MetricId) => string | undefined
 }) {
   const headingId = useId()
-  const { headlines, unmeasured } = selectHeadlines(groups)
+  const { headlines, stories } = selectHeadlines(groups, scalePassStatus)
+  const caveated = stories.filter((s) => s.status === 'caveated-past')
   return (
     <section
       aria-labelledby={headingId}
-      className="guided-results__headlines space-y-4 border-2 border-black p-4 dark:border-white"
+      className={`guided-results__headlines space-y-4 ${headlines.length > 0 ? 'border-2 border-black p-4 dark:border-white' : ''}`}
     >
       <h2 id={headingId} className={H2}>
-        Running economy
+        Energy cost
       </h2>
       {headlines.length > 0 ? (
-        headlines.map((headline) => (
-          <EconomyHeadline key={headline.story} headline={headline} />
-        ))
+        <>
+          {headlines.map((headline) => (
+            <EconomyHeadline
+              key={headline.story}
+              headline={headline}
+              sourceLabel={sourceLabelFor(headline.entry.metric.metric)}
+            />
+          ))}
+          {caveated.map((outcome) => (
+            <p key={outcome.story} className={`guided-results__headlines-caveated ${MUTED}`}>
+              <CaveatedPast outcome={outcome} />
+            </p>
+          ))}
+        </>
       ) : (
-        <p className={`guided-results__headlines-empty ${BODY}`}>
-          No headline for this clip. One appears only when step rate reads{' '}
-          {costlyThreshold(guidance.cadence)} or bounce reads{' '}
-          {costlyThreshold(guidance.verticalOscillationCm)} — where
-          running-economy research points one way.{' '}
-          {unmeasured.length > 0
-            ? `${joinNames(unmeasured.map((id) => METRIC_LABELS[id]))} could not be measured on this clip.`
-            : 'Neither reading is past that point here.'}{' '}
-          That is a position, not a grade. Every measurement is below.
-        </p>
+        <EnergyCostSummary stories={stories} />
       )}
     </section>
   )
@@ -494,6 +585,11 @@ export function GuidedMeasurements({
   const bounceEntries = new Map(
     [...banded, ...unbanded, ...notMeasured].map((entry) => [entry.metric.metric, entry]),
   )
+  // One rule for cards and headlines alike, so a headline names the same clip its card does.
+  const sourceLabelFor = (metric: MetricId): string | undefined =>
+    clipCount > 1 && sourceIndices
+      ? clipSourceLabel(sourceIndices[metric], clipCount, clipViews)
+      : undefined
   // Keyed by metric, never by position: evidence arrives in the extraction plan's own order.
   const evidenceByMetric = new Map(
     evidence.map((entry) => [entry.metric, entry]),
@@ -532,7 +628,7 @@ export function GuidedMeasurements({
           entry={entry}
           evidence={evidenceByMetric.get(entry.metric.metric)}
           clipCount={clipCount}
-          sourceLabel={clipCount > 1 && sourceIndices ? clipSourceLabel(sourceIndices[entry.metric.metric], clipCount, clipViews) : undefined}
+          sourceLabel={sourceLabelFor(entry.metric.metric)}
           onOpenEvidenceVideo={onOpenEvidenceVideo}
           variant={variant}
         />
@@ -546,7 +642,11 @@ export function GuidedMeasurements({
 
   return (
     <div ref={rootRef} className="guided-results__results space-y-8">
-      <EconomyHeadlines groups={groups} guidance={guidance} />
+      <EconomyHeadlines
+        groups={groups}
+        scalePassStatus={scalePassStatus}
+        sourceLabelFor={sourceLabelFor}
+      />
 
       <Contents
         entries={[
@@ -560,7 +660,13 @@ export function GuidedMeasurements({
         aria-labelledby={BOUNCE_HEADING_ID}
         className="guided-results__bounce space-y-3 border-l-4 border-brand-600 bg-neutral-50 p-4 dark:border-brand-400 dark:bg-neutral-900"
       >
-        <h2 id={BOUNCE_HEADING_ID} tabIndex={-1} className={`${H2} scroll-mt-4`}>
+        {/* `guided-results__scroll-target`: the same scroll margin the cards get under the sticky
+            header and motion stage below 1024 px (index.css), so the headline's link lands in view. */}
+        <h2
+          id={BOUNCE_HEADING_ID}
+          tabIndex={-1}
+          className={`${H2} guided-results__scroll-target scroll-mt-4`}
+        >
           Three ways to describe bounce
         </h2>
         <p className={BODY}>

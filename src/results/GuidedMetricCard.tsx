@@ -8,7 +8,6 @@ import type {
   ReferenceBand,
   SpeedSensitivity,
 } from '../guidance/types'
-import type { MetricResult } from '../heuristics/types'
 import { EvidenceFrame } from './EvidenceFrame'
 import { provenanceFor } from './evidenceCaptions'
 import { guidedHeadlineParts } from './formatGuidedValue'
@@ -16,6 +15,7 @@ import {
   cardReferences,
   citationParts,
   guidedEntryId,
+  joinList,
   noBandReasonFor,
   noteLead,
   splitFirstSentence,
@@ -27,9 +27,8 @@ import type {
   LinkReference,
 } from './guidedGroups'
 import {
-  HIGH_CONFIDENCE_THRESHOLD,
-  LOW_CONFIDENCE_THRESHOLD,
   METRIC_LABELS,
+  confidenceLabel,
   metricTier,
 } from './metricConfidence'
 import { METRIC_DESCRIPTIONS } from './metricDescriptions'
@@ -97,25 +96,6 @@ const LINK_KIND_LABELS: Record<GuidanceLinkKind, string> = {
   'book-chapter': 'Book chapter',
 }
 
-/**
- * ⚠️ A copy of `MetricsPanel.tsx`'s private `confidenceLabel`, same thresholds (single-sourced in
- * `metricConfidence.ts`) and same words. Only ever called for a `'caveated'` card here.
- */
-function confidenceLabel(metric: MetricResult): string {
-  if (metric.confidence >= HIGH_CONFIDENCE_THRESHOLD) return 'High confidence'
-  if (metric.confidence >= LOW_CONFIDENCE_THRESHOLD) return 'Medium confidence'
-  return 'Low confidence'
-}
-
-/** The card's confidence line, shown only for a `'caveated'` metric. Reused by the guided headline. */
-export function ConfidenceLabel({ metric }: { metric: MetricResult }) {
-  return (
-    <p className="guided-results__confidence font-sans text-sm">
-      <strong>{confidenceLabel(metric)}</strong>
-    </p>
-  )
-}
-
 /** `860` reads as `n = 860`; anything that is not a bare count ("Not published") renders as stored. */
 function formatSampleSize(sampleSize: string): string {
   return /^\d[\d,]*$/.test(sampleSize.trim())
@@ -125,12 +105,6 @@ function formatSampleSize(sampleSize: string): string {
 
 function plural(count: number, singular: string): string {
   return `${count} ${count === 1 ? singular : `${singular}s`}`
-}
-
-/** `a, b and c` — for the disclosure summary, which names what is inside it. */
-function joinList(parts: string[]): string {
-  if (parts.length <= 1) return parts.join('')
-  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
 }
 
 export function ExternalLink({ url, children }: { url: string; children: string }) {
@@ -246,7 +220,7 @@ function SourceFields({
  * source URL is an anchor. The fields come from `citationParts`, so the line a test reads through
  * `citationText` and the line rendered here cannot disagree.
  */
-export function CitationLine({ band }: { band: ReferenceBand }) {
+function CitationLine({ band }: { band: ReferenceBand }) {
   const [shortTitle, ...rest] = citationParts(
     band.source,
     band.derivation !== null,
@@ -532,7 +506,11 @@ export function GuidedMetricCard({
           )}
         </p>
         {sourceLabel && <p className="font-sans text-xs font-semibold text-neutral-600 dark:text-neutral-400">Measured from {sourceLabel}</p>}
-        {tier === 'caveated' && <ConfidenceLabel metric={metric} />}
+        {tier === 'caveated' && (
+          <p className="guided-results__confidence font-sans text-sm">
+            <strong>{confidenceLabel(metric)}</strong>
+          </p>
+        )}
         {/*
           On EVERY card, banded or not. This change originally dropped it from a banded one, on the
           reasoning that a scale, a headline naming the zone and a citation line have already said
