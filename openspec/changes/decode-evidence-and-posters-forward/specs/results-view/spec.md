@@ -189,11 +189,15 @@ the container — a forward `VideoDecoder` pass over the clip's demuxed track, w
 it needs once rather than re-decoding from the preceding keyframe on every seek. The two sources
 SHALL be interchangeable to the pixel: a forward-decoded image SHALL be drawn from the frame a seek of
 the detached element to the same target would present, through the identical crop, scale, blend and
-annotation. Wherever that frame cannot be stated with certainty — an edit list that is not a single
-plain shift, a target within two microseconds of a frame's end or at or past the presented end, a
-decoded frame whose size is not the track's, or a decoder that errors or stalls — extraction SHALL
-fall back to the detached element for every image the forward pass had not finished, and SHALL keep
-the metrics it had finished.
+annotation, and its decoder SHALL be given the colour space the container declares. Wherever that
+frame cannot be stated with certainty — an edit list that is not a single plain shift or that leaves
+any frame presenting before zero, a target within two microseconds of a frame's end or at or past
+the presented end, a container colour declaration that cannot be passed to the decoder verbatim, a
+decoded frame whose size is not the track's, or a decoder that errors or stalls before delivering
+every frame it was asked for — extraction SHALL fall back to the detached element for every image
+the forward pass had not finished, and SHALL keep the metrics it had finished. Forward decoding
+SHALL have its own switch, independent of which sampler produced the analysis, and switching it off
+SHALL restore detached-element extraction for every clip.
 
 It SHALL hold at most one decoder open at a time, of either kind, extracting every instant for one
 clip before moving to the next. A detached element SHALL own and release the object URL it creates,

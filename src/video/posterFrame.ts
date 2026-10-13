@@ -6,7 +6,6 @@ import {
   withDecodedVideo,
 } from './videoElement'
 import type { VideoMetadata } from './types'
-import { decodeFramesForward, frameShownAt, openDecodedFrameSource } from './decodedFrames'
 import { logPerfTimings, roundMs } from '../results/perfTimings'
 
 /**
@@ -245,87 +244,26 @@ async function decodePosterFrame(
   requestedAt: number,
 ): Promise<ClipPoster | null> {
   const startedAt = performance.now()
-  // Forward decoding first, where the clip allows it (`strides-6i6.4`); `undefined` hands the clip
-  // to the `<video>` seek below, which stays the answer for everything it declines.
-  const forward = await decodePosterFrameForward(sourceBlob, metadata, options)
-  const forwardDoneAt = performance.now()
   let decodedAt: number | null = null
-  const poster =
-    forward !== undefined
-      ? forward
-      : await withDecodedVideo(
-          sourceBlob,
-          options.loadTimeoutMs ?? LOAD_TIMEOUT_MS,
-          (video) => {
-            decodedAt = performance.now()
-            return drawPosterFrame(video, metadata, options)
-          },
-          () => null,
-        )
+  const poster = await withDecodedVideo(
+    sourceBlob,
+    options.loadTimeoutMs ?? LOAD_TIMEOUT_MS,
+    (video) => {
+      decodedAt = performance.now()
+      return drawPosterFrame(video, metadata, options)
+    },
+    () => null,
+  )
   const doneAt = performance.now()
   if (import.meta.env.DEV) logPerfTimings('poster', {
     bytes: sourceBlob.size,
     queueWaitMs: roundMs(startedAt - requestedAt),
-    frameSource: forward !== undefined ? 'decode' : 'seek',
-    decodeMs: roundMs(forwardDoneAt - startedAt),
-    videoLoadMs: decodedAt === null ? null : roundMs(decodedAt - forwardDoneAt),
+    videoLoadMs: decodedAt === null ? null : roundMs(decodedAt - startedAt),
     seekAndDrawMs: decodedAt === null ? null : roundMs(doneAt - decodedAt),
     derived: poster !== null,
     totalMs: roundMs(doneAt - startedAt),
   })
   return poster
-}
-
-/**
- * The poster frame out of one forward `VideoDecoder` pass instead of a `<video>` load and seek
- * (`decodedFrames.ts`). The SAME frame — the one a seek to `choosePosterTimestamps`' midpoint shows,
- * per `frameShownAt` — drawn by the SAME whole-frame `drawImage` into the same-sized canvas.
- *
- * `undefined` wherever it declines, which sends the clip to the seek path: no usable duration (the
- * seek path's two-candidate fallback is not modelled here), a clip `openDecodedFrameSource` will
- * not open, a target it will not map, a decoded frame whose size is not the element's own, or a
- * decode that does not deliver. `null` only for the failures the seek path would also answer
- * `null` for before decoding anything — an undecidable size, or no 2D context.
- */
-async function decodePosterFrameForward(
-  sourceBlob: Blob,
-  metadata: VideoMetadata,
-  options: PosterDerivationOptions,
-): Promise<ClipPoster | null | undefined> {
-  const size = computePosterSize(metadata, options.maxSidePx ?? POSTER_MAX_SIDE_PX)
-  if (size === null) return null
-  const duration = metadata.durationSec
-  if (duration == null || !Number.isFinite(duration) || duration <= 0) return undefined
-  const [timestamp] = choosePosterTimestamps(duration)
-  // `seekTo` does not seek at all within a millisecond of where a fresh element already sits; that
-  // short-circuit is the seek path's to keep.
-  if (timestamp < 0.001) return undefined
-
-  const source = await openDecodedFrameSource(sourceBlob)
-  if (source === null) return undefined
-  const key = frameShownAt(source.timeline, timestamp)
-  if (key === null) return undefined
-
-  const canvas = document.createElement('canvas')
-  canvas.width = size.width
-  canvas.height = size.height
-  const ctx = canvas.getContext('2d')
-  if (ctx === null) return null
-  const outcome = await decodeFramesForward(
-    source.track,
-    new Set([key]),
-    (frame) => {
-      // `computePosterSize` sized the canvas from the element's own intrinsic size, and the seek
-      // path scales the element's frame into it; any other source size would scale differently.
-      if (frame.displayWidth !== metadata.width || frame.displayHeight !== metadata.height) {
-        throw new Error('decoded frame size differs from the clip')
-      }
-      ctx.drawImage(frame, 0, 0, size.width, size.height)
-    },
-    { stallTimeoutMs: options.loadTimeoutMs ?? LOAD_TIMEOUT_MS },
-  )
-  if (outcome !== 'completed') return undefined
-  return { canvas, width: size.width, height: size.height, timestamp }
 }
 
 /**

@@ -3,6 +3,7 @@ import type { DemuxedTrack } from './mp4Demux'
 import { borrowClipDemux, probeClipContainerTiming } from './clipBytesCache'
 import { canUseSequentialDecode } from './webCodecsSupport'
 import { resolveSamplingRobustnessConfig } from '../results/samplingRobustnessConfig'
+import { resolveForwardDecodeConfig } from './forwardDecodeConfig'
 
 /**
  * Still frames out of a clip through ONE forward `VideoDecoder` pass, as a replacement for seeking
@@ -109,7 +110,12 @@ export interface PresentationTimeline {
   endSec: number
 }
 
-/** PURE. Builds the timeline `frameShownAt` reads. `null` for a track with no frames. */
+/**
+ * PURE. Builds the timeline `frameShownAt` reads. `null` for a track with no frames, and for one
+ * where the shift leaves any frame starting before zero: an edit list that trims pre-roll, whose
+ * trimmed frames the element never presents and whose effect on the frames around zero is not
+ * something this model has measured.
+ */
 export function presentationTimeline(
   track: Pick<DemuxedTrack, 'samples'>,
   shiftSeconds: number,
@@ -130,6 +136,7 @@ export function presentationTimeline(
       }
     })
     .sort((a, b) => a.startUs - b.startUs)
+  if (frames[0].startUs < 0) return null
   return {
     startsUs: frames.map((frame) => frame.startUs),
     endsUs: frames.map((frame) => frame.endUs),
@@ -232,9 +239,15 @@ export function decodeRange(
  * discipline as `sequentialFrameSource.ts`.
  *
  * `onFrame` must not keep the frame: it is closed as soon as `onFrame` returns. A throw from it
- * ends the pass as `'failed'`.
+ * ends the pass, and that frame does not count as delivered.
  *
- * Resolves `'completed'` only when EVERY wanted frame was delivered. Never rejects.
+ * The decoder is configured with the container's own colour declaration where it makes one
+ * (`DemuxedTrack.colorSpace`), so it paints what the `<video>` element paints; a declaration that
+ * cannot be passed verbatim fails the pass before a decoder is opened.
+ *
+ * Resolves `'completed'` exactly when EVERY wanted frame was delivered and the pass was not
+ * aborted — including when the decoder errors, stalls or rejects its flush AFTER the last of them:
+ * by then nothing it owed is missing. Never rejects.
  */
 export async function decodeFramesForward(
   track: DemuxedTrack,
@@ -246,6 +259,8 @@ export async function decodeFramesForward(
   if (options.signal?.aborted) return 'aborted'
   const range = decodeRange(track, wantedUs)
   if (range === null) return 'failed'
+  if (track.colorSpace?.kind === 'unsupported') return 'failed'
+  const colorSpace = track.colorSpace?.kind === 'nclx' ? track.colorSpace.init : undefined
 
   const delivered = new Set<number>()
   let outcome: DecodePassOutcome | null = null
@@ -278,8 +293,8 @@ export async function decodeFramesForward(
           }
           const key = frame.timestamp
           if (!wantedUs.has(key) || delivered.has(key)) return
-          delivered.add(key)
           onFrame(frame, key)
+          delivered.add(key)
         } catch {
           outcome = 'failed'
         } finally {
@@ -297,10 +312,12 @@ export async function decodeFramesForward(
       codedWidth: track.width,
       codedHeight: track.height,
       ...(track.description ? { description: track.description } : {}),
+      ...(colorSpace ? { colorSpace } : {}),
     })
   } catch {
     return 'failed'
   }
+  const allDelivered = () => delivered.size === wantedUs.size
 
   const onAbort = () => {
     if (outcome === null) outcome = 'aborted'
@@ -346,7 +363,7 @@ export async function decodeFramesForward(
         flushed,
         new Promise<void>((resolve) => {
           const poll = () => {
-            if (outcome !== null) resolve()
+            if (outcome !== null || allDelivered()) resolve()
             else wake = poll
           }
           poll()
@@ -362,8 +379,8 @@ export async function decodeFramesForward(
     if (!isClosed()) decoder.close()
   }
 
-  if (outcome !== null) return outcome
-  return delivered.size === wantedUs.size ? 'completed' : 'failed'
+  if ((outcome as DecodePassOutcome | null) === 'aborted') return 'aborted'
+  return allDelivered() ? 'completed' : 'failed'
 }
 
 /** Everything a consumer needs to turn `currentTime` targets into delivered frames for one clip. */
@@ -377,19 +394,25 @@ export interface DecodedFrameSource {
  * gate is one the analysis run already answered for this blob, or a fact this module will not
  * guess at:
  *
+ * - forward decoding is switched off (`forwardDecodeConfig.ts`, its own switch);
  * - the sequential sampling plane is switched off — then no analysis pass ever asked
  *   `canUseSequentialDecode`, and asking it here would demux the clip into a cache entry no pass
- *   would ever release;
+ *   would ever release. A guard on that cache's lifetime, not a second switch for this feature;
  * - `canUseSequentialDecode` says no — a WebM, a rotated phone capture (`VideoDecoder` paints coded
  *   frames unrotated where `<video>` applies the matrix), an unsupported codec, an oversized blob;
+ * - the sample entry declares a colour space this module cannot hand the decoder verbatim
+ *   (`ContainerColorSpace` `'unsupported'`) — the element honours the declaration, and a guess at
+ *   it would paint different colours;
  * - the container does not parse, or its edit list is not one plain shift
- *   (`presentationShiftSeconds`), or it states no presentation end.
+ *   (`presentationShiftSeconds`), or it states no presentation end, or the shift leaves any frame
+ *   presenting before zero (an edit that trims pre-roll, which the element never presents).
  *
  * Never rejects: every failure is a `null`.
  */
 export async function openDecodedFrameSource(blob: Blob): Promise<DecodedFrameSource | null> {
   try {
     if (typeof VideoDecoder === 'undefined') return null
+    if (!resolveForwardDecodeConfig().enabled) return null
     if (!resolveSamplingRobustnessConfig().sequentialSampling.enabled) return null
     if (!(await canUseSequentialDecode(blob))) return null
     const probe = await probeClipContainerTiming(blob)
@@ -399,6 +422,7 @@ export async function openDecodedFrameSource(blob: Blob): Promise<DecodedFrameSo
     const shift = presentationShiftSeconds(timing)
     if (shift === null) return null
     const track = await borrowClipDemux(blob)
+    if (track.colorSpace?.kind === 'unsupported') return null
     const end = presentationEndSeconds(timing, track, shift)
     if (end === null) return null
     const timeline = presentationTimeline(track, shift, end)

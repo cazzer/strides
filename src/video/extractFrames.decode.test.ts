@@ -335,6 +335,39 @@ describe('extracting evidence from decoded frames (strides-6i6.4)', () => {
     }
   })
 
+  it('keeps a pass that drew every image even when the decoder fails afterwards, and seeks nothing', async () => {
+    const passes: number[][] = []
+    decodeMock.mockImplementation(
+      async (
+        track: DemuxedTrack,
+        wanted: ReadonlySet<number>,
+        onFrame: (frame: VideoFrame, key: number) => void,
+      ): Promise<DecodePassOutcome> => {
+        passes.push([...wanted])
+        for (const sample of track.samples) {
+          const key = sampleTimestampUs(sample.ptsSec)
+          if (wanted.has(key)) {
+            onFrame({ key, displayWidth: 1920, displayHeight: 1080 } as unknown as VideoFrame, key)
+          }
+        }
+        return 'failed'
+      },
+    )
+    recordAllDraws()
+    const { seeked, restore } = makeAllVideosSeekable()
+    try {
+      const evidence = await extractClipEvidence(
+        { sourceBlob: new Blob(['x']), plan: planWith({ footStrikePattern: [single(0.75)] }) },
+        { presentationTimeoutMs: 1 },
+      )
+      expect(passes).toHaveLength(1)
+      expect(seeked).toEqual([])
+      expect(evidence.footStrikePattern.status).toBe('extracted')
+    } finally {
+      restore()
+    }
+  })
+
   it('refuses a decoded frame of a different size, and seeks instead', async () => {
     const passes: number[][] = []
     deliverAll(passes, { width: 1920, height: 1088 })

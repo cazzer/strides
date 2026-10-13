@@ -177,7 +177,9 @@ class FakeVideoDecoder extends EventTarget {
     FakeVideoDecoder.instances.push(this)
   }
 
-  configure(): void {
+  config: VideoDecoderConfig | null = null
+  configure(config: VideoDecoderConfig): void {
+    this.config = config
     this.state = 'configured'
   }
 
@@ -323,6 +325,68 @@ describe('decodeFramesForward', () => {
     vi.stubGlobal('VideoDecoder', StalledDecoder)
     const outcome = await decodeFramesForward(TRACK, new Set([keyOf(3)]), vi.fn(), {
       stallTimeoutMs: 20,
+    })
+    expect(outcome).toBe('failed')
+  })
+
+  it("hands the decoder the container's own colour declaration, and nothing when there is none", async () => {
+    stubWebCodecs()
+    const init = { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false } as const
+    await decodeFramesForward(
+      { ...TRACK, colorSpace: { kind: 'nclx', init } },
+      new Set([keyOf(0)]),
+      vi.fn(),
+      { stallTimeoutMs: 1000 },
+    )
+    expect(FakeVideoDecoder.instances[0].config?.colorSpace).toEqual(init)
+    await decodeFramesForward(TRACK, new Set([keyOf(0)]), vi.fn(), { stallTimeoutMs: 1000 })
+    expect(FakeVideoDecoder.instances[1].config?.colorSpace).toBeUndefined()
+  })
+
+  it('fails, opening no decoder, on a colour declaration it cannot pass verbatim', async () => {
+    stubWebCodecs()
+    const outcome = await decodeFramesForward(
+      { ...TRACK, colorSpace: { kind: 'unsupported' } },
+      new Set([keyOf(0)]),
+      vi.fn(),
+      { stallTimeoutMs: 1000 },
+    )
+    expect(outcome).toBe('failed')
+    expect(FakeVideoDecoder.instances).toHaveLength(0)
+  })
+
+  it('completes when the flush rejects after every wanted frame was delivered', async () => {
+    stubWebCodecs()
+    class RejectingFlush extends FakeVideoDecoder {
+      override flush(): Promise<void> {
+        return new Promise((_, reject) => setTimeout(() => reject(new Error('flush failed')), 0))
+      }
+    }
+    vi.stubGlobal('VideoDecoder', RejectingFlush)
+    // Frame 3 is fed last and delivered on a microtask, before the flush could settle.
+    const outcome = await decodeFramesForward(TRACK, new Set([keyOf(3)]), vi.fn(), {
+      stallTimeoutMs: 1000,
+    })
+    expect(outcome).toBe('completed')
+  })
+
+  it('fails when the flush rejects with a wanted frame still missing', async () => {
+    stubWebCodecs()
+    class LosesLastFrame extends FakeVideoDecoder {
+      override decode(chunk: EncodedVideoChunk): void {
+        if (chunk.timestamp === keyOf(3)) {
+          this.fed.push(chunk.timestamp)
+          return
+        }
+        super.decode(chunk)
+      }
+      override flush(): Promise<void> {
+        return Promise.reject(new Error('flush failed'))
+      }
+    }
+    vi.stubGlobal('VideoDecoder', LosesLastFrame)
+    const outcome = await decodeFramesForward(TRACK, new Set([keyOf(3)]), vi.fn(), {
+      stallTimeoutMs: 1000,
     })
     expect(outcome).toBe('failed')
   })

@@ -792,6 +792,10 @@ async function extractByDecoding(
     if (outcome === 'aborted' || resolved.signal?.aborted) {
       return { kind: 'done', evidence: extractionFailed(plan, reuse) }
     }
+    // A pass that drew every image still pending is done whatever the decoder did afterwards —
+    // `decodeFramesForward` already reports that case as `'completed'`; this is the same rule held
+    // at the level that owns the images, so no finished image is ever redrawn by the seek path.
+    if (inFlight.every((image) => image.state !== 'pending')) break
     if (outcome === 'failed' || !progressed) {
       return { kind: 'unavailable', completed: run.completed() }
     }
@@ -840,6 +844,27 @@ function countExtractedImages(
 }
 
 /**
+ * Opens the clip for forward decoding and runs the plan through it, or `null` where the clip is
+ * not one forward decoding takes. A function of its own so the `DecodedFrameSource` — which may hold
+ * a private demux of the whole compressed clip (`borrowClipDemux`) — is unreachable the moment it
+ * returns, before any fallback opens a 4K `<video>` beside it.
+ */
+async function attemptDecoding(
+  sourceBlob: Blob,
+  plan: ClipEvidencePlan,
+  options: EvidenceExtractionOptions,
+  hooks: ClipExtractionHooks,
+  stats: ExtractionStats,
+  timings: { sourceOpenedAt: number; tried: boolean },
+): Promise<DecodeAttempt | null> {
+  const source = await openDecodedFrameSource(sourceBlob)
+  timings.sourceOpenedAt = performance.now()
+  timings.tried = source !== null
+  if (source === null || options.signal?.aborted) return null
+  return extractByDecoding(source, plan, options, hooks, stats)
+}
+
+/**
  * One clip, one detached decoder, torn down before returning. The element, its object URL and the
  * teardown are `withDecodedVideo`'s (`videoElement.ts`) — identical plumbing to the poster path's,
  * because it is literally the same code rather than a second copy of it. A clip whose element never
@@ -885,17 +910,15 @@ async function decodeClipEvidence(
   let evidence: ClipEvidence | null = null
   let seekHooks = hooks
   let frameSource: 'decode' | 'seek' = 'seek'
-  const decodeSource = await openDecodedFrameSource(sourceBlob)
-  const sourceOpenedAt = performance.now()
-  if (decodeSource !== null && !options.signal?.aborted) {
-    const attempt = await extractByDecoding(decodeSource, plan, calibrated, hooks, stats)
-    if (attempt.kind === 'done') {
-      evidence = attempt.evidence
-      frameSource = 'decode'
-    } else {
-      seekHooks = { ...hooks, reuse: attempt.completed }
-    }
+  const decodeTimings = { sourceOpenedAt: 0, tried: false }
+  const attempt = await attemptDecoding(sourceBlob, plan, calibrated, hooks, stats, decodeTimings)
+  if (attempt?.kind === 'done') {
+    evidence = attempt.evidence
+    frameSource = 'decode'
+  } else if (attempt?.kind === 'unavailable') {
+    seekHooks = { ...hooks, reuse: attempt.completed }
   }
+  const { sourceOpenedAt, tried: triedDecode } = decodeTimings
   const decodeDoneAt = performance.now()
 
   let decodedAt: number | null = null
@@ -918,7 +941,7 @@ async function decodeClipEvidence(
     calibrationMs: roundMs(calibratedAt - startedAt),
     frameSource,
     decodeSourceMs: roundMs(sourceOpenedAt - calibratedAt),
-    decodeMs: decodeSource === null ? null : roundMs(decodeDoneAt - sourceOpenedAt),
+    decodeMs: !triedDecode ? null : roundMs(decodeDoneAt - sourceOpenedAt),
     decodePasses: stats.decodePasses,
     videoLoadMs: decodedAt === null ? null : roundMs(decodedAt - decodeDoneAt),
     seekAndDrawMs: decodedAt === null ? null : roundMs(doneAt - decodedAt),

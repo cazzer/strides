@@ -36,8 +36,8 @@ model ("interval holds the target") was tried first and disagreed with Chromium 
 `park-side-portrait.mp4`: that clip's ten 1536-tick samples sit on frames whose presentation
 neighbours are 512 ticks apart, so each covers the two frames after it. The end-based model agreed on
 every frame of every gate clip (measurement below). Anything not stated with certainty — a non-trivial
-edit list, a target within 2 µs of a deciding frame end (truncation plus either rounding of the end), a target at/past the presented end — is
-`null`, and the clip seeks as before.
+edit list, a target within 2 µs of a deciding frame end (truncation plus either rounding of the
+end), a target at/past the presented end — is `null`, and the clip seeks as before.
 
 Note this means the seek path ALREADY draws the long frame for instants that name frames 79/80,
 161/162, 194/195, 329/330, 342/343 on that clip. That is pre-existing and is reproduced, not fixed:
@@ -46,22 +46,62 @@ fixing it would move evidence images, which this change must not do.
 ### D3. Fallback keeps what it finished
 
 A forward pass that errors, stalls (`loadTimeoutMs` without decoder progress), or meets a frame of
-the wrong size hands the clip to the seek path with every metric it already completed passed as
-`reuse` — already reported through `onMetricExtracted`, so never redrawn or re-reported. Abort
-semantics are the seek path's: all `'extraction-failed'`, nothing reported after the abort.
+the wrong size BEFORE delivering every wanted frame hands the clip to the seek path with every metric
+it already completed passed as `reuse` — already reported through `onMetricExtracted`, so never
+redrawn or re-reported. A pass that delivered every wanted frame is `'completed'` whatever the
+decoder does afterwards (a rejected `flush()` included, review round 1): nothing it owed is missing,
+and `extractByDecoding` holds the same rule at the image level. Abort semantics are the seek path's:
+all `'extraction-failed'`, nothing reported after the abort. The `DecodedFrameSource` (which can hold
+a private demux of the whole compressed clip) is dropped before any fallback `<video>` opens.
 
 ### D4. Demux: borrow, don't re-cache
 
 `borrowClipDemux` returns the cached track when a sampling pass still holds it, else a private
 read+demux that is NOT cached — re-caching would resurrect an entry `releaseClipDemux` dropped and
-nothing would drop it again. Gated on `sequentialSampling.enabled` so a session with the plane off
-never asks `canUseSequentialDecode` (which caches a demux no pass would release).
+nothing would drop it again. Also gated on `sequentialSampling.enabled` so a session with the
+plane off never asks `canUseSequentialDecode` (which caches a demux no pass would release) — a guard
+on that cache's lifetime, not this feature's switch (D6).
 
 ### D5. One decoder at a time, both kinds
 
-Both consumers try the forward pass and fall back INSIDE the same `queueDetachedDecode` turn, so a
+Evidence tries the forward pass and falls back INSIDE the same `queueDetachedDecode` turn, so a
 `VideoDecoder` and a detached `<video>` are never open together, and the one-transient-decoder
 ceiling now counts both kinds (video-input delta).
+
+### D6. Its own switch (review round 1)
+
+`forwardDecodeConfig.ts`, default on, dev override `window.__STRIDES_FORWARD_DECODE_CONFIG_OVERRIDE__ =
+{ enabled: false }`. Independent of `sequentialSampling.enabled`: one decides which sampler produced
+the analysis inputs, the other where evidence pixels come from, and an A/B of either has to be able
+to hold the other still. Off restores detached-`<video>` extraction for every clip.
+
+### D7. The container's colour declaration goes to the decoder (review round 1)
+
+`mp4Demux.ts` now reads the sample entry's `colr` box into `DemuxedTrack.colorSpace` and the forward
+decoder is configured with it, so a container that declares something its bitstream does not cannot
+make the two sources paint different colours. An `nclx` box maps code-for-code onto WebCodecs names;
+anything else — `nclc`, an ICC profile, an `nclx` code WebCodecs cannot name — refuses forward
+decoding rather than guessing. No `colr` box → nothing passed, the decoder reads the bitstream, which
+is what the element does. Every gate clip carries `nclx` that matches its VUI (nine
+`9/18/9` BT.2020/HLG, `park-side-portrait.mp4` `1/1/1` BT.709). The sequential SAMPLER is not given
+the colour space: that would change analysis inputs, which this change must not touch. No per-clip
+pixel self-check is added; identity is established by the measurement below.
+
+### D8. A shift that trims pre-roll refuses (review round 1)
+
+If the edit list's shift leaves any frame presenting before zero, the edit is trimming pre-roll the
+element never shows, and nothing here has measured how the element treats the frames around zero —
+`presentationTimeline` returns `null`. No gate clip does this (each `media_time` equals the first
+composition time, strides-09b).
+
+### D9. Posters are left on the seek path (review round 1)
+
+A forward-decoded poster was built, measured pixel-identical (11 / 11) and then withdrawn: on
+desktop a midpoint poster decodes the same keyframe→midpoint span either way, so it bought nothing
+(table below), and on clips with an even frame count the midpoint sits on a frame boundary, the
+model refuses, and the refusal's cost made IMG_9116's poster slower (160 → 241 ms). Revisit after the
+S21 run, where the `<video>` load and the media pipeline's contention with analysis are the open
+question.
 
 ## Pre-registered gate (written before the branch gate was run)
 

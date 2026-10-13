@@ -9,15 +9,18 @@ analysis run competes for the same decoder (`strides-6i6.4`).
 
 ## What Changes
 
-- Evidence images and clip posters are drawn from `VideoFrame`s out of ONE forward `VideoDecoder`
-  pass over the clip's (already cached, or borrowed) demuxed track, wherever the clip is one the
-  WebCodecs sampling path can decode.
+- Evidence images are drawn from `VideoFrame`s out of ONE forward `VideoDecoder` pass over the
+  clip's (already cached, or borrowed) demuxed track, wherever the clip is one the WebCodecs sampling
+  path can decode, the container's colour declaration can be handed to the decoder verbatim, and
+  forward decoding's own switch (`__STRIDES_FORWARD_DECODE_CONFIG_OVERRIDE__`) is on.
+- Posters are NOT changed (review round 1): no measured desktop benefit, and the seek fallback made
+  IMG_9116's slower. To be revisited after the S21 run.
 - Which frame is drawn does not change: each seek target is mapped to the frame a paused `<video>`
   presents there, modelled from the container and measured against Chromium on every frame of all
   ten gate clips. Wherever the mapping is uncertain, the clip falls back to the detached `<video>`.
 - Which pixels are drawn does not change: the same `drawImage` crop/scale/blend/annotation, from the
   decoded frame instead of the element — measured pixel-identical in-browser on every evidence image
-  and poster of the gate corpus.
+  of the gate corpus.
 - No metric, sampling, person-selection, view or evidence-coverage value moves.
 
 ## Capabilities
@@ -30,5 +33,6 @@ analysis run competes for the same decoder (`strides-6i6.4`).
 
 ## Impact
 
-`src/video/decodedFrames.ts` (new), `extractFrames.ts`, `posterFrame.ts`, `clipBytesCache.ts`
-(`borrowClipDemux`). No change to `src/pose/`, sampling, or any assessment input.
+`src/video/decodedFrames.ts` and `forwardDecodeConfig.ts` (new), `extractFrames.ts`,
+`clipBytesCache.ts` (`borrowClipDemux`), `mp4Demux.ts` (reads the sample entry's `colr` box for this
+consumer only — the sampler does not use it). No change to `src/pose/`, sampling, or any assessment input.
