@@ -115,6 +115,31 @@ practice every clip is created with a pending load, so `'empty'` is momentary.
 3. **The two reproduction arms** (slow probe, slow load) must run P1 P2 P3 S1 S2 S3 on the branch,
    with clip 2 sampled sequentially. Their values are compared with the plain arm, not hidden.
 
+## Results
+
+1. **Single-clip gate: identical.** Base `054c86b` against `6830a63`, 10 clips × 2 trials,
+   `--evidence`, each with its own identity-verified dev server (ports 5354 and 5280). With
+   `elapsedMs` and the header lines stripped, 2178 lines each; `diff` differs only in six table
+   dividers whose width follows the `elapsedMs` string. With those removed both md5s are
+   `1dbe12081dfbec48da347d8c4347d666`.
+2. **Three-clip sessions: identical values.** Every clip's `[analysis-diagnostics]` and scale-pass
+   line, the last `[evidence-coverage]` line, and the results panel text, compared field by field
+   against one base plain run: 0 differences across base plain ×3, base CPU ×6 ×3, branch plain ×2
+   and branch CPU ×6 ×2. All of them ran P1 P2 P3 S1 S2 S3.
+3. **Reproduction arms on the branch:**
+
+   | arm | base order | branch order | branch values vs plain |
+   |---|---|---|---|
+   | slow probe (5 s) | P1 S1 P2 S2 P3 S3, clip 2 playback 338 | **P1 P2 P3 S1 S2 S3**, clip 2 sequential 345 | 0 differences |
+   | slow load (8 s) | P1 S1 P2 P3 S2 S3 | **P1 P2 P3 S1 S2 S3** | 0 differences |
+
+   On base the slow-probe arm differs from plain in 266 fields — clip 2's sampling, person
+   selection, view and metrics, its scale pass, 11 fields of clip 3's scale pass, and the evidence
+   line — and in the fused panel: vertical oscillation reads **15.4 %** of torso length from clip 1
+   instead of **17.1 %** from clip 2. That is the phone defect's user-visible cost, not noise. The
+   base slow-load arm, which changed only the order, has 0 differences: in these runs the order
+   alone moved no value.
+
 ## Risks / Trade-offs
 
 - **A video that never loads and never errors** now holds the earlier clips' passes as well as the

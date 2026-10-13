@@ -27,6 +27,6 @@
 
 ## 4. Verify
 
-- [ ] 4.1 Single-clip gate, base against branch, identical outside `elapsedMs`
-- [ ] 4.2 Three-clip sessions, plain and CPU ×6, base against branch
-- [ ] 4.3 Slow-probe and slow-load arms on the branch run P1 P2 P3 S1 S2 S3
+- [x] 4.1 Single-clip gate, base against branch, identical outside `elapsedMs`
+- [x] 4.2 Three-clip sessions, plain and CPU ×6, base against branch
+- [x] 4.3 Slow-probe and slow-load arms on the branch run P1 P2 P3 S1 S2 S3
