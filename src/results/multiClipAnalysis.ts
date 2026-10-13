@@ -193,6 +193,16 @@ function primaryMaySampleOnPlaybackPath(clip: ClipSession): boolean {
   return clip.analysis.primarySamplingPath !== 'sequential'
 }
 
+/** Whether this clip's sampling path is still to be decided, with an answer on its way: its video
+ * is loading, or loaded and its probe has not answered. The probe starts when the video's metadata
+ * arrives and is bounded by its own timeout (`useVideoAnalysis`), so this cannot stay true for long
+ * unless the video never finishes loading. An 'empty' source has no load in progress, so no answer
+ * is coming. */
+function samplingPathPending(clip: ClipSession): boolean {
+  if (clip.analysis.primarySamplingPath != null) return false
+  return clip.videoSource.status === 'loading' || clip.videoSource.status === 'ready'
+}
+
 /** Whether this clip still has a scale pass to run or running. */
 function hasScalePassAhead(clip: ClipSession): boolean {
   return (
@@ -275,11 +285,17 @@ export function scalePassLeaseIndex(
  *      detector until its pass is terminal (`isDoneWithSharedDetector`), so every later primary
  *      waits for it, and withholding its lane would deadlock the session;
  *   4. nothing, while the NEXT primary to run — the first idle clip at or after the active index
- *      whose source has not failed — samples on the sequential path: sequential primaries all run
- *      before any scale pass. A next primary that may sample on the playback path does not block:
- *      it is itself waiting for the earlier passes to drain (`nextActiveClipIndex`), so blocking
- *      here would deadlock. An idle clip BEFORE the active index (reset after an error) can never
- *      be handed the detector again, so it is never the next primary;
+ *      whose source has not failed — samples on the sequential path, or has not been probed yet
+ *      while its video loads or its probe runs: sequential primaries all run before any scale
+ *      pass, and an unprobed clip is most likely an MP4 that will turn out sequential. Only a next
+ *      primary KNOWN to sample on the playback path does not block: it is itself waiting for the
+ *      earlier passes to drain (`nextActiveClipIndex`), so blocking here would deadlock. The wait
+ *      for an unprobed clip cannot deadlock, because its answer needs nothing from either lane —
+ *      only its own video to load and its probe, which has a timeout, to settle (strides-6i6.5:
+ *      on a slow phone, the lane used to go to clip 1's pass while clip 2 was still loading or
+ *      probing, delaying the fused result by the whole pass). An idle clip BEFORE the active index
+ *      (reset after an error) can never be handed the detector again, so it is never the next
+ *      primary;
  *   5. otherwise the lowest-index clip that is 'ready' with its pass 'pending'.
  */
 export function nextScalePassClipIndex(
@@ -296,7 +312,12 @@ export function nextScalePassClipIndex(
   const playback = clips.findIndex((c) => isWaitingForScalePass(c) && sampledOnPlaybackPath(c))
   if (playback !== -1) return playback
   const nextPrimary = clips.find((c, index) => index >= activeClipIndex && isPrimaryToCome(c))
-  if (nextPrimary !== undefined && !primaryMaySampleOnPlaybackPath(nextPrimary)) return null
+  if (
+    nextPrimary !== undefined &&
+    (!primaryMaySampleOnPlaybackPath(nextPrimary) || samplingPathPending(nextPrimary))
+  ) {
+    return null
+  }
   const next = clips.findIndex(isWaitingForScalePass)
   return next === -1 ? null : next
 }

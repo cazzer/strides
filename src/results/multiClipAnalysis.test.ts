@@ -671,10 +671,13 @@ describe('a playback-path primary waits for earlier passes (design.md D9)', () =
     expect(nextActiveClipIndex(clips, 0)).toBe(1)
   })
 
-  it('treats a clip whose probe has not answered as playback', () => {
+  it('does not hand the detector to a clip whose probe has not answered, and holds the lane for that answer too', () => {
+    // Not advanced into: it may yet sample on the playback path. But the lane waits as well — it
+    // may equally turn out sequential, and then its primary must run before any pass
+    // (strides-6i6.5).
     const clips = [pending('a'), idle('b', null)]
     expect(nextActiveClipIndex(clips, 0)).toBe(0)
-    expect(nextScalePassClipIndex(clips, 0)).toBe(0)
+    expect(nextScalePassClipIndex(clips, 0)).toBeNull()
   })
 
   it('does not hold back a sequential primary, which still runs before any pass', () => {
@@ -699,5 +702,125 @@ describe('a playback-path primary waits for earlier passes (design.md D9)', () =
     failedLoad.videoSource = { ...failedLoad.videoSource, status: 'error' }
     const clips = [makePrimaryDoneClip('a', 'done'), failedLoad, idle('c', 'playback')]
     expect(nextActiveClipIndex(clips, 0)).toBe(2)
+  })
+})
+
+describe('a next clip still loading or probing when a primary finishes (strides-6i6.5)', () => {
+  const pending = (id: string) => makePrimaryDoneClip(id, 'pending')
+
+  /** An idle clip whose sampling path is not known yet, with its video at `status`. */
+  function unprobed(id: string, status: VideoSource['status']): ClipSession {
+    const clip = makeClip(id, { primarySamplingPath: null })
+    clip.videoSource = {
+      ...clip.videoSource,
+      status,
+      metadata: status === 'ready' ? clip.videoSource.metadata : null,
+    }
+    return clip
+  }
+
+  it("withholds clip 1's pass while clip 2's video is still loading", () => {
+    const clips = [pending('1'), unprobed('2', 'loading'), unprobed('3', 'loading')]
+    const active = nextActiveClipIndex(clips, 0)
+    expect(active).toBe(0)
+    expect(nextScalePassClipIndex(clips, active)).toBeNull()
+  })
+
+  it("withholds clip 1's pass while clip 2's video has loaded but its probe has not answered", () => {
+    const clips = [pending('1'), unprobed('2', 'ready')]
+    expect(nextScalePassClipIndex(clips, nextActiveClipIndex(clips, 0))).toBeNull()
+  })
+
+  it('hands clip 2 the detector once its probe answers sequential, and the pass keeps waiting', () => {
+    const clips = [pending('1'), makeClip('2', { primarySamplingPath: 'sequential' })]
+    const active = nextActiveClipIndex(clips, 0)
+    expect(active).toBe(1)
+    expect(nextScalePassClipIndex(clips, active)).toBeNull()
+  })
+
+  it("drains clip 1's pass first once clip 2's probe answers playback (the reference order)", () => {
+    const clips = [pending('1'), makeClip('2', { primarySamplingPath: 'playback' })]
+    const active = nextActiveClipIndex(clips, 0)
+    expect(active).toBe(0)
+    expect(nextScalePassClipIndex(clips, active)).toBe(0)
+  })
+
+  it('does not wait on an unprobed clip whose video failed to load', () => {
+    const clips = [pending('1'), unprobed('2', 'error')]
+    const active = nextActiveClipIndex(clips, 0)
+    expect(active).toBe(1)
+    expect(nextScalePassClipIndex(clips, active)).toBe(0)
+  })
+
+  it('does not wait on an unprobed clip with no load in progress, which has no answer coming', () => {
+    const clips = [pending('1'), unprobed('2', 'empty')]
+    expect(nextScalePassClipIndex(clips, nextActiveClipIndex(clips, 0))).toBe(0)
+  })
+
+  it('still lets a playback-path clip waiting for its own pass take the lane ahead of an unprobed clip', () => {
+    // It holds the shared detector until its pass is terminal, so the unprobed clip cannot start
+    // before it either way; withholding its lane would deadlock.
+    const clips = [makePrimaryDoneClip('1', 'pending', 'playback'), unprobed('2', 'loading')]
+    expect(nextScalePassClipIndex(clips, nextActiveClipIndex(clips, 0))).toBe(0)
+  })
+
+  /**
+   * The session as `MultiClipVideoSession` recomputes it, render by render, with every later
+   * clip's video still loading when clip 1's primary finishes. Clip i's probe answers `paths[i]`
+   * on render `firstAnswer + i`, on its own schedule — neither lane can hurry it. A clip with no
+   * answer yet cannot start (auto-start waits for its probe), so the primary step requires one.
+   */
+  function simulateSlowLoads(paths: ('sequential' | 'playback')[], firstAnswer: number): string[] {
+    let clips: ClipSession[] = paths.map((path, i) =>
+      i === 0 ? makeClip('1', { primarySamplingPath: path }) : unprobed(String(i + 1), 'loading'),
+    )
+    let active = 0
+    const order: string[] = []
+    const setAnalysis = (index: number, overrides: Partial<VideoAnalysisState>) => {
+      clips = clips.map((c, i) =>
+        i === index ? { ...c, analysis: { ...c.analysis, ...overrides } } : c,
+      )
+    }
+    for (let render = 0; render < 40 && order.length < 2 * paths.length; render += 1) {
+      clips = clips.map((c, i) =>
+        i > 0 && render === firstAnswer + i
+          ? {
+              ...c,
+              videoSource: makeVideoSource(),
+              analysis: { ...c.analysis, primarySamplingPath: paths[i] },
+            }
+          : c,
+      )
+      active = nextActiveClipIndex(clips, active)
+      const lane = nextScalePassClipIndex(clips, active)
+      const { phase, primarySamplingPath } = clips[active].analysis
+      const primary = phase === 'idle' && primarySamplingPath !== null ? active : null
+      expect(primary !== null && lane !== null).toBe(false)
+      if (primary !== null) {
+        setAnalysis(primary, {
+          phase: 'ready',
+          diagnostics: sampledOn(paths[primary]),
+          scalePass: makeScalePass('pending'),
+        })
+        order.push(`P${primary + 1}`)
+      } else if (lane !== null) {
+        setAnalysis(lane, { scalePass: makeScalePass('done') })
+        order.push(`S${lane + 1}`)
+      }
+    }
+    return order
+  }
+
+  it('runs P1 P2 P3 S1 S2 S3 although clips 2 and 3 were still loading when P1 finished', () => {
+    expect(simulateSlowLoads(['sequential', 'sequential', 'sequential'], 3)).toEqual([
+      'P1', 'P2', 'P3', 'S1', 'S2', 'S3',
+    ])
+  })
+
+  it('keeps the reference order when the slow clip turns out to sample on the playback path', () => {
+    expect(simulateSlowLoads(['sequential', 'playback'], 3)).toEqual(['P1', 'S1', 'P2', 'S2'])
+    expect(simulateSlowLoads(['sequential', 'sequential', 'playback'], 3)).toEqual([
+      'P1', 'P2', 'S1', 'S2', 'P3', 'S3',
+    ])
   })
 })
