@@ -17,8 +17,8 @@ an undecided next primary cannot deadlock: its answer depends on neither the sha
 the scale-pass allowance, only on its own video finishing loading — a source that fails to load is
 not outstanding — and on its probe, whose answer the clip reports once it arrives or once a fixed
 give-up bound passes (see "A slow feasibility answer still picks the sampler for a run that has not
-started"). A source with no load in progress has no answer coming and is not outstanding. The allowance SHALL be decided in
-this order: a clip already allowed its pass keeps the allowance until that pass is terminal (a
+started"). A source with no load in progress has no answer coming and is not outstanding. The
+allowance SHALL be decided in this order: a clip already allowed its pass keeps the allowance until that pass is terminal (a
 started pass is never cancelled, and an allowance outlives any delay before the clip reports its
 pass `'running'`); otherwise none, while any primary is `'sampling'` or `'processing'`; otherwise
 the lowest-index `'ready'` clip with a `'pending'` pass whose primary sampled on the playback path;

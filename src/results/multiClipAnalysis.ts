@@ -199,7 +199,7 @@ function primaryMaySampleOnPlaybackPath(clip: ClipSession): boolean {
  * unless the video never finishes loading. An 'empty' source has no load in progress, so no answer
  * is coming. */
 function samplingPathPending(clip: ClipSession): boolean {
-  if (clip.analysis.primarySamplingPath !== null) return false
+  if (clip.analysis.primarySamplingPath != null) return false
   return clip.videoSource.status === 'loading' || clip.videoSource.status === 'ready'
 }
 

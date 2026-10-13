@@ -414,6 +414,11 @@ export function useVideoAnalysis(
     const usesSequentialDecode = sequentialDecodeSupported === true
     // From here on a late probe answer can no longer change this clip's sampler.
     samplerChosenForRef.current = metadata
+    // Pin the state to this run's choice. A late probe answer can commit in the window between the
+    // render that committed the stand-in and that render's auto-start effect calling this (stale)
+    // `start`, so the state may already read `true` while this run samples on playback — and the
+    // scale pass and the session read the state, not the run.
+    setSequentialDecodeSupported(usesSequentialDecode)
     setSamplingPathSettled(true)
     // Create the scale pass's detector now, overlapping this primary pass, instead of at 'ready'.
     // Sequential path only: the playback sampler drops real-time frames under the main-thread/GPU

@@ -2186,6 +2186,41 @@ describe('useVideoAnalysis', () => {
       }
     })
 
+    it('pins the state to the run when the answer lands between the stand-in render and its start()', async () => {
+      // The window: render R commits the stand-in, the answer commits `true` before R's auto-start
+      // effect runs, and that effect calls R's `start` — whose closure still holds the stand-in.
+      // Reproduced with a held `start` from R, and a video still 'loading' so auto-start stays off.
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const answer = slowProbe()
+        const videoSource = makeVideoSource({ sourceBlob, status: 'loading' })
+        const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+        await flush()
+        await act(async () => {
+          vi.advanceTimersByTime(3000)
+        })
+        await flush()
+        const startFromStandInRender = result.current.start
+
+        await act(async () => {
+          answer(true)
+        })
+        await flush()
+        expect(result.current.primarySamplingPath).toBe('sequential')
+
+        await act(async () => {
+          startFromStandInRender()
+        })
+        await flush()
+        expect(sampleClipMock).toHaveBeenCalledTimes(1)
+        expect(sampleClipSequentialMock).not.toHaveBeenCalled()
+        // The run samples on playback, so the schedule and the scale pass must read playback too.
+        expect(result.current.primarySamplingPath).toBe('playback')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it('still decides the sampler for a run that already started on it, and a late answer changes nothing', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       try {
