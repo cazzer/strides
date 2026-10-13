@@ -96,7 +96,30 @@ session 23. Zero differing bytes anywhere. Two posters fell back to the seek pat
 clips with an even frame count (IMG_9114 274, IMG_9116 526) where the midpoint is a frame boundary
 inside the guard band.
 
-(The shared metric gate and the timings follow.)
+**Shared metric gate (gate 1): identical.** Base `054c86b` vs `a6fcf67`, ten clips x 2 trials,
+`--evidence`, each on its own identity-verified dev server (5354 / 5348). After stripping
+`elapsedMs` and the `# commit`/`# baseURL` lines, `rtk proxy diff` shows exactly five changed lines,
+all table dividers whose width follows the `elapsedMs` string length; with those removed the two
+reports md5 to the same `1dbe12081dfbec48da347d8c4347d666` (2178 lines each before divider removal:
+`99efb2c0…` vs `62949304…`). No metric, sampling, personSelection, view or evidence field moved.
+
+**Timings (gate 4), `--perf`, 2 trials, desktop.** Evidence = both passes summed (the first is the
+one the scale-pass graft supersedes; it is aborted in both arms, so its length is set by when the
+graft lands rather than by decode cost):
+
+| clip | evidence before | evidence after | final pass before → after | poster before → after |
+|---|---|---|---|---|
+| side-landscape (4K, 1 keyframe) | 7.73 s | 4.32 s | 4315 → 938 ms | 446 → 410 ms |
+| side-portrait | 4.82 s | 3.48 s | 1211 → 287 ms | 201 → 229 ms |
+| front-approach | 2.72 s | 1.26 s | 1049 → 334 ms | 221 → 188 ms |
+| multiperson | 3.33 s | 2.32 s | 1237 → 239 ms | 145 → 149 ms |
+| IMG_9116 (one pass, 2 images) | 1.14 s | 1.17 s | — | 160 → 241 ms (seek fallback) |
+| IMG_9119 | 6.06 s | 3.16 s | 2259 → 499 ms | 490 → 334 ms |
+
+The final pass drops 3-5x. Posters are flat on desktop, as expected: a midpoint poster decodes the
+same keyframe→midpoint span either way, minus the element load. The final pass decodes fewer images
+in the after arm because the superseded first pass, now faster, finished more metrics before the
+abort and handed them over through `onMetricExtracted` (strides-zm8 reuse).
 
 ## Risks
 
