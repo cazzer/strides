@@ -201,6 +201,7 @@ export const MIN_DASH_GAP_DISPLAY_PX = 1.5
 const CONSTRUCTION_ROLES: ReadonlySet<EvidenceMarkRole> = new Set([
   'verticalReference',
   'thighExtensionRay',
+  'hipMidlinePlumb',
 ])
 
 /** The resolved pixel weights for one output canvas. Exported so a test can assert the sizing scales
@@ -403,8 +404,10 @@ function drawCaliper(
   const ux = dx / length
   const uy = dy / length
   // Perpendicular, for the end ticks.
-  const px = -uy * metrics.caliperCap
-  const py = ux * metrics.caliperCap
+  const isStepWidth = op.role === 'stepWidthOffsetCaliper'
+  const cap = metrics.caliperCap * (isStepWidth ? 1.4 : 1)
+  const px = -uy * cap
+  const py = ux * cap
 
   const build: PathBuilder = (target) => {
     target.moveTo(op.x1, op.y1)
@@ -438,7 +441,7 @@ function drawCaliper(
     pass,
     build,
     EVIDENCE_MEASUREMENT_COLOR,
-    metrics.measurementWidth,
+    metrics.measurementWidth * (isStepWidth ? 1.6 : 1),
     metrics.haloWidth,
     op.opacity,
     [],

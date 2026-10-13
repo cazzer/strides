@@ -266,6 +266,10 @@ export function MetricScale({ band, value, label }: MetricScaleProps) {
         {label}: {sentence}
       </figcaption>
 
+      <p className="metric-scale__scope text-xs font-semibold leading-4 text-neutral-700 dark:text-neutral-300">
+        Observed, not a target
+      </p>
+
       {envelope !== null && domain !== null && (
         <MetricScaleGraphic
           band={band}
@@ -287,7 +291,7 @@ export function MetricScale({ band, value, label }: MetricScaleProps) {
         role="list"
         className="metric-scale__zones sr-only"
         aria-label={
-          multiZone ? 'Reference zones, lowest value first' : 'Reference range'
+          multiZone ? 'Observed zones, lowest value first' : 'Observed range'
         }
       >
         {zoneListEntries(band).map(({ key, range, label }) => (

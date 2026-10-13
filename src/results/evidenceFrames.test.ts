@@ -2387,6 +2387,30 @@ describe('planExemplarWithFallback', () => {
       expect(plan!.focusOffset).toBeGreaterThan(0.4)
     })
 
+    it('uses a nearly as representative pair when the winner clips the measured joint', () => {
+      const hardEdgeFrames = [0, 1, 2, 3, 4, 5, 6].map((i) =>
+        hipFrame(Number((i * 0.1).toFixed(2)), 45 + i * 40, 540),
+      )
+      const plan = planExemplarWithFallback(
+        'kneeFlexion',
+        focused(0, 0.4, 0.9, [focused(0.2, 0.6, 0.86)]),
+        hardEdgeFrames,
+        HD,
+        TOLERANCE,
+      )
+
+      expect(plan!.base.timestamp).toBeCloseTo(0.2, 10)
+      expect(plan!.ghost?.timestamp).toBeCloseTo(0.6, 10)
+      expect(plan!.focusOffset).toBeLessThanOrEqual(0.35)
+      expect(plan!.quality).toBe(0.86)
+    })
+
+    it('treats last-bit score noise as a tie when choosing a drawable pair', () => {
+      const plan = planAt(focused(0, 0.4, 0.9, [focused(0.2, 0.6, 0.9 - 5e-16)]))
+
+      expect(plan!.base.timestamp).toBeCloseTo(0.2, 10)
+    })
+
     it('orders the demoted pool by framing too, since a demoted single can be the outcome', () => {
       // Both pairs are one sampled interval apart, under
       // `EVIDENCE_MIN_PAIR_SEPARATION_INTERVALS`, so both collapse and this pool IS the result.
@@ -2452,6 +2476,61 @@ describe('planExemplarWithFallback', () => {
 })
 
 describe('planMetricEvidence', () => {
+  it('shows each step-width plant as its own annotated still', () => {
+    const plan = planOf(
+      metricResult('stepWidth', {
+        exemplars: [exemplar({
+          kind: 'stepWidthStrike',
+          timestamp: 0,
+          pairedTimestamp: 0.4,
+          measuredSide: 'left',
+          pairedMeasuredSide: 'right',
+        })],
+      }),
+      crossingFrames(),
+    )
+
+    expect(plan.status).toBe('planned')
+    if (plan.status !== 'planned') return
+    expect(plan.items).toHaveLength(2)
+    expect(plan.items.map((item) => [item.base.timestamp, item.base.side, item.base.opacity, item.ghost])).toEqual([
+      [0, 'left', EVIDENCE_BASE_OPACITY, null],
+      [0.4, 'right', EVIDENCE_BASE_OPACITY, null],
+    ])
+    expect(plan.items[0].crop).toEqual(plan.items[1].crop)
+    expect(plan.items.map((item) => item.label)).toEqual([
+      'Left-foot plant of the opposite-foot pair',
+      'Right-foot plant of the opposite-foot pair',
+    ])
+  })
+
+  it('keeps a step-width pair together when the image budget has one slot left', () => {
+    const plan = planOf(
+      metricResult('stepWidth', {
+        exemplars: [
+          exemplar({
+            kind: 'stepWidthStrike',
+            timestamp: 0.1,
+            measuredSide: 'left',
+            label: 'Single left-foot plant',
+          }),
+          exemplar({
+            kind: 'stepWidthStrike',
+            timestamp: 0,
+            pairedTimestamp: 0.4,
+            measuredSide: 'left',
+            pairedMeasuredSide: 'right',
+          }),
+        ],
+      }),
+      crossingFrames(),
+    )
+
+    expect(plan.status).toBe('planned')
+    if (plan.status !== 'planned') return
+    expect(plan.items.map((item) => item.label)).toEqual(['Single left-foot plant'])
+  })
+
   it('spends one slot per exemplar however many alternatives each carries', () => {
     // Alternatives are other ways to draw ONE image, so they must not reach the budget as if they
     // were extra exemplars. Every winner here is rejected by the far-apart guard and every

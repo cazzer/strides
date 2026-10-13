@@ -94,14 +94,13 @@ export type EvidenceMarkRole =
    * `180 − interiorAngle` (`kneeFlexion.ts:198`), so this arc is the SUPPLEMENT of the reported
    * quantity — carried on the op as `reportedValueIsSupplement`. */
   | 'kneeInteriorArc'
-  /** Vertical line at hip-mid x. `overstriding.ts:174` and `stepWidth.ts:220` both measure from
-   * it; drawn PER FRAME, so a ghosted pair carries two. */
+  /** Vertical reference at hip-mid x. `overstriding.ts:174` and `stepWidth.ts:220` both measure
+   * from it; drawn PER FRAME, so a ghosted pair carries two. */
   | 'hipMidlinePlumb'
   /** Vertical line at the knee's x — `footStrikePattern.ts:191` measures the ankle against it. */
   | 'kneePlumb'
-  /** left_hip → right_hip. `stepWidth`'s normalizer is a clip-MEDIAN hip width
-   * (`stepWidth.ts:224`, `bodyScale.ts:56-68`); this segment is THIS frame's, which is why it is
-   * drawn and why no quotient is labelled on it. */
+  /** left_hip → right_hip for swing-foot lateral excursion. This frame's segment only illustrates
+   * the hip-width scale; the metric uses a clip-median denominator. */
   | 'hipWidthSegment'
   /** Vertical line at one stride endpoint's hip-mid x (`strideLength.ts:178-182`). */
   | 'strideTick'
@@ -118,9 +117,12 @@ export type EvidenceMarkRole =
   /** hip-mid at one stride endpoint. */
   | 'hipMidMarker'
   /** Horizontal span from a plumb/midline to the ankle — the raw pixel NUMERATOR of
-   * `overstriding`, `footStrikePattern` and `stepWidth`. Their denominators are clip medians and
-   * exist in no single frame, which is why nothing is labelled. */
+   * `overstriding` and `footStrikePattern`. Their denominators are clip medians and exist in no
+   * single frame, which is why nothing is labelled. */
   | 'ankleOffsetCaliper'
+  /** The ankle-to-midline displacement in step width evidence. It gets a larger display mark
+   * because this span can be only a few pixels at card size. */
+  | 'stepWidthOffsetCaliper'
   /** Vertical span `wrist.y − shoulder.y` (`armSwing.ts:405`). */
   | 'armSwingCaliper'
   /** Horizontal span between the two stride ticks. */
@@ -503,21 +505,25 @@ class MarkBuilder {
     })
   }
 
-  /** A reference line spanning the whole canvas, anchored on a resolved point's own x or y. */
+  /** A reference line at a resolved point's x or y. Full-canvas unless a local half-span is given. */
   guide(
     role: EvidenceMarkRole,
     orientation: 'vertical' | 'horizontal',
     anchor: ResolvedMarkPoint,
+    halfSpanFraction?: number,
   ): void {
+    const position = orientation === 'vertical' ? anchor.x : anchor.y
+    const extent = orientation === 'vertical' ? anchor.y : anchor.x
+    const halfSpan = halfSpanFraction === undefined ? null : this.outputSide * halfSpanFraction
     this.ops.push({
       kind: 'guide',
       layer: 'measurement',
       instant: this.instant,
       role,
       orientation,
-      position: orientation === 'vertical' ? anchor.x : anchor.y,
-      from: 0,
-      to: this.outputSide,
+      position,
+      from: halfSpan === null ? 0 : Math.max(0, extent - halfSpan),
+      to: halfSpan === null ? this.outputSide : Math.min(this.outputSide, extent + halfSpan),
       opacity: anchor.opacity * this.frameOpacity,
     })
   }
@@ -818,14 +824,6 @@ function buildStepWidthMarks(ctx: InstantContext): void {
   const hipMid = builder.strictMidpoint(index, 'left_hip', 'right_hip')
   if (left === null || right === null || hipMid === null) return
 
-  // THIS frame's hip width. `stepWidth.ts:224` divides by `estimateHipWidth`'s CLIP-MEDIAN
-  // `hipWidthPx` (`bodyScale.ts:56-68`), not by this segment — so the segment is drawn as the
-  // per-instant geometry it is and no quotient is labelled on it. A drawable-looking denominator
-  // that is not the denominator used is worse than an invisible one, because it invites the
-  // reader to check the arithmetic and get a different answer (design D2).
-  builder.line('hipWidthSegment', left, right, ['left_hip', 'right_hip'])
-  builder.guide('hipMidlinePlumb', 'vertical', hipMid)
-
   // The instant's OWN foot, for the same reason as `overstriding`: `stepWidth.ts` omits the
   // frame-level `side` on the pair because "the two instants are deliberately opposite feet, so
   // naming one would be wrong about the other" — and that pair is this metric's common case. Each
@@ -835,11 +833,20 @@ function buildStepWidthMarks(ctx: InstantContext): void {
   if (side === null) return
   const ankle = builder.point(index, ANKLE_NAME[side])
   if (ankle === null) return
+  // Percentage step width uses clip-median hip width; step width in centimetres uses calibrated
+  // scale. Neither uses THIS frame's hip segment, which buried the tiny measured displacement.
+  // A local dashed midline preserves the ankle's reference without crossing the whole picture.
+  builder.guide(
+    'hipMidlinePlumb',
+    'vertical',
+    { x: hipMid.x, y: ankle.y, opacity: Math.min(hipMid.opacity, ankle.opacity) },
+    0.06,
+  )
   // `stepWidth`'s polarity is `outwardSign`, per-INSTANT (`stepWidth.ts:222-223`), never the
   // clip-wide `travelDirection` — that solves a different, fore-aft problem. `null` outwardSign is
   // the degenerate hip pair the metric records and hard-rejects (`:230`).
   builder.caliper(
-    'ankleOffsetCaliper',
+    'stepWidthOffsetCaliper',
     'horizontal',
     derived(ankle, hipMid.x, ankle.y),
     ankle,

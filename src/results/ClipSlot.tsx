@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import type { PoseDetector } from '../pose/detector'
 import { useClipPoster } from '../video/useClipPoster'
 import { useVideoSource } from '../video/useVideoSource'
@@ -8,6 +8,7 @@ import { clipHostsLiveElement, describeClipStripStatus } from './clipStripStatus
 import { SkeletonOverlay } from './SkeletonOverlay'
 import { isWaitingForScalePassLane, useVideoAnalysis } from './useVideoAnalysis'
 import type { ClipSession } from './multiClipAnalysis'
+import { resolveEvidenceSeekCalibration } from '../video/evidenceSeekOffset'
 
 export interface ClipPendingLoad {
   source: Blob | File
@@ -32,6 +33,7 @@ export interface ClipSlotProps {
    * tests) still describes itself sensibly. */
   index?: number
   total?: number
+  viewLabel?: string
   /**
    * Whether this clip is the one `nextActiveClipIndex` currently points at.
    *
@@ -56,6 +58,7 @@ export interface ClipSlotProps {
    */
   isPresented?: boolean
   onPresent?: (clipId: string) => void
+  seekRequest?: { clipId: string; timestamp: number; nonce: number } | null
   onDismiss?: () => void
   /** Called after every render with this clip's current `{ videoSource, analysis }` — the
    * caller (`MultiClipVideoSession`) must be the one that decides whether anything meaningful
@@ -92,10 +95,12 @@ export function ClipSlot({
   detector,
   index = 0,
   total = 1,
+  viewLabel = 'View pending',
   isActiveClip = false,
   scalePassAllowed = true,
   isPresented = false,
   onPresent,
+  seekRequest = null,
   onDismiss,
   onReport,
   onRemove,
@@ -164,6 +169,24 @@ export function ClipSlot({
     ),
   )
 
+  // A ready evidence action targets the canonical player, after the presentation effect has
+  // mounted it. The calibration is the same media-to-presentation conversion the extractor used.
+  // Cancellation prevents a slow MP4 probe from seeking after the preview closes or sampling starts.
+  useEffect(() => {
+    if (!isPresented || hostsLiveElement || seekRequest?.clipId !== clipId) return
+    const video = videoSource.videoRef.current
+    if (!video || !videoSource.sourceBlob) return
+    let cancelled = false
+    void resolveEvidenceSeekCalibration(videoSource.sourceBlob).then((calibration) => {
+      if (cancelled) return
+      const target = seekRequest.timestamp + calibration.offsetSeconds + calibration.midpointOffsetSeconds
+      const maxTime = Number.isFinite(video.duration) ? Math.max(0, video.duration - 0.001) : target
+      video.pause()
+      video.currentTime = Math.max(0, Math.min(maxTime, target))
+    })
+    return () => { cancelled = true }
+  }, [clipId, hostsLiveElement, isPresented, seekRequest, videoSource.sourceBlob, videoSource.videoRef])
+
   const status = describeClipStripStatus({
     videoStatus: videoSource.status,
     phase: analysis.phase,
@@ -177,6 +200,7 @@ export function ClipSlot({
     <ClipStripEntry
       index={index}
       total={total}
+      viewLabel={viewLabel}
       status={status}
       poster={poster}
       hostsLiveElement={hostsLiveElement}

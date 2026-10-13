@@ -1495,9 +1495,9 @@ export function planExemplarFrames(
 }
 
 /**
- * Orders two drawable plans of the SAME exemplar. The metric's own `quality` dominates — an
- * alternate exists to be a fallback, never to outrank a more representative instant — and framing
- * breaks a tie.
+ * Orders two drawable plans of the SAME exemplar. The metric's own `quality` dominates and framing
+ * breaks a tie. The caller makes one narrow exception after this comparison: a nearly equal
+ * knee-flexion pair can replace a winner whose focus joint is at the crop edge.
  *
  * **A tie here is not a rarity, it is a construction** (`strides-dxd`). `kneeFlexion` pools an even
  * number of peaks on `park-side-landscape.mp4`, so its median is the mean of the two middle values
@@ -1523,7 +1523,8 @@ function outranksForFallback(
   incumbent: EvidenceFramePlan | null,
 ): boolean {
   if (incumbent === null) return true
-  if (candidate.quality !== incumbent.quality)
+  // Equal distances from a median can differ at the last floating-point bit after scoring.
+  if (Math.abs(candidate.quality - incumbent.quality) > 1e-12)
     return candidate.quality > incumbent.quality
   if (candidate.focusOffset === null || incumbent.focusOffset === null)
     return false
@@ -1566,8 +1567,9 @@ function outranksForFallback(
  * ranking is indifferent, the walk is the only layer that can see which candidate puts the
  * measured joint in the middle of its image rather than in a corner, and preferring the
  * better-framed one costs nothing: they are, by the metric's own score, equally representative.
- * Where the metric's ranking is NOT indifferent it still decides alone, and where the exemplar
- * names no focus joint the ordering degenerates to first-wins exactly as before.
+ * Where the metric's ranking is NOT indifferent it still decides alone, except for the bounded
+ * knee-flexion edge fallback below. Where the exemplar names no focus joint the ordering
+ * degenerates to first-wins exactly as before.
  *
  * The returned plan is the SELECTED pair's own throughout — its instants, its `quality`, its
  * `cropGrowth` — so nothing downstream, the `[evidence-coverage]` line included, is ever told
@@ -1583,16 +1585,27 @@ export function planExemplarWithFallback(
 ): EvidenceFramePlan | null {
   let paired: EvidenceFramePlan | null = null
   let demoted: EvidenceFramePlan | null = null
+  let centredAlternative: EvidenceFramePlan | null = null
   for (const candidate of [exemplar, ...(exemplar.alternates ?? [])]) {
     if (candidate.quality < MIN_EXEMPLAR_QUALITY) continue
-    // Candidates arrive best-first, so once a pair has been drawn nothing scoring below it can win
-    // and the rest of the list need not be planned. That keeps the OUTCOME exactly what it was for
-    // an exemplar whose candidates do not tie. It does not keep the cost exactly what it was: a
-    // tied exemplar now plans every candidate at the winning quality before breaking — measured 3
-    // extra plans on `park-side-landscape.mp4` and 2 on `park-side-portrait.mp4`, all rejected,
-    // both outcomes byte-identical. No such stop while only demoted plans are in hand: a pair at
-    // ANY rank still beats a demoted single.
-    if (paired !== null && candidate.quality < paired.quality) break
+    // Candidates arrive best-first. Most exemplars stop as soon as a lower-scoring candidate
+    // cannot win; only a knee-flexion winner close to the crop edge checks nearby scores for a
+    // better-framed pair. No such stop while only demoted plans are in hand: a pair at ANY rank
+    // still beats a demoted single.
+    // A focus joint this close to the crop edge can leave most of the runner outside a 144px
+    // thumbnail. In that case, inspect only alternatives with a score within five percentage
+    // points of the winner. A different instant changes the actual background the ghost lands on;
+    // moving the crop around the same instant cannot.
+    const maxQualityLoss =
+      metric === 'kneeFlexion' &&
+      paired !== null &&
+      paired.focusOffset !== null &&
+      paired.focusOffset > 0.45
+        ? 0.05
+        : 1e-12
+    if (paired !== null && candidate.quality < paired.quality - maxQualityLoss) {
+      break
+    }
     const plan = planExemplarFrames(
       metric,
       candidate,
@@ -1606,6 +1619,15 @@ export function planExemplarWithFallback(
     // — which never had a pair to lose — is filed as a winner rather than as a consolation prize.
     if (plan.demotion === null) {
       if (outranksForFallback(plan, paired)) paired = plan
+      if (
+        metric === 'kneeFlexion' &&
+        plan.ghost !== null &&
+        plan.focusOffset !== null &&
+        plan.focusOffset <= 0.35 &&
+        (centredAlternative === null || plan.quality > centredAlternative.quality)
+      ) {
+        centredAlternative = plan
+      }
     } else if (outranksForFallback(plan, demoted)) {
       // The demoted pool is ordered by the same rule, not merely by arrival: on a clip where every
       // candidate collapses, this pool IS the outcome, and leaving it to arrival order would put
@@ -1613,7 +1635,36 @@ export function planExemplarWithFallback(
       demoted = plan
     }
   }
+  if (
+    metric === 'kneeFlexion' &&
+    paired !== null &&
+    paired.focusOffset !== null &&
+    paired.focusOffset > 0.45 &&
+    centredAlternative !== null &&
+    centredAlternative.quality >= paired.quality - 0.05
+  ) return centredAlternative
   return paired ?? demoted
+}
+
+/** A front/rear step-width pair can occupy nearly the same pixels, making the faded instant
+ * disappear into the solid one. Each plant is itself an independent measurement, so two full-size
+ * stills convey the pair more honestly than a double exposure at the thumbnail size. The same
+ * crop keeps their apparent scale comparable; each still gets its own measured-foot annotation. */
+function separateStepWidthPlants(plan: EvidenceFramePlan): EvidenceFramePlan[] {
+  if (plan.kind !== 'stepWidthStrike' || plan.ghost === null) return [plan]
+  const plants: EvidenceInstantPlan[] = [plan.base, plan.ghost]
+  return plants.map((instant) => {
+    const foot = instant.side === null ? 'Foot' : instant.side === 'left' ? 'Left-foot' : 'Right-foot'
+    return {
+      ...plan,
+      ...(instant.side === null ? {} : { side: instant.side }),
+      label: `${foot} plant of the opposite-foot pair`,
+      base: { ...instant, opacity: EVIDENCE_BASE_OPACITY },
+      ghost: null,
+      cropGrowth: null,
+      focusOffset: null,
+    }
+  })
 }
 
 /**
@@ -1622,7 +1673,8 @@ export function planExemplarWithFallback(
  * Each exemplar is resolved through `planExemplarWithFallback`, so an exemplar offering ranked
  * alternative pairs spends its slot on the best one that can actually be drawn rather than losing
  * the slot to an un-drawable winner. The budget below still counts IMAGES: alternatives belong to
- * an exemplar and at most one of them is ever rendered.
+ * an exemplar and at most one of them is normally rendered. A step-width pair instead spends two
+ * slots on separate photographs of its independently measured foot plants.
  *
  * The quality gate and the per-metric budget are re-applied here rather than trusted from
  * upstream. Both are the same constants imported from the same module, so the two layers cannot
@@ -1674,7 +1726,7 @@ export function planMetricEvidence(
     return { status: 'no-evidence', reason: 'below-quality-gate' }
   }
 
-  const items = candidates
+  const selected = candidates
     .map((exemplar) =>
       planExemplarWithFallback(
         metric.metric,
@@ -1687,6 +1739,19 @@ export function planMetricEvidence(
     )
     .filter((item): item is EvidenceFramePlan => item !== null)
     .slice(0, MAX_EXEMPLARS_PER_METRIC)
+
+  const items: EvidenceFramePlan[] = []
+  for (const plan of selected) {
+    const group =
+      metric.metric === 'stepWidth' || metric.metric === 'stepWidthCm'
+        ? separateStepWidthPlants(plan)
+        : [plan]
+    // Keep a two-plant comparison together. Showing only the first plant would contradict its
+    // "opposite-foot pair" caption and erase the very instant this presentation preserves.
+    if (items.length + group.length <= MAX_EXEMPLARS_PER_METRIC) {
+      items.push(...group)
+    }
+  }
 
   return items.length > 0
     ? { status: 'planned', items }

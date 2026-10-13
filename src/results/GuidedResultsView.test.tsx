@@ -6,7 +6,7 @@ import { MetricsPanel } from './MetricsPanel'
 import type { MetricCardEvidence } from './MetricsPanel'
 import type { EvidenceFramePlan, EvidenceInstantPlan } from './evidenceFrames'
 import { captionFor } from './evidenceCaptions'
-import { formatGuidedValue } from './formatGuidedValue'
+import { formatGuidedValue, guidedHeadline } from './formatGuidedValue'
 import {
   WITHHELD_BAND_REASON,
   cardReferences,
@@ -319,6 +319,20 @@ describe('The guided view announces completion with the same words the classic v
     )
   })
 
+  it('does not count a non-null centimetre value excluded for an unsuitable view', () => {
+    const heuristics = makeHeuristics({
+      stepWidthCm: makeMetric('stepWidthCm', {
+        value: 8.2,
+        viewFit: 'unsuitable',
+      }),
+    })
+    renderView(readyAnalysis(heuristics, 'done'))
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'A second look at the clip added 1 more metric.',
+    )
+    expect(screen.getByRole('status')).not.toHaveTextContent('2 more metrics')
+  })
+
   it("says a done pass couldn't add anything when neither centimetre metric has a value", () => {
     renderView(
       readyAnalysis(
@@ -629,6 +643,46 @@ describe('The contents list names every measurement and reaches it, even inside 
 // The three groups
 // ---------------------------------------------------------------------------------------------
 
+describe('The bounce measures are explained together while their cards keep separate status', () => {
+  it('explains the three denominators and links to each original card', () => {
+    renderView(readyAnalysis())
+    const guide = screen.getByRole('region', { name: 'Three ways to describe bounce' })
+    const links = within(guide).getAllByRole('link')
+    expect(links.map((link) => link.textContent)).toEqual([
+      'Bounce relative to torso length',
+      'Bounce in centimetres',
+      'Bounce relative to stride length',
+    ])
+    expect(guide).toHaveTextContent('Uses your torso length as the denominator.')
+    expect(guide).toHaveTextContent('Uses real-world scale from the clip')
+    expect(guide).toHaveTextContent('Uses the distance you travel per stride as the denominator.')
+    expect(guide).toHaveTextContent('different scales')
+    const groups = guidedGroups(makeHeuristics())
+    const entries = [...groups.banded, ...groups.unbanded]
+    for (const [index, id] of ['verticalOscillation', 'verticalOscillationCm', 'verticalRatio'].entries()) {
+      const entry = entries.find((candidate) => candidate.metric.metric === id)!
+      expect(links[index].parentElement).toHaveTextContent(guidedHeadline(entry, false)!)
+    }
+    expect(screen.getAllByRole('article', { name: 'Vertical oscillation' })).toHaveLength(1)
+    expect(screen.getAllByRole('article', { name: 'Vertical oscillation (cm)' })).toHaveLength(1)
+    expect(screen.getAllByRole('article', { name: 'Vertical ratio' })).toHaveLength(1)
+  })
+
+  it('marks an unavailable centimetre measure and opens its original not-measured entry', () => {
+    renderView(readyAnalysis(withUnmeasured(['verticalOscillationCm'])))
+    const guide = screen.getByRole('region', { name: 'Three ways to describe bounce' })
+    expect(guide.querySelectorAll('li')).toHaveLength(3)
+    const link = within(guide).getByRole('link', { name: 'Bounce in centimetres' })
+    expect(link.parentElement).toHaveTextContent('not measured')
+    expect(link).toHaveAttribute('href', '#guided-results-verticalOscillationCm')
+    fireEvent.click(link)
+    const target = document.getElementById('guided-results-verticalOscillationCm')
+    expect(target).toHaveFocus()
+    expect(target?.closest('details')).toHaveAttribute('open')
+    expect(screen.queryByRole('article', { name: 'Vertical oscillation (cm)' })).not.toBeInTheDocument()
+  })
+})
+
 describe('The guided view ranks metrics into three groups by what can be said about them', () => {
   it('Banded metrics render expanded and in their fixed rank order', () => {
     const { container } = renderView(readyAnalysis())
@@ -769,7 +823,7 @@ describe('The heading outline reads group → measurement', () => {
       readyAnalysis(withUnmeasured(['kneeDrive', 'cadence'])),
     )
     const h2s = Array.from(container.querySelectorAll('h2'))
-    expect(h2s).toHaveLength(3)
+    expect(h2s).toHaveLength(4) // Bounce explainer, then the three metric groups.
     for (const h2 of h2s) expect(h2.closest('summary')).toBeNull()
     const h3s = Array.from(container.querySelectorAll('h3'))
     expect(h3s).toHaveLength(13)
@@ -1700,6 +1754,19 @@ describe('Research on changing this', () => {
     ),
   )
 
+  it('makes the 174 steps/min demo cadence experiment conditional on interest', () => {
+    renderView(
+      readyAnalysis(makeHeuristics({ cadence: makeMetric('cadence', { value: 174 }) })),
+    )
+    const line = card('Cadence').querySelector('.guided-results__try') as HTMLElement
+    expect(line).toHaveTextContent(
+      'If you choose to raise step rate:',
+    )
+    expect(line).toHaveTextContent('5–10% above your own step rate')
+    expect(line).not.toHaveTextContent(/^Try:/)
+    expect(visibleInCard(line)).toBe(true)
+  })
+
   it('shows exactly one studied change visibly, and every study inside with its kind and summary', () => {
     render(
       <GuidedMetricCard
@@ -1719,7 +1786,9 @@ describe('Research on changing this', () => {
     expect(visibleInCard(line)).toBe(true)
     // ` · `, the card's own attribution separator — not an em dash, which the stored text can
     // itself contain and which read as another clause of the instruction rather than its citation.
-    expect(line.textContent).toContain('Try: something a study measured · ')
+    expect(line.textContent).toContain(
+      'If you choose to change your form: something a study measured · ',
+    )
     expect(line.textContent).not.toContain(' — ')
     const anchor = within(line).getByRole('link')
     expect(anchor).toHaveAttribute('href', four[0].url)
@@ -2136,16 +2205,18 @@ describe('Every outbound reference is from a verified set and opens safely', () 
     }
   })
 
-  it('has no in-page anchor except the contents list, and every one of those resolves in the view', () => {
+  it('keeps in-page anchors in the contents list or bounce explainer, and resolves each in the view', () => {
     const { container } = renderView(
       readyAnalysis(withUnmeasured(['kneeDrive'])),
     )
     const inPage = Array.from(container.querySelectorAll('a')).filter(
       (anchor) => (anchor.getAttribute('href') ?? '').startsWith('#'),
     )
-    expect(inPage).toHaveLength(13)
+    expect(inPage).toHaveLength(16)
     for (const anchor of inPage) {
-      expect(anchor.closest('nav')).not.toBeNull()
+      expect(
+        anchor.closest('nav, .guided-results__bounce'),
+      ).not.toBeNull()
       expect(anchor).not.toHaveAttribute('target')
       expect(
         container.querySelector(anchor.getAttribute('href')!),
@@ -2434,10 +2505,10 @@ describe('how much a card says before the reader opens anything', () => {
    * `cadence` is the worst card in the set and the one the reader named: it alone carries a
    * remediation intro, two speed halves and a 90-word mandatory note.
    *
-   * Unchanged by the review round that restored the description to every card: through this same
-   * instrument cadence read 55 before it and reads 68 after, so the budget still binds.
+   * The description restoration took cadence from 55 to 68 words. The observed-range label and
+   * explicit choice condition bring it to 78; the cap remains near that measured size.
    */
-  const CADENCE_VISIBLE_WORD_BUDGET = 70
+  const CADENCE_VISIBLE_WORD_BUDGET = 78
 
   it('keeps the cadence card inside its visible word budget', () => {
     renderView(readyAnalysis())

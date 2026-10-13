@@ -600,7 +600,7 @@ describe('per-metric mark sets', () => {
     expect(calipers.every((op) => op.polarity === null)).toBe(true)
   })
 
-  it('stepWidth draws THIS frame’s hip-width segment, a per-frame midline, and a signed caliper', () => {
+  it('stepWidth keeps its measured displacement prominent with a local midline', () => {
     const hips = (y: number): EvidenceKeypointPosition[] => [
       pos('left_hip', 300, y),
       pos('right_hip', 340, y),
@@ -629,16 +629,16 @@ describe('per-metric mark sets', () => {
     ) as EvidenceGuideOp[]
     expect(midlines).toHaveLength(2)
     expect(midlines.map((op) => op.instant)).toEqual(['base', 'ghost'])
+    expect(midlines.map((op) => [op.from, op.to])).toEqual([
+      [521.6, 598.4],
+      [527.6, 604.4],
+    ])
 
-    const segment = byRole(
-      annotation.ops,
-      'hipWidthSegment',
-    )[0] as EvidenceLineOp
-    expect([segment.from, segment.to]).toEqual(['left_hip', 'right_hip'])
+    expect(byRole(annotation.ops, 'hipWidthSegment')).toHaveLength(0)
 
     const caliper = byRole(
       annotation.ops,
-      'ankleOffsetCaliper',
+      'stepWidthOffsetCaliper',
     )[0] as EvidenceCaliperOp
     // ankle 290 is left of the midline 320, and the left hip is the left-of-midline side, so this
     // strike landed on its own side: `sign(−30) × outwardSign.left(−1)` = +1.
@@ -847,7 +847,7 @@ describe('polarity', () => {
     )
     const caliper = byRole(
       annotation.ops,
-      'ankleOffsetCaliper',
+      'stepWidthOffsetCaliper',
     )[0] as EvidenceCaliperOp
     expect(caliper.polarity).toBeNull()
   })
@@ -886,12 +886,12 @@ describe('polarity', () => {
 
     const [baseCaliper] = byRole(
       annotation.ops,
-      'ankleOffsetCaliper',
+      'stepWidthOffsetCaliper',
       'base',
     ) as EvidenceCaliperOp[]
     const [ghostCaliper] = byRole(
       annotation.ops,
-      'ankleOffsetCaliper',
+      'stepWidthOffsetCaliper',
       'ghost',
     ) as EvidenceCaliperOp[]
 
@@ -909,9 +909,7 @@ describe('polarity', () => {
   })
 
   it('draws no caliper for an instant whose side the metric never stated', () => {
-    // The explicit absence, still honoured: the midline and the hip segment are per-instant truths
-    // that need no side, but a caliper needs to know which ankle was measured, and guessing one
-    // would depict a measurement that was never taken.
+    // Without a measured side, the ankle displacement and its local reference are unknown.
     const annotation = planEvidenceAnnotations(
       plan({
         metric: 'stepWidth',
@@ -928,10 +926,8 @@ describe('polarity', () => {
       }),
       MAX_OUTPUT_SIDE,
     )
-    expect(roles(annotation.ops)).not.toContain('ankleOffsetCaliper')
-    expect(new Set(roles(annotation.ops))).toEqual(
-      new Set(['hipWidthSegment', 'hipMidlinePlumb']),
-    )
+    expect(roles(annotation.ops)).not.toContain('stepWidthOffsetCaliper')
+    expect(roles(annotation.ops)).toEqual([])
   })
 })
 
@@ -963,7 +959,7 @@ describe('a grafted metric orients its marks from its own plan', () => {
           plan({ metric, kind: 'stepWidthStrike', side: 'left', base }),
           MAX_OUTPUT_SIDE,
         ).ops,
-        'ankleOffsetCaliper',
+        'stepWidthOffsetCaliper',
       )[0] as EvidenceCaliperOp
 
     expect(caliperFor('stepWidth').polarity).toBe(1)
@@ -1263,7 +1259,11 @@ describe('the joint layer', () => {
         )
         const calipers = annotation.ops.filter(
           (op): op is EvidenceCaliperOp =>
-            op.kind === 'caliper' && op.role === 'ankleOffsetCaliper',
+            op.kind === 'caliper' &&
+            op.role ===
+              (fixture.metric === 'stepWidth'
+                ? 'stepWidthOffsetCaliper'
+                : 'ankleOffsetCaliper'),
         )
         expect(calipers.map((op) => op.instant).sort()).toEqual(['base', 'ghost'])
       })
@@ -1335,7 +1335,7 @@ describe('the honesty rule', () => {
             pos('right_hip', 340, 400),
             pos('left_ankle', 290, 560),
           ],
-          { outwardSign: { left: -1, right: 1 } },
+          { outwardSign: { left: -1, right: 1 }, side: 'left' },
         ),
       }),
     },

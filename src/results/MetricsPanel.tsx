@@ -6,8 +6,8 @@ import { classifyFootStrike } from '../heuristics/footStrikePattern'
 import type { FootStrikeClass } from '../heuristics/footStrikePattern'
 import type { ExtractedEvidenceFrame } from '../video/extractFrames'
 import { VerticalOscillationChart } from './VerticalOscillationChart'
-import { EvidenceCanvas } from './EvidenceCanvas'
-import { altFor, captionFor, provenanceFor } from './evidenceCaptions'
+import { EvidenceFrame } from './EvidenceFrame'
+import { provenanceFor } from './evidenceCaptions'
 import {
   HIGH_CONFIDENCE_THRESHOLD,
   LOW_CONFIDENCE_THRESHOLD,
@@ -15,6 +15,7 @@ import {
   metricTier,
 } from './metricConfidence'
 import { METRIC_DESCRIPTIONS } from './metricDescriptions'
+import { clipSourceLabel } from './clipProvenance'
 
 /** Stable empty list, so a panel rendered without any evidence at all never hands its cards a
  * fresh identity on every render. */
@@ -64,6 +65,9 @@ export interface MetricsPanelProps {
   /** How many clips the session holds. Only ever read to say which clip a thumbnail came from,
    * which is a question that does not arise below two. */
   clipCount?: number
+  clipViews?: readonly string[]
+  sourceIndices?: Record<MetricId, number> | null
+  onOpenEvidenceVideo?: (clipIndex: number, timestamp: number, returnFocus: HTMLButtonElement | null) => void
 }
 
 const FOOT_STRIKE_CLASS_LABELS: Record<FootStrikeClass, string> = {
@@ -134,9 +138,11 @@ function cardSlot(chart: ReactNode): ReactNode | undefined {
 function CardEvidence({
   evidence,
   clipCount,
+  onOpenEvidenceVideo,
 }: {
   evidence: MetricCardEvidence
   clipCount: number
+  onOpenEvidenceVideo?: (clipIndex: number, timestamp: number, returnFocus: HTMLButtonElement | null) => void
 }) {
   const provenance = provenanceFor(evidence.clipIndex, clipCount)
   if (evidence.pending === true) {
@@ -175,14 +181,7 @@ function CardEvidence({
       <ul className="space-y-3">
         {evidence.items.map((item, index) => (
           <li key={`${item.plan.base.timestamp}-${index}`}>
-            <figure className="metrics-panel__evidence-figure space-y-1">
-              <div className="w-36 max-w-full">
-                <EvidenceCanvas canvas={item.canvas} alt={altFor(item.plan)} />
-              </div>
-              <figcaption className="metrics-panel__evidence-caption font-sans text-[11px] leading-snug text-neutral-600 dark:text-neutral-400">
-                {captionFor(item.plan)}
-              </figcaption>
-            </figure>
+            <EvidenceFrame item={item} clipLabel={`clip ${evidence.clipIndex + 1} of ${clipCount}`} onOpenVideo={onOpenEvidenceVideo ? (returnFocus) => onOpenEvidenceVideo(evidence.clipIndex, item.plan.base.timestamp, returnFocus) : undefined} />
           </li>
         ))}
       </ul>
@@ -200,6 +199,8 @@ interface MetricCardProps {
   chart?: ReactNode
   evidence?: MetricCardEvidence
   clipCount: number
+  sourceLabel?: string
+  onOpenEvidenceVideo?: (clipIndex: number, timestamp: number, returnFocus: HTMLButtonElement | null) => void
 }
 
 /**
@@ -215,7 +216,7 @@ interface MetricCardProps {
  * even on the (verified possible, see metricConfidence.ts) case where a tier-2 metric's
  * `caveat` is null.
  */
-function MetricCard({ metric, chart, evidence, clipCount }: MetricCardProps) {
+function MetricCard({ metric, chart, evidence, clipCount, sourceLabel, onOpenEvidenceVideo }: MetricCardProps) {
   const tier = metricTier(metric)
   const isCaveated = tier === 'caveated'
 
@@ -259,6 +260,7 @@ function MetricCard({ metric, chart, evidence, clipCount }: MetricCardProps) {
       <p className="metrics-panel__value font-display text-2xl font-bold">
         {formatValue(metric)}
       </p>
+      {sourceLabel && <p className="font-sans text-xs font-semibold text-neutral-600 dark:text-neutral-400">Measured from {sourceLabel}</p>}
       {/*
         A card with no evidence renders the bare paragraph, byte for byte what it rendered before
         this feature existed — no wrapper, no reserved space, no layout shift. The whole
@@ -318,7 +320,7 @@ function MetricCard({ metric, chart, evidence, clipCount }: MetricCardProps) {
               </div>
             </div>
             <div className="order-2 @lg/card:order-none @lg/card:contents">
-              <CardEvidence evidence={evidence} clipCount={clipCount} />
+              <CardEvidence evidence={evidence} clipCount={clipCount} onOpenEvidenceVideo={onOpenEvidenceVideo} />
             </div>
           </div>
         </div>
@@ -376,6 +378,9 @@ export function MetricsPanel({
   scalePassStatus = 'idle',
   evidence = NO_EVIDENCE,
   clipCount = 1,
+  clipViews = [],
+  sourceIndices = null,
+  onOpenEvidenceVideo,
 }: MetricsPanelProps) {
   const scalePassInProgress = scalePassStatus === 'pending' || scalePassStatus === 'running'
   // Keyed by metric, never by array position: evidence arrives in its own order (the extraction
@@ -450,6 +455,8 @@ export function MetricsPanel({
               )}
               evidence={evidenceByMetric.get(metric.metric)}
               clipCount={clipCount}
+              sourceLabel={clipCount > 1 && sourceIndices ? clipSourceLabel(sourceIndices[metric.metric], clipCount, clipViews) : undefined}
+              onOpenEvidenceVideo={onOpenEvidenceVideo}
             />
           ) : null,
         )}
