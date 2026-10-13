@@ -16,6 +16,7 @@ vi.mock('../video/sequentialFrameSource', () => ({
 }))
 
 import { sampleClipSequential } from './sampleClipSequential'
+import { yieldToEventLoop } from './yieldToEventLoop'
 import { __resetForTests as resetClipBytesCache } from '../video/clipBytesCache'
 
 const FAKE_TRACK: DemuxedTrack = {
@@ -90,12 +91,16 @@ function createControlledFrameStream() {
   }
 }
 
-/** Several no-op microtask ticks -- enough for this module's internal async chains (draw ->
- * await detection -> push -> progress) to settle between controlled test steps, with no real
- * timers/IO anywhere in the mocked path to wait on. */
+/** Enough microtask ticks and event-loop turns for this module's internal async chains (draw ->
+ * await detection -> push -> progress -> yield) to settle between controlled test steps. */
 async function flush() {
-  for (let i = 0; i < 30; i += 1) {
-    await Promise.resolve()
+  // Three rounds of microtasks around two event-loop turns: the sampler yields a macrotask after
+  // every frame (yieldToEventLoop), so draining microtasks alone stops at that yield.
+  for (let round = 0; round < 3; round += 1) {
+    for (let i = 0; i < 30; i += 1) {
+      await Promise.resolve()
+    }
+    if (round < 2) await yieldToEventLoop()
   }
 }
 
@@ -176,6 +181,29 @@ describe('sampleClipSequential', () => {
     for (const stage of ['arrayBufferMs', 'demuxMs', 'decoderOpenMs', 'totalMs']) {
       expect(timings[stage]).toBeTypeOf('number')
     }
+  })
+
+  it('yields to the event loop between frames, so a run of ready frames never runs as one microtask chain', async () => {
+    const stream = createControlledFrameStream()
+    openSequentialFrameSourceMock.mockResolvedValue({ frames: stream.asyncIterable, stop: vi.fn() })
+    const detector: PoseDetector = {
+      estimatePose: vi.fn(async () => makePoseFrame()),
+      dispose: vi.fn(),
+    }
+
+    sampleClipSequential(makeFakeBlob(), detector, 1, {}, { enabled: true, targetSamplesPerSecond: null })
+    stream.push(makeSelectedFrame(0, 0))
+    stream.push(makeSelectedFrame(1, 0.1))
+    stream.push(makeSelectedFrame(2, 0.2))
+
+    // Microtasks alone: the loop detects frame 0 and then parks on its yield.
+    for (let i = 0; i < 200; i += 1) await Promise.resolve()
+    expect(detector.estimatePose).toHaveBeenCalledTimes(1)
+
+    // Each event-loop turn lets exactly one more frame through.
+    await yieldToEventLoop()
+    for (let i = 0; i < 200; i += 1) await Promise.resolve()
+    expect(detector.estimatePose).toHaveBeenCalledTimes(2)
   })
 
   it('stop() resolves with only the samples already collected — a detection that settles after stop() is not appended', async () => {

@@ -14,6 +14,7 @@ import {
 } from './sampleClip'
 import type { SampleClipHandle, SampleClipOptions } from './sampleClip'
 import { roundMs, summarizeDurations } from './perfTimings'
+import { yieldToEventLoop } from './yieldToEventLoop'
 
 /**
  * The WebCodecs counterpart to `sampleClip.ts`'s `<video>`-playback sampler: demuxes `sourceBlob`
@@ -207,6 +208,10 @@ export function sampleClipSequential(
           break
         }
         await handleSelectedFrame(selected)
+        if (settled) break
+        // The frame is already closed, so nothing is held open across this. Decoding here is
+        // frame-exact rather than real-time, so the yield costs wall-clock, never samples.
+        await yieldToEventLoop()
         if (settled) break
         waitStartedAt = performance.now()
       }
