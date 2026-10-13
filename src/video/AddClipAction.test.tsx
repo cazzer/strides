@@ -96,9 +96,11 @@ describe('AddClipAction', () => {
     // Record is the DEFAULT tab, so the path the old upload-only block could not reach is the one
     // presented first.
     expect(screen.getByRole('button', { name: /start recording/i })).toBeInTheDocument()
+    expect(screen.getByText(/film from the side/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /demo \(3 clips\)/i })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    expect(screen.getByText(/front view.*step width and arm swing/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/choose a video file/i)).toBeInTheDocument()
   })
 

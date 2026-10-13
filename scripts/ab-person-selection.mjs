@@ -67,7 +67,7 @@
  * rather than leaving it to be inferred from the numbers.
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
@@ -119,6 +119,23 @@ const CLIPS = {
     kind: 'upload',
     file: path.join(REPO_ROOT, 'e2e', 'fixtures', 'multiperson-track.mp4'),
   },
+}
+
+/**
+ * Private clips — gitignored, never in the default set, since this repo is public and they
+ * exist only on machines that have pulled them. Registered as `private-<basename>` from
+ * whatever H.264 copies sit in `fixtures-private/clips/`, so `--clips` must name them.
+ */
+const PRIVATE_CLIP_DIR = path.join(REPO_ROOT, 'fixtures-private', 'clips')
+const PUBLIC_CLIP_NAMES = Object.keys(CLIPS)
+if (existsSync(PRIVATE_CLIP_DIR)) {
+  for (const entry of readdirSync(PRIVATE_CLIP_DIR).sort()) {
+    if (!entry.endsWith('.mp4')) continue
+    CLIPS[`private-${path.basename(entry, '.mp4')}`] = {
+      kind: 'upload',
+      file: path.join(PRIVATE_CLIP_DIR, entry),
+    }
+  }
 }
 
 const DIAGNOSTICS_PREFIX = '[analysis-diagnostics]'
@@ -311,7 +328,7 @@ function parseArgs(argv) {
   const options = {
     arms: [],
     backendArms: [],
-    clips: Object.keys(CLIPS),
+    clips: PUBLIC_CLIP_NAMES,
     trials: 3,
     timeoutMs: 300_000,
     port: null,

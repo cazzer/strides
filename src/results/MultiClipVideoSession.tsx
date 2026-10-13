@@ -1,10 +1,11 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PoseDetector } from '../pose/detector'
 import { AddClipAction } from '../video/AddClipAction'
 import { ClipLoadStatus } from '../video/ClipLoadStatus'
 import { ClipPicker } from '../video/ClipPicker'
 import { releaseClipPoster } from '../video/posterFrame'
 import { ClipSlot } from './ClipSlot'
+import { clipHostsLiveElement } from './clipStripStatus'
 import type { ClipPendingLoad } from './ClipSlot'
 import { GuidedResultsView } from './GuidedResultsView'
 import { MotionStoryStage } from './MotionStoryStage'
@@ -23,6 +24,7 @@ import {
   scalePassLeaseIndex,
 } from './multiClipAnalysis'
 import type { ClipSession } from './multiClipAnalysis'
+import { clipViewLabel } from './clipProvenance'
 
 /** Stable empty list, so "extraction has not settled yet" never hands the cards a fresh
  * identity on every render. */
@@ -116,6 +118,27 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   // three files from the old first slot's own picker called `load()` three times on ONE
   // `useVideoSource` and produced a single clip, last file wins.
   const [clipIds, setClipIds] = useState<string[]>([])
+  const stripRef = useRef<HTMLUListElement>(null)
+  const [overflowCue, setOverflowCue] = useState<'left' | 'right' | null>(null)
+  useEffect(() => {
+    const strip = stripRef.current
+    if (!strip) return
+    const update = () => {
+      const hasLeft = strip.scrollLeft > 1
+      const hasRight = strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1
+      setOverflowCue(hasRight ? 'right' : hasLeft ? 'left' : null)
+    }
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update)
+    observer?.observe(strip)
+    strip.addEventListener('scroll', update)
+    window.addEventListener('resize', update)
+    update()
+    return () => {
+      observer?.disconnect()
+      strip.removeEventListener('scroll', update)
+      window.removeEventListener('resize', update)
+    }
+  }, [clipIds.length])
   const [pendingLoads, setPendingLoads] = useState<Record<string, ClipPendingLoad>>({})
   const [clipStates, setClipStates] = useState<Record<string, ClipSession>>({})
   const [activeClipIndex, setActiveClipIndex] = useState(0)
@@ -128,6 +151,18 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   // third conjunct of every clip's loop condition (design.md D1), so two open previews would mean
   // two clips decoding at once — precisely what scoping the loop to presentation exists to stop.
   const [presentedClipId, setPresentedClipId] = useState<string | null>(null)
+  const [seekRequest, setSeekRequest] = useState<{ clipId: string; timestamp: number; nonce: number } | null>(null)
+  const seekNonceRef = useRef(0)
+  const evidenceReturnFocusRef = useRef<HTMLButtonElement | null>(null)
+  const previouslyPresentedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (previouslyPresentedRef.current !== null && presentedClipId === null) {
+      const target = evidenceReturnFocusRef.current
+      if (target?.isConnected) target.focus()
+      evidenceReturnFocusRef.current = null
+    }
+    previouslyPresentedRef.current = presentedClipId
+  }, [presentedClipId])
   // Which results view renders. Seeded ONCE from the address (lazy initialiser, so a later render
   // never re-reads it) and written back on every change, so a reload or a shared link lands on the
   // same view. Classic unless the address says exactly `?view=guide` — see `resultsViewMode.ts`.
@@ -146,7 +181,23 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
     })
   }, [])
 
-  const dismissPreview = useCallback(() => setPresentedClipId(null), [])
+  const dismissPreview = useCallback(() => {
+    setPresentedClipId(null)
+    setSeekRequest(null)
+  }, [])
+  const presentClip = useCallback((clipId: string) => {
+    evidenceReturnFocusRef.current = null
+    setSeekRequest(null)
+    setPresentedClipId(clipId)
+  }, [])
+  const openEvidenceVideo = useCallback((clipIndex: number, timestamp: number, returnFocus: HTMLButtonElement | null) => {
+    const clipId = clipIds[clipIndex]
+    const clip = clipStates[clipId]
+    if (!clip || clipHostsLiveElement(clip.analysis.phase, clip.analysis.scalePass.status)) return
+    evidenceReturnFocusRef.current = returnFocus
+    setSeekRequest({ clipId, timestamp, nonce: ++seekNonceRef.current })
+    setPresentedClipId(clipId)
+  }, [clipIds, clipStates])
 
   const addClip = useCallback((source: Blob | File, opts?: { frameRateHint?: number }) => {
     const id = makeClipId()
@@ -211,6 +262,10 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   const clips: ClipSession[] = clipIds
     .map((id) => clipStates[id])
     .filter((session): session is ClipSession => session != null)
+  const clipViews = clipIds.map((id) => {
+    const view = clipStates[id]?.analysis.heuristics?.view.view
+    return view ? clipViewLabel(view) : 'View pending'
+  })
 
   // Adjusts which clip is active during render, mirroring useVideoAnalysis.ts's own
   // "adjusting state when a prop changes" pattern (React's documented approach —
@@ -343,10 +398,12 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
             working clip back into view when it starts.
           */}
           {clipIds.length > 0 && (
-            <ul
-              aria-label="Clips"
-              className="clip-strip flex min-w-0 flex-1 items-start gap-3 overflow-x-auto py-1"
-            >
+            <div className="relative order-3 min-w-0 basis-full sm:order-none sm:basis-0 sm:flex-1">
+              <ul
+              ref={stripRef}
+              aria-label="Clips; scroll sideways for more"
+              className="clip-strip flex min-w-0 items-start gap-3 overflow-x-auto py-1 pb-2"
+              >
               {clipIds.map((id, index) => (
                 <ClipSlot
                   key={id}
@@ -355,16 +412,24 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
                   detector={id === activeClipId ? detector : null}
                   index={index}
                   total={clipIds.length}
+                  viewLabel={clipViews[index]}
                   isActiveClip={id === activeClipId}
                   scalePassAllowed={id === scalePassClipId}
                   isPresented={id === presentedClipId}
-                  onPresent={setPresentedClipId}
+                  onPresent={presentClip}
+                  seekRequest={seekRequest?.clipId === id ? seekRequest : null}
                   onDismiss={dismissPreview}
                   onReport={handleReport}
                   onRemove={removeClip}
                 />
               ))}
-            </ul>
+              </ul>
+              {overflowCue && (
+                <p className="pointer-events-none absolute right-0 -bottom-3 bg-white/95 px-1 font-sans text-[10px] font-semibold text-neutral-700 dark:bg-black/95 dark:text-neutral-300" aria-hidden="true">
+                  {overflowCue === 'right' ? 'More clips →' : '← More clips'}
+                </p>
+              )}
+            </div>
           )}
 
           {/*
@@ -441,6 +506,9 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
               onChooseDifferentVideo={handleChooseDifferentVideo}
               evidence={evidence}
               clipCount={clips.length}
+              clipViews={clipViews}
+              sourceIndices={sourceIndices}
+              onOpenEvidenceVideo={clips.every((clip) => !clipHostsLiveElement(clip.analysis.phase, clip.analysis.scalePass.status)) ? openEvidenceVideo : undefined}
             />
           ) : (
             <ResultsView
@@ -449,6 +517,9 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
               onChooseDifferentVideo={handleChooseDifferentVideo}
               evidence={evidence}
               clipCount={clips.length}
+              clipViews={clipViews}
+              sourceIndices={sourceIndices}
+              onOpenEvidenceVideo={clips.every((clip) => !clipHostsLiveElement(clip.analysis.phase, clip.analysis.scalePass.status)) ? openEvidenceVideo : undefined}
             />
           )}
             </div>

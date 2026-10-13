@@ -234,6 +234,22 @@ describe('ResultsView', () => {
     expect(text).not.toMatch(/more metrics/i)
   })
 
+  it('does not count a non-null centimetre value excluded for an unsuitable view', () => {
+    const heuristics = makeHeuristics()
+    heuristics.stepWidthCm = { ...heuristics.stepWidthCm, viewFit: 'unsuitable' }
+    renderResultsView({
+      analysis: makeAnalysis({
+        phase: 'ready',
+        heuristics,
+        scalePass: { status: 'done', diagnostics: null },
+      }),
+    })
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'A second look at the clip added 1 more metric.',
+    )
+    expect(screen.getByRole('status')).not.toHaveTextContent('2 more metrics')
+  })
+
   it("says the second look couldn't add the extra metrics when it completes without any grafted value", () => {
     // A 'done' pass includes the measured-but-unfittable graft: calibration is non-null but the
     // centimetre value stays null and the panel still lists the metric as not measured — the

@@ -9,8 +9,8 @@ import type {
   SpeedSensitivity,
 } from '../guidance/types'
 import type { MetricResult } from '../heuristics/types'
-import { EvidenceCanvas } from './EvidenceCanvas'
-import { altFor, captionFor, provenanceFor } from './evidenceCaptions'
+import { EvidenceFrame } from './EvidenceFrame'
+import { provenanceFor } from './evidenceCaptions'
 import { guidedHeadlineParts } from './formatGuidedValue'
 import {
   cardReferences,
@@ -50,7 +50,7 @@ import type { MetricCardEvidence } from './MetricsPanel'
  * caveated, one sentence saying what the metric is, the metric's own caveat, the scale with the
  * evidence thumbnail beside it, one citation line naming the source, its population in short and its
  * sample size (and "derived" where the band is arithmetic), the first sentence of each mandatory
- * note, and at most one `Try:` line.
+ * note, and at most one optional experiment line.
  *
  * Behind one `<details>`: the speed caveat in full, the source's own full population sentence, what
  * a derivation says and rests on, the band's own note, the population's central statistic, the rest
@@ -300,9 +300,11 @@ function SpeedNote({ speed }: { speed: SpeedSensitivity }) {
 function CardEvidence({
   evidence,
   clipCount,
+  onOpenEvidenceVideo,
 }: {
   evidence: MetricCardEvidence
   clipCount: number
+  onOpenEvidenceVideo?: (clipIndex: number, timestamp: number, returnFocus: HTMLButtonElement | null) => void
 }) {
   const provenance = provenanceFor(evidence.clipIndex, clipCount)
   if (evidence.pending === true) {
@@ -324,14 +326,7 @@ function CardEvidence({
       <ul className="space-y-3">
         {evidence.items.map((item, index) => (
           <li key={`${index}:${item.plan.base.timestamp}`}>
-            <figure className="space-y-1">
-              <div className="w-36 max-w-full">
-                <EvidenceCanvas canvas={item.canvas} alt={altFor(item.plan)} />
-              </div>
-              <figcaption className="font-sans text-[11px] leading-snug text-neutral-600 dark:text-neutral-400">
-                {captionFor(item.plan)}
-              </figcaption>
-            </figure>
+            <EvidenceFrame item={item} clipLabel={`clip ${evidence.clipIndex + 1} of ${clipCount}`} onOpenVideo={onOpenEvidenceVideo ? (returnFocus) => onOpenEvidenceVideo(evidence.clipIndex, item.plan.base.timestamp, returnFocus) : undefined} />
           </li>
         ))}
       </ul>
@@ -365,16 +360,29 @@ function CorroborationList({
 }
 
 /**
- * The one studied change this card shows: `Try: a metronome 5–10% above your own step rate — …`
+ * The one studied change this card shows, conditional on a deliberate goal. A measured value by
+ * itself is not a reason to change gait.
  *
  * The text states a change from the runner's own value and names no value to reach — the guidance
  * test enforces both, and that the link is one of this metric's own recorded studies of changes.
  * The study's kind, summary and full citation are in the disclosure, where it renders again as text.
  */
-function TryLine({ text, link }: { text: string; link: GuidanceLink }) {
+function TryLine({
+  text,
+  link,
+  cadence,
+}: {
+  text: string
+  link: GuidanceLink
+  cadence: boolean
+}) {
   return (
     <p className={`guided-results__try ${BODY}`}>
-      <span className="font-semibold text-black dark:text-white">Try: </span>
+      <span className="font-semibold text-black dark:text-white">
+        {cadence
+          ? 'If you choose to raise step rate: '
+          : 'If you choose to change your form: '}
+      </span>
       {text}
       {/*
         ` · ` and the card's own attribution size, not an em dash at body size: the stored text can
@@ -395,6 +403,8 @@ export interface GuidedMetricCardProps {
   entry: GuidedEntry
   evidence?: MetricCardEvidence
   clipCount: number
+  sourceLabel?: string
+  onOpenEvidenceVideo?: (clipIndex: number, timestamp: number, returnFocus: HTMLButtonElement | null) => void
   /**
    * `'framed'` (default) draws the card's own 2 px frame. `'divided'` separates it from the card
    * above with a top rule only — for cards inside a group that is already framed, where a frame
@@ -414,6 +424,8 @@ export function GuidedMetricCard({
   entry,
   evidence,
   clipCount,
+  sourceLabel,
+  onOpenEvidenceVideo,
   variant = 'framed',
 }: GuidedMetricCardProps) {
   const headingId = useId()
@@ -510,6 +522,7 @@ export function GuidedMetricCard({
             </span>
           )}
         </p>
+        {sourceLabel && <p className="font-sans text-xs font-semibold text-neutral-600 dark:text-neutral-400">Measured from {sourceLabel}</p>}
         {tier === 'caveated' && (
           <p className="guided-results__confidence font-sans text-sm">
             <strong>{confidenceLabel(metric)}</strong>
@@ -579,11 +592,15 @@ export function GuidedMetricCard({
           )}
 
           {showsTry && (
-            <TryLine text={guidance.tryLine!.text} link={references.tryLink!} />
+            <TryLine
+              text={guidance.tryLine!.text}
+              link={references.tryLink!}
+              cadence={metric.metric === 'cadence'}
+            />
           )}
         </div>
         {evidence !== undefined && (
-          <CardEvidence evidence={evidence} clipCount={clipCount} />
+          <CardEvidence evidence={evidence} clipCount={clipCount} onOpenEvidenceVideo={onOpenEvidenceVideo} />
         )}
       </div>
 

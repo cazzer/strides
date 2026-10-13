@@ -10,6 +10,7 @@ export interface ClipStripEntryProps {
    * source clip to an entry by counting. */
   index: number
   total: number
+  viewLabel?: string
   status: ClipStripStatus
   poster: ClipPoster | null
   /**
@@ -74,6 +75,7 @@ export interface ClipStripEntryProps {
 export function ClipStripEntry({
   index,
   total,
+  viewLabel = 'View pending',
   status,
   poster,
   hostsLiveElement,
@@ -108,9 +110,9 @@ export function ClipStripEntry({
   useEffect(() => {
     if (!hostsLiveElement) return
     entryRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
-  }, [hostsLiveElement])
+  }, [hostsLiveElement, index])
 
-  const label = `Clip ${index + 1} of ${total}: ${status.announcement}`
+  const label = `Clip ${index + 1} of ${total}: ${status.announcement} ${viewLabel}.`
 
   // Two independent reasons the frame must show the real element rather than the poster: the
   // sampler is reading it, or a reader is looking at it. Drawing a still over either would just
@@ -121,7 +123,7 @@ export function ClipStripEntry({
     <li
       ref={entryRef}
       data-clip-condition={status.condition}
-      className="clip-strip__entry relative shrink-0"
+      className={`clip-strip__entry relative shrink-0 ${hostsLiveElement ? 'sticky left-0 right-0 z-20' : ''}`}
     >
       <ClipPreviewDialog
         open={isPresented}
@@ -170,15 +172,16 @@ export function ClipStripEntry({
           className={
             isPresented
               ? 'clip-strip__caption flex shrink-0 items-center gap-2 font-sans text-sm leading-tight font-semibold uppercase tracking-wide text-white'
-              : 'clip-strip__caption mt-0.5 flex w-24 items-center gap-1 font-sans text-[0.6875rem] leading-tight font-semibold uppercase tracking-wide'
+              : 'clip-strip__caption mt-0.5 flex w-24 flex-wrap items-center gap-x-1 font-sans text-[0.6875rem] leading-tight font-semibold uppercase tracking-wide'
           }
         >
           <span aria-hidden="true" className="shrink-0">
             {status.glyph}
           </span>
           <span aria-hidden="true" className={isPresented ? '' : 'truncate'}>
-            {isPresented ? label : status.caption}
+            {status.caption}
           </span>
+          {!isPresented && <span aria-hidden="true" className="w-full truncate normal-case">{viewLabel}</span>}
           <span className="sr-only">{label}</span>
         </p>
       </ClipPreviewDialog>
@@ -208,7 +211,7 @@ export function ClipStripEntry({
         className="absolute top-0 right-0 z-20 flex h-5 w-5 items-center justify-center border-b-2 border-l-2 border-black bg-white font-sans text-xs leading-none font-bold text-black transition-colors hover:bg-black hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:border-white dark:bg-black dark:text-white dark:hover:bg-white dark:hover:text-black"
       >
         <span aria-hidden="true">×</span>
-        <span className="sr-only">Remove clip</span>
+        <span className="sr-only">Remove clip {index + 1}, {viewLabel}</span>
       </button>
     </li>
   )

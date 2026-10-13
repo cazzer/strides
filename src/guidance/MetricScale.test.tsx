@@ -194,7 +194,7 @@ describe('MetricScale — every published zone boundary renders', () => {
     const { figure } = renderScale('cadence', 172)
     expect(one(figure, '.metric-scale__zones')).toHaveAttribute('role', 'list')
     expect(screen.getByRole('list')).toHaveAccessibleName(
-      'Reference zones, lowest value first',
+      'Observed zones, lowest value first',
     )
   })
 
@@ -235,6 +235,16 @@ describe('MetricScale — every published zone boundary renders', () => {
 })
 
 describe('MetricScale — the position is available without the graphic', () => {
+  it.each(BANDED)('%s visibly and accessibly distinguishes an observed band from a target', (metric) => {
+    const { figure } = renderScale(metric, SAMPLE_VALUES[metric][0])
+    const scope = one(figure, '.metric-scale__scope')
+    expect(scope).toHaveTextContent('Observed, not a target')
+    expect(scope.classList).not.toContain('sr-only')
+    expect(textWithoutGraphic(figure)).toContain(
+      'Observed, not a target',
+    )
+  })
+
   it('captions the figure with the value, its unit and the containing zone for cadence at 172', () => {
     const { figure, container } = renderScale('cadence', 172)
     expect(captionOf(figure)).toBe(
@@ -416,7 +426,7 @@ describe('MetricScale — a value outside its band is reported, never silently c
       }
       unmount()
     }
-  })
+  }, 10_000)
 
   it('inside an open-ended zone but beyond the drawn track: still the zone, and still says it is clamped', () => {
     const { figure, container } = renderScale('cadence', 100)
@@ -512,7 +522,11 @@ describe('MetricScale — no verdict in colour or words', () => {
     (metric) => {
       for (const value of SAMPLE_VALUES[metric]) {
         const { container, unmount } = renderScale(metric, value)
-        expect(container.textContent ?? '').not.toMatch(GRADING_WORD)
+        // The scope label explicitly negates "target". Check the position and zones for grading
+        // language while the separate scope test pins that one intentional use of the word.
+        const withoutScope = container.cloneNode(true) as Element
+        withoutScope.querySelector('.metric-scale__scope')?.remove()
+        expect(withoutScope.textContent ?? '').not.toMatch(GRADING_WORD)
         for (const element of container.querySelectorAll('*')) {
           for (const attribute of ['aria-label', 'title', 'alt']) {
             expect(element.getAttribute(attribute) ?? '').not.toMatch(

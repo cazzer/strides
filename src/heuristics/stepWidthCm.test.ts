@@ -343,7 +343,7 @@ describe('computeStepWidthCm exemplars', () => {
     expect(result.exemplars![0].timestamp).toBeCloseTo(5 / 30, 10)
   })
 
-  it('names each instant’s own foot, so both halves of the pair get their caliper drawn', () => {
+  it('names each instant’s own foot, so both separate plants get their caliper drawn', () => {
     // REGRESSION (`strides-b5o`). This module's `buildExemplars` was a line-for-line copy of
     // `stepWidth.ts`'s that had lost `measuredSide`/`pairedMeasuredSide`. Neither module sets a
     // pair-level `side` (deliberately — the two instants are opposite feet), so without them
@@ -373,17 +373,24 @@ describe('computeStepWidthCm exemplars', () => {
     expect(evidence.pairedMeasuredSide).not.toBeUndefined()
     expect(evidence.measuredSide).not.toBe(evidence.pairedMeasuredSide)
 
-    // ...and its consequence: a caliper on each half of a genuinely two-instant ghost.
+    // ...and its consequence: each measured plant renders as its own fully visible still with
+    // the caliper for that foot. A blended front-view pair can look like one ambiguous runner.
     const plan = planMetricEvidence(result, frames, { width: 1920, height: 1080 })
     expect(plan.status).toBe('planned')
-    const item = (plan as Extract<typeof plan, { status: 'planned' }>).items[0]
-    expect(item.ghost).not.toBeNull()
-
-    const calipers = planEvidenceAnnotations(item, 640).ops.filter(
-      (op): op is EvidenceCaliperOp =>
-        op.kind === 'caliper' && op.role === 'ankleOffsetCaliper',
-    )
-    expect(calipers.map((op) => op.instant).sort()).toEqual(['base', 'ghost'])
+    const items = (plan as Extract<typeof plan, { status: 'planned' }>).items
+    expect(items).toHaveLength(2)
+    expect(items.map((item) => item.base.side)).toEqual([
+      evidence.measuredSide,
+      evidence.pairedMeasuredSide,
+    ])
+    for (const item of items) {
+      expect(item.ghost).toBeNull()
+      const calipers = planEvidenceAnnotations(item, 640).ops.filter(
+        (op): op is EvidenceCaliperOp =>
+          op.kind === 'caliper' && op.role === 'stepWidthOffsetCaliper',
+      )
+      expect(calipers.map((op) => op.instant)).toEqual(['base'])
+    }
   })
 })
 

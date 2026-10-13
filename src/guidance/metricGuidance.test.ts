@@ -1715,7 +1715,7 @@ describe('the one studied change a card may show', () => {
       if (entry.tryLine === null) continue
       const { text } = entry.tryLine
       expect(text.length, entry.metric).toBeLessThanOrEqual(100)
-      // Mid-sentence: the view prefixes "Try: ".
+      // Mid-sentence: the view prefixes the line with an explicit choice condition.
       expect(text[0], entry.metric).toBe(text[0].toLowerCase())
       expect(text, entry.metric).not.toMatch(
         /\b(should|target|aim|must|ought|ideal|optimal|correct|proper|good|bad|poor|excessive|normal|better|worse|recommended)\b/i,

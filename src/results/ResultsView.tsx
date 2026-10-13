@@ -1,6 +1,8 @@
 import type { AggregateAnalysisState } from './types'
+import type { MetricId } from '../heuristics/types'
 import { MetricsPanel } from './MetricsPanel'
 import type { MetricCardEvidence } from './MetricsPanel'
+import { metricTier } from './metricConfidence'
 
 export interface ResultsViewProps {
   /** Has no `progress` — see `AggregateAnalysisState`; per-clip progress lives on the clip strip. */
@@ -22,6 +24,9 @@ export interface ResultsViewProps {
   evidence?: readonly MetricCardEvidence[]
   /** How many clips the session holds, so a card can say which one its evidence came from. */
   clipCount?: number
+  clipViews?: readonly string[]
+  sourceIndices?: Record<MetricId, number> | null
+  onOpenEvidenceVideo?: (clipIndex: number, timestamp: number, returnFocus: HTMLButtonElement | null) => void
 }
 
 /**
@@ -39,6 +44,9 @@ export function ResultsView({
   onChooseDifferentVideo,
   evidence,
   clipCount,
+  clipViews,
+  sourceIndices,
+  onOpenEvidenceVideo,
 }: ResultsViewProps) {
   const { phase, heuristics, error, start } = analysis
   // A 'done' scale pass includes the measured-but-unfittable graft, where a grafted metric's
@@ -51,12 +59,13 @@ export function ResultsView({
   const scalePassCouldntAdd =
     " A second look at the clip couldn't add the extra metrics."
   // Two metrics (`verticalOscillationCm`, `stepWidthCm`, #45) can now independently gain a value
-  // from the same completed scale pass — count how many actually did, rather than assuming
+  // from the same completed scale pass — count how many the panel actually shows as measured,
+  // excluding non-null values from unsuitable views, rather than assuming
   // "added" means exactly one, so the status line says "1 more metric" or "2 more metrics"
   // correctly instead of a copy that undercounts once a pass grafts both.
   const addedMetricCount = heuristics
-    ? [heuristics.verticalOscillationCm.value !== null, heuristics.stepWidthCm.value !== null]
-        .filter(Boolean).length
+    ? [heuristics.verticalOscillationCm, heuristics.stepWidthCm]
+        .filter((metric) => metricTier(metric) !== 'excluded').length
     : 0
   // 'error' doesn't disable the button -- Analyze must stay re-runnable after a failed run,
   // not get stuck permanently disabled with no way forward. After a *completed* run the
@@ -144,6 +153,9 @@ export function ResultsView({
             scalePassStatus={analysis.scalePass.status}
             evidence={evidence}
             clipCount={clipCount}
+            clipViews={clipViews}
+            sourceIndices={sourceIndices}
+            onOpenEvidenceVideo={onOpenEvidenceVideo}
           />
           {/*
             Save/export (e.g. Google Drive) is explicitly out of scope for this build — this is

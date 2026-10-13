@@ -112,6 +112,39 @@ export function ClipPicker({ onSource, onRecordingStateChange }: ClipPickerProps
         </button>
       </div>
 
+      <div className="border-l-4 border-brand-600 bg-neutral-100 px-4 py-3 text-sm dark:border-brand-400 dark:bg-neutral-900">
+        <p className="font-semibold">Film a clear stretch of your usual run</p>
+        <ul className="mt-2 list-disc space-y-1 pl-5">
+          <li>
+            Keep the camera steady and your whole body, including both feet, in frame for several
+            unobstructed strides.
+          </li>
+          <li>
+            Film from the side, across your path, for stride, knee bend, and bounce measures.
+          </li>
+          <li>
+            Add a front view, facing you as you run toward the camera, for step width and arm swing.
+          </li>
+        </ul>
+      </div>
+
+      <div className="text-sm text-neutral-700 dark:text-neutral-300">
+        <p>
+          <strong>Video handling:</strong> Your clip is analyzed in this browser. The app does not
+          upload your video to a server.
+        </p>
+        <details className="mt-1">
+          <summary className="w-fit cursor-pointer underline underline-offset-2">
+            More about video handling
+          </summary>
+          <p className="mt-2">
+            Clips and generated stills remain in this page&apos;s memory while you use them. Removing
+            a clip removes it from this session; an uploaded original stays on your device. The app
+            downloads analysis models and fonts separately from your video.
+          </p>
+        </details>
+      </div>
+
       {activeTab === 'record' && (
         <WebcamCapture
           onRecorded={(blob, opts) =>

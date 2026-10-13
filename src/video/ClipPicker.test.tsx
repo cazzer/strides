@@ -36,6 +36,40 @@ describe('ClipPicker', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('keeps view and capture guidance visible before either entry action', () => {
+    render(<ClipPicker onSource={vi.fn()} />)
+
+    const checkGuidance = () => {
+      expect(screen.getByText(/whole body, including both feet/i)).toBeInTheDocument()
+      expect(screen.getByText(/several unobstructed strides/i)).toBeInTheDocument()
+      expect(screen.getByText(/film from the side/i)).toBeInTheDocument()
+      expect(screen.getByText(/front view.*step width and arm swing/i)).toBeInTheDocument()
+    }
+
+    checkGuidance()
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    checkGuidance()
+    expect(screen.getByLabelText(/choose a video file/i)).toBeInTheDocument()
+  })
+
+  it('explains local video handling before recording or file selection', () => {
+    render(<ClipPicker onSource={vi.fn()} />)
+
+    const checkHandling = () => {
+      expect(screen.getByText(/your clip is analyzed in this browser/i)).toBeInTheDocument()
+      expect(screen.getByText(/does not upload your video to a server/i)).toBeInTheDocument()
+    }
+
+    checkHandling()
+    fireEvent.click(screen.getByText(/more about video handling/i))
+    expect(screen.getByText(/generated stills remain in this page/i)).toBeInTheDocument()
+    expect(screen.getByText(/downloads analysis models and fonts separately/i)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    checkHandling()
+    expect(screen.getByLabelText(/choose a video file/i)).toBeInTheDocument()
+  })
+
   it('offers exactly one demo action, not one per clip', () => {
     render(<ClipPicker onSource={vi.fn()} />)
     expect(screen.getAllByRole('button', { name: /demo/i })).toHaveLength(1)

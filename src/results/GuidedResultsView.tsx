@@ -13,10 +13,11 @@ import {
   notMeasuredReason,
 } from './guidedGroups'
 import type { GuidedEntry } from './guidedGroups'
-import { METRIC_LABELS } from './metricConfidence'
+import { METRIC_LABELS, metricTier } from './metricConfidence'
 import type { MetricCardEvidence } from './MetricsPanel'
 import type { ResultsViewProps } from './ResultsView'
 import type { ScalePassStatus } from './types'
+import { clipSourceLabel } from './clipProvenance'
 
 /**
  * Identical to `ResultsViewProps` BY CONSTRUCTION rather than restated, so the two views stay
@@ -64,15 +65,18 @@ export function GuidedResultsView({
   onChooseDifferentVideo,
   evidence = NO_EVIDENCE,
   clipCount = 1,
+  clipViews = [],
+  sourceIndices = null,
+  onOpenEvidenceVideo,
 }: GuidedResultsViewProps) {
   const { phase, heuristics, error, start } = analysis
   const scalePassCouldntAdd =
     " A second look at the clip couldn't add the extra metrics."
   const addedMetricCount = heuristics
     ? [
-        heuristics.verticalOscillationCm.value !== null,
-        heuristics.stepWidthCm.value !== null,
-      ].filter(Boolean).length
+        heuristics.verticalOscillationCm,
+        heuristics.stepWidthCm,
+      ].filter((metric) => metricTier(metric) !== 'excluded').length
     : 0
   const analyzeDisabled = phase === 'sampling' || phase === 'processing'
   const analyzeDisabledReason = analyzeDisabled
@@ -138,6 +142,9 @@ export function GuidedResultsView({
           scalePassStatus={analysis.scalePass.status}
           evidence={evidence}
           clipCount={clipCount}
+          clipViews={clipViews}
+          sourceIndices={sourceIndices}
+          onOpenEvidenceVideo={onOpenEvidenceVideo}
         />
       )}
     </section>
@@ -193,31 +200,32 @@ function fragmentTarget(
   return target !== null && root.contains(target) ? target : null
 }
 
+function revealMetric(event: MouseEvent<HTMLAnchorElement>, id: string) {
+  // Runs before the browser follows the link, so the target is already visible when it scrolls.
+  // A click on a link to the CURRENT hash fires no hashchange, which is why this is not left to
+  // the listener in `GuidedMeasurements`. A modified click opens a new tab and leaves this page be.
+  if (
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  ) {
+    return
+  }
+  const target = event.currentTarget.ownerDocument.getElementById(id)
+  if (target === null) return
+  openAncestors(target)
+  // The reader asked for this card, so focus follows. `preventScroll`: the link's own navigation
+  // scrolls, and its hashchange records the fragment as handled.
+  target.focus({ preventScroll: true })
+}
+
 function Contents({
   entries,
 }: {
   entries: { entry: GuidedEntry; excluded: boolean }[]
 }) {
-  // Runs before the browser follows the link, so the target is already visible when it scrolls.
-  // A click on a link to the CURRENT hash fires no hashchange, which is why this is not left to
-  // the listener in `GuidedMeasurements`. A modified click opens a new tab and leaves this page be.
-  const reveal = (event: MouseEvent<HTMLAnchorElement>, id: string) => {
-    if (
-      event.button !== 0 ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.shiftKey ||
-      event.altKey
-    ) {
-      return
-    }
-    const target = event.currentTarget.ownerDocument.getElementById(id)
-    if (target === null) return
-    openAncestors(target)
-    // The reader asked for this card, so focus follows. `preventScroll`: the link's own navigation
-    // scrolls, and its hashchange records the fragment as handled.
-    target.focus({ preventScroll: true })
-  }
   return (
     <nav
       aria-label="Measurements on this page"
@@ -237,7 +245,7 @@ function Contents({
             <li key={id} data-metric={entry.metric.metric}>
               <a
                 href={`#${id}`}
-                onClick={(event) => reveal(event, id)}
+                onClick={(event) => revealMetric(event, id)}
                 className={`guided-results__contents-link flex items-baseline justify-between gap-3 py-0.5 font-sans text-sm text-black dark:text-white ${FOCUS}`}
               >
                 <span className="font-semibold underline decoration-1 underline-offset-2">
@@ -261,11 +269,33 @@ function names(entries: GuidedEntry[]): string {
   return entries.map((entry) => METRIC_LABELS[entry.metric.metric]).join(', ')
 }
 
+/** A shared introduction; each metric still lives in its honest measured/ranged group below. */
+const BOUNCE_MEASURES = [
+  {
+    id: 'verticalOscillation',
+    label: 'Bounce relative to torso length',
+    explanation: 'Uses your torso length as the denominator.',
+  },
+  {
+    id: 'verticalOscillationCm',
+    label: 'Bounce in centimetres',
+    explanation: 'Uses real-world scale from the clip; it may be unavailable.',
+  },
+  {
+    id: 'verticalRatio',
+    label: 'Bounce relative to stride length',
+    explanation: 'Uses the distance you travel per stride as the denominator.',
+  },
+] as const
+
 export interface GuidedMeasurementsProps {
   heuristics: FormHeuristicsResult
   scalePassStatus: ScalePassStatus
   evidence: readonly MetricCardEvidence[]
   clipCount: number
+  clipViews?: readonly string[]
+  sourceIndices?: Record<MetricId, number> | null
+  onOpenEvidenceVideo?: (clipIndex: number, timestamp: number, returnFocus: HTMLButtonElement | null) => void
   /** The guidance record. A parameter only so a test can withhold a band; defaults to the shipped one. */
   guidance?: Record<MetricId, MetricGuidance>
 }
@@ -285,6 +315,9 @@ export function GuidedMeasurements({
   scalePassStatus,
   evidence,
   clipCount,
+  clipViews = [],
+  sourceIndices = null,
+  onOpenEvidenceVideo,
   guidance = METRIC_GUIDANCE,
 }: GuidedMeasurementsProps) {
   const bandedHeadingId = useId()
@@ -292,6 +325,9 @@ export function GuidedMeasurements({
   const notMeasuredHeadingId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
   const { banded, unbanded, notMeasured } = guidedGroups(heuristics, guidance)
+  const bounceEntries = new Map(
+    [...banded, ...unbanded, ...notMeasured].map((entry) => [entry.metric.metric, entry]),
+  )
   // Keyed by metric, never by position: evidence arrives in the extraction plan's own order.
   const evidenceByMetric = new Map(
     evidence.map((entry) => [entry.metric, entry]),
@@ -330,6 +366,8 @@ export function GuidedMeasurements({
           entry={entry}
           evidence={evidenceByMetric.get(entry.metric.metric)}
           clipCount={clipCount}
+          sourceLabel={clipCount > 1 && sourceIndices ? clipSourceLabel(sourceIndices[entry.metric.metric], clipCount, clipViews) : undefined}
+          onOpenEvidenceVideo={onOpenEvidenceVideo}
           variant={variant}
         />
       ))}
@@ -349,6 +387,44 @@ export function GuidedMeasurements({
           ...notMeasured.map((entry) => ({ entry, excluded: true })),
         ]}
       />
+
+      <section
+        aria-labelledby="guided-bounce-heading"
+        className="guided-results__bounce space-y-3 border-l-4 border-brand-600 bg-neutral-50 p-4 dark:border-brand-400 dark:bg-neutral-900"
+      >
+        <h2 id="guided-bounce-heading" className={H2}>
+          Three ways to describe bounce
+        </h2>
+        <p className={BODY}>
+          These measures describe related upward motion on different scales. Their values answer
+          different questions; open each result for its evidence and limits.
+        </p>
+        <ol className="grid gap-3 sm:grid-cols-3">
+          {BOUNCE_MEASURES.map(({ id, label, explanation }) => {
+            const entry = bounceEntries.get(id)
+            if (!entry) return null
+            const excluded = metricTier(entry.metric) === 'excluded'
+            const targetId = guidedEntryId(id)
+            return (
+              <li key={id} className="border-t border-neutral-300 pt-2 dark:border-neutral-700">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                  <a
+                    href={`#${targetId}`}
+                    onClick={(event) => revealMetric(event, targetId)}
+                    className={`font-sans text-sm font-semibold text-black underline underline-offset-2 dark:text-white ${FOCUS}`}
+                  >
+                    {label}
+                  </a>
+                  <span className={`tabular-nums ${MUTED}`}>
+                    {guidedHeadline(entry, excluded) ?? 'not measured'}
+                  </span>
+                </div>
+                <p className={BODY}>{explanation}</p>
+              </li>
+            )
+          })}
+        </ol>
+      </section>
 
       {banded.length > 0 && (
         <section

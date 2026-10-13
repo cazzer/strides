@@ -37,3 +37,6 @@ dist-ssr
 # public/ for the length of one provenance check and deleted again; only ever visible here if a
 # harness run was killed mid-check.
 /public/.strides-harness-identity.json
+
+# Private test clips (Drive "Runs" folder) — this repo is PUBLIC, never commit these.
+/fixtures-private
