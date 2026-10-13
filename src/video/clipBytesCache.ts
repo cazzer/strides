@@ -153,6 +153,21 @@ export function probeClipContainerTiming(blob: Blob): Promise<ContainerTimingPro
   )
 }
 
+/**
+ * The clip's demuxed track for a ONE-OFF reader — a poster or an evidence pass, not a sampling pass
+ * (`strides-6i6.4`). The cached track when a sampling pass still holds it, so the two share one
+ * demux; otherwise a read and demux of its own that is deliberately NOT cached, so it lives exactly
+ * as long as the reader holds it rather than until the clip leaves the session. Caching it would
+ * re-populate an entry `releaseClipDemux` dropped on purpose, and nothing would ever drop it again.
+ *
+ * Rejects when the blob cannot be read or is not a demuxable MP4.
+ */
+export function borrowClipDemux(blob: Blob): Promise<DemuxedTrack> {
+  const cached = demuxes.get(blob)
+  if (cached !== undefined) return cached
+  return readClipBytes(blob).then((bytes) => demuxMp4(bytes))
+}
+
 /** Drops the clip's demuxed track — the large entry — once no pass will sample it again. The
  * container probe stays. A later `demuxClip` reads and demuxes afresh. */
 export function releaseClipDemux(blob: Blob): void {
