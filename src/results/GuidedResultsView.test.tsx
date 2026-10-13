@@ -823,9 +823,12 @@ describe('The heading outline reads group → measurement', () => {
       readyAnalysis(withUnmeasured(['kneeDrive', 'cadence'])),
     )
     const h2s = Array.from(container.querySelectorAll('h2'))
-    expect(h2s).toHaveLength(4) // Bounce explainer, then the three metric groups.
+    // Energy cost, the bounce explainer, then the three metric groups.
+    expect(h2s).toHaveLength(5)
     for (const h2 of h2s) expect(h2.closest('summary')).toBeNull()
-    const h3s = Array.from(container.querySelectorAll('h3'))
+    const h3s = Array.from(
+      container.querySelectorAll('section.guided-results__group h3'),
+    )
     expect(h3s).toHaveLength(13)
     for (const h3 of h3s) {
       const preceding = h2s.filter(
@@ -2611,5 +2614,373 @@ describe('how much a card says before the reader opens anything', () => {
     expect(
       document.querySelectorAll('.guided-results__group-intro'),
     ).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// Energy cost headlines (narrative-metric-headlines)
+// ---------------------------------------------------------------------------------------------
+
+describe('Energy cost headlines above the contents list', () => {
+  const VAN_HOOREN_URL = 'https://pmc.ncbi.nlm.nih.gov/articles/PMC11127892/'
+  const GRADING =
+    /\b(good|bad|poor|better|worse|best|worst|optimal|ideal|excessive|healthy|unhealthy|target|goal|should|correct|incorrect|normal|abnormal|recommended)\b/i
+
+  function withReadings({
+    cadence,
+    vo,
+    voConfidence,
+  }: {
+    cadence?: number | null
+    vo?: number | null
+    voConfidence?: number
+  }): FormHeuristicsResult {
+    return makeHeuristics({
+      ...(cadence === undefined
+        ? {}
+        : {
+            cadence: makeMetric('cadence', {
+              value: cadence,
+              ...(cadence === null ? { confidence: 0 } : {}),
+            }),
+          }),
+      ...(vo === undefined
+        ? {}
+        : {
+            verticalOscillationCm: makeVerticalOscillationCm({
+              value: vo,
+              ...(vo === null ? { confidence: 0, calibration: null } : {}),
+              ...(voConfidence === undefined ? {} : { confidence: voConfidence }),
+            }),
+          }),
+    })
+  }
+
+  function headlinesSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Energy cost' })
+  }
+
+  function stories(): HTMLElement[] {
+    return Array.from(
+      headlinesSection().querySelectorAll<HTMLElement>(
+        '.guided-results__headline-story',
+      ),
+    )
+  }
+
+  function emptyState(): HTMLElement {
+    return headlinesSection().querySelector<HTMLElement>(
+      '.guided-results__headlines-empty',
+    )!
+  }
+
+  /** A clone with screen-reader-only text and the named blocks removed. */
+  function without(element: Element, remove: string[] = []): Element {
+    const clone = element.cloneNode(true) as Element
+    for (const selector of ['.sr-only', ...remove]) {
+      clone.querySelectorAll(selector).forEach((node) => node.remove())
+    }
+    return clone
+  }
+
+  /** Tokens carrying a letter or a digit: a dash or a middot is punctuation, not a word. */
+  function words(element: Element): number {
+    return (element.textContent ?? '')
+      .split(/\s+/)
+      .filter((token) => /[\p{L}\p{N}]/u.test(token)).length
+  }
+
+  it('sits between the completion line and the contents list', () => {
+    renderView(readyAnalysis(withReadings({ vo: 10.4 })))
+    const status = screen.getByRole('status')
+    expect(status.textContent).toMatch(/^Analysis complete\./)
+    const section = headlinesSection()
+    const contents = screen.getByRole('navigation', {
+      name: 'Measurements on this page',
+    })
+    expect(
+      status.compareDocumentPosition(section) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(
+      section.compareDocumentPosition(contents) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(section).toHaveClass('guided-results__headlines')
+  })
+
+  it('renders a normal-tier bounce headline at 10.4 cm in reading order', () => {
+    renderView(readyAnalysis(withReadings({ vo: 10.4 })))
+    expect(stories()).toHaveLength(1)
+    const [story] = stories()
+    expect(story).toHaveAttribute('data-story', 'bounce')
+    expect(
+      within(story).getByRole('heading', {
+        level: 3,
+        name: METRIC_LABELS.verticalOscillationCm,
+      }),
+    ).toBeInTheDocument()
+    expect(story).toHaveTextContent('10.4 cm')
+    expect(story).toHaveTextContent('above the 6.0–9.5 cm range')
+    expect(story).toHaveTextContent('Varies with pace')
+    const consequence = story.querySelector<HTMLElement>(
+      '.guided-results__consequence',
+    )!
+    expect(consequence).toHaveTextContent(
+      METRIC_GUIDANCE.verticalOscillationCm.economyConsequence!.text,
+    )
+    expect(
+      within(consequence).getByRole('link', {
+        name: /Van Hooren et al\. 2024/,
+      }),
+    ).toHaveAttribute('href', VAN_HOOREN_URL)
+    const note = story.querySelector('.guided-results__headline-note')!
+    expect(note).toHaveTextContent(
+      splitFirstSentence(METRIC_GUIDANCE.verticalOscillationCm.mandatoryNotes[0])
+        .first,
+    )
+    const tryLine = story.querySelector('.guided-results__try')!
+    expect(tryLine).toHaveTextContent(/^If you choose to change your form:/)
+    const link = within(story).getByRole('link', {
+      name: 'All three bounce measures',
+    })
+    expect(link).toHaveAttribute('href', '#guided-bounce-heading')
+    // Reading order: value → consequence → note → studied change → link.
+    const order = [
+      story.querySelector('.guided-results__headline-value')!,
+      consequence,
+      note,
+      tryLine,
+      link,
+    ]
+    for (let i = 1; i < order.length; i++) {
+      expect(
+        order[i - 1].compareDocumentPosition(order[i]) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+        String(i),
+      ).toBeTruthy()
+    }
+    // Dropped in review round 1: the citation and caveat stay on the card.
+    expect(story.querySelector('.guided-results__citation')).toBeNull()
+    expect(story.querySelector('.guided-results__caveat')).toBeNull()
+    expect(story.querySelector('.guided-results__confidence')).toBeNull()
+  })
+
+  it('does not headline a caveated reading past its point, and sends the reader to its card', () => {
+    renderView(readyAnalysis(withReadings({ vo: 10.4, voConfidence: 0.05 })))
+    expect(stories()).toHaveLength(0)
+    const empty = emptyState()
+    expect(without(empty).textContent).toContain(
+      'Bounce in centimetres reads above 9.5 cm, but with low confidence — see its card.',
+    )
+    expect(
+      within(empty).getByRole('link', {
+        name: `see its card: ${METRIC_LABELS.verticalOscillationCm}`,
+      }),
+    ).toHaveAttribute('href', `#${guidedEntryId('verticalOscillationCm')}`)
+    // It still says where step rate stands.
+    expect(empty).toHaveTextContent(
+      "Step rate is not below the 5th percentile of Garmin's table",
+    )
+  })
+
+  it('keeps the caveated line beside a headline for the other story', () => {
+    renderView(
+      readyAnalysis(withReadings({ cadence: 150, vo: 10.4, voConfidence: 0.3 })),
+    )
+    expect(stories().map((s) => s.getAttribute('data-story'))).toEqual([
+      'stepRate',
+    ])
+    expect(
+      headlinesSection().querySelector('.guided-results__headlines-caveated'),
+    ).toHaveTextContent('Bounce in centimetres reads above 9.5 cm, but with low confidence')
+  })
+
+  it('renders the step-rate headline at 150 with the pace note and a link to its card', () => {
+    renderView(readyAnalysis(withReadings({ cadence: 150 })))
+    const [story] = stories()
+    expect(story).toHaveAttribute('data-story', 'stepRate')
+    expect(story).toHaveTextContent(
+      "below the 5th percentile of Garmin's table",
+    )
+    expect(story).toHaveTextContent('Varies with pace')
+    expect(story).toHaveTextContent('180 steps per minute is not a target.')
+    expect(story.querySelector('.guided-results__try')).toHaveTextContent(
+      /^If you choose to raise step rate:/,
+    )
+    expect(
+      within(story).getByRole('link', { name: 'Go to the Cadence card' }),
+    ).toHaveAttribute('href', `#${guidedEntryId('cadence')}`)
+  })
+
+  it('moves focus to the cadence card and to the bounce introduction', () => {
+    renderView(readyAnalysis(withReadings({ cadence: 150, vo: 10.4 })))
+    fireEvent.click(screen.getByRole('link', { name: 'Go to the Cadence card' }))
+    expect(document.activeElement).toBe(card('Cadence'))
+    fireEvent.click(
+      screen.getByRole('link', { name: 'All three bounce measures' }),
+    )
+    expect(document.activeElement).toBe(
+      document.getElementById('guided-bounce-heading'),
+    )
+    // The same scroll margin the cards use under the sticky header (index.css).
+    expect(document.activeElement).toHaveClass('guided-results__scroll-target')
+  })
+
+  it('names the clip each headline was measured from, as its card does', () => {
+    const heuristics = withReadings({ cadence: 150 })
+    const sourceIndices = Object.fromEntries(
+      ALL_IDS.map((id) => [id, id === 'cadence' ? 1 : 0]),
+    ) as Record<MetricId, number>
+    render(
+      <GuidedResultsView
+        analysis={readyAnalysis(heuristics)}
+        onTryAgain={vi.fn()}
+        onChooseDifferentVideo={vi.fn()}
+        clipCount={2}
+        clipViews={['Approach view', 'Side view']}
+        sourceIndices={sourceIndices}
+      />,
+    )
+    const [story] = stories()
+    expect(story).toHaveTextContent('Measured from Clip 2 of 2 · Side view')
+    expect(card('Cadence')).toHaveTextContent(
+      'Measured from Clip 2 of 2 · Side view',
+    )
+  })
+
+  it('renders no source label with one clip', () => {
+    renderView(readyAnalysis(withReadings({ cadence: 150 })))
+    expect(stories()[0]).not.toHaveTextContent('Measured from')
+  })
+
+  it('puts step rate before bounce when both trigger, however far bounce reads', () => {
+    renderView(readyAnalysis(withReadings({ cadence: 152, vo: 30 })))
+    expect(stories().map((s) => s.getAttribute('data-story'))).toEqual([
+      'stepRate',
+      'bounce',
+    ])
+  })
+
+  it('says where both readings stand when neither is past its point', () => {
+    renderView(readyAnalysis(withReadings({ cadence: 174, vo: 4.42 })))
+    expect(stories()).toHaveLength(0)
+    expect(emptyState()).toHaveTextContent(
+      "Step rate is not below the 5th percentile of Garmin's table and bounce in centimetres is not above 9.5 cm — the points past which energy-cost research leans one way. The measurements are below.",
+    )
+    // Secondary text, not a framed finding.
+    expect(headlinesSection().className).not.toMatch(/border-2/)
+  })
+
+  it('names an unmeasured story and still places the measured one', () => {
+    renderView(readyAnalysis(withReadings({ cadence: null })))
+    expect(emptyState()).toHaveTextContent(
+      'Bounce in centimetres is not above 9.5 cm — the point past which energy-cost research leans one way. Step rate could not be measured on this clip.',
+    )
+    expect(emptyState()).not.toHaveTextContent('Neither')
+  })
+
+  it('states the trigger positions when neither story could be measured', () => {
+    renderView(readyAnalysis(withReadings({ cadence: null, vo: null })))
+    expect(emptyState()).toHaveTextContent(
+      "Energy-cost research leans one way when step rate reads below the 5th percentile of Garmin's table or bounce in centimetres reads above 9.5 cm. Step rate and bounce in centimetres could not be measured on this clip.",
+    )
+  })
+
+  it('says the centimetre bounce is still being measured while the scale pass runs', () => {
+    renderView(readyAnalysis(withReadings({ vo: null }), 'running'))
+    expect(emptyState()).toHaveTextContent(
+      'Bounce in centimetres: measuring real-world scale with a second look at the clip…',
+    )
+    expect(emptyState()).not.toHaveTextContent('could not be measured')
+  })
+
+  it('keeps every empty-state variant within fifty words and free of grading words', () => {
+    const variants: Array<[FormHeuristicsResult, ScalePassStatus]> = [
+      [withReadings({ cadence: 174, vo: 4.42 }), 'done'],
+      [withReadings({ cadence: null }), 'done'],
+      [withReadings({ vo: null }), 'running'],
+      [withReadings({ cadence: null, vo: null }), 'done'],
+      [withReadings({ cadence: null, vo: null }), 'running'],
+      [withReadings({ cadence: null, vo: 10.4, voConfidence: 0.05 }), 'done'],
+      [
+        makeHeuristics({
+          cadence: makeMetric('cadence', { value: 140, confidence: 0.2 }),
+          verticalOscillationCm: makeVerticalOscillationCm({
+            value: 10.4,
+            confidence: 0.05,
+          }),
+        }),
+        'done',
+      ],
+    ]
+    for (const [heuristics, status] of variants) {
+      const { unmount } = renderView(readyAnalysis(heuristics, status))
+      const empty = emptyState()
+      const count = words(without(empty))
+      expect(count, empty.textContent ?? '').toBeLessThanOrEqual(50)
+      expect(empty.textContent ?? '').not.toMatch(GRADING)
+      expect(empty.textContent ?? '').not.toMatch(/a position, not a grade/)
+      unmount()
+    }
+  })
+
+  it('still renders every promoted metric as its own card below', () => {
+    renderView(readyAnalysis(withReadings({ cadence: 150, vo: 10.4 })))
+    expect(
+      card('Cadence').closest('.guided-results__group--banded'),
+    ).not.toBeNull()
+    expect(
+      card(METRIC_LABELS.verticalOscillationCm).closest(
+        '.guided-results__group--banded',
+      ),
+    ).not.toBeNull()
+    expect(headlinesSection().querySelectorAll('article')).toHaveLength(0)
+  })
+
+  it('renders no evidence imagery in the headline section', () => {
+    renderView(readyAnalysis(withReadings({ cadence: 150 })), {
+      evidence: [
+        {
+          metric: 'cadence',
+          clipIndex: 0,
+          items: [extracted(framePlan('cadence', 'A footstrike'))],
+        },
+      ],
+    })
+    expect(headlinesSection().querySelectorAll('canvas')).toHaveLength(0)
+    expect(card('Cadence').querySelectorAll('canvas').length).toBeGreaterThan(0)
+  })
+
+  /**
+   * About sixty visible words per headline (review round 1), not counting a mandatory note's first
+   * sentence: that is the source's sentence, not this page's (the cards' furniture budget excludes
+   * it on the same rule), and `verticalOscillationCm`'s runs to 40 words on its own. Measured: step
+   * rate 65, bounce 59. Step rate's five over are its studied-change line, the record's own text.
+   */
+  const HEADLINE_WORD_BUDGET = 65
+
+  it('keeps each headline within its word budget, with no hue-graded class or grading word of its own', () => {
+    renderView(readyAnalysis(withReadings({ cadence: 150, vo: 10.4 })))
+    const section = headlinesSection()
+    for (const element of [section, ...section.querySelectorAll('*')]) {
+      expect(element.getAttribute('class') ?? '').not.toMatch(
+        /\b(bg|text|border|fill|stroke|ring|outline|shadow|from|via|to|decoration|accent)-(red|green|emerald|rose|amber|yellow|lime|orange)-/,
+      )
+    }
+    for (const story of stories()) {
+      const visible = without(story, ['.guided-results__headline-note'])
+      const count = words(visible)
+      expect(count, `${story.dataset.story}: ${count}`).toBeLessThanOrEqual(
+        HEADLINE_WORD_BUDGET,
+      )
+      const authored = without(story, [
+        '.guided-results__headline-note',
+        '.guided-results__consequence',
+        '.guided-results__try',
+      ])
+      expect(authored.textContent ?? '').not.toMatch(GRADING)
+    }
+    expect(section.textContent ?? '').not.toMatch(/[✓✔✗✘]/)
   })
 })

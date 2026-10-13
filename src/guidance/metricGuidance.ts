@@ -280,6 +280,21 @@ const MOORE_2016_LINK: GuidanceLink = {
     'Review: greater vertical oscillation raises oxygen consumption — while cautioning against prescribing an economical technique wholesale.',
 }
 
+/**
+ * The one source for both `economyConsequence` sentences. Numbers are Table 2's pooled rows,
+ * checked against the 2025 correction (Sports Med 2025;55(3):779), which replaces only the schematic
+ * Fig. 8 and changes no pooled number.
+ */
+const VAN_HOOREN_2024_LINK: GuidanceLink = {
+  title:
+    'Van Hooren, Jukic, Cox, Frenken, Bautista & Moore 2024, "The Relationship Between Running Biomechanics and Running Economy: A Systematic Review and Meta-Analysis of Observational Studies", Sports Medicine',
+  shortTitle: 'Van Hooren et al. 2024',
+  url: 'https://pmc.ncbi.nlm.nih.gov/articles/PMC11127892/',
+  kind: 'peer-reviewed',
+  summary:
+    'Meta-analysis of 51 observational studies comparing runners with one another. A higher step rate went with a slightly lower oxygen or energy cost (correlation −0.20, 37 studies, 593 runners), and a smaller vertical oscillation, measured as a distance, with a lower cost (correlation 0.35, 23 studies, 317 runners). Normalised to step length, the bounce association was not significant (2 studies). These are differences between runners, not the effect of one runner changing.',
+}
+
 const BRAUN_2024_LINK: GuidanceLink = {
   title:
     'Braun, Mai, Willwacher et al. 2024, "Managing lower extremity loading in distance running by altering sagittal plane trunk leaning", Journal of Sport and Health Science 14:100985',
@@ -549,6 +564,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       FOLLAND_2017_LINK,
       SCHUBERT_2014_LINK,
       ANDERSON_2022_LINK,
+      VAN_HOOREN_2024_LINK,
     ],
     /**
      * **Heiderscheit, Lenhart and Gaudette are `overstriding`'s links, on purpose. This is design.md
@@ -595,6 +611,17 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       url: HUBER_2024_LINK.url,
       // Cadence goes UP: the protocol is a metronome above the runner's own rate.
       direction: 'higher',
+    },
+    /**
+     * Van Hooren's cadence row: small, significant, across runners. It does not contradict the
+     * mandatory note above — that note is about the effect of CHANGING step rate on injury or
+     * performance; this is a between-runner association with energy cost, and says so.
+     */
+    economyConsequence: {
+      text: 'Across runners, a higher step rate goes with a slightly lower energy cost, across 37 studies — an association, not the effect of changing it.',
+      url: VAN_HOOREN_2024_LINK.url,
+      // A higher step rate goes with a lower cost, so the costly side is below the band.
+      costlySide: 'below',
     },
     guidedDescription: null,
   },
@@ -727,6 +754,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     // `null`: nothing in the record reports an intervention on the RATIO. Its one remediation link
     // targets the numerator, and already carries `verticalOscillation`'s line.
     tryLine: null,
+    economyConsequence: null,
     guidedDescription: null,
   },
 
@@ -797,6 +825,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       SMITH_2022_LINK,
       HEIDERSCHEIT_2011_LINK,
       MOORE_2016_LINK,
+      VAN_HOOREN_2024_LINK,
     ],
     // Moore 2016 is a review of what vertical oscillation costs, not a way to change it, so it sits
     // under research only — a link never appears in both lists of one metric.
@@ -812,6 +841,17 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       url: ADAMS_2018_LINK.url,
       // "As low to the ground as possible" lowers the bounce this card reports.
       direction: 'lower',
+    },
+    /**
+     * Van Hooren's absolute-displacement row, which is the unit this metric reports. The
+     * torso-normalised `verticalOscillation` deliberately carries none: the review's only
+     * normalised row is normalised to step length, over two studies, and not significant.
+     */
+    economyConsequence: {
+      text: 'Across runners, less vertical oscillation goes with a lower energy cost, across 23 studies, measured as a distance.',
+      url: VAN_HOOREN_2024_LINK.url,
+      // More bounce goes with a higher cost, so the costly side is above the band.
+      costlySide: 'above',
     },
     guidedDescription: null,
   },
@@ -866,6 +906,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     // `null`: `evidenceDirection` is 'contested'. Four measured outcomes point in different
     // directions at once, so any Try line here would be picking a side in a live disagreement.
     tryLine: null,
+    economyConsequence: null,
     guidedDescription: null,
   },
 
@@ -940,6 +981,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     remediationIntro: null,
     // `null`: `remediation` is empty — no intervention literature on swing knee flexion surfaced.
     tryLine: null,
+    economyConsequence: null,
     guidedDescription: null,
   },
 
@@ -988,6 +1030,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       */
       direction: 'lower',
     },
+    economyConsequence: null,
     guidedDescription:
       'How far your foot lands ahead of your hips at footstrike, relative to your torso length.',
   },
@@ -1016,6 +1059,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       url: ADAMS_2018_LINK.url,
       direction: 'lower',
     },
+    economyConsequence: null,
     guidedDescription: null,
   },
 
@@ -1055,6 +1099,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     remediationIntro: null,
     // `null`: contested, and the injury link is modelling-only in uninjured runners.
     tryLine: null,
+    economyConsequence: null,
     guidedDescription: null,
   },
 
@@ -1090,6 +1135,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     remediationIntro: null,
     // `null`: contested, and the injury link is modelling-only in uninjured runners.
     tryLine: null,
+    economyConsequence: null,
     guidedDescription: null,
   },
 
@@ -1119,6 +1165,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     // `null`, and this emptiness is the finding rather than an omission: `remediation` is empty
     // because the best available systematic review rates the injury link as low evidence.
     tryLine: null,
+    economyConsequence: null,
     guidedDescription:
       'Whether your foot tends to land heel-, midfoot- or forefoot-first.',
   },
@@ -1141,6 +1188,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     remediationIntro: null,
     // `null`: nothing surfaced for this metric at all.
     tryLine: null,
+    economyConsequence: null,
     guidedDescription: null,
   },
 
@@ -1163,6 +1211,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     remediationIntro: null,
     // `null`: nothing surfaced for this metric at all.
     tryLine: null,
+    economyConsequence: null,
     guidedDescription: null,
   },
   swingFootLateralExcursion: {
@@ -1186,6 +1235,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     },
     remediationIntro: null,
     tryLine: null,
+    economyConsequence: null,
     guidedDescription: null,
   },
 }

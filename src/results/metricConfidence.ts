@@ -31,6 +31,16 @@ export const METRIC_LABELS: Record<MetricId, string> = {
 export const HIGH_CONFIDENCE_THRESHOLD = 0.7
 export const LOW_CONFIDENCE_THRESHOLD = 0.4
 
+/**
+ * The confidence words a caveated card shows. Same thresholds and words as `MetricsPanel.tsx`'s
+ * private copy (the classic view is not edited); shared by the guided card and its headline section.
+ */
+export function confidenceLabel(metric: MetricResult): string {
+  if (metric.confidence >= HIGH_CONFIDENCE_THRESHOLD) return 'High confidence'
+  if (metric.confidence >= LOW_CONFIDENCE_THRESHOLD) return 'Medium confidence'
+  return 'Low confidence'
+}
+
 export type MetricTier = 'normal' | 'caveated' | 'excluded'
 
 /**

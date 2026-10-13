@@ -4,6 +4,7 @@ import { classifyFootStrike } from '../heuristics/footStrikePattern'
 import type { FootStrikeClass } from '../heuristics/footStrikePattern'
 import {
   describeBandPositionBriefly,
+  describeBandPositionStandalone,
   formatMeasuredBandValue,
 } from '../guidance/bandPosition'
 import type { GuidedEntry } from './guidedGroups'
@@ -87,12 +88,18 @@ export interface GuidedHeadlineParts {
  * **The contents list keeps calling `guidedHeadline`, not this.** It prints one value per row in a
  * three-column grid; a position fragment there would wrap every row.
  */
-export function guidedHeadlineParts(entry: GuidedEntry): GuidedHeadlineParts {
+export function guidedHeadlineParts(
+  entry: GuidedEntry,
+  { standalone = false }: { standalone?: boolean } = {},
+): GuidedHeadlineParts {
   const { band, metric } = entry
   const value = guidedHeadline(entry, false) ?? formatGuidedValue(metric)
+  // `standalone`: no scale renders beside this headline (the "Energy cost" section), so the
+  // position must name its range itself rather than say "the range shown".
+  const describe = standalone
+    ? describeBandPositionStandalone
+    : describeBandPositionBriefly
   const position =
-    band !== null && metric.value !== null
-      ? describeBandPositionBriefly(band, metric.value)
-      : null
+    band !== null && metric.value !== null ? describe(band, metric.value) : null
   return { value, position }
 }

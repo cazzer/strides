@@ -218,6 +218,32 @@ export function describeBandPositionBriefly(
   }
 }
 
+/**
+ * {@link describeBandPositionBriefly} for a place with NO scale beside it — `above the 6.0–9.5 cm
+ * range`, `below the 5th percentile of Garmin's table`.
+ *
+ * The brief fragment's "the range shown" leans on a drawn scale to say which range; without one it
+ * names nothing. Here a single range is named by its own bounds, and a value past every zone of a
+ * multi-zone band by the band's envelope. A zone or a published gap reads exactly as the brief
+ * fragment does, because a zone label with its owner already says whose table it is.
+ */
+export function describeBandPositionStandalone(
+  band: ReferenceBand,
+  value: number,
+): string {
+  const position = locateInBand(band, value)
+  const envelope = referenceBandEnvelope(band)
+  const named =
+    envelope === null
+      ? 'the range'
+      : `the ${formatBandRange(envelope.min, envelope.max, band.unit)} range`
+  if (position.kind === 'outside') return `${position.side} ${named}`
+  if (position.kind === 'inZone' && band.zones.length === 1) {
+    return `within ${named}`
+  }
+  return describeBandPositionBriefly(band, value)
+}
+
 /** `(values from 164 to 173 steps per minute)`, `(values below 153 steps per minute)`. */
 function spokenZoneValues(zone: BandZone, band: ReferenceBand): string {
   if (zone.min === null && zone.max === null) return '(any value)'

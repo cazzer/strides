@@ -494,6 +494,41 @@ export interface MetricGuidance {
    * declutter-guided-results-view design.md D6 for the full per-metric table.
    */
   tryLine: { text: string; url: string; direction: 'lower' | 'higher' } | null
+  /**
+   * What running-economy research found ACROSS RUNNERS for this quantity, and which side of the
+   * band that finding points away from — or `null`, which is the answer for every metric but two.
+   *
+   * It feeds the guided view's "Energy cost" headline and nothing else: it renders only there,
+   * never on a card (narrative-metric-headlines design.md D3).
+   *
+   * Rules, each pinned by test in `metricGuidance.test.ts`:
+   *
+   * 1. **Non-null on exactly `cadence` and `verticalOscillationCm`**, and the null set is named
+   *    there one metric at a time. Those are the two quantities whose economy association is both
+   *    significant and stated in the unit this app reports (Van Hooren et al. 2024). The
+   *    torso-normalised `verticalOscillation` is `null`: that review's only normalised row is
+   *    normalised to STEP length, over two studies, and not significant.
+   * 2. **`url` is one of this metric's own `research` or `remediation` links**, and **every number
+   *    in `text` appears in that link's own `summary`** — a compression, never a new claim.
+   * 3. **`text` opens "Across runners"** and states an association between runners, never the
+   *    effect of one runner changing. No "you"/"your", no causal verb (raises, reduces, causes,
+   *    improves), no grading word, and nothing about injury — this is an economy finding.
+   * 4. **`costlySide` is the side of the band the association points AWAY from** — where a reading
+   *    goes with a higher energy cost. It is the opposite of `tryLine.direction`'s side, and a test
+   *    pins that: a headline that fired on the side its own studied change moves toward would be
+   *    advice to go further out.
+   *
+   * A headline fires only when the value lies strictly beyond the band's outermost finite bound on
+   * `costlySide` (`pastCostlySide` in `src/results/guidedHeadlines.ts`) at the `'normal'` tier;
+   * a caveated reading past that bound is reported in one line instead. The band is still an
+   * observed range, not a target, and nothing here gives it a preferred end: the side names where a
+   * published association points, not where the runner should be.
+   */
+  economyConsequence: {
+    text: string
+    url: string
+    costlySide: 'below' | 'above'
+  } | null
   /** Guided-view-only replacement for the shared METRIC_DESCRIPTIONS entry (src/results/metricDescriptions.ts),
    * used where the shared copy reads badly in a page about published ranges. null = use the shared one.
    * The shared descriptions are the classic view's copy and are NOT edited. */
