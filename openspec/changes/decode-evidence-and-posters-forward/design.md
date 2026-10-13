@@ -127,7 +127,8 @@ Desktop, headless Chromium, `ANGLE Metal Renderer: Apple M4 Pro`, real GPU.
 the drawn pixels against every decoded frame, compare with `frameShownAt`. The containment model it
 replaced disagreed on 10 of side-portrait's 345 (D2).
 
-**Pixel identity (gate 2): 92 / 92 evidence canvases and 11 / 11 posters byte-identical.** Temporary
+**Pixel identity (gate 2): 92 / 92 evidence canvases and (before D9 withdrew them) 11 / 11 posters
+byte-identical.** Temporary
 in-page probe (added, measured, reverted): every metric the forward pass completed was re-extracted
 through the seek path with the same plan and calibration, and the two canvases compared with
 `getImageData`, byte for byte. Per clip, evidence images compared: side-landscape 8, side-portrait 8,
@@ -143,28 +144,42 @@ all table dividers whose width follows the `elapsedMs` string length; with those
 reports md5 to the same `1dbe12081dfbec48da347d8c4347d666` (2178 lines each before divider removal:
 `99efb2c0…` vs `62949304…`). No metric, sampling, personSelection, view or evidence field moved.
 
-**Timings (gate 4), `--perf`, 2 trials, desktop.** Evidence = both passes summed (the first is the
-one the scale-pass graft supersedes; it is aborted in both arms, so its length is set by when the
-graft lands rather than by decode cost):
+**Timings (gate 4), `--perf`, 2 trials, desktop — re-measured on review-round-1 commit `fbb9000`.**
+Evidence = both passes summed (the first is usually the one the scale-pass graft supersedes; its
+length is then set by when the graft lands rather than by decode cost). `decodeSourceMs` is the time
+to open the forward source in the final pass, which after `releaseClipDemux` is a private re-read and
+re-demux of the clip (`borrowClipDemux`); in the first pass the sampler still holds the demux and it
+is 0.1–0.25 ms. Posters are on the seek path again (D9), so their column is the base path both times:
 
-| clip | evidence before | evidence after | final pass before → after | poster before → after |
-|---|---|---|---|---|
-| side-landscape (4K, 1 keyframe) | 7.73 s | 4.32 s | 4315 → 938 ms | 446 → 410 ms |
-| side-portrait | 4.82 s | 3.48 s | 1211 → 287 ms | 201 → 229 ms |
-| front-approach | 2.72 s | 1.26 s | 1049 → 334 ms | 221 → 188 ms |
-| multiperson | 3.33 s | 2.32 s | 1237 → 239 ms | 145 → 149 ms |
-| IMG_9116 (one pass, 2 images) | 1.14 s | 1.17 s | — | 160 → 241 ms (seek fallback) |
-| IMG_9119 | 6.06 s | 3.16 s | 2259 → 499 ms | 490 → 334 ms |
+| clip | evidence before | evidence after | final pass before → after | final-pass `decodeSourceMs` | poster before / after |
+|---|---|---|---|---|---|
+| side-landscape (4K, 1 keyframe) | 7.73 s | 3.91 s | 4315 → 918 ms | 24.6 ms | 446 / 443 ms |
+| side-portrait | 4.82 s | 3.11 s | 1211 → 288 ms | 16.7 ms | 201 / 200 ms |
+| front-approach | 2.72 s | 0.88 s ¹ | 1049 → 288 ms | 10.7 ms | 221 / 214 ms |
+| multiperson | 3.33 s | 2.33 s | 1237 → 237 ms | 10.8 ms | 145 / 139 ms |
+| IMG_9116 (one pass, 2 images) | 1.14 s | 1.14 s | — | 0.2 ms | 160 / 163 ms |
+| IMG_9119 | 6.06 s | 2.71 s | 2259 → 308 ms | 21.4 ms | 490 / 332 ms |
 
-The final pass drops 3-5x. Posters are flat on desktop, as expected: a midpoint poster decodes the
-same keyframe→midpoint span either way, minus the element load. The final pass decodes fewer images
-in the after arm because the superseded first pass, now faster, finished more metrics before the
-abort and handed them over through `onMetricExtracted` (strides-zm8 reuse).
+¹ front-approach's first pass finished before the graft in this run (6 images, not aborted), so its
+sum is not like-for-like with the base's aborted first pass; the final-pass column is.
+
+The final pass drops 3–7x. The superseded first pass is now fast enough to finish more metrics
+before the abort and hand them over through `onMetricExtracted` (strides-zm8 reuse), which is why the
+final pass decodes fewer images than base's. The first round's measurement of the withdrawn poster
+path (446 → 410, 201 → 229, 221 → 188, 145 → 149, IMG_9116 160 → 241 via the seek fallback, IMG_9119
+490 → 334 ms) is the basis for D9.
+
+**Review round 1 re-measurement.** After adding the container colour space to `decoder.configure`
+(D7), the in-page pixel probe was re-run: 92 / 92 evidence canvases byte-identical again, same per-clip
+counts as above. The shared metric gate was re-run on `fbb9000`: after stripping, the only changed
+lines are six `elapsedMs`-width table dividers, and with those removed the report md5s to the same
+`1dbe12081dfbec48da347d8c4347d666` as base. One probe trial (side-portrait) timed out waiting for
+"Analysis complete" once and passed on retry; nothing in the analysis path is touched by this change.
 
 ## Risks
 
 - **Pixel identity is measured on desktop Chromium (ANGLE Metal, Apple M4 Pro) only.** On Android the
   `<video>` path and WebCodecs may take different decoder/colour-conversion paths. Not measurable from
   here; the phone run must check it before this is trusted there.
-- A poster's forward pass runs during analysis, as the seek did; it decodes the same keyframe→midpoint
-  span the seek did, minus the element load. Its benefit on mobile is unmeasured.
+- Posters stay on the seek path until the S21 run says whether the `<video>` load and its contention
+  with analysis are worth a forward pass there (D9).
