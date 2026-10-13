@@ -3,6 +3,7 @@ import {
   bandBounds,
   describeBandPosition,
   describeBandPositionBriefly,
+  describeBandPositionStandalone,
   formatMeasuredBandValue,
   locateInBand,
 } from './bandPosition'
@@ -595,3 +596,48 @@ describe('describeBandPositionBriefly — the card headline’s position fragmen
 function lowercaseFirst(text: string): string {
   return text.charAt(0).toLowerCase() + text.slice(1)
 }
+
+describe('describeBandPositionStandalone — a position with no scale beside it', () => {
+  it('names a single range by its own bounds rather than "the range shown"', () => {
+    const band = bandOf('verticalOscillationCm')
+    expect(describeBandPositionStandalone(band, 10.4)).toBe(
+      'above the 6.0–9.5 cm range',
+    )
+    expect(describeBandPositionStandalone(band, 4.42)).toBe(
+      'below the 6.0–9.5 cm range',
+    )
+    expect(describeBandPositionStandalone(band, 8)).toBe(
+      'within the 6.0–9.5 cm range',
+    )
+  })
+
+  it('reads as the brief fragment wherever a zone label already names its owner', () => {
+    const band = bandOf('cadence')
+    for (const value of [150, 163.5, 170, 190]) {
+      expect(describeBandPositionStandalone(band, value), String(value)).toBe(
+        describeBandPositionBriefly(band, value),
+      )
+    }
+    expect(describeBandPositionStandalone(band, 150)).toBe(
+      "below the 5th percentile of Garmin's table",
+    )
+  })
+
+  it('never says "the range shown"', () => {
+    for (const metric of BANDED) {
+      const band = bandOf(metric)
+      const envelope = referenceBandEnvelope(band)!
+      const span = envelope.max - envelope.min
+      for (const value of [
+        envelope.min - span,
+        (envelope.min + envelope.max) / 2,
+        envelope.max + span,
+      ]) {
+        expect(
+          describeBandPositionStandalone(band, value),
+          `${metric} ${value}`,
+        ).not.toMatch(/range shown/)
+      }
+    }
+  })
+})

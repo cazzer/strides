@@ -107,6 +107,15 @@ function confidenceLabel(metric: MetricResult): string {
   return 'Low confidence'
 }
 
+/** The card's confidence line, shown only for a `'caveated'` metric. Reused by the guided headline. */
+export function ConfidenceLabel({ metric }: { metric: MetricResult }) {
+  return (
+    <p className="guided-results__confidence font-sans text-sm">
+      <strong>{confidenceLabel(metric)}</strong>
+    </p>
+  )
+}
+
 /** `860` reads as `n = 860`; anything that is not a bare count ("Not published") renders as stored. */
 function formatSampleSize(sampleSize: string): string {
   return /^\d[\d,]*$/.test(sampleSize.trim())
@@ -124,7 +133,7 @@ function joinList(parts: string[]): string {
   return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
 }
 
-function ExternalLink({ url, children }: { url: string; children: string }) {
+export function ExternalLink({ url, children }: { url: string; children: string }) {
   return (
     <a
       href={url}
@@ -237,7 +246,7 @@ function SourceFields({
  * source URL is an anchor. The fields come from `citationParts`, so the line a test reads through
  * `citationText` and the line rendered here cannot disagree.
  */
-function CitationLine({ band }: { band: ReferenceBand }) {
+export function CitationLine({ band }: { band: ReferenceBand }) {
   const [shortTitle, ...rest] = citationParts(
     band.source,
     band.derivation !== null,
@@ -367,7 +376,7 @@ function CorroborationList({
  * test enforces both, and that the link is one of this metric's own recorded studies of changes.
  * The study's kind, summary and full citation are in the disclosure, where it renders again as text.
  */
-function TryLine({
+export function TryLine({
   text,
   link,
   cadence,
@@ -523,11 +532,7 @@ export function GuidedMetricCard({
           )}
         </p>
         {sourceLabel && <p className="font-sans text-xs font-semibold text-neutral-600 dark:text-neutral-400">Measured from {sourceLabel}</p>}
-        {tier === 'caveated' && (
-          <p className="guided-results__confidence font-sans text-sm">
-            <strong>{confidenceLabel(metric)}</strong>
-          </p>
-        )}
+        {tier === 'caveated' && <ConfidenceLabel metric={metric} />}
         {/*
           On EVERY card, banded or not. This change originally dropped it from a banded one, on the
           reasoning that a scale, a headline naming the zone and a citation line have already said

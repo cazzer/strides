@@ -160,6 +160,8 @@ const VERIFIED_URLS: ReadonlySet<string> = new Set([
   'https://pmc.ncbi.nlm.nih.gov/articles/PMC11520670/',
   'https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0302249',
   'https://pmc.ncbi.nlm.nih.gov/articles/PMC5317187/',
+  // Running economy (narrative-metric-headlines; opened 2026-10-13, with its 2025 correction)
+  'https://pmc.ncbi.nlm.nih.gov/articles/PMC11127892/',
 ])
 
 function entries(): MetricGuidance[] {
@@ -1773,5 +1775,119 @@ describe('the one studied change a card may show', () => {
       'lower',
     )
     expect(METRIC_GUIDANCE.verticalOscillation.tryLine!.direction).toBe('lower')
+  })
+})
+
+describe('the economy consequence a headline may state', () => {
+  /**
+   * Which metrics carry one, named one at a time — every other metric is null, by name, so a third
+   * is a deliberate act with a reviewable diff (narrative-metric-headlines design.md D1/D2).
+   */
+  const WITH_ECONOMY_CONSEQUENCE: Partial<Record<MetricId, 'below' | 'above'>> = {
+    cadence: 'below',
+    verticalOscillationCm: 'above',
+  }
+  const WITHOUT_ECONOMY_CONSEQUENCE: MetricId[] = [
+    'verticalOscillation',
+    'verticalRatio',
+    'trunkLean',
+    'overstriding',
+    'kneeFlexion',
+    'footStrikePattern',
+    'stepWidth',
+    'stepWidthCm',
+    'kneeDrive',
+    'armSwingAmplitude',
+    'swingFootLateralExcursion',
+  ]
+
+  const carrying = () =>
+    entries().filter(
+      (
+        entry,
+      ): entry is MetricGuidance & {
+        economyConsequence: NonNullable<MetricGuidance['economyConsequence']>
+      } => entry.economyConsequence !== null,
+    )
+
+  it('is carried by exactly cadence and verticalOscillationCm, on the sides named here', () => {
+    expect(
+      Object.fromEntries(
+        carrying().map((entry) => [
+          entry.metric,
+          entry.economyConsequence.costlySide,
+        ]),
+      ),
+    ).toEqual(WITH_ECONOMY_CONSEQUENCE)
+  })
+
+  it('is null on every other metric, named one at a time', () => {
+    expect(
+      new Set([
+        ...WITHOUT_ECONOMY_CONSEQUENCE,
+        ...Object.keys(WITH_ECONOMY_CONSEQUENCE),
+      ]),
+    ).toEqual(new Set(EXPECTED_METRIC_IDS))
+    for (const id of WITHOUT_ECONOMY_CONSEQUENCE) {
+      expect(METRIC_GUIDANCE[id].economyConsequence, id).toBeNull()
+    }
+    // The torso-normalised bounce is null on purpose: the review's only normalised row is
+    // normalised to step length, over two studies, and not significant.
+    expect(METRIC_GUIDANCE.verticalOscillation.economyConsequence).toBeNull()
+  })
+
+  it("cites one of that metric's own research or remediation links", () => {
+    for (const entry of carrying()) {
+      expect(
+        [...entry.research, ...entry.remediation].map((link) => link.url),
+        entry.metric,
+      ).toContain(entry.economyConsequence.url)
+    }
+  })
+
+  it('quotes no number its source summary does not state', () => {
+    let checked = 0
+    for (const entry of carrying()) {
+      const link = [...entry.research, ...entry.remediation].find(
+        (l) => l.url === entry.economyConsequence.url,
+      )!
+      for (const number of entry.economyConsequence.text.match(
+        /[−-]?\d+(?:[.,]\d+)?/g,
+      ) ?? []) {
+        checked++
+        expect(link.summary, `${entry.metric}: ${number}`).toContain(number)
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(4)
+  })
+
+  it('states an association across runners, never advice, a cause, a grade or an injury', () => {
+    for (const entry of carrying()) {
+      const { text } = entry.economyConsequence
+      expect(text, entry.metric).toMatch(/^Across runners/)
+      expect(text, entry.metric).not.toMatch(/\b(you|your|yours)\b/i)
+      expect(text, entry.metric).not.toMatch(
+        /\b(raises?|raising|reduces?|reducing|causes?|causing|improves?|improving)\b/i,
+      )
+      expect(text, entry.metric).not.toMatch(
+        /\b(good|bad|poor|better|worse|best|worst|optimal|ideal|excessive|healthy|unhealthy|target|goal|should|correct|incorrect|normal|abnormal|recommended)\b/i,
+      )
+      expect(text, entry.metric).not.toMatch(/injur/i)
+    }
+  })
+
+  it('names as costly the side opposite the one its studied change moves toward', () => {
+    for (const entry of carrying()) {
+      expect(entry.tryLine, entry.metric).not.toBeNull()
+      expect(entry.economyConsequence.costlySide, entry.metric).toBe(
+        entry.tryLine!.direction === 'higher' ? 'below' : 'above',
+      )
+    }
+  })
+
+  it('keeps cadence’s first mandatory note — the pace confound — intact', () => {
+    expect(METRIC_GUIDANCE.cadence.mandatoryNotes[0]).toMatch(
+      /^180 steps per minute is not a target\./,
+    )
   })
 })

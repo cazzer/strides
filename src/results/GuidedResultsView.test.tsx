@@ -823,9 +823,12 @@ describe('The heading outline reads group → measurement', () => {
       readyAnalysis(withUnmeasured(['kneeDrive', 'cadence'])),
     )
     const h2s = Array.from(container.querySelectorAll('h2'))
-    expect(h2s).toHaveLength(4) // Bounce explainer, then the three metric groups.
+    // Running economy, the bounce explainer, then the three metric groups.
+    expect(h2s).toHaveLength(5)
     for (const h2 of h2s) expect(h2.closest('summary')).toBeNull()
-    const h3s = Array.from(container.querySelectorAll('h3'))
+    const h3s = Array.from(
+      container.querySelectorAll('section.guided-results__group h3'),
+    )
     expect(h3s).toHaveLength(13)
     for (const h3 of h3s) {
       const preceding = h2s.filter(
@@ -2611,5 +2614,266 @@ describe('how much a card says before the reader opens anything', () => {
     expect(
       document.querySelectorAll('.guided-results__group-intro'),
     ).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// Running economy headlines (narrative-metric-headlines)
+// ---------------------------------------------------------------------------------------------
+
+describe('Running economy headlines above the contents list', () => {
+  const VAN_HOOREN_URL = 'https://pmc.ncbi.nlm.nih.gov/articles/PMC11127892/'
+  const BORROWED = [
+    '.guided-results__citation',
+    '.guided-results__consequence',
+    '.guided-results__headline-note',
+    '.guided-results__try',
+    '.guided-results__caveat',
+  ]
+
+  function withReadings({
+    cadence,
+    vo,
+  }: {
+    cadence?: number | null
+    vo?: number | null
+  }): FormHeuristicsResult {
+    return makeHeuristics({
+      ...(cadence === undefined
+        ? {}
+        : {
+            cadence: makeMetric('cadence', {
+              value: cadence,
+              ...(cadence === null ? { confidence: 0 } : {}),
+            }),
+          }),
+      ...(vo === undefined
+        ? {}
+        : {
+            verticalOscillationCm: makeVerticalOscillationCm({
+              value: vo,
+              ...(vo === null ? { confidence: 0, calibration: null } : {}),
+            }),
+          }),
+    })
+  }
+
+  function headlinesSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Running economy' })
+  }
+
+  function stories(): HTMLElement[] {
+    return Array.from(
+      headlinesSection().querySelectorAll<HTMLElement>(
+        '.guided-results__headline-story',
+      ),
+    )
+  }
+
+  function emptyState(): HTMLElement {
+    return headlinesSection().querySelector<HTMLElement>(
+      '.guided-results__headlines-empty',
+    )!
+  }
+
+  /** A clone with screen-reader-only text and the named blocks removed. */
+  function without(element: Element, remove: string[] = []): Element {
+    const clone = element.cloneNode(true) as Element
+    for (const selector of ['.sr-only', ...remove]) {
+      clone.querySelectorAll(selector).forEach((node) => node.remove())
+    }
+    return clone
+  }
+
+  /** Tokens carrying a letter or a digit: a dash or a middot is punctuation, not a word. */
+  function wordCount(text: string): number {
+    return text.split(/\s+/).filter((token) => /[\p{L}\p{N}]/u.test(token))
+      .length
+  }
+
+  function words(element: Element): number {
+    return wordCount(element.textContent ?? '')
+  }
+
+  it('sits between the completion line and the contents list', () => {
+    renderView(readyAnalysis(withReadings({ vo: 10.4 })))
+    const status = screen.getByRole('status')
+    expect(status.textContent).toMatch(/^Analysis complete\./)
+    const section = headlinesSection()
+    const contents = screen.getByRole('navigation', {
+      name: 'Measurements on this page',
+    })
+    expect(
+      status.compareDocumentPosition(section) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(
+      section.compareDocumentPosition(contents) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(section).toHaveClass('guided-results__headlines')
+  })
+
+  it('renders the bounce headline at 10.4 cm: position, citation, consequence, note, studied change and link', () => {
+    renderView(readyAnalysis(withReadings({ vo: 10.4 })))
+    expect(stories()).toHaveLength(1)
+    const [story] = stories()
+    expect(story).toHaveAttribute('data-story', 'bounce')
+    expect(
+      within(story).getByRole('heading', {
+        level: 3,
+        name: METRIC_LABELS.verticalOscillationCm,
+      }),
+    ).toBeInTheDocument()
+    expect(story).toHaveTextContent('10.4 cm')
+    expect(story).toHaveTextContent('above the 6.0–9.5 cm range')
+    expect(story).toHaveTextContent('Varies with pace')
+    expect(
+      without(story.querySelector('.guided-results__citation')!).textContent,
+    ).toBe(citationText(METRIC_GUIDANCE.verticalOscillationCm.band!.source, true))
+    const consequence = story.querySelector<HTMLElement>(
+      '.guided-results__consequence',
+    )!
+    expect(consequence).toHaveTextContent(
+      METRIC_GUIDANCE.verticalOscillationCm.economyConsequence!.text,
+    )
+    expect(
+      within(consequence).getByRole('link', {
+        name: /Van Hooren et al\. 2024/,
+      }),
+    ).toHaveAttribute('href', VAN_HOOREN_URL)
+    expect(story).toHaveTextContent(
+      splitFirstSentence(METRIC_GUIDANCE.verticalOscillationCm.mandatoryNotes[0])
+        .first,
+    )
+    expect(story.querySelector('.guided-results__try')).toHaveTextContent(
+      /^If you choose to change your form:/,
+    )
+    expect(
+      within(story).getByRole('link', { name: 'All three bounce measures' }),
+    ).toHaveAttribute('href', '#guided-bounce-heading')
+  })
+
+  it('carries the card’s own confidence label and caveat for a low-confidence reading', () => {
+    renderView(
+      readyAnalysis(
+        makeHeuristics({
+          verticalOscillationCm: makeVerticalOscillationCm({
+            value: 10.4,
+            confidence: 0.05,
+            caveat: 'Fixture caveat: scale measured in few frames.',
+          }),
+        }),
+      ),
+    )
+    const [story] = stories()
+    expect(story).toHaveTextContent('Low confidence')
+    expect(story).toHaveTextContent(
+      'Fixture caveat: scale measured in few frames.',
+    )
+  })
+
+  it('renders the step-rate headline at 150 with the pace note and a link to its own card', () => {
+    renderView(readyAnalysis(withReadings({ cadence: 150 })))
+    const [story] = stories()
+    expect(story).toHaveAttribute('data-story', 'stepRate')
+    expect(story).toHaveTextContent(
+      "below the 5th percentile of Garmin's table",
+    )
+    expect(story).toHaveTextContent('Varies with pace')
+    expect(story).toHaveTextContent('180 steps per minute is not a target.')
+    expect(story.querySelector('.guided-results__try')).toHaveTextContent(
+      /^If you choose to raise step rate:/,
+    )
+    expect(
+      within(story).getByRole('link', { name: 'Open its card: Cadence' }),
+    ).toHaveAttribute('href', `#${guidedEntryId('cadence')}`)
+  })
+
+  it('puts step rate before bounce when both trigger, however far bounce reads', () => {
+    renderView(readyAnalysis(withReadings({ cadence: 152, vo: 30 })))
+    expect(stories().map((s) => s.getAttribute('data-story'))).toEqual([
+      'stepRate',
+      'bounce',
+    ])
+  })
+
+  it('states the empty case without grading when neither reading is past its point', () => {
+    renderView(readyAnalysis(withReadings({ cadence: 174, vo: 4.42 })))
+    expect(stories()).toHaveLength(0)
+    const empty = emptyState()
+    expect(empty).toHaveTextContent(
+      "No headline for this clip. One appears only when step rate reads below the 5th percentile of Garmin's table or bounce reads above 9.5 cm",
+    )
+    expect(empty).toHaveTextContent('Neither reading is past that point here.')
+    expect(empty).toHaveTextContent('That is a position, not a grade.')
+    expect(words(empty)).toBeLessThanOrEqual(50)
+  })
+
+  it('names a spokesman that could not be measured instead', () => {
+    renderView(readyAnalysis(withReadings({ cadence: null })))
+    expect(emptyState()).toHaveTextContent(
+      'Cadence could not be measured on this clip.',
+    )
+    expect(emptyState()).not.toHaveTextContent('Neither reading')
+  })
+
+  it('names both when neither could be measured, inside the word budget', () => {
+    renderView(readyAnalysis(withReadings({ cadence: null, vo: null })))
+    const empty = emptyState()
+    expect(empty).toHaveTextContent(
+      'Cadence and Vertical oscillation (cm) could not be measured on this clip.',
+    )
+    // Metric names are labels, not words this page authored.
+    const authored = wordCount(
+      (empty.textContent ?? '')
+        .replace(METRIC_LABELS.cadence, '')
+        .replace(METRIC_LABELS.verticalOscillationCm, ''),
+    )
+    expect(authored).toBeLessThanOrEqual(50)
+  })
+
+  it('still renders every promoted metric as its own card below', () => {
+    renderView(readyAnalysis(withReadings({ cadence: 150, vo: 10.4 })))
+    expect(
+      card('Cadence').closest('.guided-results__group--banded'),
+    ).not.toBeNull()
+    expect(
+      card(METRIC_LABELS.verticalOscillationCm).closest(
+        '.guided-results__group--banded',
+      ),
+    ).not.toBeNull()
+    expect(headlinesSection().querySelectorAll('article')).toHaveLength(0)
+  })
+
+  it('renders no evidence imagery in the headline section', () => {
+    renderView(readyAnalysis(withReadings({ cadence: 150 })), {
+      evidence: [
+        {
+          metric: 'cadence',
+          clipIndex: 0,
+          items: [extracted(framePlan('cadence', 'A footstrike'))],
+        },
+      ],
+    })
+    expect(headlinesSection().querySelectorAll('canvas')).toHaveLength(0)
+    expect(card('Cadence').querySelectorAll('canvas').length).toBeGreaterThan(0)
+  })
+
+  it('carries no hue-graded class, no grading word of its own, and keeps its furniture within budget', () => {
+    renderView(readyAnalysis(withReadings({ cadence: 150, vo: 10.4 })))
+    const section = headlinesSection()
+    for (const element of [section, ...section.querySelectorAll('*')]) {
+      expect(element.getAttribute('class') ?? '').not.toMatch(
+        /\b(bg|text|border|fill|stroke|ring|outline|shadow|from|via|to|decoration|accent)-(red|green|emerald|rose|amber|yellow|lime|orange)-/,
+      )
+    }
+    // Furniture: everything but the borrowed sentences, which the guidance tests vet.
+    const furniture = without(section, BORROWED)
+    expect(words(furniture), `furniture: ${words(furniture)}`).toBeLessThanOrEqual(50)
+    expect(furniture.textContent ?? '').not.toMatch(
+      /\b(good|bad|poor|better|worse|best|worst|optimal|ideal|excessive|healthy|unhealthy|target|goal|should|correct|incorrect|normal|abnormal|recommended)\b/i,
+    )
+    expect(section.textContent ?? '').not.toMatch(/[✓✔✗✘]/)
   })
 })

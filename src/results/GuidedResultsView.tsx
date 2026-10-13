@@ -3,16 +3,26 @@ import type { MouseEvent } from 'react'
 import type { FormHeuristicsResult, MetricId } from '../heuristics/types'
 import { METRIC_GUIDANCE } from '../guidance/metricGuidance'
 import type { MetricGuidance } from '../guidance/types'
-import { guidedHeadline } from './formatGuidedValue'
-import { GuidedMetricCard } from './GuidedMetricCard'
+import { guidedHeadline, guidedHeadlineParts } from './formatGuidedValue'
+import {
+  CitationLine,
+  ConfidenceLabel,
+  ExternalLink,
+  GuidedMetricCard,
+  TryLine,
+} from './GuidedMetricCard'
 import {
   bandWithheld,
   captureHintFor,
   guidedEntryId,
   guidedGroups,
   notMeasuredReason,
+  splitFirstSentence,
+  tryLineApplies,
 } from './guidedGroups'
-import type { GuidedEntry } from './guidedGroups'
+import type { GuidedEntry, GuidedGroups } from './guidedGroups'
+import { costlyThreshold, selectHeadlines } from './guidedHeadlines'
+import type { GuidedHeadlineStory } from './guidedHeadlines'
 import { METRIC_LABELS, metricTier } from './metricConfidence'
 import type { MetricCardEvidence } from './MetricsPanel'
 import type { ResultsViewProps } from './ResultsView'
@@ -34,6 +44,7 @@ const FOCUS =
 const BODY = 'font-sans text-sm text-neutral-700 dark:text-neutral-300'
 const FOCUS_RING_TARGET = `scroll-mt-4 ${FOCUS}`
 const H2 = 'font-display text-xl font-bold tracking-tight'
+const SECONDARY = 'font-sans text-xs text-neutral-600 dark:text-neutral-400'
 const SUMMARY = `cursor-pointer p-5 font-sans text-base font-semibold ${FOCUS}`
 
 function plural(
@@ -288,6 +299,160 @@ const BOUNCE_MEASURES = [
   },
 ] as const
 
+/** Where each headline story's link goes: the bounce introduction, or the step-rate card itself. */
+const BOUNCE_HEADING_ID = 'guided-bounce-heading'
+
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names.join('')
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
+/**
+ * One "Running economy" headline: the spokesman's value and where it sits — named in full, since no
+ * scale is beside it — the card's own confidence label and caveat, the band's citation, the cited economy association, the first sentence of
+ * each mandatory note, and the card's own studied-change line where it applies.
+ *
+ * Every sentence is borrowed from the guidance record or the card; the only words authored here are
+ * the link labels. It renders no evidence: canvases belong to the card, and a node has one parent.
+ */
+function EconomyHeadline({ headline }: { headline: GuidedHeadlineStory }) {
+  const headingId = useId()
+  const { story, entry, consequence } = headline
+  const { metric, guidance, band } = entry
+  const label = METRIC_LABELS[metric.metric]
+  const parts = guidedHeadlineParts(entry, { standalone: true })
+  const consequenceLink = [...guidance.research, ...guidance.remediation].find(
+    (link) => link.url === consequence.url,
+  )
+  const tryLink =
+    guidance.tryLine === null
+      ? undefined
+      : guidance.remediation.find((link) => link.url === guidance.tryLine!.url)
+  const showsTry = tryLineApplies(entry) && tryLink !== undefined
+  const target =
+    story === 'bounce' ? BOUNCE_HEADING_ID : guidedEntryId(metric.metric)
+
+  return (
+    <div
+      role="group"
+      aria-labelledby={headingId}
+      className="guided-results__headline-story space-y-2 border-t-2 border-black pt-4 first-of-type:border-t-0 first-of-type:pt-0 dark:border-white"
+      data-story={story}
+      data-metric={metric.metric}
+    >
+      <h3 id={headingId} className="font-display text-lg font-bold tracking-tight">
+        {label}
+      </h3>
+      <p className="guided-results__headline-value flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className="font-display text-2xl font-bold">{parts.value}</span>
+        {parts.position !== null && (
+          <span className={`guided-results__headline-position text-base ${BODY}`}>
+            <span aria-hidden="true" className="hidden sm:inline">
+              {'· '}
+            </span>
+            {parts.position}
+          </span>
+        )}
+        {guidance.speedSensitivity !== null && (
+          <span
+            className={`guided-results__pace-tag shrink-0 border border-neutral-500 px-1.5 py-0.5 font-sans text-[11px] font-semibold uppercase tracking-wide dark:border-neutral-400 ${SECONDARY}`}
+          >
+            Varies with pace
+          </span>
+        )}
+      </p>
+      {/* The card's own cautions: a headline must not read more certain than its card. */}
+      {metricTier(metric) === 'caveated' && <ConfidenceLabel metric={metric} />}
+      {metric.caveat !== null && (
+        <p role="note" className={`guided-results__caveat ${MUTED}`}>
+          {metric.caveat}
+        </p>
+      )}
+      {band !== null && <CitationLine band={band} />}
+      <p className={`guided-results__consequence ${BODY}`}>
+        {consequence.text}
+        {consequenceLink !== undefined && (
+          <span className={SECONDARY}>
+            {' · '}
+            <ExternalLink url={consequenceLink.url}>
+              {consequenceLink.shortTitle}
+            </ExternalLink>
+          </span>
+        )}
+      </p>
+      {guidance.mandatoryNotes.map((note) => {
+        const { first } = splitFirstSentence(note)
+        return (
+          <p key={first} role="note" className={`guided-results__headline-note ${BODY}`}>
+            {first}
+          </p>
+        )
+      })}
+      {showsTry && (
+        <TryLine
+          text={guidance.tryLine!.text}
+          link={tryLink}
+          cadence={metric.metric === 'cadence'}
+        />
+      )}
+      <p className="font-sans text-sm">
+        <a
+          href={`#${target}`}
+          onClick={(event) => revealMetric(event, target)}
+          className={`guided-results__headline-link font-semibold text-black underline underline-offset-2 dark:text-white ${FOCUS}`}
+        >
+          {story === 'bounce' ? 'All three bounce measures' : 'Open its card'}
+          {story !== 'bounce' && <span className="sr-only">: {label}</span>}
+        </a>
+      </p>
+    </div>
+  )
+}
+
+/**
+ * The "Running economy" section: a headline for each story whose spokesman reads past its band on
+ * the side running-economy research associates with a higher cost, or a statement that none does.
+ *
+ * Selection and order are `selectHeadlines`'s — fixed spokesmen, banded group only, `displayRank`
+ * order. An empty section says why it is empty rather than promoting something else.
+ */
+function EconomyHeadlines({
+  groups,
+  guidance,
+}: {
+  groups: GuidedGroups
+  guidance: Record<MetricId, MetricGuidance>
+}) {
+  const headingId = useId()
+  const { headlines, unmeasured } = selectHeadlines(groups)
+  return (
+    <section
+      aria-labelledby={headingId}
+      className="guided-results__headlines space-y-4 border-2 border-black p-4 dark:border-white"
+    >
+      <h2 id={headingId} className={H2}>
+        Running economy
+      </h2>
+      {headlines.length > 0 ? (
+        headlines.map((headline) => (
+          <EconomyHeadline key={headline.story} headline={headline} />
+        ))
+      ) : (
+        <p className={`guided-results__headlines-empty ${BODY}`}>
+          No headline for this clip. One appears only when step rate reads{' '}
+          {costlyThreshold(guidance.cadence)} or bounce reads{' '}
+          {costlyThreshold(guidance.verticalOscillationCm)} — where
+          running-economy research points one way.{' '}
+          {unmeasured.length > 0
+            ? `${joinNames(unmeasured.map((id) => METRIC_LABELS[id]))} could not be measured on this clip.`
+            : 'Neither reading is past that point here.'}{' '}
+          That is a position, not a grade. Every measurement is below.
+        </p>
+      )}
+    </section>
+  )
+}
+
 export interface GuidedMeasurementsProps {
   heuristics: FormHeuristicsResult
   scalePassStatus: ScalePassStatus
@@ -324,7 +489,8 @@ export function GuidedMeasurements({
   const unbandedHeadingId = useId()
   const notMeasuredHeadingId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
-  const { banded, unbanded, notMeasured } = guidedGroups(heuristics, guidance)
+  const groups = guidedGroups(heuristics, guidance)
+  const { banded, unbanded, notMeasured } = groups
   const bounceEntries = new Map(
     [...banded, ...unbanded, ...notMeasured].map((entry) => [entry.metric.metric, entry]),
   )
@@ -380,6 +546,8 @@ export function GuidedMeasurements({
 
   return (
     <div ref={rootRef} className="guided-results__results space-y-8">
+      <EconomyHeadlines groups={groups} guidance={guidance} />
+
       <Contents
         entries={[
           ...banded.map((entry) => ({ entry, excluded: false })),
@@ -389,10 +557,10 @@ export function GuidedMeasurements({
       />
 
       <section
-        aria-labelledby="guided-bounce-heading"
+        aria-labelledby={BOUNCE_HEADING_ID}
         className="guided-results__bounce space-y-3 border-l-4 border-brand-600 bg-neutral-50 p-4 dark:border-brand-400 dark:bg-neutral-900"
       >
-        <h2 id="guided-bounce-heading" className={H2}>
+        <h2 id={BOUNCE_HEADING_ID} tabIndex={-1} className={`${H2} scroll-mt-4`}>
           Three ways to describe bounce
         </h2>
         <p className={BODY}>
