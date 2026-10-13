@@ -2099,6 +2099,93 @@ describe('useVideoAnalysis', () => {
     })
   })
 
+  describe("the probe timeout's playback stand-in (strides-6i6.5)", () => {
+    // Measured on a Galaxy S21: clip 2's probe took 13 s (its `blob.arrayBuffer()` contended with
+    // clip 1's primary), the 3 s timeout committed playback, and clip 2 then SAMPLED on the
+    // playback path — 153 samples where the sequential path takes all 345 — and was scheduled as a
+    // playback clip, so clip 1's scale pass ran ahead of it.
+    const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
+
+    function slowProbe(): (supported: boolean) => void {
+      let answer!: (supported: boolean) => void
+      canUseSequentialDecodeMock.mockReturnValue(new Promise((resolve) => (answer = resolve)))
+      sampleClipSequentialMock.mockImplementation(() => ({
+        promise: new Promise(() => {}),
+        handle: makeFakeHandle(),
+      }))
+      return (supported) => answer(supported)
+    }
+
+    /** waitFor polls with setTimeout, which is faked here, so flush with bounded act() loops. */
+    async function flush() {
+      for (let i = 0; i < 10; i += 1) await act(async () => {})
+    }
+
+    it('is replaced by a late answer for a queued clip, which then samples on the sequential path', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const answer = slowProbe()
+        const videoSource = makeVideoSource({ sourceBlob })
+        const { result, rerender } = renderHook(
+          ({ detector }: { detector: PoseDetector | null }) =>
+            useVideoAnalysis(videoSource, detector, { queued: detector === null }),
+          { initialProps: { detector: null as PoseDetector | null } },
+        )
+        await flush()
+        expect(result.current.primarySamplingPath).toBeNull()
+
+        await act(async () => {
+          vi.advanceTimersByTime(3000)
+        })
+        await flush()
+        // The stand-in: the session may now schedule around it, and no run has started.
+        expect(result.current.primarySamplingPath).toBe('playback')
+        expect(result.current.phase).toBe('idle')
+
+        await act(async () => {
+          answer(true)
+        })
+        await flush()
+        expect(result.current.primarySamplingPath).toBe('sequential')
+
+        // Clip 1 finishes; the detector reaches this clip.
+        rerender({ detector: makeFakeDetector() })
+        await flush()
+        expect(result.current.phase).toBe('sampling')
+        expect(sampleClipSequentialMock).toHaveBeenCalledTimes(1)
+        expect(sampleClipMock).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('still decides the sampler for a run that already started on it, and a late answer changes nothing', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const answer = slowProbe()
+        const videoSource = makeVideoSource({ sourceBlob })
+        const { result } = renderHook(() => useVideoAnalysis(videoSource, makeFakeDetector()))
+        await flush()
+
+        await act(async () => {
+          vi.advanceTimersByTime(3000)
+        })
+        await flush()
+        expect(result.current.phase).toBe('sampling')
+        expect(sampleClipMock).toHaveBeenCalledTimes(1)
+
+        await act(async () => {
+          answer(true)
+        })
+        await flush()
+        expect(result.current.primarySamplingPath).toBe('playback')
+        expect(sampleClipSequentialMock).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
   describe('isWaitingForScalePassLane', () => {
     it('is true only for a ready clip, pass pending, queued behind the detector, lane elsewhere', () => {
       expect(isWaitingForScalePassLane('ready', 'pending', true, false)).toBe(true)

@@ -215,6 +215,11 @@ export function useVideoAnalysis(
   // `sequentialDecodeSupported` itself: this is read-and-written only inside the effect that owns
   // it, never needs to trigger a render on its own.
   const sequentialDecodeProbedForRef = useRef<VideoMetadata | null>(null)
+  // Which clip's `metadata` a primary run has already picked its sampler for, in `start()`. Until
+  // then the probe timeout's `false` is only a stand-in, and the probe's real answer replaces it
+  // (strides-6i6.5): the timeout exists so auto-start cannot stall on a hung probe, not to decide
+  // the sampler for a clip still queued behind another, whose probe was merely slow.
+  const samplerChosenForRef = useRef<VideoMetadata | null>(null)
 
   const abandonActiveRun = () => {
     handleRef.current?.stop()
@@ -256,16 +261,24 @@ export function useVideoAnalysis(
 
     setSequentialDecodeSupported(null)
     const probedFor = metadata
-    let settled = false
-    /** Whether this call committed `supported` as the clip's answer. */
-    const settle = (supported: boolean): boolean => {
-      if (settled) return false
-      settled = true
-      // A newer clip may have loaded (and re-triggered this effect) while this was resolving —
-      // only commit the result if it's still the clip this probe was actually run for.
-      if (sequentialDecodeProbedForRef.current !== probedFor) return false
+    let answered = false
+    let fellBack = false
+    // A newer clip may have loaded (and re-triggered this effect) while this was resolving — only
+    // commit a result while it's still the clip this probe was actually run for.
+    const isCurrentClip = () => sequentialDecodeProbedForRef.current === probedFor
+    /** Commits the probe's real answer, unless a run has already picked its sampler for this clip
+     * on the timeout's stand-in — a run's sampler is fixed once chosen. Whether it committed. */
+    const answer = (supported: boolean): boolean => {
+      answered = true
+      if (!isCurrentClip() || samplerChosenForRef.current === probedFor) return false
       setSequentialDecodeSupported(supported)
       return true
+    }
+    /** The timeout's stand-in: playback, so auto-start is never stalled by a hung probe. */
+    const fallBack = () => {
+      if (answered || !isCurrentClip()) return
+      fellBack = true
+      setSequentialDecodeSupported(false)
     }
 
     // The sequential-decode plane is a no-op unless explicitly enabled (default `false` — see
@@ -285,17 +298,27 @@ export function useVideoAnalysis(
       ? canUseSequentialDecode(sourceBlob, probeTimings)
       : Promise.resolve(false)
     const probedBlob = sourceBlob
+    let committed = false
+    let answeredAfterFallBack = false
     void probe.then((supported) => {
-      // An answer that never reached auto-start (the timeout below won, or a newer clip replaced
-      // this one) serves no sampler, so the track the probe demuxed for it would sit unused.
-      if (!settle(supported) && probedBlob) releaseClipDemux(probedBlob)
+      answeredAfterFallBack = fellBack
+      committed = answer(supported)
+      // An answer that serves no sampler (a run already started on the timeout's stand-in, or a
+      // newer clip replaced this one) would leave the track the probe demuxed for it unused.
+      if (!committed && probedBlob) releaseClipDemux(probedBlob)
     })
-    // Chained after `settle`, so the line can never delay the result reaching auto-start.
+    // Chained after `answer`, so the line can never delay the result reaching auto-start.
     if (import.meta.env.DEV) void probe.then((supported) =>
       logPerfTimings('sequential-probe', {
         ...perfClipIdentity(probedFor, sourceBlob),
         enabled: probeEnabled,
         supported,
+        // Whether the timeout's playback stand-in had been committed before this answer arrived,
+        // and whether this answer then became the clip's. On a contended phone a queued clip's
+        // probe took 13 s; before strides-6i6.5 the stand-in stuck and that clip sampled on the
+        // playback path while this line still read `supported: true`.
+        fellBack: answeredAfterFallBack,
+        committed,
         totalMs: roundMs(performance.now() - probeStartedAt),
         ...roundProbeTimings(probeTimings),
       }),
@@ -303,8 +326,10 @@ export function useVideoAnalysis(
     // Defensive bound, not an expected path: canUseSequentialDecode is documented to never hang
     // (every gate resolves, nothing awaits an unbounded external operation once a Blob is already
     // in hand) — this exists so a future regression there degrades to "no sequential decode this
-    // run" instead of stalling auto-start indefinitely.
-    const timeoutId = setTimeout(() => settle(false), SEQUENTIAL_DECODE_PROBE_TIMEOUT_MS)
+    // run" instead of stalling auto-start indefinitely. It does NOT decide the sampler for good:
+    // a slow answer still replaces it for any run that has not started yet (see `answer`). It
+    // also bounds how long the session's scale-pass lane waits on this clip's answer.
+    const timeoutId = setTimeout(fallBack, SEQUENTIAL_DECODE_PROBE_TIMEOUT_MS)
     return () => clearTimeout(timeoutId)
   }, [metadata, sourceBlob])
 
@@ -364,6 +389,8 @@ export function useVideoAnalysis(
     // computed, and diagnostics must report the path THIS run actually took, not whatever the
     // state says by the time the run finishes.
     const usesSequentialDecode = sequentialDecodeSupported === true
+    // From here on a late probe answer can no longer change this clip's sampler.
+    samplerChosenForRef.current = metadata
     // Create the scale pass's detector now, overlapping this primary pass, instead of at 'ready'.
     // Sequential path only: the playback sampler drops real-time frames under the main-thread/GPU
     // contention creation causes (strides-gyl), where the sequential one only runs slower. The
