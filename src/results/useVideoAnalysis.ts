@@ -17,6 +17,7 @@ import {
 } from './scalePassGraft'
 import { assessScalePassSubjectAgreement } from './scalePassSubjectAgreement'
 import { getScalePassDetector } from '../pose/scalePassDetector'
+import { cancelScalePassAssetPrefetch } from '../pose/scalePassAssetPrefetch'
 import { resolvePoseDetectorConfig } from '../pose/poseBackendConfig'
 import type {
   AnalysisPhase,
@@ -420,6 +421,9 @@ export function useVideoAnalysis(
     // scale pass and the session read the state, not the run.
     setSequentialDecodeSupported(usesSequentialDecode)
     setSamplingPathSettled(true)
+    // The real-time playback sampler loses frames to a concurrent transfer on a slow link; the
+    // sequential one does not. See scalePassAssetPrefetch.ts.
+    if (!usesSequentialDecode) cancelScalePassAssetPrefetch()
     // Create the scale pass's detector now, overlapping this primary pass, instead of at 'ready'.
     // Sequential path only: the playback sampler drops real-time frames under the main-thread/GPU
     // contention creation causes (strides-gyl), where the sequential one only runs slower. The

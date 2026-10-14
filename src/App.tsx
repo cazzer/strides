@@ -1,4 +1,8 @@
+import { useEffect } from 'react'
 import { usePoseDetector } from './pose/usePoseDetector'
+import { resolvePoseDetectorConfig } from './pose/poseBackendConfig'
+import { prefetchScalePassAssets } from './pose/scalePassAssetPrefetch'
+import { resolveScalePassConfig } from './results/scalePassConfig'
 import { MultiClipVideoSession } from './results/MultiClipVideoSession'
 
 /**
@@ -15,6 +19,21 @@ import { MultiClipVideoSession } from './results/MultiClipVideoSession'
  */
 export function App() {
   const poseDetector = usePoseDetector()
+
+  // Once the primary detector's own models are in, pull the scale pass's MediaPipe assets into the
+  // HTTP cache on idle, so they are not first requested mid-analysis. Bytes only — see
+  // scalePassAssetPrefetch.ts. A MediaPipe primary already loads those assets itself.
+  useEffect(() => {
+    if (poseDetector.status !== 'ready') return
+    if (!resolveScalePassConfig().enabled) return
+    if (resolvePoseDetectorConfig().backend === 'mediapipePoseLandmarker') return
+    if (typeof requestIdleCallback === 'function') {
+      const handle = requestIdleCallback(prefetchScalePassAssets, { timeout: 2000 })
+      return () => cancelIdleCallback(handle)
+    }
+    const handle = setTimeout(prefetchScalePassAssets, 0)
+    return () => clearTimeout(handle)
+  }, [poseDetector.status])
 
   return <MultiClipVideoSession detector={poseDetector.detector} />
 }

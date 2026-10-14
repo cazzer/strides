@@ -137,6 +137,17 @@ function computePixelsPerMeter(
  */
 const TIMESTAMP_RESTART_GAP_MS = 33
 
+/**
+ * Every URL `createMediaPipePoseLandmarkerDetector` fetches: the WASM loader and binary (the
+ * variant `FilesetResolver` picks for this browser) and the `.task` model. Exposed so the bytes
+ * can be fetched ahead of detector creation (`scalePassAssetPrefetch.ts`) from exactly the URLs
+ * creation will later ask for.
+ */
+export async function resolveMediaPipePoseLandmarkerAssetUrls(): Promise<string[]> {
+  const wasmFileset = await FilesetResolver.forVisionTasks(WASM_BASE_PATH)
+  return [wasmFileset.wasmLoaderPath, wasmFileset.wasmBinaryPath, MODEL_ASSET_PATH]
+}
+
 export async function createMediaPipePoseLandmarkerDetector(): Promise<PoseDetector> {
   const wasmFileset = await FilesetResolver.forVisionTasks(WASM_BASE_PATH)
   const landmarker = await PoseLandmarker.createFromOptions(wasmFileset, {
