@@ -1,8 +1,10 @@
 import '@tensorflow/tfjs-backend-webgl'
 import * as tf from '@tensorflow/tfjs-core'
 import * as poseDetection from '@tensorflow-models/pose-detection'
-import type { PoseDetector, PoseFrameSource } from '../detector'
+import type { DetectorCreationOptions, PoseDetector, PoseFrameSource } from '../detector'
 import type { PoseFrame } from '../types'
+import { MOVENET_MODEL_URLS, createMoveNetModelLoader } from './movenetModelAssets'
+import type { MoveNetModelKey } from './movenetModelAssets'
 import { toPoseFrame } from './common'
 import type { RawKeypoint } from './common'
 import {
@@ -56,6 +58,17 @@ const MULTIPOSE_MAX_DIMENSION = 448
 const MOVENET_MODEL_TYPES: Record<MoveNetModelType, string> = {
   lightning: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
   thunder: poseDetection.movenet.modelType.SINGLEPOSE_THUNDER,
+}
+
+/**
+ * Which TFHub model each single-pose variant loads. Parallel to `MOVENET_MODEL_TYPES` above and
+ * kept beside it deliberately: the library derives the URL from the model type internally, and
+ * once we supply our own loader (see `createMoveNetModelLoader`) that derivation is ours to get
+ * right. A variant added to one map and not the other is a type error, not a silently wrong model.
+ */
+const MOVENET_SINGLEPOSE_MODEL_KEYS: Record<MoveNetModelType, MoveNetModelKey> = {
+  lightning: 'singlepose-lightning',
+  thunder: 'singlepose-thunder',
 }
 
 /**
@@ -278,6 +291,7 @@ export async function createMoveNetDetector(
   modelType: MoveNetModelType = 'lightning',
   trackingCropConfig: TrackingCropConfig = DEFAULT_TRACKING_CROP_CONFIG,
   personOfInterestConfig: PersonOfInterestConfig = DEFAULT_PERSON_OF_INTEREST_CONFIG,
+  options: DetectorCreationOptions = {},
 ): Promise<PoseDetector> {
   await tf.setBackend('webgl')
   await tf.ready()
@@ -314,9 +328,24 @@ export async function createMoveNetDetector(
   // is no retry: this detector instance is cached and reused for the whole app lifetime
   // (`usePoseDetector.ts`), and there is no natural "try again" moment once creation has already
   // been paid for (or failed) up front for every run this instance will ever serve.
+  //
+  // `modelUrl` is an `io.IOHandler`, not a URL string (`strides-utn.4`): both models' weights are
+  // obtained through this app's own model cache instead of being re-fetched from TFHub on every
+  // page load. That is worth 14.5 MB per repeat visit and is the only route to it — the measured
+  // final response is `cache-control: private, max-age=0` behind a per-request SIGNED URL, so the
+  // browser's own cache can never hold these bytes. See `movenetModelAssets.ts`. The library
+  // supports this input directly (`MoveNetModelConfig.modelUrl` is `string | io.IOHandler`), and
+  // the handler reproduces the library's own URL derivation and artifact assembly so the graph
+  // receives byte-identical weights.
   const rawDetectorPromise = poseDetection.createDetector(
     poseDetection.SupportedModels.MoveNet,
-    { modelType: MOVENET_MODEL_TYPES[modelType] },
+    {
+      modelType: MOVENET_MODEL_TYPES[modelType],
+      modelUrl: createMoveNetModelLoader(
+        MOVENET_MODEL_URLS[MOVENET_SINGLEPOSE_MODEL_KEYS[modelType]],
+        options.onAssetProgress,
+      ),
+    },
   )
   const multiPoseDetectorPromise: Promise<Awaited<
     ReturnType<typeof poseDetection.createDetector>
@@ -325,6 +354,10 @@ export async function createMoveNetDetector(
         .createDetector(poseDetection.SupportedModels.MoveNet, {
           modelType: poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING,
           multiPoseMaxDimension: MULTIPOSE_MAX_DIMENSION,
+          modelUrl: createMoveNetModelLoader(
+            MOVENET_MODEL_URLS['multipose-lightning'],
+            options.onAssetProgress,
+          ),
         })
         .catch(() => null)
     : Promise.resolve(null)

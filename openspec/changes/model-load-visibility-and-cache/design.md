@@ -1,0 +1,733 @@
+# Design — model load visibility and persistent model cache
+
+## D1. Why this is one change and not four
+
+`strides-utn` has four implementation children (`.1`, `.3`, `.4`, `.5`) plus a measurement spike
+(`.2`). All four implementation children write to the `pose-detection` spec.
+
+CLAUDE.md records a real, silent data-loss footgun in this repo's openspec workflow: a MODIFIED
+block REPLACES the whole requirement body, so two in-flight changes that MODIFY the same requirement
+clobber each other — last archive wins, the loss is invisible in the archive output's `~ 1 modified`
+line, and `openspec validate --strict` does not catch it. It has already happened here once for
+real (`navbar-clip-shell` vs `inline-annotated-evidence`, 2026-08-18), and neither change was a
+superset of the other, so no archive order alone was correct.
+
+Four parallel changes on one capability is exactly the shape that produces that. One change with a
+per-ticket `tasks.md` removes the failure mode structurally instead of relying on archive ordering
+and on every later agent remembering to diff delta headers against each other. The cost is that the
+change stays in flight until the whole epic ships — which is the intended lifetime anyway, since
+`.5` cannot render honest progress until `.3` populates it.
+
+**Consequence for later agents on this epic**: check off your own numbered section in `tasks.md`,
+and if you need to change a requirement another section already ADDED, edit that block in place
+rather than adding a second one.
+
+## D2. The load-state shape: a phase, and progress that is allowed to be absent
+
+```ts
+export type ModelLoadPhase = 'idle' | 'loading' | 'ready' | 'error'
+export interface ModelLoadProgress { loadedBytes: number; totalBytes: number }
+export interface ModelLoadState { phase: ModelLoadPhase; progress: ModelLoadProgress | null }
+```
+
+Three decisions worth stating.
+
+**`progress: null` means indeterminate, and it is not a zero.** `strides-utn.2` has already
+established from `node_modules` that at least one asset is structurally uninstrumentable: MediaPipe's
+`FilesetResolver` exposes no WASM progress hook at all, and tfjs's own `LoadOptions.onProgress` is a
+fraction of FILES, not bytes (`tfjs-core/dist/io/weights_loader.js:74`), so it cannot be converted
+into one. A shape that forced a number would force `.5` to invent one. `null` is the honest value,
+and `.5`'s spec forbids rendering a percentage from it.
+
+**`idle` exists for the scale pass, not for the primary.** The primary detector is created on mount,
+so its phase is `'loading'` from the first render and never idle. That is expressed in the type
+rather than in a comment: `PoseDetectorStatus` is now `Exclude<ModelLoadPhase, 'idle'>`, which keeps
+the existing `'loading' | 'ready' | 'error'` union byte-for-byte and keeps
+`usePoseDetector.test.ts` green unchanged. The scale-pass detector is lazy — it is genuinely idle
+until an analysis run asks for it — so the shared phase union has to carry a fourth member.
+
+**Progress is per-owner, not per-asset.** Each owner already fetches more than one asset (MoveNet
+fetches single-pose and multi-pose; the scale pass fetches WASM and a `.task`). Aggregating inside
+the owner keeps `.5` from having to know the asset inventory. `strides-utn.3` populates these
+fields; `strides-utn.1` builds the channel and leaves them `null`.
+
+**Where `.3` plugs progress in** (recorded so it is not re-litigated): the primary hook holds
+`progress` as its own state, so the natural extension is an optional progress callback threaded into
+`createDetector`; the scale-pass module publishes through the same `setLoadState` the phase already
+goes through. `.1` deliberately does not pick between that and a progress bus inside the shared
+cache utility, because the choice belongs with the utility. What `.1` pins is the **shape** — which
+is the part `.5` renders against. `.3` has since chosen the callback, for reasons that only became
+visible once the utility existed: **D8**.
+
+## D3. The scale-pass singleton gains an observation channel, and stays a singleton
+
+This is the part of `strides-utn.1` that contradicts an existing, deliberate comment, so the
+justification is recorded here rather than the comment being quietly deleted.
+
+The module doc at `src/pose/scalePassDetector.ts:6-11` reads, in part:
+
+> Lives at module level rather than in a hook because the scale pass is not a render concern:
+> nothing re-renders on this detector's readiness, and the whole point of the cache is amortizing
+> MediaPipe's WASM/model load across every analysis run on the page — a per-pass create/dispose
+> cycle would pay it every time.
+
+**That sentence bundles an observation and a reason, and only the observation has changed.** The
+reason the detector lives at module level is that a React-owned resource is scoped to a component's
+lifetime: a hook that creates it would tie a 9.4 MB model plus a WASM runtime to a mount, and a
+remount would pay for both again. That is still true and this change does not touch it. The clause
+that is now false is the incidental one — "nothing re-renders on this detector's readiness" — and it
+was never the load-bearing half. It described the product as it stood, not a property the design
+requires. `strides-utn` exists precisely because that state of affairs is the bug: the reader waits
+on an unmentioned 9.4 MB fetch while the UI says the clip is Ready.
+
+So the singleton gains an **observation channel** and does not become a React resource. Mechanically:
+
+- **The channel is plain publish/subscribe with no rendering library involved.** A module-level
+  `Set` of listeners, a `getScalePassDetectorLoadState()` snapshot reader, and a
+  `subscribeToScalePassDetectorLoad(listener)` returning an unsubscribe function.
+  `scalePassDetector.ts` imports no React, and that is the enforcement: the React adapter is a
+  separate file (`useScalePassDetectorLoad.ts`, a `useSyncExternalStore` over those two functions),
+  so the singleton cannot acquire a component lifetime by accident.
+- **Ownership is unchanged.** `getScalePassDetector()` is still the only creator, still the only
+  thing that installs the pending promise, and still the only thing that caches the instance for the
+  page lifetime. Subscribers read; they never create.
+- **Subscribing SHALL NOT start a download**, and there is a spec scenario for it. An observation
+  channel that triggers the thing it observes would have converted a lazy 9.4 MB fetch into an eager
+  one on every page load — which is the cost this epic explicitly declined to take.
+- **The two existing guarantees are untouched and still tested**: the page-lifetime instance cache,
+  and the refusal to read `resolvePoseDetectorConfig()` / `__STRIDES_POSE_BACKEND_OVERRIDE__`. The
+  channel publishes phase transitions the accessor was already making internally; it adds no new
+  branch to the creation path beyond `setLoadState` calls.
+- **`__disposeForTests()` resets the published state to `idle`** along with the instance and pending
+  promise, so module state is genuinely isolated between tests. It does not clear the listener set:
+  listeners are owned by whoever subscribed, and `renderHook`'s unmount already removes them.
+
+**The comment is rewritten, not removed.** Its new wording keeps the module-level rationale and
+replaces the falsified clause with the design that replaced it — a plain subscription for observers,
+with creation still owned by the accessor.
+
+One React mechanic worth recording because getting it wrong is an infinite render loop rather than a
+visible bug: `useSyncExternalStore`'s `getSnapshot` must return a **referentially stable** value
+between transitions. The module holds one `ModelLoadState` object and replaces it only on an actual
+phase change, so the snapshot reader returns the same reference across renders.
+
+## D4. Threading, and why `MultiClipVideoSession` does not read it yet
+
+`src/App.tsx:17-19` destructures `.detector` and drops `status`. It now reads both owners and passes
+one grouped prop:
+
+```tsx
+const poseDetector = usePoseDetector()
+const scalePassLoad = useScalePassDetectorLoad()
+const modelLoad = useMemo(
+  () => ({ primary: poseDetector.load, scalePass: scalePassLoad }),
+  [poseDetector.load, scalePassLoad],
+)
+return <MultiClipVideoSession detector={poseDetector.detector} modelLoad={modelLoad} />
+```
+
+The `useMemo` is not ceremony: `App` re-renders on every phase transition of either owner, and this
+repo has already been bitten by a fresh object identity per render forcing work downstream
+(`sameClipSession`'s whole docstring). A stable `modelLoad` keeps that prop quiet once both owners
+settle.
+
+`MultiClipVideoSession` **declares and receives the prop and deliberately does not render it.**
+`strides-utn.1` is the wire only — `.5` owns every pixel — and the two tickets run in parallel, so a
+placeholder rendering here would collide with the component `.5` is writing. The prop is declared on
+the props interface and documented as reserved for `.5`; the component destructures only `detector`
+from its props object, so the unread prop is a documented seam rather than an eslint-suppressed
+dead binding. That the value genuinely arrives was verified live, not by unit test — see D6.
+
+## D5. Which capability each requirement lands in
+
+- **`pose-detection`** takes the observability requirement, the shared cache/progress seam, and both
+  per-asset routing requirements. That capability already owns
+  "Scale-pass detector is dedicated, cached, and exempt from the backend override", which is the
+  requirement the observability one sits beside.
+- **`results-view`** takes the header model-download entry. It is deliberately NOT in
+  `multi-clip-analysis`, even though the clip strip is specified there: placing it there would imply
+  the entry participates in the clip enumeration that
+  "Clips are presented as a strip in the application header, one entry per clip" depends on, and the
+  entire resolution of that conflict is that it does not. The new requirement names that one and
+  asserts the counting invariant is unchanged.
+- **Nothing is MODIFIED.** Every requirement in this change is ADDED. The existing scale-pass
+  requirement's text — page-lifetime cache, null-not-throw, retry after failure, no config read —
+  remains true word for word after this change, so rewriting its body would only create clobber
+  surface for no gain.
+
+## D6. Verification, and what unit tests cannot reach
+
+The unit suite mocks `createDetector` outright (`usePoseDetector.test.ts`,
+`scalePassDetector.test.ts` both `vi.mock('./detector')`), so it can prove the state machine and
+cannot prove the wire. `strides-utn.1`'s live check therefore drove the real app in headless
+Chromium on real GPU per CLAUDE.md's harness section — derived dev-server port 5349, renderer
+`ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)`, never SwiftShader — with a temporary dev-only
+log inside `MultiClipVideoSession` reading `props.modelLoad`. Measured, on a cold page load followed
+by Demo 2 (the local clip):
+
+| t (ms from first render) | `primary.phase` | `scalePass.phase` |
+|---|---|---|
+| 0 | `loading` | `idle` |
+| +1,326 | **`ready`** | `idle` |
+| +7,980 | `ready` | **`loading`** |
+| +8,328 | `ready` | **`ready`** |
+
+Two things that reading confirms beyond "the prop arrives". The primary settles **6.7 s before** the
+scale pass even starts, which is the two-independent-downloads shape this epic is built around — a
+single aggregate phase would have hidden it. And the scale pass sat at `idle` through the whole of
+that window despite being subscribed from mount, which is the live evidence for D3's "subscribing
+does not start a download". `progress` was `null` on every line, as `strides-utn.1` intends.
+
+The log was removed before the ticket closed, per this repo's add-measure-revert cycle.
+
+`strides-utn.5`'s viewport check is the same class of problem and is an acceptance criterion for the
+same reason: a concealed `<video>` measures healthy through `getBoundingClientRect` and dead at the
+sampler, so no unit test can see it. Measured cost of concealment: ~20–24% of sampled frames on the
+playback path, at any size, by any mechanism.
+
+## D7. Open decisions deliberately left to their own tickets
+
+- **Retry after a failed model download (`strides-utn.5`).** `movenet.ts:313-316` argues at length
+  that there is no natural "try again" moment: the detector instance is created once and cached for
+  the whole app lifetime, and creation cost is paid up front for every run it will ever serve. So
+  retry is a real product decision, not a checkbox. `.5` must decide it explicitly — implemented, or
+  declined in writing — and its spec requirement says so.
+- **`strides-utn.4`'s withdrawal path.** That ticket is gated on `strides-utn.2`'s browser
+  measurement of whether MoveNet's responses are CORS-readable with a usable `Content-Length` from a
+  real page. If the spike returns no-go, the requirement
+  "MoveNet model weights load from the shared model cache" is **deleted from this change's
+  `pose-detection` delta** before archive and `strides-utn.4` closes as not-feasible with the
+  measurement recorded — the same discipline `derive-area-floor-from-4k-measurement` used when its
+  measurement showed a drafted requirement was unsatisfiable. Weakening the requirement to fit
+  whatever the spike found would be editing a criterion to match a result.
+- **Eager prefetch of the MediaPipe model is out of scope for the whole epic**, by an explicit
+  decision on `strides-utn`: 9.4 MB unconditional for a visitor who may never analyse a clip is a
+  cost this repo is not paying today. Downloads are instrumented where they already happen.
+
+## D8. `strides-utn.3` chose a callback over a progress bus, and why
+
+D2 left this open on purpose. The choice is a **callback**: `createDetector` takes a second
+argument, `DetectorCreationOptions`, carrying an optional `onAssetProgress`, and each owner folds
+its assets' readings with `aggregateModelAssetProgress` from the cache utility.
+
+The bus alternative was not rejected for being heavier. It was rejected because **it does not buy
+less threading**. `createMediaPipePoseLandmarkerDetector` serves BOTH owners — the scale pass
+always, and the primary whenever `__STRIDES_POSE_BACKEND_OVERRIDE__` selects mediapipe — so a bus
+would still need an owner tag threaded down through exactly the same call chain. It would replace a
+function argument with a string argument and add module-global mutable state that tests must reset,
+for the same reach.
+
+Two things decided it beyond that:
+
+- **A bus would introduce a second writer to the scale-pass channel**, which contradicts D3. That
+  section's whole claim is that ownership is unchanged: `getScalePassDetector` is still the only
+  thing that publishes, and observers only read. A bus that published progress from inside the
+  fetch utility would make the utility a publisher on a channel it does not own.
+- **`strides-utn.4` needs per-shard progress from inside a tfjs `io.IOHandler` that WE
+  construct.** A closure is the natural carrier there; there is nothing to key a bus on that is
+  more convenient than the callback already in hand.
+
+The utility therefore knows nothing about owners, phases, or React — it reports bytes for an asset
+id, and the owner decides what that means. `aggregateModelAssetProgress` is the piece that keeps
+`.5` from needing the asset inventory: it sums per-file readings into one `ModelLoadProgress`, and
+**one unknown total makes the whole reading indeterminate**, because summing only the totals that
+happen to be known would report a total that is not the total.
+
+**The primary's `progress` stays `null` on today's default backend.** MoveNet routes nothing through
+the utility until section 3. That is the seam working, not a gap: `null` means indeterminate, and a
+download nobody is measuring is exactly that.
+
+### D8.1 Two guards on `Content-Length`, because one is not enough
+
+`strides-utn.2` measured that trust has to be decided per response. The header check
+(`content-encoding` absent or `identity`) is the first guard. It is **not sufficient on its own**: a
+cross-origin response only exposes `content-encoding` when the server lists it in
+`access-control-expose-headers`, so a compressed cross-origin body can present a compressed
+`Content-Length` with nothing to flag it.
+
+The second guard is in the read loop — a declared total the decoded body has already **overrun** was
+measuring something else, whatever the headers said, and the reading drops to indeterminate from
+that point. Together they catch the measured ~376% case from either direction.
+
+The download closes with `{ loadedBytes, totalBytes: loadedBytes }`. That is a measurement, not an
+invention — the asset is complete and it was exactly that many bytes — and it stops an asset whose
+total was never readable from holding a multi-file aggregate at indeterminate after it has finished.
+
+### D8.2 The cache key is a caller-supplied identity, never the fetched URL
+
+The single most load-bearing line in the utility. `strides-utn.2`'s headline finding: MoveNet's
+files resolve through two 302s to a `storage.googleapis.com` URL whose `X-Goog-Date` and
+`X-Goog-Signature` **differ on every request**. A cache keyed on `response.url` would miss 100% of
+the time and silently do nothing at all — no error, no warning, just a feature that does not work.
+
+So `ModelAssetSpec` separates `id` (stable, the key) from `url` (what is fetched, may be signed and
+may redirect), and nothing in the module reads `response.url`. For the `.task` the two are the same
+string; for MoveNet they will not be. There is a unit test that fetches twice under one `id` with
+two different signed URLs and asserts the second issues no request.
+
+Keys live under a synthetic `https://model-asset.strides.invalid/asset/<id>?v=<version>` origin:
+`Cache.put` requires an http(s) scheme but never fetches the key, so a URL that cannot resolve is
+both legal and unambiguous about being a key rather than a resource. Eviction scans `cache.keys()`
+for the same `id` prefix at a different `v` — **scoped to the asset whose token moved**, so bumping
+one model does not discard every other cached asset.
+
+## D9. What the live run measured (`strides-utn.3`)
+
+Headless Chromium, `--headless=new --enable-gpu --ignore-gpu-blocklist`, renderer
+`ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)` — never SwiftShader. Derived dev-server port
+5371, identity-verified by nonce. Two runs against **one persistent Chromium profile**, so Cache
+Storage survives between them; Demo 2 driven to "Analysis complete" and then to the
+`[analysis-diagnostics:scale-pass]` line, which is what creates the MediaPipe detector and therefore
+what pulls the `.task`. Network read via CDP `Network.*` (`encodedDataLength` and `fromDiskCache`
+are available nowhere else).
+
+| `pose_landmarker_full.task` | requests | transferred |
+|---|---|---|
+| cold (fresh profile) | 1 | **9,398,460 bytes** |
+| warm (same profile) | **0** | **0 bytes** |
+
+**The warm run issues no request at all** — not a 304, which is what `strides-utn.2` measured on the
+old path (127 bytes), and not a disk-cache hit either. Cache Storage held exactly one entry, of
+9,398,198 bytes, under
+`https://model-asset.strides.invalid/asset/%2Fstrides%2Fmodels%2Fpose_landmarker_full.task?v=md5-5a9ad88919b2231d02b1fdf4a54090ec`.
+
+**Analysis output did not move.** Both runs report `verticalOscillationCm`
+**`10.486597716761532`**, `fit.frequencyHz` 3.12, `sampleCount` 98, `torsoMeters`
+`0.464629504405643`, `medianPixelsPerMeter` `520.898452525673`, `subjectAgreement` 99/99 — every
+digit matching CLAUDE.md's standing fresh-process Demo 2 anchor. Since that whole figure is derived
+from the landmarker's own output, it is the check that the model bytes reaching MediaPipe are
+identical whether they came from the cache or the network.
+
+**The WASM confirms the decision to leave it alone** (constraint 1): cold 2 requests /
+3,207,489 bytes, warm 2 requests / **0 bytes**, served from the browser's own disk cache. Caching it
+ourselves would have cost 11.76 MB of quota to save nothing.
+
+⚠️ **One harness limitation, recorded so it is not misread**: this driver classifies assets by their
+FINAL URL, and MoveNet's final URL is the signed GCS one, which matches no `movenet/...` pattern. Its
+rows therefore read "NO REQUEST" in both runs — that is the classifier, not the network.
+`strides-utn.2`'s driver tracked the redirect chain and is the one to reuse for section 3.
+
+## D10. `strides-utn.4` — how MoveNet's weights reach the cache, and what it measured
+
+### D10.1 The premise the spike overturned
+
+The epic opened by calling the 9.4 MB `.task` "by far the biggest download" and treating MoveNet as
+the risky optional half. `strides-utn.2` measured the opposite: MoveNet is **14,522,593 body bytes
+at app MOUNT**, before a reader touches a clip — SinglePose Lightning 4,818,229 across 3 files and
+MultiPose Lightning 9,697,908 across 4 — and **MultiPose alone (9,697,908) exceeds the `.task`
+(9,398,198)**. This section is the larger half of the epic's win, not its tail.
+
+### D10.2 An `io.IOHandler`, and why it is a supported input rather than a hack
+
+`@tensorflow-models/pose-detection@2.1.3`'s `movenet/detector.js:495-520` sets `fromTFHub = false`
+whenever `config.modelUrl` is not a string and hands the value straight to `tfc.loadGraphModel`;
+`GraphModel.findIOHandler` then treats anything with a `load` method as the handler, and
+`MoveNetModelConfig.modelUrl` is declared `string | io.IOHandler` in the package's own types. So
+`movenetModelAssets.ts` supplies a handler whose `load()` fetches `model.json` through
+`fetchModelAsset`, parses its weights manifest, fetches every shard the manifest names through
+`fetchModelAsset` in parallel, and returns `ModelArtifacts`.
+
+**The assembly is deliberately the library's own.** Same `?tfjs-format=file` URL derivation
+(`getTFHubUrl` + `parseUrl`), same `io.getWeightSpecs` flattening, same `io.getModelArtifactsForJSONSync`,
+and the same "one `ArrayBuffer` per shard, in manifest order" shape `loadWeightsAsArrayBuffer`
+returns and `decodeWeights` reads. The acceptance gate here is that **no analysis output moves**,
+and the cheapest way to guarantee that is to hand `GraphModel.loadSync` a byte-for-byte equivalent
+of what it would otherwise have received rather than a reimplementation that merely ought to match.
+
+tfjs's own `LoadOptions.onProgress` is not used and must not be: it reports a fraction of FILES, not
+bytes (`tfjs-core/dist/io/weights_loader.js:74`) — a 7-step staircase, not a measurement.
+
+### D10.3 The cache identity: version SPLIT OUT of the id, and `strides-8w2`
+
+D8.2 established that the key can never come from the fetched URL. This section adds where the
+**version token** comes from, which is `strides-8w2`'s open question for the `.task` (a hand-copied
+MD5 constant nothing checks).
+
+MoveNet needs no hand-copied token, because the TFHub URL already carries one — and the useful move
+is to take it OUT of the identity rather than leave it in:
+
+| | value |
+|---|---|
+| `ModelAssetSpec.id` | `https://tfhub.dev/google/tfjs-model/movenet/singlepose/lightning/model.json` |
+| `ModelAssetSpec.version` | `4` |
+| resulting key | `.../asset/<encoded id>?v=4` |
+
+Leaving the `/4` inside the id would work as a *key* — a different model is a different id — but a
+model bump would then **orphan** the old entries instead of evicting them, since `fetchModelAsset`
+prunes other versions of the same id and can only do that for keys that share one. Splitting makes
+a bump an eviction. Measured live: the 7 keys carry `?v=4` (singlepose) and `?v=1` (multipose),
+matching the two models' published TFHub versions, and a unit test loads `.../lightning/5` and
+asserts all three `?v=4` entries are gone.
+
+`resolveMoveNetModelSource` splits on the URL's **path segments**, not on the last `/` in the
+string. `lastIndexOf('/')` on `https://example.test` lands inside the `//`, reading the host as a
+version and `https:/` as the identity — which would collide every bare-origin URL onto one key. The
+first version of this function had exactly that bug; the unit test caught it.
+
+**What replaces the hand-copied constant, and the answer to `strides-8w2` for these assets**: the
+URLs are mirrored in `MOVENET_MODEL_URLS` because the package does not export them publicly, and
+`movenetModelAssets.test.ts` asserts each one against the installed package's own
+`dist/movenet/constants` by deep import. A dependency upgrade that repoints a model therefore fails
+a test instead of silently keying the cache on a name the library no longer fetches. That is
+`strides-8w2` option (b) — an assertion at CI rather than a convention — applied to the assets that
+can carry it. It does not close `strides-8w2` for the `.task`, whose bytes are checked in and carry
+no library constant to compare against.
+
+⚠️ Two corrections, from `strides-8w2` itself (**D12**). "An assertion at CI" is wrong: this repo
+runs no tests in CI, only `npm ci` + `npm run build` — both assertions fail on `npm test` instead,
+which is the standing pre-ship gate, not a push-triggered one (D12.4). And the `.task` IS now
+covered, by the only half of this shape that transfers to a checked-in binary: its own bytes are
+the source of truth the mirrored constant is asserted against (D12.2).
+
+### D10.4 Progress: the total GROWS, and that is the honest reading
+
+Each file's total is reported the moment its own response headers arrive, so the primary owner's
+aggregate total climbs from `model.json`'s ~417 kB to the full ~14.5 MB as the shards begin. Two
+alternatives were considered and rejected:
+
+- **Seed each shard's total from the manifest.** The manifest declares every weight's dtype and
+  shape, so a per-GROUP total is derivable — but a group's split across its `paths` is not in the
+  file. Reconstructing it means assuming the converter's 4 MiB shard size, which is an inference
+  about a tool's default, not a fact in the asset. `ModelLoadState.progress` exists to keep exactly
+  that distinction, so the guess is not made. (`aggregateModelAssetProgress`'s doc claimed MoveNet
+  could seed this way; that claim is corrected in place.)
+- **Announce each shard as `{ loadedBytes: 0, totalBytes: null }` once the manifest names it**,
+  which would hold the aggregate at indeterminate until every header lands rather than letting the
+  total climb. Honest too, but it makes the reading swing determinate → indeterminate → determinate
+  in the one place a reader is watching it. Growth was preferred as the less confusing of two
+  truthful presentations.
+
+**`strides-utn.5` must not render this as a percentage that can go backwards.** A determinate bar
+driven straight off `loadedBytes / totalBytes` will jump down when the shards start. Filed as
+`strides-utn.6`.
+
+### D10.5 What the live run measured
+
+Headless Chromium, `--headless=new --enable-gpu --ignore-gpu-blocklist`, renderer
+`ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)` — never SwiftShader. Derived dev-server port
+5371, identity-verified by nonce. Two runs against **one persistent Chromium profile**, each driving
+Demo 2 to "Analysis complete" so the weights are proven to work, not merely to arrive.
+
+**The classifier tracks the whole redirect chain**, unlike D9's driver: MoveNet's final URL is the
+signed GCS one and matches no `movenet/...` pattern, so a final-URL classifier reports "NO REQUEST"
+for a request that plainly happened.
+
+| file | cold req | cold bytes | warm req | warm bytes |
+|---|---|---|---|---|
+| `singlepose-lightning/model.json` | 1 | 168,699 | **0** | **0** |
+| `singlepose-lightning/group1-shard1of2.bin` | 1 | 4,196,888 | **0** | **0** |
+| `singlepose-lightning/group1-shard2of2.bin` | 1 | 456,381 | **0** | **0** |
+| `multipose-lightning/model.json` | 1 | 249,457 | **0** | **0** |
+| `multipose-lightning/group1-shard1of3.bin` | 1 | 4,196,894 | **0** | **0** |
+| `multipose-lightning/group1-shard2of3.bin` | 1 | 4,196,878 | **0** | **0** |
+| `multipose-lightning/group1-shard3of3.bin` | 1 | 1,061,179 | **0** | **0** |
+| **total** | **7** | **14,526,376** | **0** | **0** |
+
+Every cold row is 2 redirect hops, status 200, `cache-control: private, max-age=0`,
+`fromDiskCache: false` — the measured shape `strides-utn.2` recorded, confirming the browser's own
+cache still declines these bytes and that the 0/0 warm row is ours, not Chromium's. Cache Storage
+after the warm run holds the 7 entries at exactly their declared `Content-Length`s (168,013 +
+4,194,304 + 455,912 + 249,070 + 4,194,304 + 4,194,304 + 1,060,230 = **14,522,593**), plus the
+`.task`.
+
+**The bytes are the right bytes, checked directly rather than inferred.** A second probe SHA-256'd
+every stored entry in the page and compared it against a fresh `cache: 'no-store'` fetch of the same
+file, reconstructing the source URL from the cache key alone (so the id/version split is exercised
+too): **7/7 byte-identical**, sizes and digests both.
+
+⚠️ **The cold and warm runs' metric values differ slightly** (Demo 2 `kneeFlexion` 106.103 cold vs
+103.191 warm) and that is **not** the cache. It is the cold-vs-warm Chromium process split CLAUDE.md
+already documents, reproduced here because the warm run is by construction a second page load in a
+warmed profile. The cold run reproduces the fresh-process A/B baseline exactly (`kneeFlexion`
+106.103, `cadence` 181.2, 99/99). The gate for "did the weights change" is D10.6, which pins every
+trial to the cold operating point.
+
+### D10.6 The acceptance gate
+
+`scripts/ab-person-selection.mjs --arm 'base={}' --clips demo1,demo2,multiperson --trials 3`,
+fresh-process default, run before the change and after it on the same checkout and the same derived
+port. The two 322-line reports differ on **exactly three lines**, one per clip, all `elapsedMs`:
+
+```
+112c112
+< elapsedMs   5850 [5822..5982]      > elapsedMs   5850 [5724..5893]     (demo1)
+217c217
+< elapsedMs   3089 [2809..3190]      > elapsedMs   3065 [2884..3284]     (demo2)
+322c322
+< elapsedMs   4094 [3970..4177]      > elapsedMs   3434 [3413..3584]     (multiperson)
+```
+
+Every metric value, confidence, view reading, person-selection counter and sampling count is
+identical on all three clips. Demo 1 holds this repo's standing anchors — `cadence` 91.2,
+`kneeFlexion` 120.69, 53 detected frames.
+
+⚠️ **Two harness hazards hit while producing that diff, both of which produce a CLEAN-LOOKING WRONG
+ANSWER**, which is this repo's characteristic failure mode:
+
+1. The shell's filtered `diff` reported **"Files are identical"** for two files whose MD5s differ.
+   The real diff needs `rtk proxy diff`. CLAUDE.md's memory already warns not to branch on that
+   wrapper's exit status; this is the same wrapper asserting equality outright. Filed as
+   `strides-ef5`.
+2. `page.waitForFunction` with an **async** predicate can settle on the truthy Promise rather than
+   on what it resolves to. The byte-identity probe passed its gate against an empty cache and
+   reported a serene `0/0 cached MoveNet files are byte-identical`, which reads as a pass. Poll from
+   Node instead. Filed as `strides-h4r`.
+
+## D11. `strides-utn.5` — the entry, and the three decisions it had to make
+
+### D11.1 Progress honesty: bytes, never a fraction (`strides-utn.6`)
+
+D10.4 recorded that the primary owner's aggregate `totalBytes` GROWS — ~417 kB once the two
+`model.json` files have declared themselves, ~14.5 MB once the shards begin — and left the
+presentation to this ticket. Three presentations were weighed:
+
+| | never regresses? | shipped? |
+|---|---|---|
+| raw `loaded / total` | **no** — ~100% then ~3% | no |
+| high-water mark on the fraction | yes, and it is WORSE | no |
+| transferred bytes, no fraction anywhere | yes | **yes** |
+
+The high-water mark is worse rather than safer, and the measured shape is why: both `model.json`
+files complete before any shard's headers arrive, so the mark pins at 100% and stays there for the
+remaining ~14.1 MB — a bar reading "done" through 97% of the work. Swinging determinate →
+indeterminate the moment a fraction would fall is honest, but it is the same confusing presentation
+D10.4 already rejected for the seeding alternative, in the one place a reader is watching.
+
+**`loadedBytes` is the one monotonic quantity this pipeline has**, by construction: each asset's own
+count only rises, `aggregateModelAssetProgress`'s map only gains entries, and a cache hit reports
+its full size in one go. So the caption carries `417 kB` / `4.2 MB` — the counterpart of a clip
+entry's `42%` — and the condition bar carries the indeterminate pulse and no width at all. There is
+no honest fraction to encode, so encoding none is the accurate treatment rather than a fallback.
+
+This REFINES the requirement's own wording, which said "determinate progress only where a byte total
+is actually known". Implementation showed the phrase splits a case the requirement had not
+separated: the total is *known* and simultaneously *not yet the total*. The requirement now says
+what it meant — report a measured quantity, never a reading that can decrease — and gained a
+scenario for the growing total. `strides-utn.6` is closed by this.
+
+Live, cold, real GPU, 60 Hz rAF sampling of the rendered entry: **43 distinct readings, 0 kB →
+14.5 MB, strictly non-decreasing, over 1,302 ms**, and the string `%` never appeared in the entry in
+any of the four scenarios exercised.
+
+### D11.2 Retry: DECLINED, and the caption names the recovery instead
+
+`movenet.ts:313-316` argues there is no natural "try again" moment, and D7 required this ticket to
+decide rather than omit. **Declined**, for three reasons that compound:
+
+1. **A page reload is the natural retry, and here it is free.** The primary detector is created once
+   on mount and cached for the app's lifetime, so its failure window is *before any clip exists* —
+   there is no session state a reload would cost the reader. A bespoke Retry control would buy back
+   exactly a reload.
+2. **The scale pass already retries.** `getScalePassDetector` clears its pending promise on failure,
+   so the next analysis run re-attempts. Offering Retry for it would duplicate a retry that happens
+   anyway, on a failure that is not fatal (the primary result never depends on it).
+3. **Cost.** Retry means reopening `usePoseDetector` — a `strides-utn.1` file — in the epic's last
+   ticket, adding an attempt counter and a `detector` transition (`null → non-null` after an error)
+   that every consumer currently assumes happens at most once.
+
+So the failure copy names the action rather than offering a control: *"The pose model could not be
+downloaded. Reload the page to try again."* for the primary, and for the scale pass the consequence
+instead — *"…Centimetre measurements are unavailable for this session."* — because there is nothing
+for the reader to do about a background pass that will retry itself. Revisitable rather than closed:
+filed as `strides-2rp`.
+
+### D11.3 Live-region ownership: the entry never announces
+
+`results-view`'s "Session status stays a single announced line while per-clip progress moves to the
+clips" allows at most one live region announcing progress for the session, and the active clip's
+`role="status"` caption holds it (`ClipStripEntry.tsx:169`).
+
+**The rule: this entry exposes its condition as plain text and announces nothing** — precisely the
+rule every NON-active clip entry already follows ("every entry exposes its condition as text, but
+only the clip that is actually working announces"). It is not `aria-hidden`: unlike
+`strides-8zv`'s pending-evidence placeholder, which conveys nothing a reader could act on, this
+entry carries the one fact the epic exists to surface, so hiding it would re-create the silence by a
+different route. A byte figure that updates on every chunk would also be the chattiest announcer on
+the page — 43 announcements in 1.3 s, over the top of the session line.
+
+Verified live rather than only in jsdom: with the entry on screen in the failure state, the document
+contained **0** elements matching `[role="status"], [role="alert"], [aria-live]`, and in the
+analysed-clip case the banner contained exactly **1** — the active clip's caption, unchanged.
+
+### D11.4 Where the entry sits, and the scroll consequence nobody would have predicted
+
+The spec requires a preceding SIBLING of `<ul aria-label="Clips">` rather than a member of it, so
+that `"Combined from clip N of TOTAL"` still matches a strip entry by counting. A sibling **outside**
+the scroller satisfies that and is wrong for a different reason, measured at a 390 px viewport: the
+strip's own box is **158 px** wide there, so a fixed 96 px leading entry plus the 12 px gap leaves
+50 px of a 96 px clip frame — the clip's `<video>` more than half clipped out of the strip, which is
+the ~20-24% sampled-frame loss `strides-kyu.13` measured.
+
+So the scroller moved out one level: `.clip-strip` is now the wrapper `<div>`, the model entry and
+the `<ul>` are its two children, and the `<ul>` is a plain `shrink-0` flex row. The working clip's
+own `scrollIntoView` then scrolls the model entry off the left edge instead of being pushed out
+behind it.
+
+That exposed a real hole, and it is not hypothetical: `ClipStripEntry`'s scroll effect keys on
+`hostsLiveElement`, and the scale pass's download begins while a clip is ALREADY hosting its live
+element — so nothing about the clip changes and the effect never re-runs. A new
+`leadingEntryPresent` prop is in the effect's dependencies for exactly that transition. Measured
+live at 390 px, one run, the whole sequence:
+
+| t | model entry | clip condition | clip frame | strip box | visible | `scrollLeft` |
+|---|---|---|---|---|---|---|
+| 253 ms | up | `loading` | [209,305] | [101,374] | 96 px | 0 |
+| 261 ms | up | `idle` | [209,305] | [101,259] | **50 px** | 0 |
+| 1,682 ms | gone | **`sampling`** | [101,197] | [101,259] | **96 px** | 0 |
+| 3,398 ms | **up** | `ready` + scale pass | [163,259] | [101,259] | **96 px** | **46** |
+| 3,729 ms | gone | `ready` | [101,197] | [101,259] | 96 px | 0 |
+
+The 50 px row is the failure the structure avoids — and it is harmless where it occurs, because the
+clip is `idle` and nothing is reading it. The row that matters is 3,398 ms: the entry reappears for
+the scale pass while the clip hosts its element, the strip scrolls 46 px, and the frame stays fully
+visible. Without the re-scroll the frame would have sat at [259,355] against a strip ending at 259 —
+**0 px visible**.
+
+That the invariant is *implicit* — safe only because `clipHostsLiveElement` is false at `idle` — is
+recorded as a latent hazard rather than left in a table: `strides-kkl`. Anything that makes a clip
+host its element earlier, or that adds a second leading entry, reopens the 50 px row into a window
+where it costs frames.
+
+### D11.5 What the live checks measured
+
+Headless Chromium, `--headless=new --enable-gpu --ignore-gpu-blocklist`, renderer
+`ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)` — never SwiftShader. Derived port 5371,
+identity-verified by nonce on every run. Node-side polling throughout, never an async
+`waitForFunction` predicate (`strides-h4r`).
+
+| check | measured |
+|---|---|
+| (a) cold, zero clips | entry present from ~80 ms; `ul[aria-label="Clips"]` **absent** the whole time — the state the old `clipIds.length > 0` gate rendered nothing in |
+| (b) never regresses | 43 readings, `Loading` → 417 kB → … → 14.5 MB → gone at 1,302 ms, strictly non-decreasing; no `%` anywhere |
+| (c) warm | entry visible **67 ms**, and **0** off-origin model requests (the 3 that fire are Google Fonts) |
+| (d) mid-session | entry returns at 2,157 ms reading *Downloading the scale model…* 5.2 → 9.4 MB, gone at 2,771 ms |
+| (e) narrow viewport | below |
+| (f) failure | `loading` → `error`, caption **Failed**, *"The pose model could not be downloaded. Reload the page to try again."*, still there 3 s later |
+
+**(e) is the acceptance criterion and it is a before/after of `detectedFrames`, not a look at
+geometry.** 390x844, Demo 2, PLAYBACK sampler (`{"sequentialSampling":{"enabled":false}}` — the only
+combination that observes concealment; the default WebCodecs path is blind to it), fresh Chromium
+process AND a fresh profile per trial so every trial pays a cold model download and the entry is
+genuinely on screen, 3 trials per arm, `sampling.path` asserted `'playback'` on all 6:
+
+| | before (`bd169e1`) | after |
+|---|---|---|
+| primary `detectedFrames` | 58 / 56 / 57 | **58 / 58 / 58** |
+| primary `totalSamples` | 58 / 56 / 57 | 58 / 58 / 58 |
+| scale pass `detectedFrames` | 85 / 85 / 85 | 84 / 85 / 85 |
+| strip box width | 158 px | **158 px** |
+
+No regression on either pass — the primary reads equal-or-higher in every trial, and the scale
+pass's single one-frame difference is inside the ±1 sampling jitter this repo documents. The strip's
+own width is identical, which is the check on the scroller restructure itself.
+
+**Epic A/B, the whole matrix**: `scripts/ab-person-selection.mjs --arm 'base={}' --clips
+demo1,demo2,multiperson --trials 3`, fresh-process default, run before and after on the same
+checkout and port, diffed with `rtk proxy diff` (`strides-ef5`: the shell's filtered `diff` reports
+"Files are identical" for files whose MD5s differ). The two 332-line reports differ on **`elapsedMs`
+alone** — three summary lines and the nine per-trial log lines that restate them. Detected counts
+are identical trial for trial: demo1 53/228, demo2 99/99, multiperson 103/233.
+
+## D12. `strides-8w2` — the `.task`'s version token, measured against option (a)
+
+A defect in what `strides-utn.3` shipped, not new behaviour. `POSE_LANDMARKER_MODEL_VERSION` is a
+hand-maintained constant holding the checked-in `.task`'s MD5, and it is the whole of that asset's
+Cache Storage key. Replacing `public/models/pose_landmarker_full.task` without editing it serves
+every returning visitor the OLD model's 9.4 MB forever, from a page that ships the new file — and
+the failure looks like nothing at all: analysis completes, the numbers are self-consistent, they
+are simply the previous model's.
+
+Three options were on the ticket. **Option (b) — a test-time assertion against the file's own
+bytes — ships**, and the reason (a) was rejected is a measurement, not a preference.
+
+### D12.1 Option (a) does not hold by construction where the mistake is made
+
+(a) was to move the asset under `src/` and import it as `foo.task?url`, so vite emits a
+content-hashed filename and the URL IS the version. Measured directly, on this repo's own
+`node_modules` and a `base: '/strides/'` config, with a 20 kB stand-in (above
+`assetsInlineLimit`, so it is emitted rather than inlined):
+
+| | emitted URL | changes when the bytes change? |
+|---|---|---|
+| `vite build`, content A | `/strides/assets/fake-BQrdse6Q.task` | — |
+| `vite build`, content B | `/strides/assets/fake-Dn_piqi6.task` | **yes** |
+| `vite dev`, content C | `/strides/src/models/fake.task` | — |
+| `vite dev`, content D | `/strides/src/models/fake.task` | **no** |
+
+In development the `?url` module exports the bare source path and re-exports it **unchanged** after
+the file's bytes are replaced. So (a) would make the invariant hold in a production build and leave
+it broken in dev — which is precisely where a model is swapped, and where this repo's mandated
+live-browser verification runs (the harness drives `npm run dev` on a derived port). It would also
+delete the constant, so there would be nothing left for a test to check in the environment where
+the guarantee is absent. On top of that it changes how the asset is served, which invalidates what
+`strides-utn.2`/D9 measured at a stable self-hosted path.
+
+That is the "construction costs more than it's worth" branch: (a) buys a guarantee in the half of
+the world that was never going to make the mistake, and pays for it by removing the only thing that
+could catch it in the other half.
+
+### D12.2 What ships, and why it is the `strides-utn.4` shape
+
+`mediapipePoseLandmarker.test.ts` reads the checked-in file, hashes it, and asserts
+`POSE_LANDMARKER_MODEL_VERSION === 'md5-<digest>'`. Both constants are exported for it.
+
+This is D10.3's discipline applied to an asset that cannot carry the derivation half. MoveNet's
+token is DERIVED from the URL because TFHub publishes a version there; the `.task`'s bytes are
+checked in and no library constant describes them, so **the bytes are the source of truth** and the
+mirrored value is asserted against them — the same relationship `MOVENET_MODEL_URLS` has with the
+package's `dist/movenet/constants` deep import.
+
+Two details worth keeping:
+
+- **The file is located THROUGH `MODEL_ASSET_PATH`**, not by a re-typed path. Moving or renaming the
+  asset makes the read throw naming the path it wanted, rather than quietly hashing a file the app
+  no longer loads and passing forever.
+- **MD5, not a stronger digest.** This file's identity is already recorded as an MD5 in the source
+  comment, in CLAUDE.md, and in the 2026-08-13 verification that established the checked-in bytes
+  match the bucket's. It is a change-detector, not a security boundary; re-basing it would orphan
+  that record for nothing.
+
+Demonstrated red on all three failure modes, then restored (asset MD5 re-verified
+`5a9ad88919b2231d02b1fdf4a54090ec` and `git status` clean on `public/`):
+
+| perturbation | result |
+|---|---|
+| constant edited by one hex char, file untouched | FAIL, naming both values |
+| file's last byte flipped, constant untouched — **the real footgun** | FAIL, `expected 'md5-5a9…ec' to be 'md5-379407682622289ef765710171f0224d'` |
+| asset renamed, constant and test untouched | FAIL, `ENOENT … /public/models/pose_landmarker_full.task` |
+
+### D12.3 The live re-verification: D9 reproduces to the byte
+
+Serving is unchanged — the asset stays in `public/` at the same path — so D9's cold/warm
+measurement should carry over untouched. It was re-run rather than assumed, on the same
+methodology (persistent Chromium profile across two launches, CDP `Network.*`, Demo 2 driven to
+`[analysis-diagnostics:scale-pass] status=done`), derived port 5323, identity-verified by nonce,
+renderer `ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro)`:
+
+| `pose_landmarker_full.task` | requests | transferred | `fromDiskCache` |
+|---|---|---|---|
+| cold (fresh profile) | 1 | **9,398,460 bytes** | 0 |
+| warm (same profile) | **0** | **0 bytes** | — |
+
+Every figure matches D9 exactly, including the Cache Storage entry: one 9,398,198-byte body under
+`https://model-asset.strides.invalid/asset/%2Fstrides%2Fmodels%2Fpose_landmarker_full.task?v=md5-5a9ad88919b2231d02b1fdf4a54090ec`,
+alongside `strides-utn.4`'s 7 MoveNet entries. The WASM is likewise unchanged — cold 2 requests /
+3,207,437 bytes, warm 2 requests / 0 bytes from the browser's own disk cache.
+
+**Output did not move either.** Both runs report `verticalOscillationCm`
+**`10.486597716761532`**, `fit.frequencyHz` 3.12, `sampleCount` 98, `torsoMeters`
+`0.464629504405643`, `medianPixelsPerMeter` `520.898452525673`, `subjectAgreement` 99/99,
+`sampling.detectedFrames` 99 — CLAUDE.md's standing fresh-process Demo 2 anchor, to every digit.
+Two independent invocations of the driver (4 page loads) agreed on all of it.
+
+### D12.4 A correction to D10.3, and the honest limit of this guard
+
+D10.3 calls the MoveNet assertion "an assertion at CI rather than a convention". **This repo has no
+test job in CI.** `.github/workflows/deploy.yml` is the only workflow and it runs `npm ci` and
+`npm run build` — nothing else. Both that assertion and this one fail on `npm test`, which is this
+repo's standing pre-ship gate (every section of this very task list ends with it), not on a push.
+
+A build-time check would be strictly stronger, since `npm run build` *is* what CI runs. There is no
+route to one here that does not add a vite plugin or a package script, both of which were out of
+scope for `strides-8w2`; and (a), the one build-native mechanism vite already offers, is ruled out
+by D12.1. Left as the accepted limit rather than papered over.

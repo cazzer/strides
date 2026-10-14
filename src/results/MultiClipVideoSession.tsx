@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PoseDetector } from '../pose/detector'
+import type { ModelLoadStates } from '../pose/modelLoadState'
 import { AddClipAction } from '../video/AddClipAction'
 import { ClipLoadStatus } from '../video/ClipLoadStatus'
 import { ClipPicker } from '../video/ClipPicker'
@@ -10,6 +11,8 @@ import type { ClipPendingLoad } from './ClipSlot'
 import { GuidedResultsView } from './GuidedResultsView'
 import { MotionStoryStage } from './MotionStoryStage'
 import type { MetricCardEvidence } from './MetricsPanel'
+import { ModelLoadStripEntry } from './ModelLoadStripEntry'
+import { describeModelLoadStripStatus } from './modelLoadStripStatus'
 import { ResultsView } from './ResultsView'
 import { ResultsViewToggle } from './ResultsViewToggle'
 import { resolveResultsViewMode, writeResultsViewMode } from './resultsViewMode'
@@ -34,6 +37,15 @@ export interface MultiClipVideoSessionProps {
   /** The one shared, stateful pose detector for the whole page — handed to exactly one active
    * clip at a time (see `nextActiveClipIndex`); every other clip gets `null`. */
   detector: PoseDetector | null
+  /**
+   * Both detector owners' model-download state, read in `App` and threaded here because this
+   * component owns the application header (`strides-utn.1`).
+   *
+   * Rendered as the strip's leading entry since `strides-utn.5` — see `ModelLoadStripEntry` and
+   * `describeModelLoadStripStatus`, which decide between "a download is in flight", "one failed"
+   * and by far the commonest answer, "render nothing".
+   */
+  modelLoad: ModelLoadStates
 }
 
 function makeClipId(): string {
@@ -103,7 +115,7 @@ function sameClipSession(previous: ClipSession | undefined, next: ClipSession): 
  * every class name looks right. So the header moved down here, and `App.tsx` keeps only the pose
  * detector.
  */
-export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) {
+export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSessionProps) {
   // "Choose a different video" (a whole-session reset) unmounts the results and returns the page
   // to the picker, so the button's focus needs to land on something that survives the transition —
   // the page heading, the one thing on the page that is always there. Same fix already applied
@@ -118,7 +130,8 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   // three files from the old first slot's own picker called `load()` three times on ONE
   // `useVideoSource` and produced a single clip, last file wins.
   const [clipIds, setClipIds] = useState<string[]>([])
-  const stripRef = useRef<HTMLUListElement>(null)
+  const stripMounted = clipIds.length > 0 || describeModelLoadStripStatus(modelLoad) !== null
+  const stripRef = useRef<HTMLDivElement>(null)
   const [overflowCue, setOverflowCue] = useState<'left' | 'right' | null>(null)
   useEffect(() => {
     const strip = stripRef.current
@@ -138,7 +151,9 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
       strip.removeEventListener('scroll', update)
       window.removeEventListener('resize', update)
     }
-  }, [clipIds.length])
+    // `stripMounted` as well as the clip count: the model-download entry can mount the scroller
+    // before any clip exists, and the ref is only populated once it has.
+  }, [clipIds.length, stripMounted])
   const [pendingLoads, setPendingLoads] = useState<Record<string, ClipPendingLoad>>({})
   const [clipStates, setClipStates] = useState<Record<string, ClipSession>>({})
   const [activeClipIndex, setActiveClipIndex] = useState(0)
@@ -294,6 +309,12 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
   const aggregate = computeAggregateAnalysisState(clips)
   const anyClipVideoReady = clips.some((c) => c.videoSource.status === 'ready')
 
+  // `null` on every settled render, which is nearly all of them. Non-null exactly while a model
+  // download is in flight or has failed — twice per session at most, and at two very different
+  // moments: MoveNet's 14.5 MB at mount, and MediaPipe's 9.4 MB `.task` only once a first clip has
+  // reached `'ready'`. The second of those is why this cannot be a page-load-only affordance.
+  const modelLoadStatus = describeModelLoadStripStatus(modelLoad)
+
   // Which clip each FUSED metric was selected from, or null until every clip is ready — the same
   // gate `aggregate.heuristics !== null` passes, so a card can never attribute a picture to a
   // result that has not been fused yet.
@@ -396,34 +417,54 @@ export function MultiClipVideoSession({ detector }: MultiClipVideoSessionProps) 
             actually shrink inside the flex row rather than pushing the wordmark off screen. An
             entry scrolled out of view would be a concealed entry, so `ClipStripEntry` scrolls the
             working clip back into view when it starts.
+
+            The SCROLLER is this wrapper, not the `<ul>` — moved out one level by `strides-utn.5`.
+            The model-download entry has to be first in the bar and must NOT be a member of a list
+            labelled *Clips* (it would break the one-entry-per-clip count that lets a reader match
+            `"Combined from clip N of TOTAL"` by counting), so it is a preceding sibling — and a
+            sibling OUTSIDE the scroller would permanently consume 96 px of the strip's visible
+            width. That is not cosmetic: the strip's own box measures 158 px at a 390 px viewport,
+            so a fixed leading entry plus the 12 px gap leaves 50 px of a 96 px clip frame — the
+            working `<video>` more than half clipped out of the strip, which costs ~20-24% of its
+            sampled frames. Inside the scroller, the working clip's own `scrollIntoView` pushes this
+            entry off the left edge instead (measured: it scrolls 46 px and the frame stays whole).
           */}
-          {clipIds.length > 0 && (
+          {(modelLoadStatus !== null || clipIds.length > 0) && (
             <div className="relative order-3 min-w-0 basis-full sm:order-none sm:basis-0 sm:flex-1">
-              <ul
-              ref={stripRef}
-              aria-label="Clips; scroll sideways for more"
-              className="clip-strip flex min-w-0 items-start gap-3 overflow-x-auto py-1 pb-2"
+              <div
+                ref={stripRef}
+                className="clip-strip flex min-w-0 items-start gap-3 overflow-x-auto py-1 pb-2"
               >
-              {clipIds.map((id, index) => (
-                <ClipSlot
-                  key={id}
-                  clipId={id}
-                  pendingLoad={pendingLoads[id] ?? null}
-                  detector={id === activeClipId ? detector : null}
-                  index={index}
-                  total={clipIds.length}
-                  viewLabel={clipViews[index]}
-                  isActiveClip={id === activeClipId}
-                  scalePassAllowed={id === scalePassClipId}
-                  isPresented={id === presentedClipId}
-                  onPresent={presentClip}
-                  seekRequest={seekRequest?.clipId === id ? seekRequest : null}
-                  onDismiss={dismissPreview}
-                  onReport={handleReport}
-                  onRemove={removeClip}
-                />
-              ))}
-              </ul>
+                {modelLoadStatus !== null && <ModelLoadStripEntry status={modelLoadStatus} />}
+                {clipIds.length > 0 && (
+                  <ul aria-label="Clips; scroll sideways for more" className="flex shrink-0 items-start gap-3">
+                    {clipIds.map((id, index) => (
+                      <ClipSlot
+                        key={id}
+                        clipId={id}
+                        pendingLoad={pendingLoads[id] ?? null}
+                        detector={id === activeClipId ? detector : null}
+                        index={index}
+                        total={clipIds.length}
+                        viewLabel={clipViews[index]}
+                        isActiveClip={id === activeClipId}
+                        scalePassAllowed={id === scalePassClipId}
+                        isPresented={id === presentedClipId}
+                        // Every clip shifts horizontally when the leading entry appears or leaves, so
+                        // the working clip has to be scrolled back into view at that moment too — its
+                        // own `hostsLiveElement` has not changed, and the scale pass's download starts
+                        // precisely while a clip is already hosting its live element.
+                        leadingEntryPresent={modelLoadStatus !== null}
+                        onPresent={presentClip}
+                        seekRequest={seekRequest?.clipId === id ? seekRequest : null}
+                        onDismiss={dismissPreview}
+                        onReport={handleReport}
+                        onRemove={removeClip}
+                      />
+                    ))}
+                  </ul>
+                )}
+              </div>
               {overflowCue && (
                 <p className="pointer-events-none absolute right-0 -bottom-3 bg-white/95 px-1 font-sans text-[10px] font-semibold text-neutral-700 dark:bg-black/95 dark:text-neutral-300" aria-hidden="true">
                   {overflowCue === 'right' ? 'More clips →' : '← More clips'}

@@ -67,6 +67,7 @@ describe('createDetector', () => {
       'thunder',
       undefined,
       undefined,
+      {},
     )
   })
 
@@ -146,6 +147,7 @@ describe('createDetector', () => {
       undefined,
       trackingCrop,
       undefined,
+      {},
     )
   })
 
@@ -166,6 +168,7 @@ describe('createDetector', () => {
       'thunder',
       trackingCrop,
       undefined,
+      {},
     )
   })
 
@@ -185,6 +188,27 @@ describe('createDetector', () => {
       undefined,
       undefined,
       personOfInterest,
+      {},
+    )
+  })
+
+  it('passes the asset-progress listener through to createMoveNetDetector', async () => {
+    // `strides-utn.4`: MoveNet is 14.5 MB across 7 files and is now the primary owner's whole
+    // progress reading. A listener dropped here reads as an unmeasurable download rather than as
+    // a bug, so it is asserted rather than assumed.
+    createMoveNetDetectorMock.mockResolvedValue({
+      estimatePose: vi.fn(),
+      dispose: vi.fn(),
+    })
+    const onAssetProgress = vi.fn()
+
+    await createDetector({ backend: 'movenet' }, { onAssetProgress })
+
+    expect(createMoveNetDetectorMock).toHaveBeenCalledWith(
+      undefined,
+      undefined,
+      undefined,
+      { onAssetProgress },
     )
   })
 })

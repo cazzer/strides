@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PoseDetector } from './detector'
 
@@ -54,6 +54,82 @@ describe('usePoseDetector', () => {
     rerender()
 
     expect(createDetectorMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('publishes the same phase through `load`, with progress absent', async () => {
+    // `strides-utn.1` builds the channel; `strides-utn.3` fills it. `progress: null` means
+    // INDETERMINATE, and a consumer must be able to tell that from a measured zero.
+    const fakeDetector = makeFakeDetector()
+    createDetectorMock.mockResolvedValue(fakeDetector)
+
+    const { result } = renderHook(() => usePoseDetector())
+
+    expect(result.current.load).toEqual({ phase: 'loading', progress: null })
+
+    await waitFor(() => expect(result.current.load.phase).toBe('ready'))
+    expect(result.current.load.progress).toBeNull()
+  })
+
+  it('reports a creation failure through `load` rather than only into an unread status', async () => {
+    createDetectorMock.mockRejectedValue(new Error('no webgl'))
+
+    const { result } = renderHook(() => usePoseDetector())
+
+    await waitFor(() => expect(result.current.load.phase).toBe('error'))
+  })
+
+  it('keeps `load` referentially stable across renders that do not change the phase', async () => {
+    const fakeDetector = makeFakeDetector()
+    createDetectorMock.mockResolvedValue(fakeDetector)
+
+    const { result, rerender } = renderHook(() => usePoseDetector())
+    await waitFor(() => expect(result.current.load.phase).toBe('ready'))
+
+    const settled = result.current.load
+    rerender()
+
+    // A fresh identity per render would push work downstream on every render forever — the same
+    // failure `sameClipSession` exists to stop one level down.
+    expect(result.current.load).toBe(settled)
+  })
+
+  it('publishes byte progress from the model-asset fetch, and clears it once settled', async () => {
+    let resolveDetector: (detector: PoseDetector) => void = () => {}
+    createDetectorMock.mockImplementation(
+      () => new Promise<PoseDetector>((resolve) => (resolveDetector = resolve)),
+    )
+
+    const { result } = renderHook(() => usePoseDetector())
+    await waitFor(() => expect(createDetectorMock).toHaveBeenCalled())
+
+    // `createDetector` receives a per-creation progress sink alongside the config; the hook folds
+    // whatever it reports into the same `load` the header reads.
+    const { onAssetProgress } = createDetectorMock.mock.calls[0][1]
+    act(() => onAssetProgress({ assetId: 'a', loadedBytes: 400, totalBytes: 1000 }))
+    expect(result.current.load).toEqual({
+      phase: 'loading',
+      progress: { loadedBytes: 400, totalBytes: 1000 },
+    })
+
+    act(() => resolveDetector(makeFakeDetector()))
+    await waitFor(() => expect(result.current.load.phase).toBe('ready'))
+
+    // A settled phase has no download in flight, so it carries no determinate reading — leaving
+    // the last one would hand the header a stale percentage to render.
+    expect(result.current.load.progress).toBeNull()
+  })
+
+  it('leaves progress null while a download reports nothing measurable', async () => {
+    createDetectorMock.mockResolvedValue(makeFakeDetector())
+
+    const { result } = renderHook(() => usePoseDetector())
+
+    // `createDetector` is mocked here, so nothing reports: this is the general contract, not a
+    // statement about MoveNet, whose 7 files DO report bytes since `strides-utn.4`. MediaPipe's
+    // WASM runtime never will. Silence must read as indeterminate, not as 0%.
+    expect(result.current.load.progress).toBeNull()
+    await waitFor(() => expect(result.current.load.phase).toBe('ready'))
+    expect(result.current.load.progress).toBeNull()
   })
 
   it('disposes the cached detector on unmount', async () => {

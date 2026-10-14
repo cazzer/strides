@@ -1,10 +1,23 @@
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { forVisionTasksMock, createFromOptionsMock, detectForVideo, close } = vi.hoisted(() => ({
+const {
+  forVisionTasksMock,
+  createFromOptionsMock,
+  detectForVideo,
+  close,
+  fetchModelAssetMock,
+  hasCachedModelAssetMock,
+} = vi.hoisted(() => ({
   forVisionTasksMock: vi.fn(),
   createFromOptionsMock: vi.fn(),
   detectForVideo: vi.fn(),
   close: vi.fn(),
+  fetchModelAssetMock: vi.fn(),
+  hasCachedModelAssetMock: vi.fn(),
 }))
 
 vi.mock('@mediapipe/tasks-vision', () => ({
@@ -12,7 +25,19 @@ vi.mock('@mediapipe/tasks-vision', () => ({
   PoseLandmarker: { createFromOptions: createFromOptionsMock },
 }))
 
-import { createMediaPipePoseLandmarkerDetector } from './mediapipePoseLandmarker'
+// The `.task` is now fetched by us rather than by MediaPipe, so this backend has a network call
+// of its own to stub. Without it every test here reaches undici through jsdom's relative BASE_URL.
+vi.mock('../modelAssetCache', () => ({
+  fetchModelAsset: fetchModelAssetMock,
+  hasCachedModelAsset: hasCachedModelAssetMock,
+}))
+
+import {
+  MODEL_ASSET_PATH,
+  POSE_LANDMARKER_MODEL_VERSION,
+  createMediaPipePoseLandmarkerDetector,
+  resolveMediaPipePoseLandmarkerAssetUrls,
+} from './mediapipePoseLandmarker'
 import { COMMON_KEYPOINT_NAMES } from '../types'
 import { videoFrameSource } from '../detector'
 
@@ -59,8 +84,10 @@ beforeEach(() => {
   createFromOptionsMock.mockReset()
   detectForVideo.mockReset()
   close.mockReset()
+  fetchModelAssetMock.mockReset()
   forVisionTasksMock.mockResolvedValue({ wasm: 'fileset' })
   createFromOptionsMock.mockResolvedValue({ detectForVideo, close })
+  fetchModelAssetMock.mockResolvedValue(new Uint8Array([1, 2, 3]))
 })
 
 describe('createMediaPipePoseLandmarkerDetector', () => {
@@ -78,6 +105,36 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
         baseOptions: expect.objectContaining({ delegate: 'GPU' }),
       }),
     )
+  })
+
+  it('hands the landmarker model BYTES, from the shared cache, not a path to fetch itself', async () => {
+    // The whole point of `strides-utn.3`: GitHub Pages serves this 9.4 MB asset with
+    // `cache-control: max-age=600` and we cannot change that header, so the bytes have to come
+    // through our own cache. Passing `modelAssetPath` would hand the fetch back to MediaPipe and
+    // lose both the cache and the progress reading.
+    const bytes = new Uint8Array([7, 7, 7])
+    fetchModelAssetMock.mockResolvedValue(bytes)
+
+    await createMediaPipePoseLandmarkerDetector()
+
+    const [spec] = fetchModelAssetMock.mock.calls[0]
+    expect(spec.url).toContain('models/pose_landmarker_full.task')
+    // The cache identity is stable and the version token is non-empty — a blank token would key
+    // every model revision to the same entry.
+    expect(spec.id).toBe(spec.url)
+    expect(spec.version).toBeTruthy()
+
+    const [, landmarkerOptions] = createFromOptionsMock.mock.calls[0]
+    expect(landmarkerOptions.baseOptions.modelAssetBuffer).toBe(bytes)
+    expect(landmarkerOptions.baseOptions.modelAssetPath).toBeUndefined()
+  })
+
+  it('forwards its progress sink to the asset fetch', async () => {
+    const onAssetProgress = vi.fn()
+
+    await createMediaPipePoseLandmarkerDetector({ onAssetProgress })
+
+    expect(fetchModelAssetMock.mock.calls[0][1]).toBe(onAssetProgress)
   })
 
   it('maps a single-frame estimate to a PoseFrame, denormalizing by video dimensions', async () => {
@@ -243,5 +300,86 @@ describe('createMediaPipePoseLandmarkerDetector', () => {
     detector.dispose()
 
     expect(close).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * `strides-8w2`. The `.task`'s Cache Storage entry is keyed on `POSE_LANDMARKER_MODEL_VERSION`, a
+ * value nothing else in the app derives — so replacing `public/models/pose_landmarker_full.task`
+ * without editing that line serves every returning visitor the OLD model's 9.4 MB forever, from a
+ * page that ships the new file. The failure looks like nothing at all: analysis completes and the
+ * numbers are self-consistent, they are simply the previous model's.
+ *
+ * This is the same discipline `movenetModelAssets.test.ts` applies to `MOVENET_MODEL_URLS` — a
+ * mirrored value asserted against its source of truth — except that a checked-in binary has no
+ * upstream constant to compare against, so its own bytes are the source of truth.
+ */
+describe('POSE_LANDMARKER_MODEL_VERSION', () => {
+  /**
+   * Resolved THROUGH `MODEL_ASSET_PATH` rather than re-typed, so a moved or renamed asset makes
+   * this read throw (naming the path it looked for) instead of quietly hashing a file the app
+   * stopped loading and passing forever.
+   */
+  function readCheckedInModelBytes(): Buffer {
+    const base = import.meta.env.BASE_URL
+    expect(
+      MODEL_ASSET_PATH.startsWith(base),
+      `MODEL_ASSET_PATH ${MODEL_ASSET_PATH} is not under BASE_URL ${base}; this test can no longer locate the file it is meant to hash`,
+    ).toBe(true)
+    // Leading separators stripped because `resolve` treats an absolute segment as a new root, and
+    // BASE_URL is '/' here but '/strides/' in the app — the slice leaves no leading slash either
+    // way today, and this keeps that from being load-bearing.
+    const publicRelativePath = MODEL_ASSET_PATH.slice(base.length).replace(/^\/+/, '')
+    // `path.resolve` rather than `new URL(..., import.meta.url)`: vite rewrites the latter into an
+    // asset-glob lookup when its first argument is not a literal, and a template with a runtime
+    // value resolves to the STRING "undefined" instead of a path (hit for real writing this test).
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+    return readFileSync(resolve(repoRoot, 'public', publicRelativePath))
+  }
+
+  it("equals the checked-in .task file's own MD5", () => {
+    const digest = createHash('md5').update(readCheckedInModelBytes()).digest('hex')
+
+    expect(
+      POSE_LANDMARKER_MODEL_VERSION,
+      'public/models/pose_landmarker_full.task and POSE_LANDMARKER_MODEL_VERSION disagree. If you replaced the model, set the constant in mediapipePoseLandmarker.ts to the expected value below; a stale token serves the OLD model from Cache Storage to every returning visitor.',
+    ).toBe(`md5-${digest}`)
+  })
+
+  it('is a non-empty token, so every model revision cannot collide onto one cache entry', () => {
+    // `fetchModelAsset` keys on `encodeURIComponent(version)`; an empty or whitespace token is a
+    // legal string that keys two different models to the same entry, which is the same defect
+    // this file guards against arriving by a different route.
+    expect(POSE_LANDMARKER_MODEL_VERSION.trim()).not.toBe('')
+  })
+})
+
+describe('resolveMediaPipePoseLandmarkerAssetUrls', () => {
+  const FILESET = { wasmLoaderPath: 'https://cdn.test/loader.js', wasmBinaryPath: 'https://cdn.test/binary.wasm' }
+
+  it('includes the .task while the persistent model cache does not hold it', async () => {
+    forVisionTasksMock.mockResolvedValueOnce(FILESET)
+    hasCachedModelAssetMock.mockResolvedValueOnce(false)
+
+    await expect(resolveMediaPipePoseLandmarkerAssetUrls()).resolves.toEqual([
+      FILESET.wasmLoaderPath,
+      FILESET.wasmBinaryPath,
+      MODEL_ASSET_PATH,
+    ])
+  })
+
+  it('leaves the .task out once it is cached, so a prefetch never re-downloads 9.4 MB', async () => {
+    forVisionTasksMock.mockResolvedValueOnce(FILESET)
+    hasCachedModelAssetMock.mockResolvedValueOnce(true)
+
+    await expect(resolveMediaPipePoseLandmarkerAssetUrls()).resolves.toEqual([
+      FILESET.wasmLoaderPath,
+      FILESET.wasmBinaryPath,
+    ])
+    expect(hasCachedModelAssetMock).toHaveBeenCalledWith({
+      id: MODEL_ASSET_PATH,
+      url: MODEL_ASSET_PATH,
+      version: POSE_LANDMARKER_MODEL_VERSION,
+    })
   })
 })

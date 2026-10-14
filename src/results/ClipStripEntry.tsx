@@ -32,6 +32,18 @@ export interface ClipStripEntryProps {
    * the always-mounted `ClipPreviewDialog` around this entry's frame into an actual dialog.
    */
   isPresented?: boolean
+  /**
+   * Whether the strip currently leads with a non-clip entry — today, the model-download entry
+   * (`strides-utn.5`), which is a preceding sibling of the clip list inside the same scroller.
+   *
+   * This is a SCROLL input, not a styling one. Every clip shifts right by that entry's width the
+   * moment it appears, and the case that matters is exactly the one where nothing else changes:
+   * the background scale pass starts downloading its model while this clip is already hosting its
+   * live element, so `hostsLiveElement` does not transition and the effect below would never
+   * re-run. At a narrow viewport that shift is enough to push the working `<video>` out of the
+   * strip's visible bounds, which is the ~20-24% sampled-frame loss `strides-kyu.13` measured.
+   */
+  leadingEntryPresent?: boolean
   /** Activating the entry presents this clip. */
   onPresent?: () => void
   /** Escape, Close, or a backdrop click dismisses it. */
@@ -81,6 +93,7 @@ export function ClipStripEntry({
   hostsLiveElement,
   isActiveClip,
   isPresented = false,
+  leadingEntryPresent = false,
   onPresent,
   onDismiss,
   onRemove,
@@ -107,10 +120,14 @@ export function ClipStripEntry({
   // stay-visible requirement pull against each other, and this is the seam between them. Scoped to
   // `nearest` in both axes so an entry that is already visible causes no scrolling at all.
   // Optional-called: jsdom implements no scrolling API, and this is a live-browser concern only.
+  //
+  // `leadingEntryPresent` is the second trigger and it is not decorative: a leading non-clip entry
+  // entering or leaving the strip shifts every clip horizontally without changing anything about
+  // the clip itself, so without it the working element can be pushed out of view and stay there.
   useEffect(() => {
     if (!hostsLiveElement) return
     entryRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
-  }, [hostsLiveElement, index])
+  }, [hostsLiveElement, index, leadingEntryPresent])
 
   const label = `Clip ${index + 1} of ${total}: ${status.announcement} ${viewLabel}.`
 

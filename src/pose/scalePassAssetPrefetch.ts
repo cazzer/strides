@@ -6,6 +6,12 @@ import { resolveMediaPipePoseLandmarkerAssetUrls } from './backends/mediapipePos
  * detector creation later reads them from cache instead of starting the download only once a
  * clip is already being analysed.
  *
+ * The `.task` is left out once the persistent model cache (`modelAssetCache.ts`) holds it — see
+ * `resolveMediaPipePoseLandmarkerAssetUrls` — so a returning visitor's prefetch never re-downloads
+ * 9.4 MB that detector creation will read from that cache anyway. When it is NOT cached, this warms
+ * only the HTTP cache (ten-minute max-age on the deploy), which creation's own fetch then hits and
+ * copies into the persistent one.
+ *
  * BYTES ONLY. This never creates a detector: creation is main-thread/GPU work that costs the
  * real-time playback sampler frames (strides-gyl), and it stays where `useVideoAnalysis` puts it.
  *
