@@ -292,10 +292,14 @@ add-a-clip affordance SHALL remain in the page body.
 
 ### Requirement: One transient video decoder across every feature that opens one
 
-More than one feature decodes a clip's retained source blob on a transient `<video>` element of its
-own — poster derivation and evidence-frame extraction today. The system SHALL hold **at most one such
-decoder open at a time counted across all of them**, not one per feature, and SHALL enforce that
-through a single shared serialization point that every transient decoder passes through.
+More than one feature decodes a clip's retained source blob on a transient decoder of its own —
+poster derivation and evidence-frame extraction today — and a transient decoder is either a
+`<video>` element or a WebCodecs `VideoDecoder` reading the clip's demuxed track. The system SHALL
+hold **at most one such decoder open at a time counted across all of them and across both kinds**,
+not one per feature or per kind, and SHALL enforce that through a single shared serialization point
+that every transient decoder passes through. A feature that tries a `VideoDecoder` and falls back to
+a `<video>` element for the same clip SHALL do both inside one turn of that serialization point, so
+the two are never open together.
 
 A per-feature ceiling does not compose. Two features, each correctly bounded at one decoder, permit a
 global peak of two; a third would permit three. These are full-resolution decoders held open at the

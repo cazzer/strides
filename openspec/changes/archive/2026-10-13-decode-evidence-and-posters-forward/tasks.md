@@ -16,7 +16,7 @@
 - [x] 3.2 In-page pixel probe (temporary, reverted): every forward-decoded evidence image vs the seek path
 - [x] 3.3 Shared metric gate, base vs branch, `rtk proxy` diff + md5
 - [x] 3.4 `[perf-timings]` evidence before/after on desktop
-- [ ] 3.5 Phone run (Galaxy S21): timings, and that forward-decoded images match seeked ones there
+- [x] 3.5 Phone run (Galaxy S21): timings, and that forward-decoded images match seeked ones there
 
 ## 4. Review round 1
 

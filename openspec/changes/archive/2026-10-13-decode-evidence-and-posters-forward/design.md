@@ -176,10 +176,31 @@ lines are six `elapsedMs`-width table dividers, and with those removed the repor
 `1dbe12081dfbec48da347d8c4347d666` as base. One probe trial (side-portrait) timed out waiting for
 "Analysis complete" once and passed on retry; nothing in the analysis path is touched by this change.
 
+### Phone run (Galaxy S21, merged `main` 35b1f9c, 2026-10-13) — task 3.5
+
+Three-clip demo twice on the phone, `__STRIDES_FORWARD_DECODE_CONFIG_OVERRIDE__` on and off, every
+rendered evidence canvas hashed (SHA-256 over `getImageData`) once the session settled
+(`android-evidence.mjs`, throwaway driver over CDP). Both runs' `[analysis-diagnostics]` and
+scale-pass lines are identical, so the two arms planned from the same analysis.
+
+- **Seek path loses images on the phone.** With forward decoding off, three clip-1 exemplars
+  (`park-side-landscape.mp4`, 4K) come back `extraction-failed` — `trunkLean` at 3.717 s,
+  `kneeFlexion` at 3.217 / 3.4 s and `footStrikePattern`'s second strike at 3.117 s, all in the
+  last second of a 3.88 s clip. The forward pass delivers all three.
+- **13 of the 14 images both arms produced are byte-identical.** The exception is side-portrait's
+  `kneeDrive` ghosted pair (5.467 / 6.267 s): the plan is identical, the pixels are not. Desktop
+  measured that clip's frames against seeks (D2) and the forward path reproduces that model;
+  which frame Android's seek showed was not determined.
+- **Timings, settled session:** forward 7 extractions totalling 53 s, seek 8 totalling 68 s;
+  session settled 98 s forward vs 125 s seek. Per clip, the 4K landscape clip is the one forward
+  decoding does not win (19 s vs 7–14 s): its decoder outputs are delivered on the main thread
+  between the MediaPipe scale pass's synchronous per-frame calls, so its throughput tracks the scale
+  pass. The 1080p and short 4K clips drop from 3.4–11 s to 0.9–7.6 s.
+
 ## Risks
 
-- **Pixel identity is measured on desktop Chromium (ANGLE Metal, Apple M4 Pro) only.** On Android the
-  `<video>` path and WebCodecs may take different decoder/colour-conversion paths. Not measurable from
-  here; the phone run must check it before this is trusted there.
+- **Pixel identity was measured on desktop Chromium first; the S21 run above checked Android**: 13 / 14
+  shared images identical, one ghosted pair different, and the seek path failing three images the
+  forward path delivers.
 - Posters stay on the seek path until the S21 run says whether the `<video>` load and its contention
   with analysis are worth a forward pass there (D9).

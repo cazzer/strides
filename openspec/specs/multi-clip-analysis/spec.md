@@ -429,11 +429,17 @@ sequential-path primary — the work the fused result waits on — runs before a
 primary pass and a scale pass never contend for the GPU. A primary pass is outstanding while a clip
 is `'sampling'` or `'processing'`, or while the next primary to run — the first clip at or after
 the shared detector's active index that is `'idle'` with a video source that has not failed to
-load — samples on the sequential path. A next primary that samples, or may sample, on the playback
-path is NOT outstanding for this purpose: it is itself waiting for the earlier clips' passes to
-finish (see "Serialized shared-detector access across concurrently mounted clips"), and the passes
-SHALL be allowed to drain, in index order, so that it can start. The allowance SHALL be decided in
-this order: a clip already allowed its pass keeps the allowance until that pass is terminal (a
+load — samples on the sequential path, or has not yet had its sampling path decided because its
+video is still loading or its sequential-decode probe has not answered. A next primary known to
+sample on the playback path is NOT outstanding for this purpose: it is itself waiting for the
+earlier clips' passes to finish (see "Serialized shared-detector access across concurrently mounted
+clips"), and the passes SHALL be allowed to drain, in index order, so that it can start. Waiting for
+an undecided next primary cannot deadlock: its answer depends on neither the shared detector nor
+the scale-pass allowance, only on its own video finishing loading — a source that fails to load is
+not outstanding — and on its probe, whose answer the clip reports once it arrives or once a fixed
+give-up bound passes (see "A slow feasibility answer still picks the sampler for a run that has not
+started"). A source with no load in progress has no answer coming and is not outstanding. The
+allowance SHALL be decided in this order: a clip already allowed its pass keeps the allowance until that pass is terminal (a
 started pass is never cancelled, and an allowance outlives any delay before the clip reports its
 pass `'running'`); otherwise none, while any primary is `'sampling'` or `'processing'`; otherwise
 the lowest-index `'ready'` clip with a `'pending'` pass whose primary sampled on the playback path;
@@ -468,6 +474,21 @@ whose pass failed.
   or is the next primary to run and samples on the sequential path
 - **THEN** no clip is allowed a scale pass, and the `'ready'` clip's pass stays `'pending'`
 
+#### Scenario: A next clip still loading or probing holds the passes
+
+- **WHEN** clip 1 is `'ready'` with its scale pass `'pending'`, and clip 2 — the next primary to
+  run — is still loading its video, or has loaded it but its sequential-decode probe has not
+  answered
+- **THEN** no clip is allowed a scale pass until clip 2's probe answers; if it answers sequential,
+  clip 2 receives the detector and its primary runs before clip 1's pass, and if it answers
+  playback, clip 1's pass runs first, as for any playback clip
+
+#### Scenario: Three MP4 clips that load slowly still run every primary first
+
+- **WHEN** three clips that all sample on the sequential path are loaded together, and clips 2 and 3
+  are still loading their videos when clip 1's primary reaches `'ready'`
+- **THEN** the passes run in the order primary 1, primary 2, primary 3, scale 1, scale 2, scale 3
+
 #### Scenario: A sequential clip followed by a playback clip keeps the reference order
 
 - **WHEN** a sequential-path clip and then a playback-path clip are loaded together
@@ -500,7 +521,7 @@ whose pass failed.
 
 - **WHEN** a clip has errored, or its video source failed to load
 - **THEN** it is not an outstanding primary, and the other clips' passes are allowed as if it were
-  absent
+  absent, whether or not its sampling path was ever decided
 
 ### Requirement: With more than one clip, each metric names the clip it was measured from
 

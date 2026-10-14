@@ -140,6 +140,17 @@ practice every clip is created with a pending load, so `'empty'` is momentary.
    base slow-load arm, which changed only the order, has 0 differences: in these runs the order
    alone moved no value.
 
+## Phone verification (Galaxy S21, merged `main` 35b1f9c, 2026-10-13)
+
+Two runs of the three-clip demo through `android-profile.mjs` (Chrome 155, Adreno 660, WebCodecs,
+adb-reversed dev server). Every clip sampled on the sequential path, 233 / 345 / 99 samples, where
+the defect had put clip 2 on playback at 153 of 345. All three scale passes ran after the last
+primary reached 'ready' (primaries done 38.7 s; scale passes done 57.9 / 76.9 / 83.9 s).
+"Analysis complete" 39.9 s and 41.2 s after the click, against 56–81 s before this change and
+`strides-6i6.1`; settled (all three scale passes plus evidence) 90 s against 112–116 s. The active
+clips' probes answered in 274–3852 ms; the 3.8 s readings are clips 2 and 3, still downloading,
+and neither was active at the time.
+
 ## Risks / Trade-offs
 
 - **A video that never loads and never errors** now holds the earlier clips' passes as well as the

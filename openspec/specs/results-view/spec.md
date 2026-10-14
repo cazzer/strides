@@ -825,15 +825,31 @@ Demoting is the honest outcome wherever it is available: these rules exist to RE
 ghost with a truthful still, so classifying a single-instant measurement as un-demotable makes them
 delete evidence instead.
 
-Extraction SHALL use a **second, detached** video element created from the clip's own source blob,
+Extraction SHALL draw from a source it creates from the clip's own source blob and owns outright,
 never the clip's own presented element, whose playback state belongs to the reader (it may be paused
-on an arbitrary frame, or loop-playing while its preview is open). It SHALL hold at most one detached
-decoder open at a time, extracting every instant for one clip in a single pass before moving
-to the next. It SHALL own and release the object URL it creates, and SHALL NOT reuse or release the
-one the video source hook holds privately. After a seek reports completion it SHALL wait for the new
-frame to be presented before drawing, since seek completion does not imply the new frame is
-composited. A seek that never completes SHALL degrade that metric to "no evidence" rather than
-leaving the interface waiting.
+on an arbitrary frame, or loop-playing while its preview is open). That source SHALL be a **second,
+detached** video element, or — where the clip is one the WebCodecs sampling path can decode and the
+frame a detached element would present at every planned seek target can be determined exactly from
+the container — a forward `VideoDecoder` pass over the clip's demuxed track, which decodes each frame
+it needs once rather than re-decoding from the preceding keyframe on every seek. The two sources
+SHALL be interchangeable to the pixel: a forward-decoded image SHALL be drawn from the frame a seek of
+the detached element to the same target would present, through the identical crop, scale, blend and
+annotation, and its decoder SHALL be given the colour space the container declares. Wherever that
+frame cannot be stated with certainty — an edit list that is not a single plain shift or that leaves
+any frame presenting before zero, a target within two microseconds of a frame's end or at or past
+the presented end, a container colour declaration that cannot be passed to the decoder verbatim, a
+decoded frame whose size is not the track's, or a decoder that errors or stalls before delivering
+every frame it was asked for — extraction SHALL fall back to the detached element for every image
+the forward pass had not finished, and SHALL keep the metrics it had finished. Forward decoding
+SHALL have its own switch, independent of which sampler produced the analysis, and switching it off
+SHALL restore detached-element extraction for every clip.
+
+It SHALL hold at most one decoder open at a time, of either kind, extracting every instant for one
+clip before moving to the next. A detached element SHALL own and release the object URL it creates,
+and SHALL NOT reuse or release the one the video source hook holds privately. After a seek reports
+completion it SHALL wait for the new frame to be presented before drawing, since seek completion
+does not imply the new frame is composited. A seek that never completes SHALL degrade that metric to
+"no evidence" rather than leaving the interface waiting.
 
 Extracted images SHALL be held in memory for the session only. The system SHALL NOT serialize them to
 a data URL or blob, offer a download, or persist them to any storage.
@@ -847,9 +863,9 @@ reported at all, the clip's frames are unavailable, or extraction failed).
 
 - **WHEN** an analysis run reaches `phase: 'ready'`, whether or not the clip's own element is
   currently presented and playing
-- **THEN** evidence extraction runs against a separate detached element created from the clip's
-  source blob, the clip's own element's playback state is untouched, and analysis wall-clock time is
-  unchanged from a run with no extraction
+- **THEN** evidence extraction runs against a source created from the clip's source blob — a
+  separate detached element, or a forward decoder of its own — the clip's own element's playback
+  state is untouched, and analysis wall-clock time is unchanged from a run with no extraction
 
 #### Scenario: A webcam clip reporting an infinite duration still yields a valid plan
 
@@ -941,6 +957,26 @@ reported at all, the clip's frames are unavailable, or extraction failed).
   second is dropped, because one frame of a difference depicts no part of the reported number
 - **AND** the verdict is the same under both reasons the pair could not be drawn, because the
   classification is a property of the metric's number rather than of the rule that rejected the pair
+
+#### Scenario: A forward-decoded evidence image is the image a seek would have drawn
+
+- **WHEN** a clip's evidence is extracted by forward decoding
+- **THEN** every image is pixel-identical to the image the detached element draws for the same plan,
+  including where the frame a seek presents is not the frame its target names — a long sample on a
+  variable-rate track is shown for the targets inside the frames that follow it, by both sources
+
+#### Scenario: A frame the forward pass cannot vouch for is extracted by seeking
+
+- **WHEN** any planned seek target sits within two microseconds of a frame's end, or the clip's edit
+  list is not a single plain shift
+- **THEN** no image of that clip is drawn from the forward pass, and the detached element extracts
+  it exactly as it did before forward decoding existed
+
+#### Scenario: A forward pass that dies hands over only what it had not finished
+
+- **WHEN** the forward decoder errors or stops making progress after some metrics' images are done
+- **THEN** those metrics keep their images and are not drawn again, and every other planned image is
+  extracted by the detached element
 
 #### Scenario: A failed seek degrades to no evidence
 
