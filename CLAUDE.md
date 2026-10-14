@@ -2152,8 +2152,15 @@ the first occurrence is the primary.
 ## Model downloads: cached client-side, and visible in the header (2026-09-03, epic `strides-utn`)
 
 Pipeline model assets used to re-download on every page load and say nothing while they did. Both
-halves are fixed. Change: `openspec/changes/model-load-visibility-and-cache/` (in flight as of this
-writing, **not archived** — pending user verification).
+halves are fixed. Change: `openspec/changes/archive/2026-10-14-model-load-visibility-and-cache/`.
+Built 2026-09-03, **merged to `main` 2026-10-14**, six weeks late, onto a main that had meanwhile
+gained `strides-w59`'s scale-pass prefetch. The two now cooperate: the prefetch asks
+`hasCachedModelAsset` first and leaves the `.task` out once it is cached, so a returning visitor's
+prefetch never re-downloads 9.4 MB. Re-verified at merge, real GPU: `ab-person-selection --evidence`
+on three clips identical to `main` on every field but `elapsedMs`; cold visit downloads the `.task`
+ONCE (the prefetch; creation's fetch then reads a 0-byte body from the HTTP cache); warm visit makes
+**zero** MoveNet and zero `.task` requests. The separate eager page-load prefetch branch
+(`strides-noo`/`strides-gyl`) was NOT merged — `strides-w59` superseded it.
 
 **Two independent, differently-timed downloads, and MoveNet is the big one.** The epic's own spike
 (`strides-utn.2`) inverted its priority, so do not repeat the original assumption:

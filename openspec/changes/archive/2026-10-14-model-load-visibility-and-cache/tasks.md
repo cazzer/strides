@@ -152,5 +152,5 @@ measurement recorded, and skip the rest of this section (design.md D7).
 - [x] 5.2 `openspec validate model-load-visibility-and-cache --strict` clean.
 - [x] 5.3 Update CLAUDE.md with what was measured — the model-fetch seam per asset, the cache key
       scheme, and any determinism or throughput effect the live checks turned up.
-- [ ] 5.4 `openspec archive model-load-visibility-and-cache --yes`, once the whole epic has shipped
+- [x] 5.4 `openspec archive model-load-visibility-and-cache --yes`, once the whole epic has shipped
       and is verified. Not before.
