@@ -23,6 +23,7 @@ describe('prefetchScalePassAssets', () => {
 
   beforeEach(() => {
     resetScalePassAssetPrefetchForTests()
+    resolveUrlsMock.mockReset()
     resolveUrlsMock.mockResolvedValue(URLS)
     fetchMock = vi.fn(async () => new Response('bytes'))
     vi.stubGlobal('fetch', fetchMock)
@@ -65,6 +66,14 @@ describe('prefetchScalePassAssets', () => {
     prefetchScalePassAssets()
     cancelScalePassAssetPrefetch()
     await flush()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('never starts once cancelled first', async () => {
+    cancelScalePassAssetPrefetch()
+    prefetchScalePassAssets()
+    await flush()
+    expect(resolveUrlsMock).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 

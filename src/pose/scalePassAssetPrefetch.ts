@@ -44,14 +44,21 @@ export function prefetchScalePassAssets(): void {
   })()
 }
 
-/** Aborts any in-flight prefetch. A completed prefetch has nothing left to abort. */
+/**
+ * Aborts any in-flight prefetch, and stops one that has not started yet from ever starting: a
+ * playback-path clip can begin sampling before the primary detector is ready, which is when the
+ * prefetch would otherwise start, right on top of that sampling. A completed prefetch has nothing
+ * left to abort.
+ */
 export function cancelScalePassAssetPrefetch(): void {
+  started = true
   controller?.abort()
   controller = null
 }
 
 /** Test-only: forget that a prefetch was started. */
 export function resetScalePassAssetPrefetchForTests(): void {
-  cancelScalePassAssetPrefetch()
+  controller?.abort()
+  controller = null
   started = false
 }
