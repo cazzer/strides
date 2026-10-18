@@ -5,10 +5,11 @@
  * read once from `location.search` and written back with `history.replaceState`, so a reload keeps
  * the choice and the address can be shared, without adding a history entry per toggle.
  *
- * **Classic is the default, and the parse is deliberately strict.** Exactly one `view` parameter
- * whose value is exactly `guide` selects the guided view; everything else selects classic — absent,
- * empty, `classic`, an unknown value, a differently-cased `GUIDE`, and a repeated parameter even when
- * one of its copies says `guide`. The app itself only ever writes the lowercase form, so strictness
+ * **Guided is the default, and the parse is deliberately strict** (flipped from classic on
+ * 2026-10-16, `strides-8c3`). Exactly one `view` parameter whose value is exactly `classic` selects
+ * the classic view; everything else selects guided — absent, empty, `guide` (so every link written
+ * before the flip still lands where it did), an unknown value, a differently-cased `CLASSIC`, and a
+ * repeated parameter even when one of its copies says `classic`. The app itself only ever writes the lowercase form, so strictness
  * costs a hand-typed URL nothing it could not recover from by clicking the toggle, while a lenient
  * parse would make "which view does this address show" a question with more than one spelling of
  * the answer. A repeated parameter is ambiguous by construction, and the tie goes to the default.
@@ -18,14 +19,14 @@ export type ResultsViewMode = 'classic' | 'guide'
 /** The search parameter the mode lives in. */
 export const RESULTS_VIEW_PARAM = 'view'
 
-/** The one value that selects the guided view. */
-const GUIDE_VALUE = 'guide'
+/** The one value that selects the classic view. */
+const CLASSIC_VALUE = 'classic'
 
-/** Pure: `?view=guide` → `'guide'`, anything else → `'classic'`. Accepts a search string with or
+/** Pure: `?view=classic` → `'classic'`, anything else → `'guide'`. Accepts a search string with or
  * without its leading `?`, i.e. exactly what `location.search` holds. */
 export function resolveResultsViewMode(search: string): ResultsViewMode {
   const values = new URLSearchParams(search).getAll(RESULTS_VIEW_PARAM)
-  return values.length === 1 && values[0] === GUIDE_VALUE ? 'guide' : 'classic'
+  return values.length === 1 && values[0] === CLASSIC_VALUE ? 'classic' : 'guide'
 }
 
 /** Decodes one `key` of a raw `key=value` pair, or `null` if it is not valid percent-encoding. */
@@ -45,16 +46,16 @@ function decodeParamKey(pair: string): string | null {
  * Every other parameter survives BYTE FOR BYTE — the raw pairs are filtered rather than round-tripped
  * through `URLSearchParams`, whose serializer would re-encode them (`%20` becomes `+`, for one) and
  * change an address the reader or some other tool wrote. Every existing `view` pair is removed, so a
- * repeated parameter collapses to one. Classic removes `view` entirely rather than writing
- * `view=classic`, so the default address stays exactly as clean as it was before the view existed;
- * guide appends `view=guide` after whatever else is there.
+ * repeated parameter collapses to one. Guide — the default — removes `view` entirely rather than
+ * writing `view=guide`, so the default address carries no parameter; classic appends `view=classic`
+ * after whatever else is there.
  */
 export function searchWithResultsViewMode(search: string, mode: ResultsViewMode): string {
   const raw = search.startsWith('?') ? search.slice(1) : search
   const kept = raw
     .split('&')
     .filter((pair) => pair !== '' && decodeParamKey(pair) !== RESULTS_VIEW_PARAM)
-  if (mode === 'guide') kept.push(`${RESULTS_VIEW_PARAM}=${GUIDE_VALUE}`)
+  if (mode === 'classic') kept.push(`${RESULTS_VIEW_PARAM}=${CLASSIC_VALUE}`)
   return kept.length > 0 ? `?${kept.join('&')}` : ''
 }
 

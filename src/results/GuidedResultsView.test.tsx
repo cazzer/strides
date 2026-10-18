@@ -87,16 +87,16 @@ function renderView(
   extra: { evidence?: readonly MetricCardEvidence[]; clipCount?: number } = {},
 ) {
   const onTryAgain = vi.fn()
-  const onChooseDifferentVideo = vi.fn()
+  const onStartOver = vi.fn()
   const utils = render(
     <GuidedResultsView
       analysis={analysis}
       onTryAgain={onTryAgain}
-      onChooseDifferentVideo={onChooseDifferentVideo}
+      onStartOver={onStartOver}
       {...extra}
     />,
   )
-  return { ...utils, onTryAgain, onChooseDifferentVideo }
+  return { ...utils, onTryAgain, onStartOver }
 }
 
 const ALL_IDS = guidanceInDisplayOrder().map((g) => g.metric)
@@ -385,12 +385,12 @@ describe('GuidedResultsView — shell controls mirror ResultsView', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('calls onChooseDifferentVideo from its button', () => {
-    const { onChooseDifferentVideo } = renderView(readyAnalysis())
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Choose a different video' }),
-    )
-    expect(onChooseDifferentVideo).toHaveBeenCalledTimes(1)
+  it('calls onStartOver only once Start over is confirmed', () => {
+    const { onStartOver } = renderView(readyAnalysis())
+    fireEvent.click(screen.getByRole('button', { name: 'Start over' }))
+    expect(onStartOver).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove and start over' }))
+    expect(onStartOver).toHaveBeenCalledTimes(1)
   })
 
   it('renders the error alert with Try again and Analyze again, and no metrics, in the error phase', () => {
@@ -443,7 +443,7 @@ describe('The contents list names every measurement and reaches it, even inside 
   })
 
   function renderView(analysis: VideoAnalysisState) {
-    const props = { onTryAgain: vi.fn(), onChooseDifferentVideo: vi.fn() }
+    const props = { onTryAgain: vi.fn(), onStartOver: vi.fn() }
     const utils = render(<FreshView analysis={analysis} {...props} />)
     return {
       ...utils,
@@ -2836,7 +2836,7 @@ describe('Energy cost headlines above the contents list', () => {
       <GuidedResultsView
         analysis={readyAnalysis(heuristics)}
         onTryAgain={vi.fn()}
-        onChooseDifferentVideo={vi.fn()}
+        onStartOver={vi.fn()}
         clipCount={2}
         clipViews={['Approach view', 'Side view']}
         sourceIndices={sourceIndices}

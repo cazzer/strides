@@ -953,9 +953,13 @@ deliberately; do not "fix" it as a typo.**
 
 ## The guided results view — `?view=guide` (2026-09-15, epic `strides-kgi`)
 
-**A second, opt-in results page** that sets each metric against a published reference band where
-one can be cited. **Classic stays the default**: `resolveResultsViewMode` selects guide only for
-exactly one `?view=guide`; absent, unknown, `GUIDE` or a repeated param all resolve classic. Spec:
+**A second results page** that sets each metric against a published reference band where one can
+be cited. ⚠️ **Guided is the DEFAULT since 2026-10-16** (`strides-8c3`, change
+`results-ux-round-one`): `resolveResultsViewMode` selects classic only for exactly one
+`?view=classic`; absent, `?view=guide`, unknown, `CLASSIC` or a repeated param all resolve guided.
+The A/B harness and e2e suite therefore drive the guided view now — measured bit-identical to the
+classic-default `main` on all three `--evidence` clips except `elapsedMs`. Everything below that
+says "classic stays the default" or "opt-in" describes the pre-flip state. Spec:
 `openspec/specs/guided-results-view/spec.md`; full provenance, derivations and refusals:
 `openspec/changes/archive/2026-09-15-guided-results-view/design.md`.
 
@@ -996,7 +1000,7 @@ it**. Toggling unmounts one view and mounts the other, and the canvases move acr
 ⚠️ **Both views must render `role="status"` starting "Analysis complete."** — the e2e suite and
 `scripts/ab-person-selection.mjs` wait on that text, so either view can be driven.
 
-**Driving it:** load `/strides/?view=guide` on the derived port. Hooks: `.guided-results`,
+**Driving it:** the bare `/strides/` on the derived port is guided now; `?view=classic` for classic. Hooks: `.guided-results`,
 `.guided-results__group` (`--banded` / `--unbanded` / `--not-measured`; the last two are
 `<details>`, collapsed), `nav[aria-label="Measurements on this page"]`, `.metric-scale`. The A/B
 harness never passes `?view=`, reads the classic default, and is unaffected.

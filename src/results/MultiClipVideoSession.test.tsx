@@ -836,7 +836,7 @@ describe('MultiClipVideoSession', () => {
     expect(isReleased(survivor)).toBe(false)
   })
 
-  it('releases every clip’s poster in `handleChooseDifferentVideo` itself when the session resets', async () => {
+  it('releases every clip’s poster in `handleStartOver` itself when the session resets', async () => {
     const posters = posterPerFile()
     render(<MultiClipVideoSession detector={null} modelLoad={IDLE_MODEL_LOADS} />)
 
@@ -853,7 +853,11 @@ describe('MultiClipVideoSession', () => {
 
     // Same raw-click reasoning as above: every slot is about to unmount, so a flushed passive pass
     // would release all of these regardless of what this component did.
-    screen.getByRole('button', { name: /choose a different video/i }).click()
+    // The first click only asks (strides-qi5q); nothing is released until the reader confirms.
+    fireEvent.click(screen.getByRole('button', { name: /^start over$/i }))
+    expect(screen.getByText(/remove all 2 clips and start over\?/i)).toBeInTheDocument()
+    expect(all.map(isReleased)).toEqual([false, false])
+    screen.getByRole('button', { name: /remove and start over/i }).click()
 
     // EVERY clip, not just the active one — the session is going away whole.
     expect(all.map(isReleased)).toEqual([true, true])
@@ -1074,7 +1078,7 @@ describe('MultiClipVideoSession', () => {
 })
 
 // ---------------------------------------------------------------------------------------------
-// Results view mode: `?view=guide` and the toggle (strides-kgi.6)
+// Results view mode: `?view=classic`, the guided default (strides-8c3), and the toggle (strides-kgi.6)
 // ---------------------------------------------------------------------------------------------
 
 // A PASSTHROUGH spy — hoisted like every `vi.mock`, so it is in place for the whole file, and it
@@ -1152,47 +1156,47 @@ describe('MultiClipVideoSession — results view mode', () => {
     )
   })
 
-  it('defaults to the classic view with no view param, and leaves the address untouched', async () => {
+  it('defaults to the guided view with no view param, and leaves the address untouched', async () => {
     window.history.replaceState(null, '', '/strides/?clip=demo#top')
-    await loadOneReadyClip()
-
-    expect(mountedView()).toBe('classic')
-    expect(document.querySelector('.guided-results__group')).toBeNull()
-    expect(toggleButton('Classic')).toHaveAttribute('aria-pressed', 'true')
-    expect(toggleButton('Guided')).toHaveAttribute('aria-pressed', 'false')
-    expect(window.location.search).toBe('?clip=demo')
-    expect(window.location.hash).toBe('#top')
-  })
-
-  it.each(['?view=classic', '?view=GUIDE', '?view=nonsense', '?view=guide&view=classic'])(
-    'renders the classic view for %s',
-    async (search) => {
-      window.history.replaceState(null, '', `/strides/${search}`)
-      await loadOneReadyClip()
-      expect(mountedView()).toBe('classic')
-    },
-  )
-
-  it('is seeded with the guided view from ?view=guide', async () => {
-    window.history.replaceState(null, '', '/strides/?view=guide')
     await loadOneReadyClip()
 
     expect(mountedView()).toBe('guide')
     expect(document.querySelector('.guided-results__group')).not.toBeNull()
     expect(toggleButton('Guided')).toHaveAttribute('aria-pressed', 'true')
     expect(toggleButton('Classic')).toHaveAttribute('aria-pressed', 'false')
+    expect(window.location.search).toBe('?clip=demo')
+    expect(window.location.hash).toBe('#top')
+  })
+
+  it.each(['?view=guide', '?view=CLASSIC', '?view=nonsense', '?view=classic&view=guide'])(
+    'renders the guided view for %s',
+    async (search) => {
+      window.history.replaceState(null, '', `/strides/${search}`)
+      await loadOneReadyClip()
+      expect(mountedView()).toBe('guide')
+    },
+  )
+
+  it('is seeded with the classic view from ?view=classic', async () => {
+    window.history.replaceState(null, '', '/strides/?view=classic')
+    await loadOneReadyClip()
+
+    expect(mountedView()).toBe('classic')
+    expect(document.querySelector('.guided-results__group')).toBeNull()
+    expect(toggleButton('Classic')).toHaveAttribute('aria-pressed', 'true')
+    expect(toggleButton('Guided')).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('reads the address once, at mount — a later change to it does not switch the view', async () => {
     render(<MultiClipVideoSession detector={makeFakeDetector()} modelLoad={IDLE_MODEL_LOADS} />)
-    window.history.replaceState(null, '', '/strides/?view=guide')
+    window.history.replaceState(null, '', '/strides/?view=classic')
 
     fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
     await chooseFile(new File(['x'], 'run.mp4', { type: 'video/mp4' }))
     markVideoReady(canonicalVideos()[0])
     await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
 
-    expect(mountedView()).toBe('classic')
+    expect(mountedView()).toBe('guide')
   })
 
   it('places the toggle in the page body, immediately above the results view — never in the header', async () => {
@@ -1211,20 +1215,7 @@ describe('MultiClipVideoSession — results view mode', () => {
   it('toggles between the views, mounting exactly one each way, and writes the address', async () => {
     window.history.replaceState(null, '', '/strides/?clip=demo#top')
     await loadOneReadyClip()
-    expect(mountedView()).toBe('classic')
-
-    const guided = toggleButton('Guided')
-    guided.focus()
-    fireEvent.click(guided)
-
     expect(mountedView()).toBe('guide')
-    expect(document.querySelector('.guided-results__group')).not.toBeNull()
-    expect(window.location.search).toBe('?clip=demo&view=guide')
-    expect(window.location.hash).toBe('#top')
-    expect(window.location.pathname).toBe('/strides/')
-    // The reader stays on the control they just used; the swap happened below it.
-    expect(document.activeElement).toBe(guided)
-    expect(guided).toHaveAttribute('aria-pressed', 'true')
 
     const classic = toggleButton('Classic')
     classic.focus()
@@ -1232,15 +1223,28 @@ describe('MultiClipVideoSession — results view mode', () => {
 
     expect(mountedView()).toBe('classic')
     expect(document.querySelector('.guided-results__group')).toBeNull()
-    // Classic strips `view` entirely, so the default address is exactly what it was.
+    expect(window.location.search).toBe('?clip=demo&view=classic')
+    expect(window.location.hash).toBe('#top')
+    expect(window.location.pathname).toBe('/strides/')
+    // The reader stays on the control they just used; the swap happened below it.
+    expect(document.activeElement).toBe(classic)
+    expect(classic).toHaveAttribute('aria-pressed', 'true')
+
+    const guided = toggleButton('Guided')
+    guided.focus()
+    fireEvent.click(guided)
+
+    expect(mountedView()).toBe('guide')
+    expect(document.querySelector('.guided-results__group')).not.toBeNull()
+    // Guided strips `view` entirely, so the default address is exactly what it was.
     expect(window.location.search).toBe('?clip=demo')
     expect(window.location.hash).toBe('#top')
-    expect(document.activeElement).toBe(classic)
+    expect(document.activeElement).toBe(guided)
 
     // And back again, to show the toggle is not one-shot.
-    fireEvent.click(toggleButton('Guided'))
-    expect(mountedView()).toBe('guide')
-    expect(window.location.search).toBe('?clip=demo&view=guide')
+    fireEvent.click(toggleButton('Classic'))
+    expect(mountedView()).toBe('classic')
+    expect(window.location.search).toBe('?clip=demo&view=classic')
   })
 
   it('moves the SAME evidence canvas between the views on every toggle, never losing it', async () => {
@@ -1269,6 +1273,7 @@ describe('MultiClipVideoSession — results view mode', () => {
       () => settled,
     )
 
+    window.history.replaceState(null, '', '/strides/?view=classic')
     await loadOneReadyClip()
 
     expect(mountedView()).toBe('classic')
@@ -1287,5 +1292,69 @@ describe('MultiClipVideoSession — results view mode', () => {
     expect(document.body).toContainElement(canvas)
     expect(canvas.closest('.metrics-panel')).not.toBeNull()
     expect(document.querySelector('.metrics-panel .evidence-image > canvas')).toBe(canvas)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+// Waiting on a phone: screen wake lock and the wait notice (strides-6os1)
+// ---------------------------------------------------------------------------------------------
+
+describe('MultiClipVideoSession — waiting on a phone', () => {
+  afterEach(() => {
+    // @ts-expect-error -- removing the test double
+    delete navigator.wakeLock
+    vi.unstubAllGlobals()
+  })
+
+  function stubPointer(coarse: boolean) {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: query === '(pointer: coarse)' ? coarse : false,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    )
+  }
+
+  async function startHangingAnalysis() {
+    const stop = vi.fn()
+    sampleClipMock.mockImplementationOnce(() => ({
+      promise: new Promise(() => {}), // mid-analysis for the whole test
+      handle: { stop },
+    }))
+    render(<MultiClipVideoSession detector={makeFakeDetector()} modelLoad={IDLE_MODEL_LOADS} />)
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run.mp4', { type: 'video/mp4' }))
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(sampleClipMock).toHaveBeenCalledTimes(1))
+  }
+
+  it('holds a screen wake lock while a clip is analysing, and releases it on start over', async () => {
+    stubPointer(false)
+    const sentinel = { released: false, release: vi.fn(async () => { sentinel.released = true }) }
+    const request = vi.fn(async () => sentinel)
+    Object.defineProperty(navigator, 'wakeLock', { value: { request }, configurable: true })
+
+    await startHangingAnalysis()
+    await waitFor(() => expect(request).toHaveBeenCalledWith('screen'))
+
+    fireEvent.click(screen.getByRole('button', { name: /^start over$/i }))
+    fireEvent.click(screen.getByRole('button', { name: /remove and start over/i }))
+    await waitFor(() => expect(sentinel.release).toHaveBeenCalled())
+  })
+
+  it('tells a coarse-pointer reader to expect a wait, without a live region', async () => {
+    stubPointer(true)
+    await startHangingAnalysis()
+    const notice = await screen.findByText(/analysis on a phone can take a minute or more/i)
+    expect(notice.closest('[aria-live],[role="status"],[role="alert"]')).toBeNull()
+  })
+
+  it('says nothing about phones on a fine-pointer device', async () => {
+    stubPointer(false)
+    await startHangingAnalysis()
+    expect(screen.queryByText(/analysis on a phone/i)).toBeNull()
   })
 })

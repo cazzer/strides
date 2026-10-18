@@ -23,6 +23,7 @@ import { METRIC_LABELS, confidenceLabel, metricTier } from './metricConfidence'
 import type { MetricCardEvidence } from './MetricsPanel'
 import type { ResultsViewProps } from './ResultsView'
 import type { ScalePassStatus } from './types'
+import { StartOverControl } from './StartOverControl'
 import { clipSourceLabel } from './clipProvenance'
 
 /**
@@ -55,8 +56,8 @@ function plural(
  * The analysis, presented against cited guidance: every measured metric beside what published
  * research says about it, in three groups by what can honestly be said (guided-results-view spec).
  *
- * A sibling of `ResultsView`, not a wrapper around it. ⚠️ Its shell — the Analyze / Choose a
- * different video buttons, the `role="status"` completion line with the scale-pass narrative, and
+ * A sibling of `ResultsView`, not a wrapper around it. ⚠️ Its shell — the Analyze button and the
+ * shared `StartOverControl`, the `role="status"` completion line with the scale-pass narrative, and
  * the error alert — is a deliberate COPY of `ResultsView`'s, class strings included, because that
  * file is not to be edited by this change (design.md D7.2) and both views must behave identically
  * around the metrics. The completion line in particular is load-bearing, not copy: the e2e suite
@@ -69,7 +70,7 @@ function plural(
 export function GuidedResultsView({
   analysis,
   onTryAgain,
-  onChooseDifferentVideo,
+  onStartOver,
   evidence = NO_EVIDENCE,
   clipCount = 1,
   clipViews = [],
@@ -104,13 +105,7 @@ export function GuidedResultsView({
             {phase === 'error' ? 'Analyze again' : 'Analyze'}
           </button>
         )}
-        <button
-          type="button"
-          onClick={onChooseDifferentVideo}
-          className="inline-flex items-center justify-center border-2 border-black dark:border-white px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black dark:text-white transition-colors hover:bg-black hover:text-white dark:hover:bg-white dark:hover:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-        >
-          Choose a different video
-        </button>
+        <StartOverControl onConfirm={onStartOver} clipCount={clipCount} />
       </div>
 
       {phase === 'ready' && (

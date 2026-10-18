@@ -12,6 +12,13 @@ export interface AddClipActionProps {
    * file. See the note on `handleSource` for why closing the panel does not truncate that fan-out.
    */
   onSource: (source: Blob | File, opts?: { frameRateHint?: number }) => void
+  /**
+   * A request from elsewhere on the page to open the panel — the session coverage notice's
+   * "Add a … clip" (`strides-pz0u`). A counter, so asking twice opens it twice; `0` (or absent) is
+   * "never asked". Opening this way also moves focus to the trigger, because the reader asked from
+   * the page body and the panel is in the header.
+   */
+  openRequest?: number
 }
 
 /**
@@ -41,7 +48,7 @@ export interface AddClipActionProps {
  * The strip's own row is unchanged, so opening this grows the header downward and pushes `<main>`
  * down; it never paints over the row above.
  */
-export function AddClipAction({ onSource }: AddClipActionProps) {
+export function AddClipAction({ onSource, openRequest = 0 }: AddClipActionProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -59,6 +66,21 @@ export function AddClipAction({ onSource }: AddClipActionProps) {
     setIsRecording(false)
     shouldReturnFocusRef.current = true
   }, [])
+
+  // An open request is handled DURING render (React's "adjusting state when a prop changes"
+  // pattern), so the panel opens in the same commit; only the focus move waits for the effect. A
+  // request already pending when this mounts — the session reset and remounted it — is not acted on.
+  const [mountOpenRequest] = useState(openRequest)
+  const [handledOpenRequest, setHandledOpenRequest] = useState(openRequest)
+  if (openRequest !== handledOpenRequest) {
+    setHandledOpenRequest(openRequest)
+    setIsOpen(true)
+  }
+  useEffect(() => {
+    if (handledOpenRequest === mountOpenRequest) return
+    triggerRef.current?.focus()
+    triggerRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [handledOpenRequest, mountOpenRequest])
 
   useEffect(() => {
     if (isOpen || !shouldReturnFocusRef.current) return

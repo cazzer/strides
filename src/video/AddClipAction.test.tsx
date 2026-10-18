@@ -104,6 +104,22 @@ describe('AddClipAction', () => {
     expect(screen.getByLabelText(/choose a video file/i)).toBeInTheDocument()
   })
 
+  it('opens, and takes focus, on each open request from elsewhere on the page', () => {
+    const { rerender } = render(<AddClipAction onSource={vi.fn()} openRequest={0} />)
+    // 0 means "never asked": it does not open on mount.
+    expect(trigger()).toHaveAttribute('aria-expanded', 'false')
+
+    rerender(<AddClipAction onSource={vi.fn()} openRequest={1} />)
+    expect(trigger()).toHaveAttribute('aria-expanded', 'true')
+    expect(document.activeElement).toBe(trigger())
+
+    // Closed by the reader, then asked again: it opens again.
+    fireEvent.click(trigger())
+    expect(trigger()).toHaveAttribute('aria-expanded', 'false')
+    rerender(<AddClipAction onSource={vi.fn()} openRequest={2} />)
+    expect(trigger()).toHaveAttribute('aria-expanded', 'true')
+  })
+
   it('reports one source per file, so one picker interaction still creates one clip per file', () => {
     const onSource = vi.fn()
     render(<AddClipAction onSource={onSource} />)

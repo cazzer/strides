@@ -49,7 +49,7 @@ describe('VideoInputPanel', () => {
     expect(container.textContent).toBe('')
   })
 
-  it('renders no reset button when ready -- "Choose a different video" moved to the results column', () => {
+  it('renders no reset button when ready -- the session reset ("Start over") lives in the results column', () => {
     const videoSource = makeVideoSource({
       status: 'ready',
       metadata: { durationSec: 10, width: 640, height: 480, frameRate: null },
@@ -57,7 +57,7 @@ describe('VideoInputPanel', () => {
     render(<VideoInputPanel videoSource={videoSource} />)
 
     expect(
-      screen.queryByRole('button', { name: /choose a different video/i }),
+      screen.queryByRole('button', { name: /start over|choose a different video/i }),
     ).not.toBeInTheDocument()
   })
 

@@ -14,9 +14,12 @@ import type { MetricCardEvidence } from './MetricsPanel'
 import { ModelLoadStripEntry } from './ModelLoadStripEntry'
 import { describeModelLoadStripStatus } from './modelLoadStripStatus'
 import { ResultsView } from './ResultsView'
+import { SessionCoverageNotice } from './SessionCoverageNotice'
+import { sessionCoverage } from './sessionCoverage'
 import { ResultsViewToggle } from './ResultsViewToggle'
 import { resolveResultsViewMode, writeResultsViewMode } from './resultsViewMode'
 import type { ResultsViewMode } from './resultsViewMode'
+import { useScreenWakeLock } from './useScreenWakeLock'
 import { useSessionEvidence } from './useSessionEvidence'
 import type { EvidenceSection } from './useSessionEvidence'
 import {
@@ -116,7 +119,7 @@ function sameClipSession(previous: ClipSession | undefined, next: ClipSession): 
  * detector.
  */
 export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSessionProps) {
-  // "Choose a different video" (a whole-session reset) unmounts the results and returns the page
+  // "Start over" (a whole-session reset, confirmed first) unmounts the results and returns the page
   // to the picker, so the button's focus needs to land on something that survives the transition —
   // the page heading, the one thing on the page that is always there. Same fix already applied
   // once for the single-clip flow (WebcamCapture, #4).
@@ -180,7 +183,7 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
   }, [presentedClipId])
   // Which results view renders. Seeded ONCE from the address (lazy initialiser, so a later render
   // never re-reads it) and written back on every change, so a reload or a shared link lands on the
-  // same view. Classic unless the address says exactly `?view=guide` — see `resultsViewMode.ts`.
+  // same view. Guided unless the address says exactly `?view=classic` — see `resultsViewMode.ts`.
   const [resultsViewMode, setResultsViewMode] = useState<ResultsViewMode>(() =>
     resolveResultsViewMode(window.location.search),
   )
@@ -308,6 +311,30 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
 
   const aggregate = computeAggregateAnalysisState(clips)
   const anyClipVideoReady = clips.some((c) => c.videoSource.status === 'ready')
+  // Which camera views the session is missing, read off the fused result (`strides-pz0u`). Only
+  // once the session is ready: a clip still analysing has no view yet, and would read as missing.
+  const coverage =
+    aggregate.phase === 'ready' && aggregate.heuristics
+      ? sessionCoverage(
+          clips.flatMap((c) => (c.analysis.heuristics ? [c.analysis.heuristics.view.view] : [])),
+          aggregate.heuristics,
+        )
+      : null
+  const [addClipRequest, setAddClipRequest] = useState(0)
+  const requestAddClip = useCallback(() => setAddClipRequest((n) => n + 1), [])
+
+  // Any clip still being worked on — its primary pass, or its scale pass, which replays the clip
+  // after "Analysis complete". The screen is kept on for exactly that long (`strides-6os1`).
+  const analysisInFlight =
+    aggregate.phase === 'sampling' ||
+    aggregate.phase === 'processing' ||
+    clips.some((c) => clipHostsLiveElement(c.analysis.phase, c.analysis.scalePass.status))
+  useScreenWakeLock(analysisInFlight)
+  // Read once: a device's primary pointer does not change mid-session, and a coarse one is the
+  // closest honest proxy for "a phone or tablet" without sniffing the user agent.
+  const [coarsePointer] = useState(
+    () => (typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches) ?? false,
+  )
 
   // `null` on every settled render, which is nearly all of them. Non-null exactly while a model
   // download is in flight or has failed — twice per session at most, and at two very different
@@ -354,12 +381,12 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
     // Focus lands on the page heading, not on the errored clip's `<video>`. That element is no
     // longer in the page body — it is positioned off screen and marked `inert`, so focusing it
     // would silently drop focus to `<body>` and strand a keyboard user. Same target
-    // `handleChooseDifferentVideo` uses, and for the same reason: it is the nearest thing that
+    // `handleStartOver` uses, and for the same reason: it is the nearest thing that
     // survives the alert unmounting underneath the button that was just clicked.
     headingRef.current?.focus()
   }, [clips, headingRef])
 
-  const handleChooseDifferentVideo = useCallback(() => {
+  const handleStartOver = useCallback(() => {
     // Every clip in the session is going away, so every poster is too. Same posture as
     // `removeClip`: released here and again by each slot's own cleanup, idempotently.
     for (const session of Object.values(clipStates)) releaseClipPoster(session.poster)
@@ -479,7 +506,7 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
             a moment with two file inputs, two Upload tabs or two pairs of demo buttons on the page
             for a test or a reader to pick between.
           */}
-          {anyClipVideoReady && <AddClipAction onSource={addClip} />}
+          {anyClipVideoReady && <AddClipAction onSource={addClip} openRequest={addClipRequest} />}
         </div>
       </header>
 
@@ -509,6 +536,24 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
             <ClipPicker onSource={addClip} />
           </section>
         )}
+
+        {/*
+          A plain paragraph, NOT a live region: the results view's status line is the session's one
+          announced line. Phones take a minute or more (`strides-6i6`), so the wait is said once,
+          up front, rather than discovered.
+        */}
+        {coarsePointer && analysisInFlight && (
+          <p className="phone-wait-notice font-sans text-sm text-neutral-700 dark:text-neutral-300">
+            Analysis on a phone can take a minute or more. Keep this tab open and in front until it
+            finishes.
+          </p>
+        )}
+
+        {/*
+          Above BOTH views, rendered once here rather than copied into each: what the session is
+          missing is a session fact, not a property of how the results are laid out.
+        */}
+        {coverage && <SessionCoverageNotice coverage={coverage} onAddClip={requestAddClip} />}
 
         {/*
           In the page body, not the header: the header's clip strip is `flex-1` and gives up width to
@@ -544,7 +589,7 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
             <GuidedResultsView
               analysis={aggregate}
               onTryAgain={handleTryAgain}
-              onChooseDifferentVideo={handleChooseDifferentVideo}
+              onStartOver={handleStartOver}
               evidence={evidence}
               clipCount={clips.length}
               clipViews={clipViews}
@@ -555,7 +600,7 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
             <ResultsView
               analysis={aggregate}
               onTryAgain={handleTryAgain}
-              onChooseDifferentVideo={handleChooseDifferentVideo}
+              onStartOver={handleStartOver}
               evidence={evidence}
               clipCount={clips.length}
               clipViews={clipViews}

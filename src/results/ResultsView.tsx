@@ -3,6 +3,7 @@ import type { MetricId } from '../heuristics/types'
 import { MetricsPanel } from './MetricsPanel'
 import type { MetricCardEvidence } from './MetricsPanel'
 import { metricTier } from './metricConfidence'
+import { StartOverControl } from './StartOverControl'
 
 export interface ResultsViewProps {
   /** Has no `progress` — see `AggregateAnalysisState`; per-clip progress lives on the clip strip. */
@@ -12,11 +13,11 @@ export interface ResultsViewProps {
    * the chance to move focus somewhere stable first, the same fix already applied there and in
    * `WebcamCapture`. */
   onTryAgain: () => void
-  /** Called instead of `videoSource.reset` directly for "Choose a different video" — clicking
-   * it unmounts this whole component (the video source leaves `'ready'`), taking the focused
-   * button with it, so the composer (`App.tsx`) must move focus somewhere stable first. Same
-   * contract as `onTryAgain`. */
-  onChooseDifferentVideo: () => void
+  /** The whole-session reset behind "Start over", called only once the reader has confirmed it
+   * (`StartOverControl`, `strides-qi5q`). It unmounts this whole component (no clip is loaded any
+   * more), taking the focused button with it, so the composer must move focus somewhere stable
+   * first. Same contract as `onTryAgain`. */
+  onStartOver: () => void
   /** The imagery each metric was measured from. Passed straight through to `MetricsPanel`, which
    * renders each metric's thumbnails inside that metric's own card. Already extracted by the
    * composer (`MultiClipVideoSession`, which owns `useSessionEvidence`) — this component stays
@@ -41,9 +42,9 @@ export interface ResultsViewProps {
 export function ResultsView({
   analysis,
   onTryAgain,
-  onChooseDifferentVideo,
+  onStartOver,
   evidence,
-  clipCount,
+  clipCount = 1,
   clipViews,
   sourceIndices,
   onOpenEvidenceVideo,
@@ -70,7 +71,7 @@ export function ResultsView({
   // 'error' doesn't disable the button -- Analyze must stay re-runnable after a failed run,
   // not get stuck permanently disabled with no way forward. After a *completed* run the
   // button doesn't render at all: analysis is deterministic, so re-running the same clip has
-  // nothing new to say -- the forward action is choosing a different video.
+  // nothing new to say -- the forward action is starting over with a different video.
   const analyzeDisabled = phase === 'sampling' || phase === 'processing'
   const analyzeDisabledReason = analyzeDisabled
     ? 'Analysis already in progress'
@@ -90,13 +91,7 @@ export function ResultsView({
             {phase === 'error' ? 'Analyze again' : 'Analyze'}
           </button>
         )}
-        <button
-          type="button"
-          onClick={onChooseDifferentVideo}
-          className="inline-flex items-center justify-center border-2 border-black dark:border-white px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black dark:text-white transition-colors hover:bg-black hover:text-white dark:hover:bg-white dark:hover:text-black focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-        >
-          Choose a different video
-        </button>
+        <StartOverControl onConfirm={onStartOver} clipCount={clipCount} />
       </div>
 
       {/*

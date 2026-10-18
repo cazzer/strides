@@ -9,8 +9,10 @@ export interface ResultsViewToggleProps {
 }
 
 const OPTIONS: ReadonlyArray<{ mode: ResultsViewMode; label: string }> = [
-  { mode: 'classic', label: 'Classic' },
+  // Guided first: it is the default since `strides-8c3`. Order states the default; the styling
+  // below still marks only which view is showing, never which is better.
   { mode: 'guide', label: 'Guided' },
+  { mode: 'classic', label: 'Classic' },
 ]
 
 const BASE =
@@ -39,7 +41,7 @@ export function ResultsViewToggle({ mode, onChange }: ResultsViewToggleProps) {
     <div className="results-view-toggle flex flex-wrap items-center gap-x-4 gap-y-2">
       <div
         role="group"
-        aria-label="Results view: classic or guided"
+        aria-label="Results view: guided or classic"
         aria-describedby={hintId}
         className="flex"
       >

@@ -82,20 +82,20 @@ function renderResultsView(
   props: Partial<
     Pick<
       Parameters<typeof ResultsView>[0],
-      'analysis' | 'onTryAgain' | 'onChooseDifferentVideo'
+      'analysis' | 'onTryAgain' | 'onStartOver'
     >
   > = {},
 ) {
   const onTryAgain = props.onTryAgain ?? vi.fn()
-  const onChooseDifferentVideo = props.onChooseDifferentVideo ?? vi.fn()
+  const onStartOver = props.onStartOver ?? vi.fn()
   render(
     <ResultsView
       analysis={props.analysis ?? makeAnalysis()}
       onTryAgain={onTryAgain}
-      onChooseDifferentVideo={onChooseDifferentVideo}
+      onStartOver={onStartOver}
     />,
   )
-  return { onTryAgain, onChooseDifferentVideo }
+  return { onTryAgain, onStartOver }
 }
 
 describe('ResultsView', () => {
@@ -116,19 +116,17 @@ describe('ResultsView', () => {
     expect(
       screen.queryByRole('button', { name: /analyze/i }),
     ).not.toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: /choose a different video/i }),
-    ).toBeEnabled()
+    expect(screen.getByRole('button', { name: /^start over$/i })).toBeEnabled()
   })
 
-  it('calls onChooseDifferentVideo (not videoSource.reset directly) from its button', () => {
-    const { onChooseDifferentVideo } = renderResultsView({
+  it('calls onStartOver (not videoSource.reset directly) only once Start over is confirmed', () => {
+    const { onStartOver } = renderResultsView({
       analysis: makeAnalysis({ phase: 'ready', heuristics: makeHeuristics() }),
     })
-    fireEvent.click(
-      screen.getByRole('button', { name: /choose a different video/i }),
-    )
-    expect(onChooseDifferentVideo).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: /^start over$/i }))
+    expect(onStartOver).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: /remove and start over/i }))
+    expect(onStartOver).toHaveBeenCalledTimes(1)
   })
 
   it('re-enables Analyze after an error, so the user can retry via the primary button too', () => {
@@ -163,7 +161,7 @@ describe('ResultsView', () => {
         <ResultsView
           analysis={analysis}
           onTryAgain={vi.fn()}
-          onChooseDifferentVideo={vi.fn()}
+          onStartOver={vi.fn()}
         />,
       )
       expect(screen.queryByRole('status')).not.toBeInTheDocument()
@@ -194,7 +192,7 @@ describe('ResultsView', () => {
           scalePass: { status: 'running', diagnostics: null },
         })}
         onTryAgain={vi.fn()}
-        onChooseDifferentVideo={vi.fn()}
+        onStartOver={vi.fn()}
       />,
     )
     expect(screen.getByRole('status').textContent).toMatch(
@@ -211,7 +209,7 @@ describe('ResultsView', () => {
           scalePass: { status: 'done', diagnostics: null },
         })}
         onTryAgain={vi.fn()}
-        onChooseDifferentVideo={vi.fn()}
+        onStartOver={vi.fn()}
       />,
     )
     expect(screen.getByRole('status').textContent).toMatch(
