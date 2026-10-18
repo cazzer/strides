@@ -312,35 +312,6 @@ can be changed later without breaking either instrument.
 - **WHEN** the guided view renders for a completed analysis
 - **THEN** an element with a status role contains the text "Analysis complete."
 
-### Requirement: The classic results view remains the default
-
-With no view explicitly selected, the existing results view SHALL render. The guided view SHALL be
-reachable by an explicit selection that survives a reload and can be shared as a link, and SHALL be
-reachable by a visible control that names both destinations and is operable from the keyboard.
-
-Defaulting to the new view would put every existing reader in front of a page whose content is
-research commentary, and would make the existing view's behaviour conditional on a parameter no
-existing instrument passes. The new view is opt-in until someone decides otherwise, and that
-decision is not part of introducing it.
-
-Selecting a view SHALL NOT require a routing library.
-
-#### Scenario: No selection renders the classic view
-
-- **WHEN** the results render with no view explicitly selected, or with an unrecognised selection
-- **THEN** the existing results view renders
-
-#### Scenario: An explicit selection survives a reload and is shareable
-
-- **WHEN** the reader selects the guided view
-- **THEN** the selection is reflected in the page's address so that reloading or sharing it renders
-  the guided view
-
-#### Scenario: The control is reachable and names both destinations
-
-- **WHEN** the view control renders
-- **THEN** it is operable from the keyboard and carries an accessible name identifying both views
-
 ### Requirement: The guided view ranks metrics into three groups by what can be said about them
 
 The guided view SHALL present metrics in three groups: those measured with a reference band,
@@ -830,3 +801,37 @@ scrolled clear of any sticky header. The completion line SHALL be unchanged.
 
 - **WHEN** a headline renders for a metric whose card has evidence images
 - **THEN** the images render on the card and none renders in the headline section
+
+### Requirement: The guided results view is the default
+
+With no view explicitly selected, the guided results view SHALL render. The classic view SHALL be
+reachable by an explicit selection that survives a reload and can be shared as a link, and by a
+visible control that names both destinations and is operable from the keyboard.
+
+Exactly one `view` parameter whose value is exactly `classic` SHALL select the classic view; every
+other address, including an absent, unknown, repeated or differently-cased parameter, SHALL select
+the guided view. Selecting the guided view SHALL remove the `view` parameter from the address rather
+than write a value, so the default address carries none.
+
+Selecting a view SHALL NOT require a routing library.
+
+#### Scenario: No selection renders the guided view
+
+- **WHEN** the results render with no view explicitly selected, or with an unrecognised selection
+- **THEN** the guided results view renders
+
+#### Scenario: An explicit classic selection survives a reload and is shareable
+
+- **WHEN** the reader selects the classic view
+- **THEN** the address carries `view=classic`, so reloading or sharing it renders the classic view
+
+#### Scenario: An older guided link still renders the guided view
+
+- **WHEN** the page loads with `?view=guide`
+- **THEN** the guided results view renders
+
+#### Scenario: The control is reachable and names both destinations
+
+- **WHEN** the view control renders
+- **THEN** it is operable from the keyboard and carries an accessible name identifying both views
+
