@@ -11,6 +11,7 @@ import { bindAll, bindOnly } from '../__fixtures__/boundParams'
 import { CAMERA_PRESETS } from '../camera'
 import { ModelRunner, type RunnerFocus } from '../ModelRunner'
 import type { BoundRunnerParams, CameraPreset } from '../types'
+import { useRunnerIntro } from '../useRunnerIntro'
 
 function bind(
   measured: readonly MetricId[] | 'all',
@@ -112,10 +113,52 @@ export function ScenarioView({ scenario }: { scenario: Scenario }) {
   )
 }
 
+const INTRO_PARAMS = bind('all')
+const INTRO_FOCUS: RunnerFocus = { metricIds: ['kneeFlexion', 'overstriding'] }
+
+/** The intro beat (ps19.3); "Replay intro" makes a new result identity, so it plays again. */
+export function IntroView() {
+  const [resultKey, setResultKey] = useState(() => ({}))
+  const [doneCount, setDoneCount] = useState(0)
+  const intro = useRunnerIntro({
+    bound: INTRO_PARAMS,
+    resultKey,
+    order: INTRO_FOCUS.metricIds,
+    onDone: () => setDoneCount((n) => n + 1),
+  })
+  return (
+    <section data-scenario="intro" className="space-y-2 border-2 border-black p-3 dark:border-white">
+      <h2 className="font-display text-lg font-bold">Intro: adopt your gait</h2>
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setResultKey({})}
+          className="min-h-11 border border-black px-2 font-sans text-xs dark:border-white"
+        >
+          Replay intro
+        </button>
+        <p className="font-sans text-xs" data-intro-done={doneCount}>
+          onDone fired {doneCount}×
+        </p>
+      </div>
+      <ModelRunner
+        params={INTRO_PARAMS}
+        camera="wholeBodySide"
+        focus={INTRO_FOCUS}
+        label="Model runner: intro"
+        overrides={intro.overrides}
+        intro={{ running: intro.running, onSkip: intro.skip }}
+        className="h-[60vh]"
+      />
+    </section>
+  )
+}
+
 export function Sandbox() {
   return (
     <main className="mx-auto max-w-3xl space-y-6 p-4">
       <h1 className="font-display text-2xl font-bold">Model runner sandbox</h1>
+      <IntroView />
       {SCENARIOS.map((scenario) => (
         <ScenarioView key={scenario.id} scenario={scenario} />
       ))}

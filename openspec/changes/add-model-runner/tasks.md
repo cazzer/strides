@@ -53,3 +53,10 @@
 - [x] 9.2 The held phase is taken on the side view's near leg in every camera
 - [x] 9.3 Value tween progress is wall-clock and shared by drawing and cadence; zero duration is finished; overlap with a camera tween tested
 - [x] 9.4 Requirement renamed "Reduced motion holds a still pose"; `footFloor` computed once; left labels get more gap
+
+## 10. Intro beat (ps19.3)
+
+- [x] 10.1 `src/runner/useRunnerIntro.ts`: `introOrder` (focus first via `paramForMetric`, then spec order), `introStepMs` (4000 / n within 300..1000 ms), `introOverrides` per step (`valueTween` neutral → bound, `sources` flip, 500 ms `flash`), `setTimeout` sequencing, once-per-result registry, skip, reduced motion
+- [x] 10.2 `ModelRunner` `intro` prop: "Skip" button beside Play/Pause while running (never under reduced motion), focus handed to Play/Pause when it goes away focused
+- [x] 10.3 `useRunnerIntro.test.tsx`: order, exact end, neutrals fixed, continuity across steps, skip, reduced motion (on load and mid-intro), once per result, new result, StrictMode, commits O(steps), Skip button and focus
+- [x] 10.4 Dev sandbox "Replay intro"; gates: lint, `tsc -b`, vitest (runner + full), `openspec validate --strict`, `vite build`

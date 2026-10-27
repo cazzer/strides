@@ -281,3 +281,39 @@ your numbers". No text SHALL call the runner a reference, an ideal or the reader
 #### Scenario: Text alternative
 - **WHEN** only cadence and trunk lean are measured and trunk lean is in focus
 - **THEN** the text alternative begins "Measured from your clip: Cadence, Trunk lean." and states "Shown: Trunk lean 5.0°."
+
+### Requirement: The runner adopts the reader's gait in a short intro, once per result
+
+When a result is first shown, the runner SHALL start fully neutral (every part dashed grey, every
+measured parameter at its neutral constant) and then apply the measured parameters one at a time,
+the focus-area parameters first in focus order and the rest in parameter order, over about four
+seconds in total. Each parameter SHALL tween from its neutral constant to its bound value, its
+part SHALL turn solid as the tween starts, and its value SHALL flash beside it for about 500 ms.
+Unmeasured parameters SHALL be drawn at their bound values throughout and never change. At the end
+every measured parameter SHALL be drawn at exactly its bound value and an `onDone` callback SHALL
+fire once. The motion SHALL run in the renderer's loop, with no React commit per frame.
+
+A visible "Skip" button (at least 44 px) SHALL sit beside the pause control while the intro runs;
+skipping SHALL jump to the final state and fire `onDone` once. When the button goes away while it
+holds focus, focus SHALL move to the pause control. Under reduced motion the intro SHALL NOT start:
+the final state is drawn at once, no Skip button is shown, and `onDone` fires once.
+
+The intro SHALL play once per result: a remount with the same result SHALL draw the final state at
+once and SHALL NOT fire `onDone` again; a new result SHALL play it. StrictMode's simulated
+remount SHALL NOT count as a played intro.
+
+#### Scenario: Parameters are applied in focus order
+- **WHEN** cadence, trunk lean, knee flexion and overstriding are measured and knee flexion then overstriding are in focus
+- **THEN** the swing-knee bend, landing offset, cadence and torso pitch are applied in that order, each tween ends at exactly its bound value, and no unmeasured parameter's value or style changes at any step
+
+#### Scenario: Skip
+- **WHEN** the reader presses "Skip" mid-intro
+- **THEN** the runner draws exactly the bound parameters, the Skip button is gone with focus on the pause control, and `onDone` has fired once
+
+#### Scenario: Reduced motion
+- **WHEN** the runner mounts with reduced motion preferred
+- **THEN** it draws the bound parameters at once, shows no Skip button, and fires `onDone` once
+
+#### Scenario: Plays once per result
+- **WHEN** the runner remounts for a result whose intro already played
+- **THEN** it draws the final state at once without firing `onDone`; a different result plays the intro again

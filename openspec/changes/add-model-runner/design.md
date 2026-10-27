@@ -261,6 +261,33 @@ Deviations from the ps19.2 plan:
   does not give a column-flex child a height when the figure has none, so the consumer must size
   it through `className` (documented on the component).
 
+### D14. Intro beat (ps19.3)
+
+`useRunnerIntro({ bound, resultKey, order, onDone })` returns `{ overrides, running, skip }` and
+drives ModelRunner only through the D13 seam. Step i holds every not-yet-finished measured
+parameter at its neutral constant in `overrides.values`, flips its own `sources` entry to measured,
+and sets `valueTween = { from: neutral, to: bound.value, durationMs, key: String(i) }`, so the loop
+moves it on wall-clock time; the hook only sets state from `setTimeout` (a step, its flash clearing
+at 500 ms, the end), about 2n + 2 commits for n parameters. Per-step time is 4000 / n within
+300..1000 ms. Neutral parameters are never in `values`, so they stay at `bound.value`. At the end
+`overrides` is undefined and exactly `bound` is drawn.
+
+**Once per result.** A module-level registry (a WeakSet for object keys, a Set for strings) marks a
+key when its first step actually begins, from a 0 ms timer, not when the effect runs: StrictMode's
+simulated unmount clears that timer, so the real mount still plays. A remount with a played key
+draws the final state at once and does not fire `onDone` (the caller already heard it, or
+unmounted mid-intro). An unmount mid-intro therefore does not replay on remount. Reduced motion
+never starts the intro; it marks the key and fires `onDone` once (also from a 0 ms timer, guarded
+by a per-mount "fired for" ref so StrictMode's second effect run cannot fire it twice).
+
+**Skip.** ModelRunner takes `intro?: { running, onSkip }` and shows a "Skip" button in the control
+row while running and motion is allowed. Focus is tracked with onFocus/onBlur; when the button
+unmounts while focused (skip pressed, or the intro ended), focus moves to Play/Pause.
+
+**Accepted transient.** Neutral parameters may have been fitted around measured contact
+parameters (`realizeParams`); until a measured landing is applied, a just-applied foot strike can
+draw off its label. It lasts at most one step and the end state is exact.
+
 ## Risks / Trade-offs
 
 - When two measured contact parameters conflict (D4), the weaker one is drawn away from its
