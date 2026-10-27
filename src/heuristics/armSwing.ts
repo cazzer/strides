@@ -10,6 +10,7 @@ import type {
   SpectralSample,
 } from './spectralFit'
 import { analyzeHipBounce } from './hipBounce'
+import { torsoLengthAt } from './bodyScale'
 import { resolvedSpanCenter, selectBounceInstants } from './bounceInstants'
 import {
   cropKeypoints,
@@ -19,9 +20,9 @@ import {
 } from './exemplars'
 
 /**
- * The shared per-side arm-swing computation — the per-side fit, its gate/policy constants, and
- * the per-side exemplar builder. `armSwingAmplitude` (how BIG the swing is) is its consumer
- * today; it calls `computeSideSwing` itself and runs the fit, exactly as
+ * The shared per-side arm-swing computation — the stride-rate anchor, the per-side fit and
+ * per-stride travel, its gate/policy constants, and the per-side exemplar builder.
+ * `armSwingAmplitude` (how BIG the swing is) is its consumer today; it calls `computeSideSwing` itself and runs the fit, exactly as
  * `verticalOscillationCm`/`verticalRatio` each call the exported `analyzeHipBounce` — no
  * cross-metric memoization exists in `index.ts`, and the fit is one cheap linear least-squares per
  * side.
@@ -45,11 +46,13 @@ import {
  * early ones and each side's "amplitude" is mostly a reading of the clip's end.
  *
  * The fix divides every sample by a per-frame scale factor before the fit — see
- * `resolveScaleStabilizer` for the construction and the reasoning behind each piece of it (strict
- * bilateral proxy, whole-window log-quadratic trend, no clamp). The output stays in PIXELS, at the
- * clip's reference (median measured) scale, so downstream semantics are unchanged:
- * `armSwingAmplitude`'s division by the clip-median torso length still pairs a reference-scale
- * numerator with a clip-median denominator.
+ * `resolveScaleStabilizer` for the construction and the reasoning behind each piece of it (the
+ * body-length proxy, whole-window log-quadratic trend, no clamp). The proxy is the caller's
+ * choice of two (`ArmSwingScaleProxy`): the strictly bilateral inter-shoulder span for a
+ * front-on clip, the per-frame torso length for a side-on one, where the shoulders superimpose.
+ * The output stays in PIXELS, at the clip's reference (median measured) scale, so downstream
+ * semantics are unchanged: `armSwingAmplitude`'s division by the clip-median torso length still
+ * pairs a reference-scale numerator with a clip-median denominator.
  */
 
 /**
@@ -153,7 +156,8 @@ export function resolveStrideRateHz(
 }
 
 /**
- * Minimum frames on which BOTH shoulders independently resolve for the scale trend to be fitted
+ * Minimum frames on which the scale proxy resolves (for the shoulder span: BOTH shoulders
+ * independently) for the scale trend to be fitted
  * at all — deliberately the same bar `fitSpectralSinusoid` sets for its own smallest fit
  * (`MIN_SPECTRAL_FIT_SAMPLES`), for the same reason: a low-order model over a handful of points
  * chases noise rather than describing anything. Below it the factor is IDENTICALLY 1 for every
@@ -232,31 +236,60 @@ function solveTrendSystem(
 }
 
 /**
- * Builds the per-frame scale factor `f(t)` the swing series is divided by: a smoothed
- * inter-shoulder-span trend, normalized so `f` reads 1 at the clip's reference (median measured)
- * scale. Each piece is a deliberate choice:
+ * Which per-frame body length the swing series is scale-stabilized by.
  *
- * - **The proxy is the inter-shoulder distance, resolved STRICTLY bilaterally**
- *   (`resolveBilateralPair`, never `resolveMidpoint`'s single-side fallback). A scale needs two
- *   real points — a span measured against a fabricated stand-in point is a fabricated length, the
- *   exact bug class `estimateHipWidth` and view detection's bilateral-spread signal already refuse
- *   for the same reason. A frame whose proxy is missing still gets a factor (the trend evaluates
- *   at every timestamp), so no swing sample is ever dropped for it.
+ * - `'shoulderSpan'` — front/ambiguous clips: `shoulderSpanAt`, resolved STRICTLY bilaterally.
+ * - `'torsoLength'` — side clips: `torsoLengthAt` (`bodyScale.ts`). Side-on the two shoulders
+ *   superimpose, so their span collapses toward zero and jitters: measured median 37 px / p5 5 px
+ *   on `park-side-landscape.mp4` and 14 px / p5 3.4 px on `park-side-portrait.mp4`, where the
+ *   shoulder-stabilized series' range inflated to 171 px against a 33 px detrended raw range.
+ *   Torso length is the pipeline's own view-safe normalizer (see `estimateBodyScale`'s doc).
+ *   `torsoLengthAt` resolves its midpoints tolerantly; side-on a single-shoulder stand-in sits
+ *   where the midpoint would, so the strictness argument below does not carry over.
+ */
+export type ArmSwingScaleProxy = 'shoulderSpan' | 'torsoLength'
+
+/**
+ * The inter-shoulder distance, resolved STRICTLY bilaterally (`resolveBilateralPair`, never
+ * `resolveMidpoint`'s single-side fallback), or `null`. A scale needs two real points — a span
+ * measured against a fabricated stand-in point is a fabricated length, the exact bug class
+ * `estimateHipWidth` and view detection's bilateral-spread signal already refuse for the same
+ * reason.
+ */
+function shoulderSpanAt(frame: RobustPoseFrame): number | null {
+  const shoulders = resolveBilateralPair(frame, 'left_shoulder', 'right_shoulder')
+  if (shoulders === null) return null
+  return distance(shoulders.left, shoulders.right)
+}
+
+const SCALE_PROXY_AT: Record<ArmSwingScaleProxy, (frame: RobustPoseFrame) => number | null> = {
+  shoulderSpan: shoulderSpanAt,
+  torsoLength: torsoLengthAt,
+}
+
+/**
+ * Builds the per-frame scale factor `f(t)` the swing series is divided by: a smoothed trend of a
+ * per-frame body-length proxy (`ArmSwingScaleProxy`), normalized so `f` reads 1 at the clip's
+ * reference (median measured) scale. Each piece is a deliberate choice:
+ *
+ * - **The proxy is a real body length or nothing.** A frame whose proxy does not resolve (or is
+ *   non-finite or non-positive) contributes no trend sample, but still gets a factor (the trend
+ *   evaluates at every timestamp), so no swing sample is ever dropped for it.
  * - **The trend is a whole-window least-squares quadratic in LOG space**,
  *   `log(spanPx) ≈ c + d·t + e·t²` with time centered at the proxy samples' mean before the basis
  *   is built — the centering `spectralFit.ts`'s module doc describes as free conditioning
  *   insurance for normal equations. Log space because
  *   scale is multiplicative — a 2× approach costs the same trend budget at any distance — and
  *   because the exponentiated trend is positive by construction, so the divisor can never cross
- *   zero. Three degrees of freedom because a 3-dof polynomial cannot represent ANY frequency the
- *   fit searches (every candidate completes at least one cycle inside the window): the stride-rate
- *   wobble the
- *   inter-shoulder span genuinely carries (trunk counter-rotation, ~5.8% rms measured on Demo 2)
- *   structurally cannot leak into the divisor, where it would multiply straight into the swing
- *   series as in-band noise. A per-frame or heavily-smoothed divisor has no such guarantee.
+ *   zero. Three degrees of freedom because a 3-dof polynomial cannot represent an oscillation
+ *   completing a cycle or more inside the window — which every fit this module accepts does: the
+ *   stride-rate wobble the inter-shoulder span genuinely carries (trunk counter-rotation, ~5.8% rms
+ *   measured on Demo 2), or the step-rate flex of the torso, structurally cannot leak into the
+ *   divisor, where it would multiply straight into the swing series as in-band noise. A per-frame
+ *   or heavily-smoothed divisor has no such guarantee.
  * - **`f(t) = exp(trend(t)) / referencePx`**, where `referencePx` is the median of the measured
  *   per-frame proxies — so the divided series stays in PIXELS, at the clip's reference scale,
- *   rather than becoming a dimensionless shoulder-span multiple with different downstream units.
+ *   rather than becoming a dimensionless body-length multiple with different downstream units.
  * - **Evaluation time is clamped into the fitted proxy window; the factor's VALUE is not.**
  *   Inside the window the exponentiated fit stays within the data's own range — but a frame whose
  *   own proxy is missing can sit OUTSIDE the window (a far shoulder unresolvable at the clip's
@@ -265,21 +298,22 @@ function solveTrendSystem(
  *   interpolation of measured data. There is still no clamp on `f(t)` itself: the fallback
  *   ladder below guards the degenerate cases a value clamp would otherwise paper over.
  *
- * Fallback ladder — every rung returns the CONSTANT 1 (an exact no-op, not an approximate one):
- * fewer than `MIN_SCALE_TREND_SAMPLES` frames with a usable bilateral proxy; a trend system too
+ * Fallback ladder — every rung returns the CONSTANT 1 (an exact no-op, not an approximate one),
+ * whichever proxy is in use: fewer than `MIN_SCALE_TREND_SAMPLES` frames with a usable proxy; a trend system too
  * singular to solve (e.g. all proxy samples at one timestamp); a fitted trend flat to within
  * `FLAT_TREND_LOG_RANGE` (see that constant for why this rung is what makes the constant-scale
  * no-op exact); a non-finite or non-positive factor at evaluation time (unreachable from a solved
  * fit over real input, guarded per the "never NaN" contract).
  */
-function resolveScaleStabilizer(frames: RobustPoseFrame[]): (timestampSeconds: number) => number {
+function resolveScaleStabilizer(
+  frames: RobustPoseFrame[],
+  proxyLengthAt: (frame: RobustPoseFrame) => number | null,
+): (timestampSeconds: number) => number {
   const times: number[] = []
   const spans: number[] = []
   for (const frame of frames) {
-    const shoulders = resolveBilateralPair(frame, 'left_shoulder', 'right_shoulder')
-    if (shoulders === null) continue
-    const span = distance(shoulders.left, shoulders.right)
-    if (!Number.isFinite(span) || span <= 0) continue
+    const span = proxyLengthAt(frame)
+    if (span === null || !Number.isFinite(span) || span <= 0) continue
     times.push(frame.timestamp)
     spans.push(span)
   }
@@ -391,7 +425,9 @@ export interface SideSwing {
   travelPx: number | null
   /** Frames where this side's shoulder AND wrist both resolved. */
   resolvedCount: number
-  /** Of resolvedCount, how many had either point flagged interpolated. */
+  /** Of resolvedCount, how many had either point flagged interpolated. `resolvedCount −
+   * interpolatedCount` is the side's directly-detected frame count, which is how a side-view
+   * caller tells the near arm from the occluded far one. */
   interpolatedCount: number
 }
 
@@ -407,8 +443,9 @@ export interface SideSwing {
  * most distal available point — inherits the largest version of it. That input signal is unchanged;
  * only how an amplitude is read off it changed.
  *
- * Each sample is divided by the clip's smoothed inter-shoulder scale trend before the fit — the
- * module doc's "Scale stabilization" section says why, `resolveScaleStabilizer` says how. The
+ * Each sample is divided by the clip's smoothed body-length scale trend before the fit, over the
+ * proxy the caller names (`options.scaleProxy`) — the module doc's "Scale stabilization" section
+ * says why, `resolveScaleStabilizer` says how. The
  * division changes sample VALUES only: the series' null pattern, `resolvedCount` and
  * `interpolatedCount` are exactly what the raw series produces, because the trend evaluates at
  * every timestamp whether or not that frame's own proxy resolved.
@@ -450,11 +487,11 @@ export interface SideSwing {
 export function computeSideSwing(
   frames: RobustPoseFrame[],
   side: 'left' | 'right',
-  options: { strideHz: number },
+  options: { strideHz: number; scaleProxy: ArmSwingScaleProxy },
 ): SideSwing {
   let resolvedCount = 0
   let interpolatedCount = 0
-  const scaleFactorAt = resolveScaleStabilizer(frames)
+  const scaleFactorAt = resolveScaleStabilizer(frames, SCALE_PROXY_AT[options.scaleProxy])
 
   const seriesY = frames.map((frame) => {
     const shoulder = resolvePoint(frame, SHOULDER_NAME[side])

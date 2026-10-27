@@ -137,8 +137,9 @@ export type MetricExemplarKind =
    * nothing: a rate is a property of a sequence, and these two stills depict an amplitude. */
   | 'bounceCycle'
   /** One arm-swing half-cycle — the wrist at its highest and its lowest, on ONE side, emitted by
-   * `armSwingAmplitude` via the shared `armSwing.ts` builder. Two of these (one per arm) is what
-   * makes the metric legible: each pair spans the very excursion the mean is taken over. */
+   * `armSwingAmplitude` via the shared `armSwing.ts` builder, one per MEASURED arm: two from the
+   * front (one per arm, each spanning the swing the mean is taken over), one — the near arm's —
+   * from the side. */
   | 'armSwingCycle'
   /** One stride — two consecutive same-side footstrikes, the interval whose hip-mid horizontal
    * displacement is `verticalRatio`'s DENOMINATOR. Distinct from `'bounceCycle'`, which is that
@@ -568,7 +569,11 @@ export interface HeuristicsConfig {
    * reports its adoption as `HipBounceAnalysis.subFloorRhythm`. Two consequences of moving this
    * number, neither of them local: the sub-floor grid moves with it in both directions at once, and
    * the claim "a fit below here cannot be a human gait" — which is what licenses withholding
-   * `cadence` on such a clip — has to survive the move. */
+   * `cadence` on such a clip — has to survive the move.
+   *
+   * NOT read by the arm swing: its per-side fit searches around the clip's stride rate instead
+   * (`armSwing.ts`, `ARM_SWING_BAND_HALF_WIDTH`), which this band — the STEP band — does not
+   * contain for any runner below 144 spm. The same holds for the max and step keys below. */
   spectralFitMinFrequencyHz: number // 1.2
   /** Highest candidate bounce frequency, in Hz, for the shared hip-bounce spectral fit — 4.0
    * corresponds to 240 steps/min (`4.0 × 60`), above any sustained human running cadence. Capping
@@ -764,11 +769,11 @@ export interface HeuristicsConfig {
    * derivation in `openspec/changes/add-knee-drive-metric/design.md` D1/D4. */
   kneeDriveMinProminenceDegrees: number // 10
 
-  /** Minimum sinusoid partial R², on the WEAKER of the two arms, for a fitted arm-swing amplitude
-   * pair to be published at all. Same shape and same default as `verticalOscillationMinFitR2` /
-   * `cadenceMinFitR2` — each caller owns its own "is this fit trustworthy" policy — but read
-   * against the weaker side specifically, because a mean over one real amplitude and one
-   * noise-fitted one is not an arm-swing amplitude at all. It replaced
+  /** Minimum sinusoid partial R², on each MEASURED arm (both arms: the WEAKER one; side view: the
+   * near arm), for an arm-swing reading to be published at all. Same shape and same default as
+   * `verticalOscillationMinFitR2` / `cadenceMinFitR2` — each caller owns its own "is this fit
+   * trustworthy" policy — but read against the weaker side of a both-arms reading specifically,
+   * because a mean over one real travel and one noise-fitted one is not an arm-swing size at all. It replaced
    * `armSwingMinProminenceRatio`, whose extrema-prominence estimator was measured latching onto
    * sub-cycle wiggles (see `armSwing.ts`). THE gate for the shared per-side fits — every consumer
    * of `armSwing.ts` gates on this one key, deliberately never a second constant, so no two
@@ -913,12 +918,14 @@ export const DEFAULT_VIEW_FIT_TABLE: HeuristicsConfig['viewFitTable'] = {
     front: { fit: 'unsuitable', multiplier: 0.1 },
     ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
   },
-  // A side view occludes or superimposes the far arm — an occlusion/separability failure rather
-  // than a loss of the swing signal itself — and an amplitude averaged over one visible arm and
-  // one occluded arm is contaminated by the occlusion.
+  // A side view occludes the far arm, so a both-arms mean is contaminated there — which is why
+  // side reads the NEAR arm alone (`armSwingAmplitude.ts`, strides-eiil.3) and is tolerated rather
+  // than unsuitable: one arm, clearly seen in the plane the swing actually moves in. 0.6 rather
+  // than primary because one arm cannot speak for an asymmetric runner's other arm. Ambiguous
+  // keeps the both-arms rule and stays unsuitable.
   armSwingAmplitude: {
     front: { fit: 'primary', multiplier: 1.0 },
-    side: { fit: 'unsuitable', multiplier: 0.1 },
+    side: { fit: 'tolerated', multiplier: 0.6 },
     ambiguous: { fit: 'unsuitable', multiplier: 0.2 },
   },
   swingFootLateralExcursion: {

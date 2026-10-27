@@ -23,18 +23,18 @@
 
 ## 3. Side view reads the near arm (`strides-eiil.3`, design D3)
 
-- [ ] 3.1 `resolveScaleStabilizer` takes a proxy (`shoulderSpanAt` | `torsoLengthAt`); fallback ladder
+- [x] 3.1 `resolveScaleStabilizer` takes a proxy (`shoulderSpanAt` | `torsoLengthAt`); fallback ladder
       unchanged
-- [ ] 3.2 `computeSideSwing(frames, side, { strideHz, scaleProxy })`
-- [ ] 3.3 `armSwingAmplitude` side branch: near arm by directly-detected count, torso proxy,
+- [x] 3.2 `computeSideSwing(frames, side, { strideHz, scaleProxy })`
+- [x] 3.3 `armSwingAmplitude` side branch: near arm by directly-detected count, torso proxy,
       near-arm gates/confidence/caveat/exemplar; tie → both-arms rule
-- [ ] 3.4 `viewFitTable.armSwingAmplitude.side = { fit: 'tolerated', multiplier: 0.6 }`; doc updates
+- [x] 3.4 `viewFitTable.armSwingAmplitude.side = { fit: 'tolerated', multiplier: 0.6 }`; doc updates
       in `types.ts`
-- [ ] 3.5 `metricDescriptions.ts` copy
-- [ ] 3.6 Tests: near-arm value/caveat/exemplar, far arm cannot null, tie, torso proxy vs
+- [x] 3.5 `metricDescriptions.ts` copy
+- [x] 3.6 Tests: near-arm value/caveat/exemplar, far arm cannot null, tie, torso proxy vs
       superimposed shoulders, exact no-op for both proxies; existing side-unsuitable assertions
       updated
-- [ ] 3.7 `npx tsc -b`, lint, full vitest, `vite build`, `openspec validate --strict`
+- [x] 3.7 `npx tsc -b`, lint, full vitest, `vite build`, `openspec validate --strict`
 
 ## 4. Verification and record
 

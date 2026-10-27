@@ -1483,16 +1483,16 @@ describe('capture hints', () => {
       ].sort(),
     )
     expect(byKind(ASKS_FOR_FRONT_OR_REAR)).toEqual(
-      ['armSwingAmplitude', 'stepWidth', 'stepWidthCm', 'swingFootLateralExcursion'].sort(),
+      ['stepWidth', 'stepWidthCm', 'swingFootLateralExcursion'].sort(),
     )
     expect(byKind(NO_ANGLE_RULED_OUT)).toEqual(
       ['cadence', 'verticalOscillation', 'verticalOscillationCm'].sort(),
     )
   })
 
-  it('explains arm swing by the far arm being hidden, not by side-to-side placement', () => {
+  it('asks arm swing for any square-on angle — side-on reads the near arm, only an angle rules it out', () => {
     expect(METRIC_GUIDANCE.armSwingAmplitude.captureHints.wrongAngle).toBe(
-      "Film from directly in front of or behind the runner. From the side, the far arm is hidden behind the body, so only one arm's swing can be seen.",
+      "Film square to the runner's line of travel, from in front, from behind or from the side. At an angle the arms overlap the body and neither swing can be measured cleanly.",
     )
   })
 

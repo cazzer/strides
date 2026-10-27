@@ -161,10 +161,29 @@ const SAMPLING_FLOOR = Math.cos((2 * Math.PI * BASE_PARAMS.swingFreqHz) / BASE_P
 function sideTravelsPx(frames: RobustPoseFrame[]): { left: number; right: number } {
   const strideHz = resolveStrideRateHz(frames, DEFAULT_HEURISTICS_CONFIG)
   if (strideHz === null) throw new Error('fixture must carry a stride rhythm')
-  const left = computeSideSwing(frames, 'left', { strideHz }).travelPx
-  const right = computeSideSwing(frames, 'right', { strideHz }).travelPx
+  const left = computeSideSwing(frames, 'left', { strideHz, scaleProxy: 'shoulderSpan' }).travelPx
+  const right = computeSideSwing(frames, 'right', { strideHz, scaleProxy: 'shoulderSpan' }).travelPx
   if (left === null || right === null) throw new Error('fixture must yield a travel on both sides')
   return { left, right }
+}
+
+/** Flags the named keypoints `interpolated` on the frames `when` selects — positions untouched —
+ * which is how occlusion shows up on a side clip's far arm. */
+function withInterpolated(
+  frames: RobustPoseFrame[],
+  names: string[],
+  when: (index: number) => boolean,
+): RobustPoseFrame[] {
+  return frames.map((frame, i) =>
+    when(i)
+      ? {
+          ...frame,
+          keypoints: frame.keypoints.map((kp) =>
+            names.includes(kp.name) ? { ...kp, status: 'interpolated' as const } : kp,
+          ),
+        }
+      : frame,
+  )
 }
 
 /** The realistic fixture `armSwing.test.ts` uses for its shared-fit cases — stride-rate swing,
@@ -257,7 +276,7 @@ describe('computeArmSwingAmplitude', () => {
 
     const result = computeArmSwingAmplitude(frames, 'front')
     const strideHz = resolveStrideRateHz(frames, DEFAULT_HEURISTICS_CONFIG)!
-    const fit = computeSideSwing(frames, 'left', { strideHz }).fit
+    const fit = computeSideSwing(frames, 'left', { strideHz, scaleProxy: 'shoulderSpan' }).fit
 
     expect(trueTravelPx).toBeGreaterThan(44)
     expect(fit.ok && fit.peakToPeakAmplitude).toBeCloseTo(40, 0)
@@ -265,19 +284,79 @@ describe('computeArmSwingAmplitude', () => {
     expect(result.value! * TORSO_LENGTH_PX).toBeLessThanOrEqual(trueTravelPx + 1e-6)
   })
 
-  it('a side-view clip: still computed (never withheld), viewFit unsuitable, confidence capped near the 0.1 multiplier', () => {
-    const frames = buildArmSwingFrames({
-      ...BASE_PARAMS,
-      leftAmplitudePx: 40,
-      rightAmplitudePx: 40,
-    })
+  it('a side-view clip reads the near arm alone: tolerated, capped near 0.6, one exemplar', () => {
+    // The right arm is occluded on a third of the frames (interpolated there), so the LEFT arm —
+    // more directly-detected frames — is the near arm, and its travel alone is the value.
+    const frames = withInterpolated(
+      buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 20 }),
+      ['right_wrist'],
+      (i) => i % 3 === 0,
+    )
+    const strideHz = resolveStrideRateHz(frames, DEFAULT_HEURISTICS_CONFIG)!
+    const near = computeSideSwing(frames, 'left', { strideHz, scaleProxy: 'torsoLength' })
 
     const result = computeArmSwingAmplitude(frames, 'side')
 
-    expect(result.value).not.toBeNull() // still computed, per "never a silent wrong number"
-    expect(result.viewFit).toBe('unsuitable')
-    expect(result.confidence).toBeLessThan(0.15)
-    expect(result.caveat).toContain('side view')
+    expect(result.value).toBe(near.travelPx! / TORSO_LENGTH_PX)
+    expect(result.value!).toBeGreaterThanOrEqual((40 / TORSO_LENGTH_PX) * SAMPLING_FLOOR - 1e-9)
+    expect(result.viewFit).toBe('tolerated')
+    expect(result.confidence).toBeGreaterThan(0.5)
+    expect(result.confidence).toBeLessThanOrEqual(0.6)
+    expect(result.interpolatedFraction).toBe(0)
+    expect(result.caveat).toContain('near arm only')
+    expect(result.caveat ?? '').not.toContain('fit its trace much less cleanly')
+    expect(result.exemplars).toHaveLength(1)
+    expect(result.exemplars![0].side).toBe('left')
+  })
+
+  it('a side-view far arm that fits only noise does not null the near-arm reading', () => {
+    // From the front this is the "one arm fitting only noise" null; side-on the far arm is not
+    // consulted at all.
+    const frames = withInterpolated(
+      buildArmSwingFrames({
+        ...BASE_PARAMS,
+        leftAmplitudePx: 40,
+        rightAmplitudePx: 0,
+        rightJitterPx: 20,
+        seed: 7,
+      }),
+      ['right_wrist'],
+      (i) => i % 4 === 0,
+    )
+
+    expect(computeArmSwingAmplitude(frames, 'front').value).toBeNull()
+    const side = computeArmSwingAmplitude(frames, 'side')
+    expect(side.value).not.toBeNull()
+    expect(side.caveat).toContain('near arm only')
+  })
+
+  it('a side-view detected-count tie falls back to the both-arms rule', () => {
+    // Nothing interpolated on either arm: a tie, so the side clip reads the mean of both arms
+    // (over the torso-stabilized fits) and a noise-only arm nulls it, exactly as from the front.
+    const tied = buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 20 })
+    const strideHz = resolveStrideRateHz(tied, DEFAULT_HEURISTICS_CONFIG)!
+    const left = computeSideSwing(tied, 'left', { strideHz, scaleProxy: 'torsoLength' }).travelPx!
+    const right = computeSideSwing(tied, 'right', { strideHz, scaleProxy: 'torsoLength' }).travelPx!
+
+    const result = computeArmSwingAmplitude(tied, 'side')
+
+    expect(result.value).toBe((left + right) / (2 * TORSO_LENGTH_PX))
+    expect(result.viewFit).toBe('tolerated')
+    expect(result.caveat ?? '').not.toContain('near arm only')
+    expect(result.exemplars).toHaveLength(2)
+
+    const noisyTie = computeArmSwingAmplitude(
+      buildArmSwingFrames({
+        ...BASE_PARAMS,
+        leftAmplitudePx: 40,
+        rightAmplitudePx: 0,
+        rightJitterPx: 20,
+        seed: 7,
+      }),
+      'side',
+    )
+    expect(noisyTie.value).toBeNull()
+    expect(noisyTie.caveat).toContain('too irregular to measure')
   })
 
   it('an ambiguous-view clip: still computed, viewFit unsuitable, confidence capped near the 0.2 multiplier', () => {

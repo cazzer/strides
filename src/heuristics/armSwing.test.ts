@@ -177,7 +177,7 @@ const SIDES = ['left', 'right'] as const
 
 /** Every fixture below swings at `BASE_PARAMS.swingFreqHz` unless it says otherwise, so the stride
  * rate `computeSideSwing` is anchored on is that same frequency. */
-const AT_STRIDE = { strideHz: BASE_PARAMS.swingFreqHz }
+const AT_STRIDE = { strideHz: BASE_PARAMS.swingFreqHz, scaleProxy: 'shoulderSpan' as const }
 
 /** The anchored grid `computeSideSwing` searches, restated for the raw-pixel reference fits. */
 const ANCHORED_GRID = {
@@ -251,7 +251,7 @@ describe('computeSideSwing — searched around the stride rate', () => {
       })
 
       for (const side of SIDES) {
-        const { fit } = computeSideSwing(frames, side, { strideHz: swingFreqHz })
+        const { fit } = computeSideSwing(frames, side, { strideHz: swingFreqHz, scaleProxy: 'shoulderSpan' })
         expect(fit.ok).toBe(true)
         if (fit.ok) {
           expect(Math.abs(fit.frequencyHz - swingFreqHz)).toBeLessThanOrEqual(
@@ -272,7 +272,7 @@ describe('computeSideSwing — searched around the stride rate', () => {
       rightAmplitudePx: 40,
     })
 
-    const { fit } = computeSideSwing(frames, 'left', { strideHz: 0.2 })
+    const { fit } = computeSideSwing(frames, 'left', { strideHz: 0.2, scaleProxy: 'shoulderSpan' })
     expect(fit.ok).toBe(true)
     if (fit.ok) {
       expect(Math.abs(fit.frequencyHz - 0.2)).toBeLessThanOrEqual(
@@ -399,7 +399,7 @@ function framesFromWave(params: {
 }
 
 function travelOf(frames: RobustPoseFrame[], strideHz: number): number {
-  const swing = computeSideSwing(frames, 'left', { strideHz })
+  const swing = computeSideSwing(frames, 'left', { strideHz, scaleProxy: 'shoulderSpan' })
   if (swing.travelPx === null) throw new Error('fixture must yield a travel')
   return swing.travelPx
 }
@@ -444,7 +444,7 @@ describe('computeSideSwing — per-stride travel', () => {
       fps: 60,
       wave: (t) => 20 * (Math.sin(TAU * t) + 0.5 * Math.sin(2 * TAU * t - Math.PI / 2)),
     })
-    const swing = computeSideSwing(frames, 'left', { strideHz: 1.0 })
+    const swing = computeSideSwing(frames, 'left', { strideHz: 1.0, scaleProxy: 'shoulderSpan' })
 
     expect(swing.fit.ok && swing.fit.peakToPeakAmplitude).toBeCloseTo(40, 0)
     expect(swing.travelPx! / 45).toBeGreaterThan(0.98)
@@ -458,7 +458,7 @@ describe('computeSideSwing — per-stride travel', () => {
       return 20 * (p < 0.5 ? 4 * p - 1 : 3 - 4 * p)
     }
     const frames = framesFromWave({ durationSec: 4, fps: 60, wave: triangle })
-    const swing = computeSideSwing(frames, 'left', { strideHz: 1.0 })
+    const swing = computeSideSwing(frames, 'left', { strideHz: 1.0, scaleProxy: 'shoulderSpan' })
 
     expect(swing.fit.ok && swing.fit.peakToPeakAmplitude).toBeCloseTo((8 / Math.PI ** 2) * 40, 0)
     expect(swing.travelPx!).toBeGreaterThanOrEqual(40 * (1 - 4 / 60) - 1e-9)
@@ -764,6 +764,104 @@ describe('computeSideSwing — scale stabilization (strides-egw)', () => {
       // merely within an epsilon of it — deleting that rung would leave a 1±1e-15 factor that
       // still passes any toBeCloseTo.
       expect(fittedAmplitude(frames, side)).toBe(rawPixelAmplitude(frames, side))
+    }
+  })
+})
+
+/**
+ * Side-on, the two shoulders superimpose: the inter-shoulder span collapses to a few jittering
+ * pixels (live: median 37 px / p5 5 px on side-landscape, 14 px / p5 3.4 px on side-portrait), so
+ * a side clip is stabilized by per-frame torso length instead (`strides-eiil.3`).
+ */
+describe('computeSideSwing — side-on scale proxy (torso length)', () => {
+  /** A side-on subject growing `growth`× on screen, swinging 40 px (body units, at g = 1) on the
+   * left wrist, whose shoulders sit 0–5 px apart with jitter. */
+  function sideOnFrames(growth: number, seed = 3): RobustPoseFrame[] {
+    const jitter = makeJitter(seed)
+    const fps = 30
+    const durationSec = 4
+    return Array.from({ length: fps * durationSec }, (_, i) => {
+      const t = i / fps
+      const g = Math.pow(growth, t / durationSec)
+      const centerX = 200
+      const spread = 2.5 + 2.5 * jitter()
+      const wristOffset = (BASE_WRIST_OFFSET_Y - 20 * Math.sin(TAU * 1.5 * t)) * g
+      return buildFrame(
+        {
+          left_shoulder: { x: centerX - spread / 2, y: SHOULDER_Y },
+          right_shoulder: { x: centerX + spread / 2, y: SHOULDER_Y },
+          left_hip: { x: centerX, y: SHOULDER_Y + TORSO_LENGTH_PX * g },
+          right_hip: { x: centerX, y: SHOULDER_Y + TORSO_LENGTH_PX * g },
+          left_wrist: { x: centerX, y: SHOULDER_Y + wristOffset },
+          right_wrist: { x: centerX, y: SHOULDER_Y + wristOffset },
+        },
+        t,
+      )
+    })
+  }
+  const SIDE_ON = { strideHz: 1.5, scaleProxy: 'torsoLength' } as const
+  const SHOULDER = { strideHz: 1.5, scaleProxy: 'shoulderSpan' } as const
+
+  it('recovers the body-unit travel of a growing subject, where the shoulder span inflates it', () => {
+    const grown = sideOnFrames(3)
+    const torsoTravel = computeSideSwing(grown, 'left', SIDE_ON).travelPx!
+    const torsoRef = (() => {
+      // The stabilized series is at the clip's MEDIAN torso, so express the travel in torso units.
+      const lengths = grown.map((frame) => {
+        const at = (name: string) => frame.keypoints.find((kp) => kp.name === name)!.y!
+        return at('left_hip') - at('left_shoulder')
+      })
+      return [...lengths].sort((a, b) => a - b)[Math.floor(lengths.length / 2)]
+    })()
+    const shoulderFit = computeSideSwing(grown, 'left', SHOULDER).fit
+    const torsoFit = computeSideSwing(grown, 'left', SIDE_ON).fit
+    const still = computeSideSwing(sideOnFrames(1), 'left', SIDE_ON).travelPx!
+
+    // Body units: the static clip reads 40 / 150, and so must the growing one.
+    expect(torsoTravel / torsoRef).toBeCloseTo(still / TORSO_LENGTH_PX, 2)
+    expect(still / TORSO_LENGTH_PX).toBeGreaterThan((40 / TORSO_LENGTH_PX) * 0.95)
+    // The superimposed shoulders carry no trace of the growth, so the shoulder-span "stabilized"
+    // series still has its amplitude modulated 1× → 3× across the window — the constant-amplitude
+    // premise the fit assumes is violated — while the torso-stabilized one is a sinusoid again.
+    expect(shoulderFit.ok && torsoFit.ok).toBe(true)
+    if (shoulderFit.ok && torsoFit.ok) {
+      expect(shoulderFit.sinusoidR2).toBeLessThan(0.95)
+      expect(torsoFit.sinusoidR2).toBeGreaterThan(0.999)
+    }
+  })
+
+  it('a constant-scale side-on clip is the raw-pixel computation exactly — the no-op holds for both proxies', () => {
+    const frames = buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 20 })
+
+    for (const side of SIDES) {
+      const torsoFit = computeSideSwing(frames, side, { ...AT_STRIDE, scaleProxy: 'torsoLength' }).fit
+      expect(torsoFit.ok && torsoFit.peakToPeakAmplitude).toBe(rawPixelAmplitude(frames, side))
+    }
+  })
+
+  it('with too few torso frames the torso stabilization is an exact no-op', () => {
+    // Hips resolve on only 8 frames — below MIN_SCALE_TREND_SAMPLES — on a genuinely growing clip.
+    const frames = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 20,
+      scaleGrowthFactor: 3,
+    }).map((frame, i) =>
+      i % 15 === 0
+        ? frame
+        : {
+            ...frame,
+            keypoints: frame.keypoints.map((kp) =>
+              kp.name === 'left_hip' || kp.name === 'right_hip'
+                ? { ...kp, x: null, y: null, score: 0, status: 'unrecoverable' as const }
+                : kp,
+            ),
+          },
+    )
+
+    for (const side of SIDES) {
+      const torsoFit = computeSideSwing(frames, side, { ...AT_STRIDE, scaleProxy: 'torsoLength' }).fit
+      expect(torsoFit.ok && torsoFit.peakToPeakAmplitude).toBe(rawPixelAmplitude(frames, side))
     }
   })
 })

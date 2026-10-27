@@ -232,7 +232,8 @@ spurious below-quality-gate one.
 - **WHEN** a side-on subject grows on screen while the two shoulders nearly superimpose, so the
   inter-shoulder span jitters near zero
 - **THEN** the torso-length-stabilized series recovers the body-unit swing travel, where a
-  shoulder-span-stabilized series would be inflated by dividing by a near-zero, noisy span
+  shoulder-span-stabilized series — divided by a near-zero span that carries no trace of the
+  growth — does not
 
 ## REMOVED Requirements
 
