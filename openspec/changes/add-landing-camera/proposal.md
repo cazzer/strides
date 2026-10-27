@@ -11,10 +11,11 @@ reduced-motion still had the foot off the ground. The tour fell back to `legsSid
 - A new camera preset `landingSide`: a side view framed per parameter set on hip-mid and the near
   leg's landing (`landingCamera(values)`). The renderer reframes it on the values it draws.
 - While the camera is `landingSide`, playback loops a window of the near leg's phase from 0.15
-  before its contact to 0.10 after it, at the area's 0.4× rate. Entering plays on into the window; leaving lets the
-  phase run the whole cycle again.
+  before its contact to 0.10 after it, at the area's 0.4× rate. Each loop rests about 300 ms on
+  the contact frame and briefly on its last frame. Entering plays on into the window; leaving
+  lets the phase run the whole cycle again.
 - The still frame on `landingSide` with no keyed focus is the near leg's contact, so the
-  reduced-motion still shows the foot on the ground.
+  reduced-motion still shows the foot on the ground. Pausing on `landingSide` also shows it.
 - Contact marks meet the points their metrics read. The overstride guides are plumbs from hip-mid
   and the contact ankle. The foot-strike offset runs at ankle height from under the knee to the
   ankle, with its label under the heel (or under the toe on a forefoot strike). Ground-lane labels

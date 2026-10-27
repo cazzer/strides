@@ -17,7 +17,15 @@
 - [x] 3.3 runnerAnnotations.test.ts: plumb guides, foot-strike geometry and label anchor (heel / toe), stacking, held phase without a key
 - [x] 3.4 ModelRunner.test.tsx: tween to the landing frame and window playback, leaving without a jump, bound change reframes, reduced-motion contact on the ground (three focuses), marks on the live leg
 
-## 4. Verification
+## 4. Review round 1
 
-- [ ] 4.1 Gates: lint, `tsc -b`, vitest (runner, results, full), `openspec validate add-landing-camera --strict`, `vite build`
-- [ ] 4.2 Real-app screenshots of the tour stops (Landing included) and the summary's Landing row, plus sandbox crops at 390; check the ps19.4 sink and label crowding
+- [x] 4.a Holds on contact (300 ms) and the window's end (150 ms) through `stepPlayback`; restart jump measured (design.md D16)
+- [x] 4.b A still landing figure (paused too) stands at contact
+- [x] 4.c Frame top from hip-mid's highest point in the window, margin 0.25; bounce cases in the framing tests
+- [x] 4.d Stacked ground-lane labels share one centre; the stack test checks a whole line pitch
+- [x] 4.e Component tests: the hold, pausing mid-loop, entering the window frame by frame
+
+## 5. Verification
+
+- [x] 5.1 Gates: lint, `tsc -b`, vitest (runner, results, full), `openspec validate add-landing-camera --strict`, `vite build`
+- [x] 5.2 Real-app screenshots of the tour stops (Landing included) and the summary's Landing row, plus sandbox crops at 390; check the ps19.4 sink and label crowding

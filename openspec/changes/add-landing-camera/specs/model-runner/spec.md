@@ -12,8 +12,8 @@ round, and move every projected joint continuously in t.
 
 `landingSide` SHALL be a contact-tracking side view: `landingCamera(values)` frames, for one
 parameter set, hip-mid and the near (right) leg's knee, ankle, heel and toe through the landing
-phase window around that leg's contact, with the span from just above hip-mid at contact to below
-the ground (room for the ground-lane labels) inside the frame's height. The preset itself SHALL be
+phase window around that leg's contact, with the span from just above hip-mid's highest point in
+that window to below the ground (room for the ground-lane labels) inside the frame's height. The preset itself SHALL be
 the neutral parameters' landing frame; the renderer SHALL reframe it on the values it draws.
 
 #### Scenario: Side view
@@ -33,7 +33,7 @@ the neutral parameters' landing frame; the renderer SHALL reframe it on the valu
 - **THEN** the joints that preset focuses on lie within the documented frame half-height
 
 #### Scenario: The landing camera frames the landing at any landing offset
-- **WHEN** the runner, with its landing offset anywhere from −0.3 to 0.7 torso lengths, is projected through `landingCamera` of its own values at any phase of the landing window
+- **WHEN** the runner, with its landing offset anywhere from −0.3 to 0.7 torso lengths or its bounce at the top of its range, is projected through `landingCamera` of its own values at any phase of the landing window
 - **THEN** hip-mid and the near knee, ankle, heel and toe lie inside the frame's half-width and half-height
 
 ### Requirement: The focus area is accented and annotated with its metric's own value
@@ -59,7 +59,7 @@ offset, and the foot-strike offset SHALL run at ankle height from under the knee
 knee) to the contact ankle. The foot-strike label SHALL hang under the contact keypoint: the heel
 when the foot lands heel-down, the toe on a forefoot strike. Labels hanging below the ground (the
 ground lane) SHALL NOT overlap: two or more SHALL share the lane's lowest anchor height and stack in
-focus order.
+focus order as one block, centred on the first label's anchor.
 
 #### Scenario: Trunk lean is annotated
 - **WHEN** trunk lean is measured at 5° and in focus
@@ -91,7 +91,7 @@ focus order.
 
 #### Scenario: Overstride and foot-strike labels stack
 - **WHEN** overstriding and foot strike are both in focus
-- **THEN** both labels sit at the same lane height, the second offset below by the first's lines
+- **THEN** both labels share one centre and lane height, the second's first line at least a line pitch below the first's last line
 
 ### Requirement: The runner animates at most thirty frames a second and only while seen
 
@@ -102,7 +102,10 @@ document is hidden or the figure is off screen, and resume without a jump.
 
 While the camera is `landingSide`, playback SHALL loop a window of the cycle around the near leg's
 contact (late swing into early stance) at the playback rate given, starting again from the
-window's start each time it passes its end. A figure outside the window when the camera changes to
+window's start each time it passes its end. Each pass SHALL rest on the exact contact frame for
+about 300 ms of wall-clock time, and briefly on the window's last frame before starting again;
+playback SHALL only move forward, never back through the window. The rests SHALL NOT lift the
+thirty-frame cap. A figure outside the window when the camera changes to
 `landingSide` SHALL play on into it without a jump, and leaving `landingSide` SHALL let the phase
 run round the whole cycle again from where it is. A change of the drawn values that moves the
 contact SHALL reframe the landing camera like any camera change.
@@ -123,6 +126,14 @@ contact SHALL reframe the landing camera like any camera change.
 - **WHEN** the runner plays with the camera at `landingSide` at 0.4×
 - **THEN** every drawn phase lies inside the landing window, and the loop passes through the near leg's contact again and again
 
+#### Scenario: Each landing loop rests on the contact
+- **WHEN** the runner plays with the camera at `landingSide`
+- **THEN** once per loop the drawn pose is exactly the contact pose for about 300 ms, and no more than thirty frames a second are drawn
+
+#### Scenario: Entering the landing window
+- **WHEN** the runner plays with the camera at `landingSide` from a phase outside the landing window
+- **THEN** every frame steps the phase a little forward until it is inside the window
+
 #### Scenario: Leaving the landing camera
 - **WHEN** the camera changes from `landingSide` to another preset while the runner plays
 - **THEN** the phase continues without a jump and runs outside the landing window again
@@ -137,7 +148,9 @@ Under reduced motion the runner SHALL NOT autoplay; it SHALL hold a still pose u
 presses play. The still pose (under reduced motion, while paused, and on the first frame) SHALL be
 the key phase of the first focus parameter that has one, so that limb lies exactly on its
 annotation, and otherwise the near leg's contact while the camera is `landingSide`, and mid-stance
-otherwise. The key phase SHALL be taken on the same leg in every
+otherwise. While the camera is `landingSide`, every still state (paused included, wherever in the
+landing loop the reader pauses) SHALL show that still pose, so the contact marks always meet the
+drawn leg. The key phase SHALL be taken on the same leg in every
 camera (the leg a side view shows nearer), so a camera change never moves the still pose. A still
 figure SHALL move to a new focus's still pose, and reduced motion switching on while the reader has
 not chosen to play SHALL stop the figure at its still pose.
@@ -153,3 +166,7 @@ not chosen to play SHALL stop the figure at its still pose.
 #### Scenario: Reduced motion on the landing camera
 - **WHEN** the runner mounts with reduced motion preferred and the camera at `landingSide`, with a landing focus, a focus with no key phase, or none
 - **THEN** it holds the near leg's contact with that foot's lowest point on the drawn ground, and no animation frame is pending
+
+#### Scenario: Pausing on the landing camera
+- **WHEN** the reader pauses the runner partway through a landing loop
+- **THEN** the figure stands at the contact, with the overstride's ankle plumb starting at the drawn ankle
