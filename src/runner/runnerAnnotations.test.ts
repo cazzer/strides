@@ -177,14 +177,17 @@ describe('which annotations are drawn', () => {
     ])
   })
 
-  it('draws no limb-shaped guide: every guide is a short two-point line', () => {
+  it('draws no limb-shaped guide: every guide is a two-point line, short unless a plumb', () => {
     for (const id of RUNNER_PARAM_IDS) {
       if (id === 'cadence') continue
       for (const yaw of [0, 90]) {
         for (const guide of only(bindAll(), id, yaw).guides) {
           expect(guide).toHaveLength(2)
           const [a, b] = guide
-          expect(Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z)).toBeLessThan(MODEL_PROPORTIONS.thigh)
+          const plumb = a.x === b.x && a.z === b.z
+          if (!plumb) {
+            expect(Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z)).toBeLessThan(MODEL_PROPORTIONS.thigh)
+          }
         }
       }
     }
@@ -192,6 +195,15 @@ describe('which annotations are drawn', () => {
 })
 
 describe('the held phase', () => {
+  it('is the held phase asked for without a keyed focus, and the keyed one with', () => {
+    const contact = GAIT_PHASES.rightContact
+    expect(plan(bindAll(), [], { heldPhaseWithoutKey: contact }).heldPhase).toBe(contact)
+    expect(plan(bindAll(), ['torsoPitch'], { heldPhaseWithoutKey: contact }).heldPhase).toBe(contact)
+    expect(
+      plan(bindAll(), ['peakThighAngle'], { heldPhaseWithoutKey: contact }).heldPhase,
+    ).toBe(phaseForLeg('right', GAIT_PHASES.peakThigh))
+  })
+
   it('is mid-stance without a keyed focus', () => {
     expect(plan(bindAll(), []).heldPhase).toBe(GAIT_PHASES.midStance)
     expect(plan(bindAll(), ['torsoPitch', 'pelvisBounce', 'armSwing']).heldPhase).toBe(
@@ -289,21 +301,79 @@ describe('the marks are the drawn values and lie on the live figure', () => {
     expect(screenLength(span[0], span[1], SIDE)).toBeCloseTo(values.armSwing, 12)
   })
 
-  it('landing: the offset runs from hip-mid to the live contact ankle', () => {
+  it('landing: the offset runs from hip-mid to the live contact ankle, with plumbs from both', () => {
     const phase = heldFor('landingOffset')
-    const [[start, end]] = only(bound, 'landingOffset').marks
-    expect(start.x).toBeCloseTo(hipMid(phase, bound).x, 12)
-    expect(end.x).toBeCloseTo(liveJoint(phase, bound, 'right_ankle').x, 12)
+    const annotation = only(bound, 'landingOffset')
+    const [[start, end]] = annotation.marks
+    const hip = hipMid(phase, bound)
+    const ankle = liveJoint(phase, bound, 'right_ankle')
+    expect(start.x).toBeCloseTo(hip.x, 12)
+    expect(end.x).toBeCloseTo(ankle.x, 12)
     expect(screenLength(start, end, SIDE)).toBeCloseTo(values.landingOffset, 9)
     expect(start.y).toBeLessThan(GROUND_Y)
+    // The guides meet the two points the metric reads: hip-mid and the contact ankle.
+    const [hipGuide, ankleGuide] = annotation.guides
+    expect(hipGuide[0].x).toBeCloseTo(hip.x, 12)
+    expect(hipGuide[0].y).toBeCloseTo(hip.y, 12)
+    expect(hipGuide[1].x).toBeCloseTo(hip.x, 12)
+    expect(hipGuide[1].y).toBeLessThan(start.y)
+    expect(ankleGuide[0]).toEqual({ x: ankle.x, y: ankle.y, z: ankle.z })
+    expect(ankleGuide[1].y).toBeLessThan(end.y)
   })
 
-  it('foot strike: the offset runs from the live knee to the live ankle at contact', () => {
+  it('foot strike: the offset runs at ankle height from under the live knee to the live ankle', () => {
     const phase = heldFor('contactShankOffset')
-    const [[start, end]] = only(bound, 'contactShankOffset').marks
-    expect(start.x).toBeCloseTo(liveJoint(phase, bound, 'right_knee').x, 12)
-    expect(end.x).toBeCloseTo(liveJoint(phase, bound, 'right_ankle').x, 12)
-    expect(screenLength(start, end, SIDE)).toBeCloseTo(values.contactShankOffset, 9)
+    const annotation = only(bound, 'contactShankOffset')
+    const [[start, end]] = annotation.marks
+    const knee = liveJoint(phase, bound, 'right_knee')
+    const ankle = liveJoint(phase, bound, 'right_ankle')
+    expect(start.x).toBeCloseTo(knee.x, 12)
+    expect(end.x).toBeCloseTo(ankle.x, 12)
+    expect(start.y).toBeCloseTo(ankle.y, 12)
+    expect(end.y).toBeCloseTo(ankle.y, 12)
+    expect(screenLength(start, end, SIDE)).toBeCloseTo(values.contactShankOffset, 12)
+    // A plumb from the live knee down past the mark.
+    const [kneeGuide] = annotation.guides
+    expect(kneeGuide[0]).toEqual({ x: knee.x, y: knee.y, z: knee.z })
+    expect(kneeGuide[1].x).toBe(knee.x)
+    expect(kneeGuide[1].y).toBeLessThan(ankle.y)
+  })
+
+  it('foot strike: the label hangs under the heel heel-down, under the toe on a forefoot strike', () => {
+    for (const [value, keypoint] of [
+      [0.12, 'right_heel'],
+      [-0.12, 'right_foot_index'],
+    ] as const) {
+      const strike = bindAll({ footStrikePattern: makeMetric('footStrikePattern', { value }) })
+      const phase = plan(strike, ['contactShankOffset']).heldPhase
+      const { label } = only(strike, 'contactShankOffset')
+      const point = liveJoint(phase, strike, keypoint)
+      expect(label.side).toBe('below')
+      expect(label.anchor).toEqual({ x: point.x, y: point.y, z: point.z })
+      expect(point.y).toBeCloseTo(GROUND_Y, 9)
+      expect(label.offsetLines).toBeUndefined()
+    }
+  })
+
+  it('stacks the ground-lane labels in focus order, centred under the first, at the lane’s lowest anchor', () => {
+    for (const focus of [
+      ['landingOffset', 'contactShankOffset'],
+      ['contactShankOffset', 'landingOffset'],
+    ] as RunnerParamId[][]) {
+      const annotations = annotate(bound, focus)
+      const [first, second] = annotations.map((a) => a.label)
+      const landingMarkY = only(bound, 'landingOffset').marks[0][0].y
+      expect(first.anchor.y).toBe(landingMarkY)
+      expect(second.anchor.y).toBe(landingMarkY)
+      const own = only(bound, focus[0]).label.anchor.x
+      expect(first.anchor.x).toBe(own)
+      expect(second.anchor.x).toBe(own)
+      expect(first.offsetLines).toBe(0)
+      expect(second.offsetLines).toBe(first.lines.length)
+    }
+    // Labels off the ground lane are left alone.
+    const [lean] = annotate(bound, ['torsoPitch', 'landingOffset', 'contactShankOffset'])
+    expect(lean.label.offsetLines).toBeUndefined()
   })
 
   it('step width: from the midline to the live contact ankle, value × hip width', () => {

@@ -5,12 +5,28 @@ import { makeMetric } from '../results/__fixtures__/metricResult'
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { bindAll, bindOnly } from './__fixtures__/boundParams'
-import { CAMERA_PRESETS, projectPoint, projectPose } from './camera'
+import {
+  CAMERA_PRESETS,
+  LANDING_CONTACT_HOLD_MS,
+  LANDING_PHASE_WINDOW,
+  landingCamera,
+  projectPoint,
+  projectPose,
+} from './camera'
 import { GAIT_PHASES, GROUND_Y, poseAt } from './gaitModel'
 import { ModelRunner, RUNNER_CAPTION, type ModelRunnerProps } from './ModelRunner'
 import { phaseForLeg } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
-import { FAR_OPACITY, RUNNER_PARAM_IDS, UNFOCUSED_OPACITY, edgeKey } from './runnerScene'
+import {
+  FAR_OPACITY,
+  FRAME_MS,
+  LABEL_LINE_HEIGHT,
+  RUNNER_PARAM_IDS,
+  RUNNER_PX,
+  UNFOCUSED_OPACITY,
+  clampLabelX,
+  edgeKey,
+} from './runnerScene'
 import type { CameraPreset, CameraState, RunnerParams } from './types'
 
 const LABEL = 'Wireframe runner'
@@ -624,5 +640,239 @@ describe('ModelRunner review round 2', () => {
     expect(maxStep).toBeLessThan(0.15)
     expectPose(GAIT_PHASES.midStance, 'torsoSide', { ...VALUES, torsoPitch: 20 })
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('ModelRunner landing camera', () => {
+  const LANDING_FOCUS = { metricIds: ['overstriding', 'footStrikePattern'] } as const
+  const GRID = 600
+  const TRACKED: KeypointName[] = ['left_ankle', 'right_ankle', 'right_knee', 'left_knee']
+
+  /** The cycle phase whose pose, seen through `camera`, best matches the drawn tracked joints. */
+  function drawnPhase(camera: CameraState, values: RunnerParams = VALUES): number {
+    const drawn = TRACKED.map(joint)
+    let best = 0
+    let bestError = Infinity
+    for (let i = 0; i < GRID; i += 1) {
+      const projected = projectPose(poseAt(i / GRID, values), camera)
+      const error = TRACKED.reduce((sum, name, k) => {
+        const p = projected[COMMON_KEYPOINT_NAMES.indexOf(name)]
+        return sum + Math.hypot(p.x - drawn[k].cx, p.y - drawn[k].cy)
+      }, 0)
+      if (error < bestError) {
+        bestError = error
+        best = i / GRID
+      }
+    }
+    // The grid's spacing against the swing foot's speed: a mismatched phase errs by a whole unit.
+    expect(bestError).toBeLessThan(0.1)
+    return best
+  }
+
+  const inWindow = (phase: number) =>
+    phase >= LANDING_PHASE_WINDOW.start - 2 / GRID &&
+    phase <= LANDING_PHASE_WINDOW.start + LANDING_PHASE_WINDOW.length + 2 / GRID
+
+  it('tweens to the landing frame of the drawn values, and plays only the window around contact', () => {
+    const { rerenderWith } = setup({ camera: 'legsSide', playbackRate: 0.4 })
+    rerenderWith({ camera: 'landingSide', focus: LANDING_FOCUS })
+    advance(700)
+    const camera = landingCamera(VALUES)
+    // Played on into the window (no jump on entry); then it stays there.
+    advance(2000)
+    const seen: number[] = []
+    for (let i = 0; i < 40; i += 1) {
+      advance(100)
+      seen.push(drawnPhase(camera))
+    }
+    for (const phase of seen) expect(inWindow(phase), String(phase)).toBe(true)
+    expect(Math.min(...seen)).toBeLessThan(0.45)
+    expect(Math.max(...seen)).toBeGreaterThan(0.55)
+  })
+
+  /** Whether every drawn joint is the contact pose's, through the landing camera. */
+  function atContact(camera: CameraState): boolean {
+    const projected = projectPose(poseAt(GAIT_PHASES.rightContact, VALUES), camera)
+    return COMMON_KEYPOINT_NAMES.every(
+      (name, j) =>
+        Math.abs(joint(name).cx - projected[j].x) < 1e-3 && Math.abs(joint(name).cy - projected[j].y) < 1e-3,
+    )
+  }
+
+  it('rests on the exact contact frame for the hold once per loop, within the thirty-frame cap', () => {
+    setup({ camera: 'landingSide', focus: LANDING_FOCUS, playbackRate: 0.4 })
+    const camera = landingCamera(VALUES)
+    // Leave the mount's contact frame first, so every stretch counted below is a hold.
+    advance(200)
+    expect(atContact(camera)).toBe(false)
+    const stretches: number[] = []
+    let run = 0
+    let previous = joint('right_ankle')
+    let draws = 0
+    for (let t = 0; t < 4000; t += 16) {
+      advance(16)
+      const now = joint('right_ankle')
+      if (now.cx !== previous.cx || now.cy !== previous.cy) draws += 1
+      previous = now
+      if (atContact(camera)) run += 16
+      else if (run > 0) {
+        stretches.push(run)
+        run = 0
+      }
+    }
+    // About one loop a second (0.25 of a cycle at 0.4× plus both holds): one contact rest each.
+    expect(stretches.length).toBeGreaterThanOrEqual(3)
+    expect(stretches.length).toBeLessThanOrEqual(5)
+    for (const ms of stretches) {
+      expect(ms).toBeGreaterThanOrEqual(LANDING_CONTACT_HOLD_MS - 2 * FRAME_MS)
+      expect(ms).toBeLessThanOrEqual(LANDING_CONTACT_HOLD_MS + 2 * FRAME_MS)
+    }
+    expect(draws).toBeLessThanOrEqual(4 * 30)
+  })
+
+  it('pausing on the landing camera stands the figure at the contact, so the marks meet it', () => {
+    const { container } = setup({ camera: 'landingSide', focus: LANDING_FOCUS, playbackRate: 0.4 })
+    const camera = landingCamera(VALUES)
+    let phase = drawnPhase(camera)
+    for (let i = 0; i < 120 && !(phase > 0.38 && phase < 0.43); i += 1) {
+      advance(16)
+      phase = drawnPhase(camera)
+    }
+    expect(phase).toBeGreaterThan(0.38)
+    expect(phase).toBeLessThan(0.43)
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    expect(vi.getTimerCount()).toBe(0)
+    expectPose(GAIT_PHASES.rightContact, camera)
+    const guides = container.querySelectorAll('[data-annotation="landingOffset"] [data-role="guide"]')
+    const [ankleTop] = pathEnds(guides[1].getAttribute('d'))
+    expect(ankleTop.x).toBeCloseTo(joint('right_ankle').cx, 3)
+    expect(ankleTop.y).toBeCloseTo(joint('right_ankle').cy, 3)
+    // Playing again starts from the contact.
+    fireEvent.click(screen.getByRole('button', { name: 'Play runner' }))
+    advance(100)
+    expect(inWindow(drawnPhase(camera))).toBe(true)
+  })
+
+  it('enters the window from outside by playing on: every frame steps forward a little', () => {
+    // A knee-flexion focus holds its own key phase (0.12), outside the landing window.
+    setup({ camera: 'landingSide', focus: { metricIds: ['kneeFlexion'] }, playbackRate: 0.4 })
+    const camera = landingCamera(VALUES)
+    // The loop's first frame only sets its clock.
+    advance(FRAME_MS + 1)
+    let previous = drawnPhase(camera)
+    expect(inWindow(previous)).toBe(false)
+    const seen = [previous]
+    for (let i = 0; i < 30; i += 1) {
+      advance(FRAME_MS + 1)
+      const phase = drawnPhase(camera)
+      const step = (phase - previous + 1) % 1
+      expect(step, `${previous} → ${phase}`).toBeGreaterThan(0)
+      expect(step, `${previous} → ${phase}`).toBeLessThan(0.03)
+      seen.push(phase)
+      previous = phase
+      // Up to the contact hold, which is the next thing that stops it.
+      if (phase > GAIT_PHASES.rightContact - 0.05) break
+    }
+    expect(Math.min(...seen)).toBeLessThan(LANDING_PHASE_WINDOW.start)
+    expect(Math.max(...seen)).toBeGreaterThan(LANDING_PHASE_WINDOW.start)
+  })
+
+  it('enters the window by playing on, and leaving it runs the whole cycle again without a jump', () => {
+    const { rerenderWith } = setup({ camera: 'landingSide', playbackRate: 0.4 })
+    const camera = landingCamera(VALUES)
+    // Held at contact on the first frame: inside the window.
+    expect(drawnPhase(camera)).toBeCloseTo(GAIT_PHASES.rightContact, 2)
+    advance(1500)
+    expect(inWindow(drawnPhase(camera))).toBe(true)
+
+    rerenderWith({ camera: CAMERA_PRESETS.legsSide, playbackRate: 0.4 })
+    advance(700)
+    let previous = drawnPhase(CAMERA_PRESETS.legsSide)
+    const seen: number[] = []
+    for (let i = 0; i < 40; i += 1) {
+      advance(100)
+      const phase = drawnPhase(CAMERA_PRESETS.legsSide)
+      const step = (phase - previous + 1) % 1
+      expect(step, `${previous} → ${phase}`).toBeLessThan(0.1)
+      seen.push(phase)
+      previous = phase
+    }
+    expect(seen.some((phase) => !inWindow(phase))).toBe(true)
+  })
+
+  it('reframes when a bound value moves the contact, tweening like any camera change', () => {
+    const { rerenderWith } = setup({ camera: 'landingSide', focus: LANDING_FOCUS })
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    const big = bindAll({ overstriding: makeMetric('overstriding', { value: 0.6 }) })
+    const bigValues = runnerParamValues(big)
+    expect(bigValues.landingOffset).not.toBe(VALUES.landingOffset)
+    rerenderWith({ params: big })
+    expect(vi.getTimerCount()).toBe(1)
+    advance(700)
+    expectPose(GAIT_PHASES.rightContact, landingCamera(bigValues), bigValues)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  for (const focus of [LANDING_FOCUS, { metricIds: ['trunkLean'] } as const, undefined]) {
+    it(`under reduced motion holds the contact with the near foot on the ground (focus ${focus?.metricIds.join('+') ?? 'none'})`, () => {
+      mockReducedMotion(true)
+      const { container } = setup({ camera: 'landingSide', focus })
+      const camera = landingCamera(VALUES)
+      expectPose(GAIT_PHASES.rightContact, camera)
+      expect(vi.getTimerCount()).toBe(0)
+      const pose = poseAt(GAIT_PHASES.rightContact, VALUES)
+      const lowest = Math.min(
+        ...(['right_ankle', 'right_heel', 'right_foot_index'] as const).map(
+          (name) => pose[COMMON_KEYPOINT_NAMES.indexOf(name)].y,
+        ),
+      )
+      expect(Math.abs(lowest - GROUND_Y)).toBeLessThan(1e-9)
+      const groundY = Number(container.querySelector('[data-ground]')?.getAttribute('y1'))
+      const drawnLowest = Math.max(
+        ...(['right_ankle', 'right_heel', 'right_foot_index'] as const).map((name) => joint(name).cy),
+      )
+      expect(drawnLowest).toBeCloseTo(groundY, 3)
+      advance(1000)
+      expectPose(GAIT_PHASES.rightContact, camera)
+    })
+  }
+
+  it('draws the landing marks on the live leg: guides meet hip-mid and the ankle, the labels stacked as one block', () => {
+    mockReducedMotion(true)
+    const { container } = setup({ camera: 'landingSide', focus: LANDING_FOCUS })
+    const hip = {
+      x: (joint('left_hip').cx + joint('right_hip').cx) / 2,
+      y: (joint('left_hip').cy + joint('right_hip').cy) / 2,
+    }
+    const guides = container.querySelectorAll('[data-annotation="landingOffset"] [data-role="guide"]')
+    const [hipTop] = pathEnds(guides[0].getAttribute('d'))
+    expect(hipTop.x).toBeCloseTo(hip.x, 3)
+    expect(hipTop.y).toBeCloseTo(hip.y, 3)
+    const [ankleTop] = pathEnds(guides[1].getAttribute('d'))
+    expect(ankleTop.x).toBeCloseTo(joint('right_ankle').cx, 3)
+    expect(ankleTop.y).toBeCloseTo(joint('right_ankle').cy, 3)
+    const [, strikeEnd] = pathEnds(
+      container.querySelector('[data-annotation="contactShankOffset"] [data-role="mark"]')?.getAttribute('d') ?? null,
+    )
+    expect(strikeEnd.x).toBeCloseTo(joint('right_ankle').cx, 3)
+    expect(strikeEnd.y).toBeCloseTo(joint('right_ankle').cy, 3)
+    // The foot strike's block sits a whole line pitch below the overstride's last line, on the
+    // same centre (the overstride's, kept inside the frame by the usual label clamp).
+    const spans = (id: string) =>
+      Array.from(container.querySelectorAll<SVGTSpanElement>(`[data-annotation="${id}"] text tspan`))
+    const overstride = spans('landingOffset')
+    const strike = spans('contactShankOffset')
+    const y = (span: SVGTSpanElement) => Number(span.getAttribute('y'))
+    const pitch = (RUNNER_PX.label / 100) * LABEL_LINE_HEIGHT
+    expect(y(strike[0])).toBeGreaterThanOrEqual(y(overstride[overstride.length - 1]) + pitch - 1e-3)
+    const [start, end] = pathEnds(
+      container.querySelector('[data-annotation="landingOffset"] [data-role="mark"]')?.getAttribute('d') ?? null,
+    )
+    const centre = (start.x + end.x) / 2
+    const font = RUNNER_PX.label / 100
+    for (const block of [overstride, strike]) {
+      const chars = Math.max(...block.map((span) => (span.textContent ?? '').length))
+      expect(Number(block[0].getAttribute('x'))).toBeCloseTo(clampLabelX(centre, 'middle', chars, font), 3)
+    }
   })
 })

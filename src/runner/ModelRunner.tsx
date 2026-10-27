@@ -14,6 +14,13 @@
  * frame, the figure stands at the first annotated focus parameter's key phase (`planAnnotations`),
  * so the annotated limb lies exactly on its mark; mid-stance without a keyed focus.
  *
+ * **The landing camera follows the values, not a fixed point.** For `camera="landingSide"` the
+ * renderer frames `landingCamera(values)` on the static values it draws (a bound change retargets
+ * it, tweened like any camera change), holds the near leg's contact when still, and while playing
+ * loops `LANDING_PHASE_WINDOW` around that contact, resting on its holds (`stepPlayback`). Entering
+ * the window plays on into it; leaving the camera lets the phase run round the whole cycle again
+ * from where it is. Paused on the landing camera, the figure stands at the held phase too.
+ *
  * Size it through `className`: the figure fills its box, and the drawing fills what the caption
  * and controls leave.
  */
@@ -28,8 +35,15 @@ import {
 } from 'react'
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
-import { interpolateCamera, projectPoint, projectPose } from './camera'
-import { GROUND_Y, cyclesPerSecond, pelvisHeight, poseAt } from './gaitModel'
+import {
+  LANDING_PHASE_WINDOW,
+  interpolateCamera,
+  landingCamera,
+  projectPoint,
+  projectPose,
+  type PhaseWindow,
+} from './camera'
+import { GAIT_PHASES, GROUND_Y, cyclesPerSecond, pelvisHeight, poseAt } from './gaitModel'
 import {
   planAnnotations,
   shownWhileStill,
@@ -64,6 +78,7 @@ import {
   placeLabel,
   sanitizeRate,
   segmentStyle,
+  stepPlayback,
   valueTweenProgress,
   type RunnerSource,
   type SegmentStyle,
@@ -226,10 +241,8 @@ interface Live {
   active: boolean
   playing: boolean
   rate: number
-}
-
-function fract(value: number): number {
-  return value - Math.floor(value)
+  /** The span of the cycle playback loops over; null: the whole cycle. */
+  window: PhaseWindow | null
 }
 
 function fmt(value: number): string {
@@ -377,9 +390,6 @@ export function ModelRunner({
   const active = visible && onScreen
   const rate = sanitizeRate(playbackRate)
 
-  const targetKey = cameraKey(camera)
-  const target = useMemo(() => cameraFromKey(targetKey), [targetKey])
-
   const overrideValues = overrides?.values
   const values = useMemo<RunnerParams>(() => {
     const base = runnerParamValues(params)
@@ -391,6 +401,17 @@ export function ModelRunner({
       }),
     ) as Record<RunnerParamId, number>
   }, [params, overrideValues])
+
+  // The landing camera is framed on the static values, so its key changes only when they do.
+  const tracksContact = camera === 'landingSide'
+  const presetKey = cameraKey(camera)
+  const landingKey = useMemo(
+    () => (tracksContact ? cameraKey(landingCamera(values)) : null),
+    [tracksContact, values],
+  )
+  const targetKey = landingKey ?? presetKey
+  const target = useMemo(() => cameraFromKey(targetKey), [targetKey])
+  const phaseWindow = tracksContact ? LANDING_PHASE_WINDOW : null
   const overrideSources = overrides?.sources
   const sources = useMemo(
     () => effectiveSources(params, overrideSources),
@@ -408,8 +429,9 @@ export function ModelRunner({
         focusParams,
         kind: annotationKind,
         cameraYawDeg: target.yawDeg,
+        heldPhaseWithoutKey: tracksContact ? GAIT_PHASES.rightContact : undefined,
       }),
-    [params, values, sources, focusParams, annotationKind, target.yawDeg],
+    [params, values, sources, focusParams, annotationKind, target.yawDeg, tracksContact],
   )
   // A still figure shows a limb mark only at its key phase; a playing one shows every mark.
   const valueTween = overrides?.valueTween ?? null
@@ -448,6 +470,8 @@ export function ModelRunner({
   }, [flash, valueTween, values, heldPhase, target.yawDeg])
 
   const phaseRef = useRef<number>(heldPhase)
+  // Wall-clock ms still to rest on a landing hold (`stepPlayback`).
+  const holdLeftRef = useRef(0)
   const heldPhaseRef = useRef(heldPhase)
   const reducedRef = useRef(reduced)
   const cameraNowRef = useRef<CameraState>(target)
@@ -455,7 +479,7 @@ export function ModelRunner({
   const cameraTweenRef = useRef<CameraTween | null>(null)
   const valueTweenRef = useRef<ValueTweenState | null>(null)
   const sceneRef = useRef<Scene | null>(null)
-  const liveRef = useRef<Live>({ active, playing, rate })
+  const liveRef = useRef<Live>({ active, playing, rate, window: phaseWindow })
   const kickRef = useRef<() => void>(() => {})
 
   const drawRef = useRef(() => {
@@ -499,6 +523,7 @@ export function ModelRunner({
         text.lines,
         fontUnits,
         (text.side === 'left' ? RUNNER_PX.labelGapLeft : RUNNER_PX.labelGap) * unit,
+        text.offsetLines,
       )
       lines.forEach((line, i) => setPoint(line, 'x', 'y', layout.x, layout.ys[i]))
       const chars = Math.max(0, ...text.lines.map((line) => line.length))
@@ -574,17 +599,20 @@ export function ModelRunner({
   }, [valueTween, reduced])
 
   // The still frame: a new held phase (focus change) moves a still figure to it, and so does
-  // reduced motion switching on while the reader has not chosen to play.
+  // reduced motion switching on while the reader has not chosen to play. On the landing camera
+  // every still state (pausing included) shows the held phase, so the marks meet the drawn leg.
   useLayoutEffect(() => {
     const heldChanged = heldPhaseRef.current !== heldPhase
     const reducedStarted = reduced && !reducedRef.current && choice === null
     heldPhaseRef.current = heldPhase
     reducedRef.current = reduced
-    if ((heldChanged && !playing) || reducedStarted) {
+    if (!playing) holdLeftRef.current = 0
+    const landingStill = tracksContact && !playing && phaseRef.current !== heldPhase
+    if ((heldChanged && !playing) || reducedStarted || landingStill) {
       phaseRef.current = heldPhase
       drawRef.current()
     }
-  }, [heldPhase, reduced, choice, playing])
+  }, [heldPhase, reduced, choice, playing, tracksContact])
 
   // Report whether the figure is seen, and that it no longer is once unmounted (an unmount-only
   // cleanup, so a parent holding `active` never keeps a stale true for a runner that is gone).
@@ -608,7 +636,7 @@ export function ModelRunner({
   // Hand the loop the latest play state and start or stop it (every render, after the effects
   // above have set up any tween).
   useLayoutEffect(() => {
-    liveRef.current = { active, playing, rate }
+    liveRef.current = { active, playing, rate, window: phaseWindow }
     kickRef.current()
   })
 
@@ -658,9 +686,14 @@ export function ModelRunner({
       const scene = sceneRef.current
       if (live.playing && scene) {
         const drawn = drawnValues(scene.values, valueTweenRef.current, performance.now())
-        phaseRef.current = fract(
-          phaseRef.current + (stepMs / 1000) * cyclesPerSecond(drawn) * live.rate,
+        const next = stepPlayback(
+          { phase: phaseRef.current, holdLeftMs: live.window ? holdLeftRef.current : 0 },
+          stepMs,
+          cyclesPerSecond(drawn) * live.rate,
+          live.window,
         )
+        phaseRef.current = next.phase
+        holdLeftRef.current = next.holdLeftMs
       }
       const cameraTween = cameraTweenRef.current
       if (cameraTween) {

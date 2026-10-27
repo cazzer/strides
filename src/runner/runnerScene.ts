@@ -7,7 +7,14 @@ import type { MetricId } from '../heuristics/types'
 import { METRIC_LABELS } from '../results/metricConfidence'
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
-import { CAMERA_FRAME_HALF_HEIGHT, CAMERA_PRESETS, projectPose, resolveCamera } from './camera'
+import {
+  CAMERA_FRAME_HALF_HEIGHT,
+  CAMERA_FRAME_HALF_WIDTH,
+  CAMERA_PRESETS,
+  projectPose,
+  resolveCamera,
+  type PhaseWindow,
+} from './camera'
 import { GAIT_PHASES, poseAt } from './gaitModel'
 import { formatRunnerValue, type LabelSide } from './runnerAnnotations'
 import { RUNNER_PARAM_SEGMENTS, RUNNER_PARAM_SPECS, paramForMetric } from './runnerParams'
@@ -28,8 +35,8 @@ export const FRAME_TOLERANCE_MS = 1.5
 export const MAX_FRAME_STEP_MS = 100
 export const CAMERA_TWEEN_MS = 600
 
-/** viewBox half-extents: ±1.5 wide, ±`CAMERA_FRAME_HALF_HEIGHT` (2) high. */
-export const VIEW_HALF_WIDTH = 1.5
+/** viewBox half-extents: ±`CAMERA_FRAME_HALF_WIDTH` (1.5) wide, ±`CAMERA_FRAME_HALF_HEIGHT` (2) high. */
+export const VIEW_HALF_WIDTH = CAMERA_FRAME_HALF_WIDTH
 export const VIEW_HALF_HEIGHT = CAMERA_FRAME_HALF_HEIGHT
 
 /** CSS-pixel sizes, divided by the live pixels-per-viewBox-unit before they are drawn. */
@@ -290,6 +297,66 @@ export function easeInOutCubic(t: number): number {
   return u < 0.5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2
 }
 
+function fract(value: number): number {
+  return value - Math.floor(value)
+}
+
+const PHASE_WINDOW_TOLERANCE = 1e-9
+
+/**
+ * The phase `delta` cycles on from `phase`. Without a window it runs round the whole cycle. With
+ * one, a phase inside it loops inside it (past the end, it starts again from the window's start),
+ * and a phase outside it plays on normally until it reaches the window: entering never jumps.
+ */
+export function advancePhase(phase: number, delta: number, window: PhaseWindow | null): number {
+  if (!window) return fract(phase + delta)
+  const offset = fract(phase - window.start)
+  // The tolerance keeps a phase that rounding put a hair past the end looping, not leaving.
+  if (offset > window.length + PHASE_WINDOW_TOLERANCE) return fract(phase + delta)
+  const next = offset + delta
+  return fract(window.start + (next > window.length ? (next - window.length) % window.length : next))
+}
+
+/** Where playback stands: its phase, and how much of a hold it still has to rest. */
+export interface PlaybackState {
+  phase: number
+  holdLeftMs: number
+}
+
+/**
+ * Playback `stepMs` of wall-clock time on, at `cyclesPerSecond` (cadence × rate). Outside a window,
+ * or with none, this is `advancePhase`. Inside one, a step that would carry the phase past one of
+ * the window's holds stops exactly on it and rests there for the hold's `ms` (wall-clock time, so
+ * the rate does not stretch it), then plays on; a hold is taken once per pass because a phase
+ * resting on it is no longer before it. Playback only ever moves forward.
+ */
+export function stepPlayback(
+  state: PlaybackState,
+  stepMs: number,
+  cyclesPerSecond: number,
+  window: PhaseWindow | null,
+): PlaybackState {
+  let ms = stepMs
+  if (state.holdLeftMs > 0) {
+    if (ms <= state.holdLeftMs) return { phase: state.phase, holdLeftMs: state.holdLeftMs - ms }
+    ms -= state.holdLeftMs
+  }
+  const delta = (ms / 1000) * cyclesPerSecond
+  if (window) {
+    const offset = fract(state.phase - window.start)
+    if (offset <= window.length + PHASE_WINDOW_TOLERANCE) {
+      let first: { offset: number; hold: { phase: number; ms: number } } | null = null
+      for (const hold of window.holds ?? []) {
+        const at = fract(hold.phase - window.start)
+        const ahead = at - PHASE_WINDOW_TOLERANCE > offset && at - PHASE_WINDOW_TOLERANCE <= offset + delta
+        if (ahead && (first === null || at < first.offset)) first = { offset: at, hold }
+      }
+      if (first) return { phase: first.hold.phase, holdLeftMs: first.hold.ms }
+    }
+  }
+  return { phase: advancePhase(state.phase, delta, window), holdLeftMs: 0 }
+}
+
 /** The playback rate the loop uses: non-finite or non-positive input plays at 1×. */
 export function sanitizeRate(rate: number | undefined): number {
   return rate !== undefined && Number.isFinite(rate) && rate > 0 ? rate : 1
@@ -323,7 +390,8 @@ export interface LabelLayout {
 
 /**
  * Where a label's lines go, in viewBox units: its block sits `gapUnits` beyond the projected
- * anchor on `side`, then is kept inside the frame.
+ * anchor on `side`, `offsetLines` line pitches further out above or below (a label stacked under
+ * another in the same lane), then is kept inside the frame.
  */
 export function placeLabel(
   anchor: { x: number; y: number },
@@ -331,6 +399,7 @@ export function placeLabel(
   lines: readonly string[],
   fontUnits: number,
   gapUnits: number,
+  offsetLines = 0,
 ): LabelLayout {
   const lineHeight = fontUnits * LABEL_LINE_HEIGHT
   const blockHeight = lines.length * lineHeight
@@ -338,8 +407,8 @@ export function placeLabel(
   let centreY = anchor.y
   if (side === 'right') x += gapUnits
   else if (side === 'left') x -= gapUnits
-  else if (side === 'below') centreY += gapUnits + blockHeight / 2
-  else centreY -= gapUnits + blockHeight / 2
+  else if (side === 'below') centreY += gapUnits + blockHeight / 2 + offsetLines * lineHeight
+  else centreY -= gapUnits + blockHeight / 2 + offsetLines * lineHeight
   const chars = Math.max(0, ...lines.map((line) => line.length))
   const limit = Math.max(0, VIEW_HALF_HEIGHT - blockHeight / 2)
   centreY = Math.min(limit, Math.max(-limit, centreY))
