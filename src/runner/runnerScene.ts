@@ -55,6 +55,12 @@ export const RUNNER_PX = {
   labelGap: 6,
   /** Left-side labels end at their anchor: a little more room clears a bracket's tick. */
   labelGapLeft: 10,
+  /**
+   * A footfall ring's radius as it fades, from contact to gone. Kept small: a ring this size is
+   * far below WCAG 2.3.1's flash-area threshold at any runner size (design D4).
+   */
+  beatRingMin: 4,
+  beatRingMax: 12,
 } as const
 
 /** Label line pitch, in font sizes. */

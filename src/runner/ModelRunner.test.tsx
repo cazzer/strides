@@ -13,7 +13,7 @@ import {
   projectPoint,
   projectPose,
 } from './camera'
-import { GAIT_PHASES, GROUND_Y, poseAt } from './gaitModel'
+import { GAIT_PHASES, GROUND_Y, pelvisHeight, poseAt } from './gaitModel'
 import { ModelRunner, RUNNER_CAPTION, type ModelRunnerProps } from './ModelRunner'
 import { phaseForLeg } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
@@ -254,7 +254,7 @@ describe('ModelRunner drawing', () => {
     })
     const { container } = setup({ params, camera: 'footSide', focus: { metricIds: ['footStrikePattern'] } })
     const lines = container.querySelectorAll('[data-annotation="contactShankOffset"] text tspan')
-    expect(Array.from(lines, (line) => line.textContent)).toEqual(['Heel strike (proxy)', 'shown approximately'])
+    expect(Array.from(lines, (line) => line.textContent)).toEqual(['Heel first (estimate)', 'shown approximately'])
     for (const line of lines) expect(line.getAttribute('x')).not.toBeNull()
     expect(container.querySelector('p.sr-only')?.textContent).toContain(
       'drawn at a limit of the figure, not at the measured value',
@@ -874,5 +874,148 @@ describe('ModelRunner landing camera', () => {
       const chars = Math.max(...block.map((span) => (span.textContent ?? '').length))
       expect(Number(block[0].getAttribute('x'))).toBeCloseTo(clampLabelX(centre, 'middle', chars, font), 3)
     }
+  })
+})
+
+describe('ModelRunner cadence beat', () => {
+  const RHYTHM: ModelRunnerProps['focus'] = { metricIds: ['cadence'] }
+  const UNIT = 1 / 100
+
+  function rings(): { opacity: number; r: number; cx: number; cy: number }[] {
+    return Array.from(document.querySelectorAll('circle[data-pulse]'), (el) => ({
+      opacity: Number(el.getAttribute('opacity')),
+      r: Number(el.getAttribute('r')),
+      cx: Number(el.getAttribute('cx')),
+      cy: Number(el.getAttribute('cy')),
+    }))
+  }
+
+  function beat(): Element {
+    const el = document.querySelector('[data-annotation="cadence"]')
+    if (!el) throw new Error('no cadence annotation')
+    return el
+  }
+
+  function ringRadius(opacity: number): number {
+    return (RUNNER_PX.beatRingMax - (RUNNER_PX.beatRingMax - RUNNER_PX.beatRingMin) * opacity) * UNIT
+  }
+
+  it('labels the cadence and pulses a ring from each foot as it lands, with no React commit per frame', () => {
+    const onRender = vi.fn()
+    render(
+      <Profiler id="runner" onRender={onRender}>
+        <ModelRunner
+          {...props({ params: bindAll({ cadence: makeMetric('cadence', { value: 180 }) }), focus: RHYTHM })}
+        />
+      </Profiler>,
+    )
+    expect(beat().getAttribute('data-kind')).toBe('beat')
+    expect(beat().querySelector('text')?.textContent).toBe('180 steps/min')
+    expect(beat().querySelectorAll('[data-role="guide"]')).toHaveLength(2)
+    expect(rings()).toHaveLength(2)
+    const renders = onRender.mock.calls.length
+    const groundY = projectPoint({ x: 0, y: GROUND_Y, z: 0 }, CAMERA_PRESETS.wholeBodySide).y
+    let peak = 0
+    let gone = false
+    let previous = rings()
+    for (let t = 0; t < 2000; t += 16) {
+      advance(16)
+      const now = rings()
+      for (const [i, ring] of now.entries()) {
+        // The radius grows exactly as the ring fades: 4 px at contact, 12 px when gone.
+        expect(ring.r).toBeCloseTo(ringRadius(ring.opacity), 3)
+        expect(ring.cy).toBeCloseTo(groundY, 3)
+        if (ring.opacity < previous[i].opacity) expect(ring.r).toBeGreaterThanOrEqual(previous[i].r)
+        peak = Math.max(peak, ring.opacity)
+        if (ring.opacity === 0) gone = true
+      }
+      previous = now
+    }
+    expect(peak).toBeGreaterThan(0.6)
+    expect(gone).toBe(true)
+    expect(onRender.mock.calls.length).toBe(renders)
+  })
+
+  it('pulses as each foot lands: a strong ring sits under a foot that is down', () => {
+    setup({ focus: RHYTHM })
+    let strong = 0
+    for (let t = 0; t < 1500; t += 16) {
+      advance(16)
+      for (const [i, ring] of rings().entries()) {
+        if (ring.opacity < 0.5) continue
+        strong += 1
+        const side = i === 0 ? 'left' : 'right'
+        const lowest = Math.max(joint(`${side}_heel`).cy, joint(`${side}_foot_index`).cy)
+        expect(Math.abs(lowest - ring.cy)).toBeLessThan(0.02)
+      }
+    }
+    expect(strong).toBeGreaterThan(0)
+  })
+
+  it('keeps the real cadence in the label when the playback is slowed', () => {
+    setup({
+      params: bindAll({ cadence: makeMetric('cadence', { value: 180 }) }),
+      focus: RHYTHM,
+      playbackRate: 0.4,
+    })
+    expect(beat().querySelector('text')?.textContent).toBe('180 steps/min')
+    expect(rings()).toHaveLength(2)
+  })
+
+  it('under reduced motion shows the label and ticks, never a ring, and leaves no frame pending', () => {
+    mockReducedMotion(true)
+    setup({ focus: RHYTHM })
+    expect(beat().querySelector('text')?.textContent).toMatch(/steps\/min$/)
+    expect(beat().querySelectorAll('[data-role="guide"]')).toHaveLength(2)
+    expect(rings()).toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+    // The reader may play the figure; the ring stays off while reduced motion is preferred.
+    fireEvent.click(screen.getByRole('button', { name: 'Play runner' }))
+    advance(500)
+    expect(rings()).toHaveLength(0)
+  })
+
+  it('shows no ring while paused', () => {
+    setup({ focus: RHYTHM })
+    expect(rings()).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    expect(rings()).toHaveLength(0)
+    expect(beat().querySelectorAll('[data-role="guide"]')).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: 'Play runner' }))
+    expect(rings()).toHaveLength(2)
+  })
+
+  it('keeps the ring small and never red (WCAG 2.3.1)', () => {
+    setup({ focus: RHYTHM })
+    for (let t = 0; t < 1000; t += 16) {
+      advance(16)
+      for (const ring of rings()) expect(ring.r).toBeLessThanOrEqual(16 * UNIT + 1e-9)
+    }
+    for (const el of document.querySelectorAll('circle[data-pulse]')) {
+      expect(el.getAttribute('class')).not.toMatch(/red|rose|pink|orange/)
+      expect(el.getAttribute('class')).toContain('forced-colors:stroke-[color:Highlight]')
+      expect(el.getAttribute('fill')).toBe('none')
+    }
+  })
+
+  it('keeps the ticks on the ground while a tween changes the figure’s height; the head label rides it', () => {
+    const tall = { ...VALUES, pelvisBounce: VALUES.pelvisBounce + 0.1 }
+    expect(Math.abs(pelvisHeight(tall) - pelvisHeight(VALUES))).toBeGreaterThan(1e-3)
+    const { rerenderWith, container } = setup({ focus: RHYTHM })
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    const tick = () =>
+      container.querySelector('[data-annotation="cadence"] [data-role="guide"]')?.getAttribute('d')
+    const labelY = () => Number(container.querySelector('[data-annotation="cadence"] tspan')?.getAttribute('y'))
+    const tickBefore = tick()
+    const labelBefore = labelY()
+    rerenderWith({
+      focus: RHYTHM,
+      overrides: {
+        valueTween: { from: { pelvisBounce: tall.pelvisBounce }, to: { pelvisBounce: tall.pelvisBounce }, durationMs: 10_000, key: 'lift' },
+      },
+    })
+    advance(100)
+    expect(tick()).toBe(tickBefore)
+    expect(labelY()).not.toBeCloseTo(labelBefore, 3)
   })
 })

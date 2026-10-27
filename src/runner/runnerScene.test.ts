@@ -169,8 +169,13 @@ describe('describeRunner', () => {
     })
     expect(bound.contactShankOffset.source === 'measured' && bound.contactShankOffset.clamped).toBe(true)
     const text = describeRunner(bound, ['torsoPitch', 'contactShankOffset'])
-    expect(text).toContain('Shown: Trunk lean 5.0°; Foot strike pattern Heel strike (proxy), drawn at a limit of the figure, not at the measured value.')
+    expect(text).toContain('Shown: Trunk lean 5.0°; Foot strike pattern Heel first (estimate), drawn at a limit of the figure, not at the measured value.')
     expect(describeRunner(bindOnly(['cadence']), ['torsoPitch'])).not.toContain('Shown:')
+  })
+
+  it('states a cadence focus as its steps per minute', () => {
+    const bound = bindAll({ cadence: makeMetric('cadence', { value: 180 }) })
+    expect(describeRunner(bound, ['cadence'])).toContain('Shown: Cadence 180 steps/min.')
   })
 
   it('never frames the figure as a reference, an ideal or the reader’s body', () => {
