@@ -1,4 +1,5 @@
-import type { FormHeuristicsResult, MetricId } from '../heuristics/types'
+import { DEFAULT_HEURISTICS_CONFIG } from '../heuristics/types'
+import type { FormHeuristicsResult, MetricId, VerticalOscillationSignal } from '../heuristics/types'
 import type { FocusAreaId } from './focusAreas'
 import type { MetricTier } from './types'
 
@@ -14,16 +15,16 @@ import type { MetricTier } from './types'
  *
  * The three bounce metrics are one fitted hip bounce over three denominators:
  *
- * - `verticalRatio` = `fit.peakToPeakAmplitude / stride.strideLengthPx` (`verticalRatio.ts`): the hip
- *   bounce in pixels over the median same-side stride in pixels. It does NOT read
- *   `verticalOscillationCm`, which is a separate centimetre fit of the same hip bounce (the scale
- *   pass), so a derivation cites the centimetre figure as "the same bounce, in cm", not as an operand.
+ * - `verticalRatio` = `fit.peakToPeakAmplitude / stride.strideLengthPx` (`verticalRatio.ts`): the
+ *   MoveNet hip bounce in pixels over the median same-side stride in pixels. It does NOT read
+ *   `verticalOscillationCm`, a separate MediaPipe fit (the scale pass) that may even track another
+ *   person, so the derivation never cites the centimetre bounce.
  * - `verticalOscillation` = the same fit's amplitude over the median torso length in pixels, under the
  *   default `verticalOscillationSignal: 'hipMid'`. Same fit, same frames, so
  *   `verticalOscillation / verticalRatio` = `strideLengthPx / torsoLengthPx` EXACTLY: the stride in
  *   torso lengths, which no metric exposes on its own. `compositeReadings.test.ts` pins the identity.
- * - Stride in metres (`verticalOscillationCm / verticalRatio`) is computed from the ratio itself, so
- *   citing it as an input would be circular; it is never derived here.
+ * - Stride in metres (`verticalOscillationCm / verticalRatio`) would mix that separate fit with the
+ *   ratio and be circular besides; it is never derived here.
  *
  * Fusion picks each metric's clip independently (`fuseHeuristics.ts`), so every cross-metric figure
  * is taken only when both metrics come from the same clip (design.md D4).
@@ -93,44 +94,49 @@ export function areaReadings<T>(
   return readings
 }
 
-/** What vertical ratio was derived from, as far as this result can say it (design.md D3). */
+/**
+ * What vertical ratio was derived from, as far as this result can say it (design.md D3): its own
+ * two inputs, in the one unit that makes the arithmetic check (torso lengths), and the stride count.
+ *
+ * Never the centimetre bounce: `verticalOscillationCm` is a separate MediaPipe fit (the scale pass),
+ * possibly of a different subject, and vertical ratio does not read it.
+ */
 export interface BounceDerivation {
-  /** The bounce, in cm when measured on vertical ratio's clip, else relative to torso length. */
-  bounce: {
-    metric: 'verticalOscillationCm' | 'verticalOscillation'
-    value: number
-    unit: 'centimeters' | 'ratio'
-  } | null
-  /** `verticalOscillation / verticalRatio` = median stride / median torso length, same clip only. */
-  strideTorsoLengths: number | null
+  /**
+   * The hip bounce and the stride, both in torso lengths, so `bounce / stride` IS vertical ratio:
+   * `verticalOscillation` (the same hip fit's amplitude over the torso) and
+   * `verticalOscillation / verticalRatio` (the stride over the torso). Null unless the relative bounce
+   * is measured on vertical ratio's own clip and reads the same fit.
+   */
+  figures: { bounceTorsoLengths: number; strideTorsoLengths: number } | null
   /** Vertical ratio's `sampleSize`: the same-side stride pairs its stride length is the median of. */
   strideCount: number
 }
 
-/** Null unless vertical ratio is measured (not excluded). `sourceIndices` null means one clip. */
+/**
+ * Null unless vertical ratio is measured (not excluded). `sourceIndices` null means one clip.
+ *
+ * `voSignal` is the signal `verticalOscillation` was computed from. Production computes every clip
+ * with `DEFAULT_HEURISTICS_CONFIG` (`runClipAnalysisPipeline.ts`), and the result does not record
+ * the signal, so this guards the default: an `earMid` vertical oscillation fits a different series
+ * from vertical ratio's hip fit, and its quotient would not be the stride (strides-xki9 design D3).
+ */
 export function bounceDerivation(
   fused: FormHeuristicsResult,
   tiers: Readonly<Record<MetricId, MetricTier>>,
   sourceIndices: Readonly<Record<MetricId, number>> | null,
+  voSignal: VerticalOscillationSignal = DEFAULT_HEURISTICS_CONFIG.verticalOscillationSignal,
 ): BounceDerivation | null {
   const ratio = fused.verticalRatio
   if (tiers.verticalRatio === 'excluded' || ratio.value === null || ratio.value === 0) return null
-  const usable = (metric: 'verticalOscillationCm' | 'verticalOscillation'): number | null => {
-    const value = fused[metric].value
-    const sameClip =
-      sourceIndices === null || sourceIndices[metric] === sourceIndices.verticalRatio
-    return tiers[metric] !== 'excluded' && sameClip ? value : null
-  }
-  const centimetres = usable('verticalOscillationCm')
-  const relative = usable('verticalOscillation')
+  const relative = fused.verticalOscillation.value
+  const usable =
+    voSignal === 'hipMid' &&
+    relative !== null &&
+    tiers.verticalOscillation !== 'excluded' &&
+    (sourceIndices === null || sourceIndices.verticalOscillation === sourceIndices.verticalRatio)
   return {
-    bounce:
-      centimetres !== null
-        ? { metric: 'verticalOscillationCm', value: centimetres, unit: 'centimeters' }
-        : relative !== null
-          ? { metric: 'verticalOscillation', value: relative, unit: 'ratio' }
-          : null,
-    strideTorsoLengths: relative !== null ? relative / ratio.value : null,
+    figures: usable ? { bounceTorsoLengths: relative, strideTorsoLengths: relative / ratio.value } : null,
     strideCount: ratio.sampleSize,
   }
 }

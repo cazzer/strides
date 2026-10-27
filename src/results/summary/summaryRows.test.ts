@@ -135,18 +135,16 @@ describe('summaryRows', () => {
   it('carries the bounce derivation on the rhythm row only, guarded to vertical ratio’s clip', () => {
     const { areas } = summaryRows(makeHeuristics())
     expect(areas.find(({ view }) => view.area === 'rhythm')!.bounce).toEqual({
-      bounce: { metric: 'verticalOscillationCm', value: 7.5, unit: 'centimeters' },
-      strideTorsoLengths: expect.closeTo(3.75, 10),
+      figures: { bounceTorsoLengths: 0.15, strideTorsoLengths: expect.closeTo(3.75, 10) },
       strideCount: 7,
     })
     expect(areas.filter(({ bounce }) => bounce !== null)).toHaveLength(1)
     const sourceIndices = Object.fromEntries(ALL_IDS.map((id) => [id, 0])) as Record<MetricId, number>
     const mixed = summaryRows(makeHeuristics(), {
-      sourceIndices: { ...sourceIndices, verticalOscillationCm: 1, verticalOscillation: 1 },
+      sourceIndices: { ...sourceIndices, verticalOscillation: 1 },
     })
     expect(mixed.areas.find(({ view }) => view.area === 'rhythm')!.bounce).toEqual({
-      bounce: null,
-      strideTorsoLengths: null,
+      figures: null,
       strideCount: 7,
     })
     expect(summaryRows(withUnmeasured(['verticalRatio'])).areas[0].bounce).toBeNull()

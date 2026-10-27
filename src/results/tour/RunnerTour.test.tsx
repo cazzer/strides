@@ -8,7 +8,6 @@ import type { MetricCardEvidence } from '../MetricsPanel'
 import { METRIC_LABELS } from '../metricConfidence'
 import type { SessionCoverage } from '../sessionCoverage'
 import type { ScalePassStatus, VideoAnalysisState } from '../types'
-import { readingHeadline } from '../../guidance/compositeReadings'
 import { hasCompactBar } from '../summary/summaryLabels'
 import { RunnerTour } from './RunnerTour'
 import { tourPlan } from './tourPlan'
@@ -156,13 +155,14 @@ function stubShortPhone(initial: boolean): { set: (matches: boolean) => void } {
   }
 }
 
-/** Visible words a stop's prose carries (design.md D4): the value line, sr-only text, citations,
+/** Visible words a stop's prose carries (design.md D4): the value line (and a secondary value), a
+ * From line (capped at 14 on its own), sr-only text, citations,
  * the phone panel's band-bar key (the bar's legend, as beside the runner at `lg`) and the end block
  * are excluded; the end block is budgeted on its own. */
 function proseWords(section: Element): number {
   return words(
     section,
-    '.sr-only, .runner-tour__value, .feedback-line__citation, .runner-tour__panel-legend, .runner-tour__end',
+    '.sr-only, .runner-tour__value, .runner-tour__derivation, .feedback-line__citation, .runner-tour__panel-legend, .runner-tour__end',
   )
 }
 
@@ -469,23 +469,22 @@ describe('RunnerTour — the runner follows the active stop', () => {
     for (const area of plan.areaStops) {
       act(() => stop(container, area.view.area).focus())
       expect(container.querySelector('.runner-tour__legend') !== null, area.view.area).toBe(
-        hasCompactBar(readingHeadline(area.readings[0])),
+        hasCompactBar(area.entries[0]),
       )
     }
     act(() => stop(container, 'oneThing').focus())
     expect(container.querySelector('.runner-tour__legend')).toBeNull()
   })
 
-  it('focuses a cadence-less rhythm stop on vertical ratio, which labels nothing on the figure', async () => {
+  it('focuses a cadence-less rhythm stop on its area headline, never on the secondary vertical ratio', async () => {
     const { container } = renderTour({
       resultKey: nextKey(),
       heuristics: makeHeuristics({ cadence: makeMetric('cadence', { value: null, confidence: 0 }) }),
     })
     await skipIntro()
     act(() => stop(container, 'rhythm').focus())
-    // Vertical ratio, the stop's headline, drives no runner parameter: no bounce label is drawn.
-    expect((await lastRunnerProps()).focus?.metricIds).toEqual([])
-    expect(container.querySelector('.runner-tour__legend')).not.toBeNull()
+    expect((await lastRunnerProps()).focus?.metricIds).toEqual(['verticalOscillationCm'])
+    expect(stop(container, 'rhythm').querySelector('.runner-tour__value--secondary')).not.toBeNull()
   })
 
   it('introduces a front-only session from the front, on the camera the runner gets', async () => {
@@ -644,6 +643,15 @@ describe('RunnerTour — word budget', () => {
     ],
     ['caveated', { heuristics: makeHeuristics({}, { confidence: 0.5 }) }],
     ['cadence excluded', { heuristics: makeHeuristics({ cadence: makeMetric('cadence', { value: null, confidence: 0 }) }) }],
+    [
+      'vertical ratio heads the stop',
+      {
+        heuristics: makeHeuristics({
+          cadence: makeMetric('cadence', { value: null, confidence: 0 }),
+          verticalOscillationCm: makeVerticalOscillationCm({ value: null, confidence: 0, calibration: null }),
+        }),
+      },
+    ],
     [
       'vertical ratio excluded',
       { heuristics: makeHeuristics({ verticalRatio: makeMetric('verticalRatio', { value: null, confidence: 0 }) }) },

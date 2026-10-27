@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import type { PoseDetector } from '../pose/detector'
 import type { ModelLoadStates } from '../pose/modelLoadState'
@@ -459,7 +459,15 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
   // Which clip each FUSED metric was selected from, or null until every clip is ready — the same
   // gate `aggregate.heuristics !== null` passes, so a card can never attribute a picture to a
   // result that has not been fused yet.
-  const sourceIndices = computeFusionSourceIndices(clips)
+  //
+  // Memoised on its CONTENT: `computeFusionSourceIndices` returns a fresh object every render, which
+  // would defeat every memo keyed on it downstream (the summary's rows, the tour's plan, the evidence
+  // filter). A 13-entry record, so the string key is cheap.
+  const sourceIndicesKey = JSON.stringify(computeFusionSourceIndices(clips))
+  const sourceIndices = useMemo(
+    () => JSON.parse(sourceIndicesKey) as ReturnType<typeof computeFusionSourceIndices>,
+    [sourceIndicesKey],
+  )
   // The session's ONE evidence extraction. It lives here, not inside the results subtree, because
   // the images it produces are canvas ELEMENTS and a node has one parent: whoever owns extraction
   // must not also be the thing that parents the canvases, or a second surface would silently steal

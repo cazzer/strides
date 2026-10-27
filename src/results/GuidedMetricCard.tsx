@@ -500,7 +500,7 @@ export function GuidedMetricCard({
           )}
         </p>
         {derivation !== undefined && (
-          <p className={`guided-results__derived-from ${BODY}`}>{derivation}</p>
+          <p className={`guided-results__derived-from tabular-nums ${MUTED}`}>{derivation}</p>
         )}
         {sourceLabel && <p className="font-sans text-xs font-semibold text-neutral-600 dark:text-neutral-400">Measured from {sourceLabel}</p>}
         {tier === 'caveated' && (

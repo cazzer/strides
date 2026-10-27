@@ -14,8 +14,8 @@
 ## 3. Tour
 
 - [x] 3.1 `tourPlan` takes `sourceIndices`; stops inherit `readings` and `bounce`
-- [x] 3.2 `TourStop`: headline from the first reading (with From line for a composite); secondary bounce block for a later composite
-- [x] 3.3 `RunnerTour`: focus and legend from the first reading's headline; pass `sourceIndices`
+- [x] 3.2 `TourStop`: the area's own headline; VR's From line after the bar when VR heads the stop; else a secondary VR block after the prose
+- [x] 3.3 `RunnerTour`: pass `sourceIndices` (focus and legend stay on the area headline)
 
 ## 4. Verification
 
@@ -24,3 +24,12 @@
 - [x] 4.3 Live: side-landscape tour + summary at 1280×800, 390×844, 375×667, light/dark, reduced motion; 3-clip demo same-clip guard; park-approach; side-portrait
 - [x] 4.4 View A/B base vs branch, three clips, bit-identical but `elapsedMs`
 - [x] 4.5 Findings in `docs/agent-notes/runner-tour.md`
+
+## 5. Review round 1
+
+- [x] 5.1 From line cites only VR's inputs (relative hip bounce ÷ stride, torso lengths, median of N); never VO_cm; `hipMid` guard (`strides-1k3w` for a per-result one)
+- [x] 5.2 Tour: area headline kept; secondary VR block after the prose with visible position, no From line; From line after bar when VR heads; no fallback block
+- [x] 5.3 Summary: "Same bounce in …" disclosure in the card idiom; muted From line; `role=group`
+- [x] 5.4 `sourceIndices` memoised on content in `MultiClipVideoSession`
+- [x] 5.5 Not-a-score line in design.md; spec deltas and design D3–D6 revised
+- [x] 5.6 Verification and live re-check (`r1-` screenshots); agent note updated

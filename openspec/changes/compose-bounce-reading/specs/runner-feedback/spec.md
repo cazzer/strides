@@ -11,8 +11,8 @@ reading, placed where the first of them sits in the area's order. A composite re
 headlined by its first measured member in composite order (vertical ratio, else vertical
 oscillation in centimetres, else the relative vertical oscillation), and SHALL carry its other
 measured members, in composite order. A composite with no measured member SHALL form no reading.
-Composite readings are presentation only: they SHALL NOT change any area's headline, its feedback
-(why line, cue or non-point), the one thing, or any measured value.
+Composite readings are presentation only, a grouping and never a score: they SHALL NOT change any
+area's headline, its feedback (why line, cue or non-point), the one thing, or any measured value.
 
 #### Scenario: Rhythm with everything measured
 
@@ -34,36 +34,38 @@ Composite readings are presentation only: they SHALL NOT change any area's headl
 
 ### Requirement: The bounce reading is headlined by vertical ratio and cites what it was derived from
 
-When vertical ratio is measured, the bounce reading SHALL carry one line naming what vertical ratio
-was derived from, in words, never with an operator: the bounce (vertical oscillation in
-centimetres when it is measured, else the relative vertical oscillation, as "% of torso length"),
-the stride in torso lengths (the relative vertical oscillation's value divided by vertical ratio's,
-which equals the median stride over the median torso length because both read the same hip-bounce
-fit), and the number of strides vertical ratio's stride length was the median of (its sample size).
-A figure SHALL be cited only when its metric is measured AND comes from the same clip as vertical
-ratio's; a figure from another clip SHALL be left out rather than combined. With neither bounce
-figure from vertical ratio's clip the line SHALL cite the strides alone. The line SHALL read
-"From bounce 7.2 cm and stride 4.6 torso lengths (5 strides)", "From bounce 7.2 cm and 5 strides"
-without a stride figure, "From 5 strides" with neither, and use "1 stride" for one. When vertical
-ratio is not measured the bounce reading SHALL carry no such line. Stride length in metres SHALL
-NOT be cited: it would be derived from vertical ratio and the centimetre bounce, which is circular.
+When vertical ratio is measured, the bounce reading SHALL carry one line naming vertical ratio's
+own inputs, and nothing it was not computed from: the hip bounce as a share of torso length (the
+relative vertical oscillation, which reads the same hip-bounce fit) divided by the stride length in
+torso lengths (the relative vertical oscillation's value divided by vertical ratio's, which equals
+the median stride over the median torso length because both read that fit), and the number of
+strides the stride length is the median of (vertical ratio's sample size). Both figures are in
+torso lengths so the division checks. The figures SHALL be cited only when the relative vertical
+oscillation is measured, comes from the same clip as vertical ratio, and was computed from the
+hip-midpoint signal; otherwise the line SHALL name the inputs with no figures. The line SHALL read
+"From hip bounce 15.3% of torso ÷ stride length 6.3 torsos (median of 3)", or "From hip bounce ÷
+stride length (median of 3)" without figures, with "(one measurement)" for a single stride, and
+SHALL use "stride" only for the length. It SHALL NOT cite vertical oscillation in centimetres,
+which is a separate fit (the scale pass) that vertical ratio does not read, and SHALL NOT change
+when the scale pass lands. When vertical ratio is not measured the bounce reading SHALL carry no
+such line.
 
 #### Scenario: One clip, everything measured
 
-- **WHEN** all three bounce metrics are measured on one clip, with vertical ratio over 5 strides
-- **THEN** the line reads "From bounce <cm value> cm and stride <x.x> torso lengths (5 strides)"
+- **WHEN** the bounce metrics are measured on one clip, with vertical ratio over 3 strides
+- **THEN** the line reads "From hip bounce <x.x>% of torso ÷ stride length <y.y> torsos (median of
+  3)", and x.x divided by y.y is vertical ratio
 
-#### Scenario: Centimetre bounce not yet measured
+#### Scenario: The scale pass lands
 
-- **WHEN** the scale pass has not grafted vertical oscillation in centimetres
-- **THEN** the line cites the relative bounce as "% of torso length", and switches to centimetres
-  once the graft lands
+- **WHEN** vertical oscillation in centimetres is grafted after the line has rendered
+- **THEN** the line is unchanged: it never cites the centimetre bounce
 
-#### Scenario: Bounce figures from another clip
+#### Scenario: Relative bounce from another clip
 
-- **WHEN** a multi-clip session takes vertical ratio from one clip and both vertical oscillation
-  metrics from another
-- **THEN** the line reads "From N strides" and cites no bounce or stride figure
+- **WHEN** a multi-clip session takes vertical ratio from one clip and the relative vertical
+  oscillation from another
+- **THEN** the line reads "From hip bounce ÷ stride length (median of N)", with no figures
 
 #### Scenario: Vertical ratio excluded
 

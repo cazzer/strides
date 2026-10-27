@@ -2,7 +2,6 @@ import type { MetricId } from '../../heuristics/types'
 import { readingHeadline } from '../../guidance/compositeReadings'
 import type { AreaReading, BounceDerivation } from '../../guidance/compositeReadings'
 import { referenceBandEnvelope } from '../../guidance/types'
-import { formatGuidedValue } from '../formatGuidedValue'
 import type { GuidedEntry } from '../guidedGroups'
 import { METRIC_LABELS } from '../metricConfidence'
 
@@ -35,22 +34,22 @@ export function alsoMeasuredNames(readings: readonly AreaReading<GuidedEntry>[])
   return readings.map((reading) => METRIC_LABELS[readingHeadline(reading).metric.metric])
 }
 
-function strides(count: number): string {
-  return `${count} ${count === 1 ? 'stride' : 'strides'}`
+function medianOf(count: number): string {
+  return count === 1 ? 'one measurement' : `median of ${count}`
 }
 
 /**
- * What vertical ratio was derived from, in words and never with an operator (the bounce and the
- * stride are in different units): `From bounce 7.2 cm and stride 4.6 torso lengths (5 strides)`,
- * `From bounce 7.2 cm and 5 strides` without a stride figure, `From 5 strides` with neither.
+ * What vertical ratio was derived from: its own two inputs, in torso lengths so the division checks
+ * (`15.3% ÷ 6.3 = 2.4%`), `From hip bounce 15.3% of torso ÷ stride length 6.3 torsos (median of 3)`.
+ * Without same-clip figures it names the inputs alone: `From hip bounce ÷ stride length (median of 3)`.
+ * "Stride" is only ever the length here; the count is "median of N".
  */
 export function formatBounceDerivation(derivation: BounceDerivation): string {
-  const { bounce, strideTorsoLengths, strideCount } = derivation
-  const stride =
-    strideTorsoLengths === null
-      ? strides(strideCount)
-      : `stride ${strideTorsoLengths.toFixed(1)} torso lengths (${strides(strideCount)})`
-  return bounce === null ? `From ${stride}` : `From bounce ${formatGuidedValue(bounce)} and ${stride}`
+  const { figures, strideCount } = derivation
+  const count = `(${medianOf(strideCount)})`
+  return figures === null
+    ? `From hip bounce ÷ stride length ${count}`
+    : `From hip bounce ${(figures.bounceTorsoLengths * 100).toFixed(1)}% of torso ÷ stride length ${figures.strideTorsoLengths.toFixed(1)} torsos ${count}`
 }
 
 /**

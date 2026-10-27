@@ -34,31 +34,24 @@ describe('alsoMeasuredNames', () => {
 })
 
 describe('formatBounceDerivation', () => {
-  const cm = { metric: 'verticalOscillationCm', value: 7.19338, unit: 'centimeters' } as const
-  it('cites the bounce, the stride in torso lengths and the strides, in words', () => {
-    expect(formatBounceDerivation({ bounce: cm, strideTorsoLengths: 4.567, strideCount: 5 })).toBe(
-      'From bounce 7.2 cm and stride 4.6 torso lengths (5 strides)',
-    )
+  it('cites the hip bounce and the stride length in torso lengths, and the median count', () => {
     expect(
-      formatBounceDerivation({
-        bounce: { metric: 'verticalOscillation', value: 0.153, unit: 'ratio' },
-        strideTorsoLengths: 3.75,
-        strideCount: 1,
-      }),
-    ).toBe('From bounce 15.3% of torso length and stride 3.8 torso lengths (1 stride)')
+      formatBounceDerivation({ figures: { bounceTorsoLengths: 0.153, strideTorsoLengths: 6.3 }, strideCount: 3 }),
+    ).toBe('From hip bounce 15.3% of torso ÷ stride length 6.3 torsos (median of 3)')
+    expect(
+      formatBounceDerivation({ figures: { bounceTorsoLengths: 0.15, strideTorsoLengths: 3.75 }, strideCount: 1 }),
+    ).toBe('From hip bounce 15.0% of torso ÷ stride length 3.8 torsos (one measurement)')
   })
 
-  it('leaves out what it cannot cite', () => {
-    expect(formatBounceDerivation({ bounce: cm, strideTorsoLengths: null, strideCount: 5 })).toBe(
-      'From bounce 7.2 cm and 5 strides',
+  it('names the inputs alone when it has no same-clip figures', () => {
+    expect(formatBounceDerivation({ figures: null, strideCount: 5 })).toBe(
+      'From hip bounce ÷ stride length (median of 5)',
     )
-    expect(formatBounceDerivation({ bounce: null, strideTorsoLengths: null, strideCount: 1 })).toBe('From 1 stride')
   })
 
   it('stays within 14 words at its longest', () => {
     const longest = formatBounceDerivation({
-      bounce: { metric: 'verticalOscillation', value: 0.153, unit: 'ratio' },
-      strideTorsoLengths: 12.34,
+      figures: { bounceTorsoLengths: 0.153, strideTorsoLengths: 12.34 },
       strideCount: 12,
     })
     expect(longest.split(/\s+/).length).toBeLessThanOrEqual(14)

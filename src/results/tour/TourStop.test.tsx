@@ -3,8 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { FormHeuristicsResult } from '../../heuristics/types'
 import type { FocusAreaId } from '../../guidance/focusAreas'
 import { METRIC_DESCRIPTIONS } from '../metricDescriptions'
-import { makeHeuristics, makeMetric } from '../__fixtures__/metricResult'
-import { readingHeadline } from '../../guidance/compositeReadings'
+import { makeHeuristics, makeMetric, makeVerticalOscillationCm } from '../__fixtures__/metricResult'
 import { hasCompactBar } from '../summary/summaryLabels'
 import { tourPlan } from './tourPlan'
 import { AreaStop, OneThingStop } from './TourStop'
@@ -27,55 +26,65 @@ describe('AreaStop', () => {
     expect(value.children[1]).toHaveClass('text-4xl')
   })
 
-  it('adds the bounce reading after cadence as a secondary value with its From line and no bar', () => {
+  it('adds vertical ratio after cadence’s prose as a secondary value with its visible position, no bar, no From line', () => {
     const { container } = render(<AreaStop stop={areaStop('rhythm')} />)
     const [headline, secondary] = container.querySelectorAll('.runner-tour__value')
     expect(headline.firstElementChild).toHaveTextContent(/^Cadence$/)
-    expect(headline.querySelector('.runner-tour__derivation')).toBeNull()
     expect(secondary).toHaveClass('runner-tour__value--secondary')
     expect(secondary).toHaveAttribute('data-composite', 'bounce')
     expect(secondary.children[0]).toHaveTextContent(/^Vertical ratio$/)
-    expect(secondary.children[1]).toHaveTextContent(/^4\.00%/)
-    expect(secondary.children[1]).toHaveClass('text-2xl')
-    // Its band position is for assistive technology only, as the headline's is.
-    expect(secondary.children[1].querySelector('.sr-only')).not.toBeNull()
-    expect(secondary.querySelector('.runner-tour__derivation')).toHaveTextContent(
-      'From bounce 7.5 cm and stride 3.8 torso lengths (7 strides)',
-    )
+    // The band position is visible text here, not only for assistive technology.
+    const value = secondary.children[1].cloneNode(true) as Element
+    value.querySelectorAll('.sr-only').forEach((node) => node.remove())
+    expect(value.textContent).toMatch(/^4\.00% · \S/)
+    expect(secondary.children[1].querySelector('.text-2xl')).toHaveTextContent(/^4\.00%$/)
+    expect(container.querySelector('.runner-tour__derivation')).toBeNull()
     expect(container.querySelectorAll('.runner-tour__scale')).toHaveLength(1)
-    // After the headline's bar, before the prose.
-    expect(container.querySelector('.runner-tour__scale')!.compareDocumentPosition(secondary)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    )
+    // After the why line: the area's prose first, the second reading last.
+    const why = container.querySelector('.runner-tour__why')!
+    expect(why.compareDocumentPosition(secondary)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
   })
 
-  it('makes vertical ratio the headline, bar and From line included, when cadence is excluded', () => {
+  it('keeps the area’s own headline (the one its feedback is keyed on) and adds vertical ratio when cadence is excluded', () => {
     const heuristics = makeHeuristics({ cadence: makeMetric('cadence', { value: null, confidence: 0 }) })
+    const stop = areaStop('rhythm', heuristics)
+    expect(stop.view.headline!.metric.metric).toBe('verticalOscillationCm')
+    const { container } = render(<AreaStop stop={stop} />)
+    const [headline, secondary] = container.querySelectorAll('.runner-tour__value')
+    expect(headline.firstElementChild).toHaveTextContent(/^Bounce$/)
+    expect(secondary.firstElementChild).toHaveTextContent(/^Vertical ratio$/)
+    expect(container.querySelector('.runner-tour__derivation')).toBeNull()
+  })
+
+  it('puts vertical ratio’s From line after its bar and legend when it heads the stop', () => {
+    const heuristics = makeHeuristics({
+      cadence: makeMetric('cadence', { value: null, confidence: 0 }),
+      verticalOscillationCm: makeVerticalOscillationCm({ value: null, confidence: 0, calibration: null }),
+    })
     const { container } = render(<AreaStop stop={areaStop('rhythm', heuristics)} />)
     const values = container.querySelectorAll('.runner-tour__value')
     expect(values).toHaveLength(1)
     expect(values[0].firstElementChild).toHaveTextContent(/^Vertical ratio$/)
-    expect(values[0]).toHaveAttribute('data-composite', 'bounce')
-    expect(values[0].querySelector('.runner-tour__derivation')).toHaveTextContent(/^From bounce 7\.5 cm/)
-    expect(container.querySelector('.runner-tour__scale')).not.toBeNull()
+    const derivation = container.querySelector('.runner-tour__derivation')!
+    expect(derivation).toHaveTextContent('From hip bounce 15.0% of torso ÷ stride length 3.8 torsos (median of 7)')
+    expect(values[0].contains(derivation)).toBe(false)
+    expect(container.querySelector('.runner-tour__panel-legend')!.compareDocumentPosition(derivation)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    )
   })
 
-  it('cites nothing for a fallback bounce headline (vertical ratio excluded)', () => {
+  it('shows no secondary block when vertical ratio is not measured', () => {
     const heuristics = makeHeuristics({ verticalRatio: makeMetric('verticalRatio', { value: null, confidence: 0 }) })
     const { container } = render(<AreaStop stop={areaStop('rhythm', heuristics)} />)
-    const secondary = container.querySelector('.runner-tour__value--secondary')!
-    expect(secondary.firstElementChild).toHaveTextContent(/^Bounce$/)
-    expect(secondary.children[1]).toHaveTextContent(/^7\.5 cm/)
-    expect(container.querySelector('.runner-tour__derivation')).toBeNull()
+    expect(container.querySelectorAll('.runner-tour__value')).toHaveLength(1)
+    expect(container.querySelector('.runner-tour__value--secondary')).toBeNull()
   })
 
   it('draws a compact bar only for a banded headline', () => {
     for (const area of ['rhythm', 'arms', 'posture', 'knees', 'landing', 'footPath'] as const) {
       const stop = areaStop(area)
       const { container, unmount } = render(<AreaStop stop={stop} />)
-      expect(container.querySelector('.runner-tour__scale') !== null, area).toBe(
-        hasCompactBar(readingHeadline(stop.readings[0])),
-      )
+      expect(container.querySelector('.runner-tour__scale') !== null, area).toBe(hasCompactBar(stop.entries[0]))
       // One bar per stop, never a second for a secondary reading.
       expect(container.querySelectorAll('.runner-tour__scale').length, area).toBeLessThanOrEqual(1)
       unmount()

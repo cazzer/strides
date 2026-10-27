@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import type { FormHeuristicsResult, MetricId, View } from '../../heuristics/types'
-import { readingHeadline } from '../../guidance/compositeReadings'
 import { FOCUS_AREAS, FOCUS_AREA_ORDER } from '../../guidance/focusAreas'
 import type { TourStopId } from '../../guidance/focusAreas'
 import { ONE_THING_LABEL } from '../../guidance/feedbackPoints'
@@ -538,9 +537,9 @@ interface TourBodyProps {
  * only once the runner's figure (its drawing) is at least 90% on screen as well as seen by the
  * runner, so it never plays out below the fold. Reading on past the first stop ends it.
  *
- * The runner's focus is the shown stop's HEADLINE metric only — its first reading's headline — so
- * the figure never labels a number the stop's text does not state. A secondary bounce block at the
- * rhythm stop is not the headline, so it never reaches the figure.
+ * The runner's focus is the shown stop's HEADLINE metric only, so the figure never labels a number
+ * the stop's text does not state. The rhythm stop's secondary vertical-ratio block is not the
+ * headline, so it never reaches the figure.
  */
 function TourBody({
   heuristics,
@@ -586,7 +585,7 @@ function TourBody({
   const shownArea = plan.areaStops.find((stop) => stop.view.area === shown) ?? null
   const focusMetric: MetricId | null =
     shownArea !== null
-      ? readingHeadline(shownArea.readings[0]).metric.metric
+      ? shownArea.entries[0].metric.metric
       : shown === 'oneThing' && plan.oneThing.kind === 'cue'
         ? plan.oneThing.metric
         : null
@@ -603,7 +602,7 @@ function TourBody({
     [introRunning, focus, camera, evidence, sourceIndices, clipViewKinds],
   )
   const runnerLabel = shownArea === null ? 'whole body' : shownArea.view.label.toLowerCase()
-  const showLegend = shownArea !== null && hasCompactBar(readingHeadline(shownArea.readings[0]))
+  const showLegend = shownArea !== null && hasCompactBar(shownArea.entries[0])
 
   return (
     <div ref={rootRef} className={TOUR_BODY_CLASS}>

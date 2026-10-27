@@ -36,9 +36,11 @@ citation, methodology disclosure and inline evidence. An area SHALL get a row on
 one of its metrics is measured.
 
 A composite reading SHALL render as one labelled group: its headline metric's full card, with the
-reading's "From …" derivation line directly under the card's headline value when it has one, then
-its other measured members' full cards inside ONE nested disclosure, collapsed by default, whose
-summary names them ("Also: …") and is at least 44 px tall. Collapsed, the member cards SHALL stay
+reading's "From …" derivation line directly under the card's headline value when it has one, in a
+muted style distinct from the description, then its other measured members' full cards inside ONE
+nested disclosure, collapsed by default, in the card disclosure's own idiom, whose summary names
+what the members are ("Same bounce in cm and % of torso length", or the one unit present) and is at
+least 44 px tall. Collapsed, the member cards SHALL stay
 mounted, so their evidence canvases keep their one parent, and a fragment link to a member card
 SHALL open both disclosures.
 
@@ -55,6 +57,6 @@ SHALL open both disclosures.
 #### Scenario: Opening the rhythm row
 
 - **WHEN** the reader opens the rhythm row with cadence and all three bounce metrics measured
-- **THEN** the cadence card shows, then the vertical ratio card with its band, its "From bounce …"
-  line and its evidence, then one collapsed "Also: Vertical oscillation (cm), Vertical
-  oscillation" disclosure holding those two cards
+- **THEN** the cadence card shows, then the vertical ratio card with its band, its "From hip
+  bounce …" line and its evidence, then one collapsed "Same bounce in cm and % of torso length"
+  disclosure holding the two vertical oscillation cards

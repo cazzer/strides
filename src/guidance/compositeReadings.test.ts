@@ -105,37 +105,44 @@ describe('areaReadings', () => {
 })
 
 describe('bounceDerivation', () => {
-  it('cites the centimetre bounce, the stride in torso lengths and the stride count on one clip', () => {
+  it('cites the relative hip bounce and the stride in torso lengths, so the division checks', () => {
     const heuristics = makeHeuristics()
     const derivation = bounceDerivation(heuristics, tiersOf(heuristics), ONE_CLIP)!
-    expect(derivation.bounce).toEqual({ metric: 'verticalOscillationCm', value: 7.5, unit: 'centimeters' })
     // 0.15 torso lengths of bounce over a 4% ratio: a 3.75-torso stride (the fixture's 750 / 200 px).
-    expect(derivation.strideTorsoLengths).toBeCloseTo(3.75, 10)
+    expect(derivation.figures!.bounceTorsoLengths).toBe(0.15)
+    expect(derivation.figures!.strideTorsoLengths).toBeCloseTo(3.75, 10)
+    expect(derivation.figures!.bounceTorsoLengths / derivation.figures!.strideTorsoLengths).toBeCloseTo(
+      heuristics.verticalRatio.value!,
+      12,
+    )
     expect(derivation.strideCount).toBe(7)
     // `null` sourceIndices is one clip.
     expect(bounceDerivation(heuristics, tiersOf(heuristics), null)).toEqual(derivation)
   })
 
-  it('cites the relative bounce while the centimetre one is not measured', () => {
-    const heuristics = makeHeuristics({
+  it('never cites the centimetre bounce: it is a separate fit vertical ratio does not read', () => {
+    const withCm = makeHeuristics()
+    const withoutCm = makeHeuristics({
       verticalOscillationCm: makeVerticalOscillationCm({ ...UNMEASURED, calibration: null }),
     })
-    const derivation = bounceDerivation(heuristics, tiersOf(heuristics), ONE_CLIP)!
-    expect(derivation.bounce).toEqual({ metric: 'verticalOscillation', value: 0.15, unit: 'ratio' })
+    expect(bounceDerivation(withCm, tiersOf(withCm), ONE_CLIP)).toEqual(
+      bounceDerivation(withoutCm, tiersOf(withoutCm), ONE_CLIP),
+    )
   })
 
-  it('drops every figure from a clip other than vertical ratio’s', () => {
+  it('drops the figures when the relative bounce comes from another clip', () => {
     const heuristics = makeHeuristics()
-    const mixed = { ...ONE_CLIP, verticalOscillationCm: 1, verticalOscillation: 1 }
-    expect(bounceDerivation(heuristics, tiersOf(heuristics), mixed)).toEqual({
-      bounce: null,
-      strideTorsoLengths: null,
+    expect(
+      bounceDerivation(heuristics, tiersOf(heuristics), { ...ONE_CLIP, verticalOscillation: 1 }),
+    ).toEqual({ figures: null, strideCount: 7 })
+  })
+
+  it('drops the figures unless vertical oscillation reads the same hip fit (hipMid)', () => {
+    const heuristics = makeHeuristics()
+    expect(bounceDerivation(heuristics, tiersOf(heuristics), ONE_CLIP, 'earMid')).toEqual({
+      figures: null,
       strideCount: 7,
     })
-    // Centimetres from elsewhere, relative from vertical ratio's clip: the relative bounce and stride.
-    const cmElsewhere = bounceDerivation(heuristics, tiersOf(heuristics), { ...ONE_CLIP, verticalOscillationCm: 1 })!
-    expect(cmElsewhere.bounce?.metric).toBe('verticalOscillation')
-    expect(cmElsewhere.strideTorsoLengths).not.toBeNull()
   })
 
   it('is null when vertical ratio is excluded', () => {
@@ -143,13 +150,11 @@ describe('bounceDerivation', () => {
     expect(bounceDerivation(heuristics, tiersOf(heuristics), ONE_CLIP)).toBeNull()
   })
 
-  it('cites no stride without the relative bounce', () => {
+  it('cites no figures without the relative bounce', () => {
     const heuristics = makeHeuristics({
       verticalOscillation: makeVerticalOscillation({ ...UNMEASURED, fit: null }),
     })
-    const derivation = bounceDerivation(heuristics, tiersOf(heuristics), ONE_CLIP)!
-    expect(derivation.bounce?.metric).toBe('verticalOscillationCm')
-    expect(derivation.strideTorsoLengths).toBeNull()
+    expect(bounceDerivation(heuristics, tiersOf(heuristics), ONE_CLIP)).toEqual({ figures: null, strideCount: 7 })
   })
 
   it('reads the stride in torso lengths exactly as the heuristics measure it (VO / VR = stride / torso)', () => {
@@ -175,7 +180,7 @@ describe('bounceDerivation', () => {
     if (!stride.ok || scale === null) return
     const derivation = bounceDerivation(result, tiersOf(result), null)
     expect(derivation).not.toBeNull()
-    expect(derivation!.strideTorsoLengths).toBeCloseTo(stride.strideLengthPx / scale.torsoLengthPx, 9)
+    expect(derivation!.figures!.strideTorsoLengths).toBeCloseTo(stride.strideLengthPx / scale.torsoLengthPx, 9)
     expect(derivation!.strideCount).toBe(stride.pairCount)
   })
 })

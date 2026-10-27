@@ -9,7 +9,6 @@ import {
 } from '../../guidance/feedbackPoints'
 import type { OneThing } from '../../guidance/feedbackPoints'
 import { readingHeadline } from '../../guidance/compositeReadings'
-import type { AreaReading } from '../../guidance/compositeReadings'
 import { FOCUS_AREAS } from '../../guidance/focusAreas'
 import type { FocusAreaId, TourStopId } from '../../guidance/focusAreas'
 import { METRIC_GUIDANCE } from '../../guidance/metricGuidance'
@@ -20,8 +19,8 @@ import { guidedHeadlineParts } from '../formatGuidedValue'
 import { joinList } from '../guidedGroups'
 import type { GuidedEntry } from '../guidedGroups'
 import { ExternalLink } from '../GuidedMetricCard'
-import { confidenceLabel, metricTier } from '../metricConfidence'
-import { SHORT_METRIC_LABELS, hasCompactBar, readingDerivation } from '../summary/summaryLabels'
+import { METRIC_LABELS, confidenceLabel, metricTier } from '../metricConfidence'
+import { SHORT_METRIC_LABELS, formatBounceDerivation, hasCompactBar } from '../summary/summaryLabels'
 import type { CaptureHint, TourAreaStop } from './tourPlan'
 import { tourStopDomId } from './tourPlan'
 
@@ -52,7 +51,7 @@ const VALUE_LABEL =
   'font-sans text-xs font-semibold uppercase tracking-wide text-neutral-600 dark:text-neutral-400'
 const VALUE = 'font-display text-4xl font-bold tabular-nums leading-tight max-lg:text-3xl'
 const SECONDARY_VALUE = 'font-display text-2xl font-bold tabular-nums leading-tight'
-const DERIVATION = 'runner-tour__derivation font-sans text-sm text-neutral-700 dark:text-neutral-300'
+const DERIVATION = 'runner-tour__derivation font-sans text-sm text-neutral-600 dark:text-neutral-400'
 const CONFIDENCE = 'font-sans text-sm text-neutral-700 dark:text-neutral-300'
 const CITATION = 'feedback-line__citation font-sans text-xs text-neutral-600 dark:text-neutral-400'
 const BUTTON =
@@ -140,63 +139,67 @@ function StopSection({ id, heading, children }: StopSectionProps) {
 }
 
 /**
- * A value on its own line, named by a small label above it, with its band position for assistive
- * technology only, its confidence when that is not normal, and a composite's "From …" line.
- * Excluded from the word budget (`.runner-tour__value`): numbers and names, not prose.
+ * Vertical ratio after the rhythm stop's prose, when the bounce reading is headed by it and the stop
+ * is not (`strides-xki9` review round 1): its label, its value with the band position as visible
+ * text, and its confidence when that is not normal. No bar (one per stop) and no "From" line (the
+ * summary card carries it). Excluded from the word budget with the value line: a name and numbers.
  */
-function ValueBlock({
-  entry,
-  derivation,
-  secondary,
-  composite,
-}: {
-  entry: GuidedEntry
-  derivation: string | undefined
-  secondary: boolean
-  composite: string | undefined
-}) {
+function SecondaryValue({ entry }: { entry: GuidedEntry }) {
   const parts = guidedHeadlineParts(entry, { standalone: true })
-  const shortName = SHORT_METRIC_LABELS[entry.metric.metric]
   return (
-    <div
-      className={secondary ? 'runner-tour__value runner-tour__value--secondary space-y-1' : 'runner-tour__value space-y-1'}
-      data-composite={composite}
-    >
-      {shortName !== undefined && <p className={VALUE_LABEL}>{shortName}</p>}
-      <p className={secondary ? SECONDARY_VALUE : VALUE}>
-        {parts.value}
-        {parts.position !== null && <span className="sr-only">, {parts.position}</span>}
+    <div className="runner-tour__value runner-tour__value--secondary space-y-1" data-composite="bounce">
+      <p className={VALUE_LABEL}>{METRIC_LABELS[entry.metric.metric]}</p>
+      <p className="font-sans text-sm text-neutral-800 dark:text-neutral-200">
+        <span className={SECONDARY_VALUE}>{parts.value}</span>
+        {parts.position !== null && (
+          <>
+            <span aria-hidden="true">{' · '}</span>
+            <span className="sr-only">, </span>
+            {parts.position}
+          </>
+        )}
       </p>
       {metricTier(entry.metric) === 'caveated' && <p className={CONFIDENCE}>{confidenceLabel(entry.metric)}</p>}
-      {derivation !== undefined && <p className={DERIVATION}>{derivation}</p>}
     </div>
   )
 }
 
-function compositeIdOf(reading: AreaReading<GuidedEntry>): string | undefined {
-  return reading.kind === 'composite' ? reading.id : undefined
-}
-
 /**
- * One measured focus area: its first reading's headline value (named, with its confidence when that
- * is not normal, and a composite's "From …" line), a compact band bar when that headline is banded,
- * then, when a composite reading comes later (rhythm's bounce, after cadence), that reading's value
- * as a smaller secondary block with no bar, then the cited why line, then either the area's one
- * studied option or its non-point. Nothing else: the cards are in the summary.
+ * One measured focus area: its headline value (named, with its confidence when that is not normal),
+ * a compact band bar when the headline is banded, vertical ratio's "From …" line when vertical ratio
+ * IS the headline, the cited why line, then either the area's one studied option or its non-point,
+ * then vertical ratio as a secondary value when the bounce reading is headed by it and the stop is
+ * not. The headline is the area's own (`view.headline`), the metric its feedback is keyed on.
+ * Nothing else: the cards are in the summary.
  */
 export function AreaStop({ stop }: { stop: TourAreaStop }) {
-  const { view, readings, bounce, feedback } = stop
-  const [first, ...later] = readings
-  const headline = readingHeadline(first)
-  const secondary = later.find((reading) => reading.kind === 'composite')
+  const { view, entries, readings, bounce, feedback } = stop
+  const [headline] = entries
+  const parts = guidedHeadlineParts(headline, { standalone: true })
+  const shortName = SHORT_METRIC_LABELS[headline.metric.metric]
+  const tier = view.headline?.tier
+  const headlineIsRatio = headline.metric.metric === 'verticalRatio'
+  const derivation = headlineIsRatio && bounce !== null ? formatBounceDerivation(bounce) : null
+  const ratioReading = readings.find(
+    (reading) => reading.kind === 'composite' && reading.headline.metric.metric === 'verticalRatio',
+  )
+  const secondary = !headlineIsRatio && ratioReading !== undefined ? readingHeadline(ratioReading) : null
   return (
     <StopSection id={view.area} heading={FOCUS_AREAS[view.area].label}>
-      <ValueBlock
-        entry={headline}
-        derivation={readingDerivation(first, bounce)}
-        secondary={false}
-        composite={compositeIdOf(first)}
-      />
+      {/* The value on its own line, named by a small label above it. Excluded from the word budget
+          with its label and confidence: numbers and names, not prose. */}
+      <div className="runner-tour__value space-y-1">
+        {shortName !== undefined && <p className={VALUE_LABEL}>{shortName}</p>}
+        <p className={VALUE}>
+          {parts.value}
+          {parts.position !== null && <span className="sr-only">, {parts.position}</span>}
+        </p>
+        {tier === 'caveated' && (
+          <p className="font-sans text-sm text-neutral-700 dark:text-neutral-300">
+            {confidenceLabel(headline.metric)}
+          </p>
+        )}
+      </div>
       {hasCompactBar(headline) && (
         <div className="runner-tour__scale w-full max-w-sm">
           <MetricScale band={headline.band!} value={headline.metric.value!} compact />
@@ -204,15 +207,7 @@ export function AreaStop({ stop }: { stop: TourAreaStop }) {
       )}
       {/* Below `lg` the bar's key sits under it, in the panel; at `lg` it is beside the runner. */}
       {hasCompactBar(headline) && <BandLegend className="runner-tour__panel-legend lg:hidden" />}
-      {/* One bar per stop: the secondary reading is a value and its derivation, never a second bar. */}
-      {secondary !== undefined && (
-        <ValueBlock
-          entry={readingHeadline(secondary)}
-          derivation={readingDerivation(secondary, bounce)}
-          secondary
-          composite={compositeIdOf(secondary)}
-        />
-      )}
+      {derivation !== null && <p className={DERIVATION}>{derivation}</p>}
       {feedback.why !== null && <FeedbackLine line={feedback.why} className="runner-tour__why" />}
       {feedback.cue !== null ? (
         <CueLine {...feedback.cue} />
@@ -221,6 +216,7 @@ export function AreaStop({ stop }: { stop: TourAreaStop }) {
           <FeedbackLine line={feedback.nonPoint} className="runner-tour__non-point" />
         )
       )}
+      {secondary !== null && <SecondaryValue entry={secondary} />}
     </StopSection>
   )
 }
