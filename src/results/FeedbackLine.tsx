@@ -10,7 +10,7 @@ export function FeedbackLine({ line, className = '' }: { line: CitedLine; classN
   return (
     <p className={`font-sans text-base text-neutral-900 dark:text-neutral-100 ${className}`}>
       {line.text}
-      <span className="font-sans text-xs text-neutral-600 dark:text-neutral-400">
+      <span className="feedback-line__citation font-sans text-xs text-neutral-600 dark:text-neutral-400">
         {' · '}
         {EVIDENCE_KIND_LABELS[line.evidence]}
         {' · '}

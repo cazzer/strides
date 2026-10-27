@@ -270,7 +270,13 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
     writeResultsLanding()
     showView('summary')
   }, [showView])
-  const replayTour = useCallback(() => showView('tour'), [showView])
+  // How many times the reader has replayed the tour. Folded into the tour's result key, so each
+  // replay plays the runner's intro again; leaving and re-entering any other way does not.
+  const [tourReplays, setTourReplays] = useState(0)
+  const replayTour = useCallback(() => {
+    setTourReplays((n) => n + 1)
+    showView('tour')
+  }, [showView])
   const showSummary = useCallback(() => showView('summary'), [showView])
   const showClassic = useCallback(() => showView('classic'), [showView])
   useEffect(() => {
@@ -676,7 +682,14 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
         */}
         {anyClipVideoReady && (
           <div ref={viewRegionRef} className="space-y-8">
-            {resultsViewMode === 'tour' && <RunnerTour {...resultsViewProps} onLeaveTour={leaveTour} />}
+            {resultsViewMode === 'tour' && (
+              <RunnerTour
+                {...resultsViewProps}
+                onLeaveTour={leaveTour}
+                resultKey={`${clipIds.join(' ')}#${tourReplays}`}
+                coverage={coverage}
+              />
+            )}
             {resultsViewMode === 'summary' && (
               <ResultsSummary
                 {...resultsViewProps}
