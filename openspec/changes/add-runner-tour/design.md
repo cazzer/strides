@@ -198,9 +198,23 @@ and `metricTier`. Nothing comes from `src/runner`.
   with spaces (a `TreeWalker`, so adjacent elements never run together), removing `.sr-only`,
   `.runner-tour__value` (name, value, confidence), `.feedback-line__citation` (evidence kind and
   source) and `.runner-tour__end`, which is budgeted separately (≤ 25).
-- **Phones.** The rail, body and stop class strings are exported constants (`TOUR_RAIL_CLASS`,
-  `TOUR_BODY_CLASS`, `TOUR_STOP_CLASS`) so `strides-trn2.4` can add its `max-lg:` background layout
-  in place.
+- **Phones (`strides-trn2.4`).** CSS only, `max-lg:` on the exported class strings, so nothing
+  renders per breakpoint and the one runner never remounts. Below `lg` the rail is `contents` and
+  the runner, its notes and the stops share one grid cell. The runner's parts are styled from the
+  tour through structural selectors (`figure > figcaption`, `figure > div:has(> svg)`,
+  `figure > div:last-child`), pinned by `runnerPhoneStructure.test.tsx`, so `src/runner` carries no
+  phone code. Each part sticks within the tour rather than being `fixed`: fixed would paint over
+  the content above the tour at scroll 0, and `position: sticky`/`fixed` makes its element a
+  stacking context, so the runner and its controls could not sit on different sides of the panels
+  if one element held both. The stage (sticky, viewport tall, edge to edge) is under the panels; the
+  control row (sticky, opaque, `z` above the panels) holds Skip intro and Pause; the caption shares
+  its first line. Each stop is a transparent slot of the old height with its panel at the bottom,
+  so a slot reaches the 42% reading line while its panel is still low, and the drawing is framed in
+  the slot's top: inset from the stage's bottom by `--rt-reserve` (`min(17.5rem, 50%)`, about a
+  resting panel), a CSS offset rather than a camera change. The bar wraps to two rows below `lg`
+  (heading and Skip, then dots) and is measured into `--runner-tour-bar-height`, since its height
+  depends on the width and the text size. `tourPanelContrast.test.ts` reads every surface opacity
+  from the tour's source and every colour from Tailwind's `theme.css`.
 - **Fidelity.** The tour is the default view and its runner animates through the scale pass. The
   A/B driver gained a `--view-arm` plane; tour vs `?view=classic` on side-landscape, side-portrait
   and front-approach, three fresh-process trials each with `--evidence`, was bit-identical in every

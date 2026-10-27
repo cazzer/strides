@@ -22,15 +22,25 @@ import { tourStopDomId } from './tourPlan'
 
 /**
  * A stop's section: at least the viewport below the session header and the tour's sticky bar, so
- * one stop at a time sits at the reading line. Named so the phone layout (`strides-trn2.4`) can add
- * its `max-lg:` panel styling here rather than in each stop.
+ * one stop at a time sits at the reading line. Below `lg` the section is a transparent slot of the
+ * same height, its panel (`TOUR_PANEL_CLASS`) at the bottom: the runner shows through the slot's
+ * top, which is the part of the screen the runner's drawing is framed in (`--rt-reserve`), and the
+ * slot reaches the reading line while its panel is still low on the screen.
  */
 export const TOUR_STOP_CLASS =
-  'runner-tour__stop flex min-h-[calc(100dvh_-_var(--motion-story-header-height,88px)_-_3.5rem)] scroll-mt-[calc(var(--motion-story-header-height,88px)_+_3.5rem)] flex-col justify-center gap-3 border-t-2 border-black py-10 focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand-600 dark:border-white'
-const STOP_HEADING = 'font-display text-2xl font-bold tracking-tight'
+  'runner-tour__stop flex min-h-[calc(100dvh_-_var(--motion-story-header-height,88px)_-_3.5rem)] scroll-mt-[calc(var(--motion-story-header-height,88px)_+_3.5rem)] flex-col justify-center gap-3 border-t-2 border-black py-10 focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand-600 max-lg:min-h-[calc(100dvh_-_var(--rt-top))] max-lg:scroll-mt-[var(--rt-top)] max-lg:justify-end max-lg:border-t-0 max-lg:py-3 dark:border-white'
+/**
+ * A stop's content. At `lg` it has no box of its own (`contents`), so the section lays its content
+ * out directly. Below `lg` it is the panel that scrolls over the runner: at least 85% opaque and
+ * blurred, inside a frame, so its text keeps WCAG AA contrast over the runner's worst-case stroke
+ * (`tourPanelContrast.test.ts`, which reads the opacity from this string).
+ */
+export const TOUR_PANEL_CLASS =
+  'runner-tour__panel lg:contents max-lg:flex max-lg:flex-col max-lg:gap-3 max-lg:border-2 max-lg:border-black max-lg:bg-white/90 max-lg:p-4 max-lg:backdrop-blur-md max-lg:dark:border-white max-lg:dark:bg-black/90'
+const STOP_HEADING = 'font-display text-2xl font-bold tracking-tight max-lg:text-xl'
 const VALUE_LABEL =
   'font-sans text-xs font-semibold uppercase tracking-wide text-neutral-600 dark:text-neutral-400'
-const VALUE = 'font-display text-4xl font-bold tabular-nums leading-tight'
+const VALUE = 'font-display text-4xl font-bold tabular-nums leading-tight max-lg:text-3xl'
 const CITATION = 'feedback-line__citation font-sans text-xs text-neutral-600 dark:text-neutral-400'
 const BUTTON =
   'inline-flex min-h-11 items-center justify-center border-2 border-black px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black transition-colors hover:bg-black hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:border-white dark:text-white dark:hover:bg-white dark:hover:text-black'
@@ -73,10 +83,12 @@ function StopSection({ id, heading, children }: StopSectionProps) {
       aria-labelledby={`${domId}-heading`}
       className={TOUR_STOP_CLASS}
     >
-      <h3 id={`${domId}-heading`} className={STOP_HEADING}>
-        {heading}
-      </h3>
-      {children}
+      <div className={TOUR_PANEL_CLASS}>
+        <h3 id={`${domId}-heading`} className={STOP_HEADING}>
+          {heading}
+        </h3>
+        {children}
+      </div>
     </section>
   )
 }
@@ -151,7 +163,7 @@ export function OneThingStop({ oneThing, unmeasured, captureHint, onSeeAll, onAd
           {oneThing.kind === 'nothingToChange' ? NOTHING_TO_CHANGE : ONE_THING_UNCLEAR[oneThing.reason]}
         </p>
       )}
-      <div className="runner-tour__end mt-6 space-y-3 border-t-2 border-neutral-300 pt-4 dark:border-neutral-700">
+      <div className="runner-tour__end mt-6 space-y-3 border-t-2 border-neutral-300 pt-4 max-lg:mt-2 max-lg:pt-3 dark:border-neutral-700">
         {unmeasured.length > 0 && (
           <p className="font-sans text-sm text-neutral-700 dark:text-neutral-300">
             {`Not measured: ${joinList(unmeasured.map((area) => FOCUS_AREAS[area].label))}.`}

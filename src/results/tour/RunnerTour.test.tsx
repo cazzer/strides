@@ -206,6 +206,23 @@ describe('RunnerTour — shell', () => {
     expect(onLeaveTour).toHaveBeenCalledTimes(1)
   })
 
+  it('lays out the phone layout in CSS alone: one runner, each stop’s content in one panel', () => {
+    // Below `lg` the runner is a background and each stop a panel over it, all through `max-lg:`
+    // classes: nothing renders per breakpoint, so a resize never remounts the runner (and never
+    // resets the reader's Pause).
+    const { container } = renderTour()
+    expect(runner.mounts).toBe(1)
+    for (const section of container.querySelectorAll<HTMLElement>('[data-tour-stop]')) {
+      const panels = section.querySelectorAll(':scope > .runner-tour__panel')
+      expect(panels, section.dataset.tourStop).toHaveLength(1)
+      expect(section.children).toHaveLength(1)
+      // The heading that labels the section is in its panel, first.
+      expect(panels[0].firstElementChild?.id).toBe(section.getAttribute('aria-labelledby'))
+    }
+    // Every stop is labelled by its heading still, through the panel.
+    expect(screen.getByRole('region', { name: 'Landing' })).toHaveAttribute('data-tour-stop', 'landing')
+  })
+
   it('ends with "See all measurements", which leaves the tour', () => {
     const { onLeaveTour } = renderTour()
     fireEvent.click(screen.getByRole('button', { name: 'See all measurements' }))

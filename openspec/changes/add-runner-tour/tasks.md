@@ -59,3 +59,12 @@
 - [x] 7.8 A/B fidelity gate (`--view-arm`): tour vs classic bit-identical but `elapsedMs`.
 - [x] 7.9 Verify live at 1280 px on `park-side-landscape.mp4` and "Demo (3 clips)"; lint, `tsc -b`, `vitest run`, e2e, `openspec validate --strict`.
 - [x] 7.10 Review round 1: landing → `legsSide` (summary too); headline-only focus; intro gated on a 90%-visible rail, intro camera from coverage; no coverage notice above the tour, hint as the add-a-clip control; wider rail, taller runner, value on its own line; "Your runner model"; NOTHING_TO_CHANGE reworded; progress dots; Replay scrolls to the top; TreeWalker word count; legend per active stop; ResizeObserver re-read.
+
+## 8. Runner tour, phones (`strides-trn2.4`)
+
+- [x] 8.1 `max-lg:` layout on the exported class strings: the rail `contents`; runner stage, notes and stops in one grid cell; the stage sticky under the bar, under the panels; the control row sticky above them; one runner at every width.
+- [x] 8.2 `TourStop`: each stop's content in a panel (`TOUR_PANEL_CLASS`), at least 85% opaque with a backdrop blur, at the bottom of a transparent slot; phone sizes for the heading and the value.
+- [x] 8.3 Frame the drawing above the panels' reserve (`--rt-reserve`); measure the tour bar into `--runner-tour-bar-height`; two-row bar below `lg`.
+- [x] 8.4 Spec: edit "The runner sits beside the stops…" in place for the narrow layout.
+- [x] 8.5 Tests: `tourPanelContrast.test.ts` (WCAG AA over the page and every runner colour, light and dark), `runnerPhoneStructure.test.tsx`, the panel structure in `RunnerTour.test.tsx`.
+- [x] 8.6 Verify live at 390×844 (light, dark, reduced motion) on `park-side-landscape.mp4` and "Demo (3 clips)"; no horizontal overflow at 360/390/430; the runner stops when the tab is hidden; desktop at 1280 pixel-identical; A/B tour vs classic.
