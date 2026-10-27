@@ -172,8 +172,8 @@ The figure's height SHALL be solved per parameter set so that the contact foot's
 (ankle, heel or toe) is exactly on the ground (y = 0). Through stance, from contact to toe-off, the
 stance leg SHALL be solved so that the foot's lowest point stays on the ground: within numerical
 precision at the neutral parameters, and within 0.01 torso lengths over the declared realistic
-domain (landing offsets up to 0.3 torso lengths, every other leg parameter across its realistic
-spread) and at every range corner with the landing offset at its lower end. The bound values SHALL
+domain (landing offsets up to 0.3 torso lengths, which is the neutral overstride, every other leg
+parameter across its realistic spread) and at every range corner with the landing offset at its lower end. The bound values SHALL
 outrank the pin: where a parameter set cannot keep the foot down without breaking a binding (very
 large landing offsets), the mid-stance foot SHALL give way by a bounded amount, every bound value
 SHALL still read back exactly, and the contact foot SHALL still stand exactly on the ground. The

@@ -398,9 +398,34 @@ millisecond after contact moves fast.
   declared domain (thigh peak 20 added) and at landing ≤ 0.512 with swing bend ≥ 100 and step width
   ≥ 0.3; a 50° swing bend, crossed legs (step width −1.5) or landing ≥ 0.6 can still dip to −0.188.
 - Landing 0.7 corners: stance sink 0.181 (was 0.124), swing dip 0.188 (was 0.172).
-- **Open:** at landing 0.35, swing bend 50, step width −1.5, foot strike 0.4 (drawn 0.175), thigh peak
-  10 (drawn 13.5), bounce 0, kneeFlexion reads 11° off its bound. Present on the round-0 model too
-  (af7eee70); found by the per-landing sweep, not yet diagnosed.
+
+**Review round 2 (ps19.4).**
+- **kneeFlexion regression, fixed.** At landing 0.35, swing bend 50, step width −1.5, foot strike
+  0.4, thigh peak 10, bounce 0 (all measured) kneeFlexion read 39° against 50; main's model reads
+  it exactly. Traced: the stance knee rose from a straight contact (0°) to 21° at phase 0.08, then
+  straightened to 0° at mid-stance (the leg at full reach), and the metric's zig-zag extrema finder
+  (rise ≥ 20 from the last minimum, then fall ≥ 20) counted 21° as a second maximum. The stance
+  solve now samples its own knee over stance (64 steps, in `legFrame`, memoized on the parameter
+  values) and caps the reach so the knee never straightens more than 18° (20 less a 2° margin for
+  the 3-sample smoothing) below its running maximum. Where that binds the foot floats slightly.
+  A seeded random check (500 interior sets over the full ranges, random measured subsets) now holds
+  every MEASURE_PARAM binding, and so does the per-landing sweep below.
+- **The declared domain stops at landing 0.3, the neutral overstride.** Past it, per landing over
+  the 32 corners of the other leg parameters (every binding exact, contact exact), worst stance
+  sink / swing dip: 0.35: 0.056 / −0.060; 0.4: 0.077 / −0.083; 0.45: 0.089 / −0.096; 0.512 (the
+  demo clip): 0.108 / −0.115; 0.6: 0.138 / −0.146; 0.7: 0.181 / −0.188. No foot rotation was added
+  to absorb the miss.
+- Annotation marks hung off the figure (all but landing and step width, which hang off the ground)
+  follow `pelvisHeight(drawn) − pelvisHeight(values)` during a value tween.
+
+**Known limits, accepted.**
+- Bounce smoothness holds (≤ 1.3× a sinusoid per frame, step-peak spread ≤ 0.12b) only up to
+  b = 0.14; larger bounces are measured above (strides-ps19.7).
+- The heel-lift branch still snaps the foot from heel-down to toe-down where the lift begins on a
+  heel-strike foot, or where the foot's key passes flat at mid-stance with the leg at full reach.
+  With the ankle higher than a flat sole reaches, no foot angle is both continuous and on the
+  ground; both continuous variants tried floated the foot up to 0.04 inside the domain.
+- The swing foot can dip to −0.188 with a 50° swing bend, step width −1.5 or landing ≥ 0.6.
 
 ## Risks / Trade-offs
 
