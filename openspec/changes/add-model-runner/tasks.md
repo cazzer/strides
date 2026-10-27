@@ -46,3 +46,10 @@
 - [x] 8.3 Live reduced-motion switch returns to the still frame; single loop controller; tests for media change, camera retarget, unmount, model cross-checks
 - [x] 8.4 Far/unfocused opacity floors, 6 px focus stroke, arc wedge, forced-colours palette, ground at the foot floor, "shown approximately", legend only when dashes are in frame
 - [x] 8.5 Gates and re-shot screenshots (390/1280, light/dark, reduced/normal, forced colours)
+
+## 9. Renderer review round 2
+
+- [x] 9.1 A still figure draws only the limb marks at its held phase; every mark while playing
+- [x] 9.2 The held phase is taken on the side view's near leg in every camera
+- [x] 9.3 Value tween progress is wall-clock and shared by drawing and cadence; zero duration is finished; overlap with a camera tween tested
+- [x] 9.4 Requirement renamed "Reduced motion holds a still pose"; `footFloor` computed once; left labels get more gap

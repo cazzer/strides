@@ -210,16 +210,27 @@ that pose. The still frame (reduced motion, paused, first frame) holds the FIRST
 parameter's key phase on the annotated leg, so that limb lies exactly on its mark; without a keyed
 focus it holds mid-stance. A still figure moves to a new focus's held phase; a playing one is never
 jumped. Reduced motion switching on with no reader choice returns the figure to the held phase.
-Side views annotate the near limbs (cos yaw >= 0: right); front views (|cos yaw| < 0.5) put each
-limb mark on the leg whose key phase is nearest the held phase (the stance leg for a contact
-parameter), arms on the stance side. No limb-shaped guide is drawn: the first version drew ghost
+The held phase is always taken on the leg a side view calls near (cos yaw >= 0: right), front
+views included, so turning a paused camera from side to front never moves the figure by half a
+stride (review round 2). Side views annotate the near limbs; front views (|cos yaw| < 0.5) put each
+limb mark on the leg whose key phase is nearest the held phase (the held leg for the first), arms on
+the stance side. A FOCUS change while still can change the held phase; that snap is accepted
+because the figure is not moving. While still, a limb mark whose key phase is not the held phase is
+not drawn (`shownWhileStill`): only the first keyed focus parameter's limb is at its key phase, and
+a second arc would float off the figure (review round 2). Its value stays in the text alternative,
+and every mark is drawn while the figure plays, since the live limb passes through each. No limb-shaped guide is drawn: the first version drew ghost
 thighs, shanks and contact legs beside the runner, which read as a target pose (PRD honesty rule 3,
 strides-v2d). Guides are now short reference rays (arc radius + 0.12) and extension ticks.
 
 **Intro seam.** `overrides: { values, sources, flash }` are discrete (one render per change);
-`overrides.valueTween: { from, to, durationMs, key }` is interpolated linearly by the loop from the
-moment its key first appears, runs while paused (like a camera tween) but not while hidden or
-offscreen, jumps to `to` under reduced motion, and holds `to` exactly while the same key is passed.
+`overrides.valueTween: { from, to, durationMs, key }` is interpolated linearly by the loop. Its
+progress is wall-clock time since the key first appeared (`performance.now()`), shared by the
+drawing and the cadence integration through one helper (`valueTweenProgress`; a non-positive
+duration is finished), so it stays in step with the intro hook's timers and, after a hidden or
+offscreen stretch, resumes at the right progress. It runs while paused (like a camera tween), jumps
+to `to` under reduced motion, and holds `to` exactly while the same key is passed. The key is the
+identity: the same key with a different `to` is ignored. When the tween ends between frames the
+loop draws its end state once before stopping.
 ps19.3 should drive each parameter's tween through `valueTween` and flip `sources`/`flash` per
 step. Without any override exactly `bound` is drawn.
 

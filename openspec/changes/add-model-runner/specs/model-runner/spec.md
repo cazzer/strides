@@ -187,7 +187,9 @@ strike, step width and swing-foot excursion), whose geometry is the drawn value 
 label is the metric's own reported value in the guided card's format. A clamped value's label SHALL
 say it is shown approximately. A limb annotation SHALL be built on the pose its metric reads (its
 key phase) and SHALL lie on the live figure's limb whenever the figure is at that phase; no
-second, limb-shaped figure SHALL be drawn. A focus metric that drives no parameter SHALL be
+second, limb-shaped figure SHALL be drawn. While the figure is still, a limb mark whose key phase is
+not the held phase SHALL NOT be drawn (its value stays in the text alternative); while the figure
+plays, every mark SHALL be drawn. A focus metric that drives no parameter SHALL be
 ignored, and two focus metrics driving one parameter SHALL give one annotation.
 
 #### Scenario: Trunk lean is annotated
@@ -197,6 +199,10 @@ ignored, and two focus metrics driving one parameter SHALL give one annotation.
 #### Scenario: A clamped foot strike says so
 - **WHEN** overstriding is measured at 0.05 and foot strike at 0.10, with foot strike in focus
 - **THEN** the foot-strike label reads its class and "shown approximately", and the text alternative says it is drawn at a limit of the figure, not at the measured value
+
+#### Scenario: A second keyed focus does not float
+- **WHEN** knee drive and knee flexion are both in focus and the runner is still
+- **THEN** only the knee-drive arc is drawn, and the knee-flexion arc appears once the runner plays
 
 #### Scenario: The annotated limb is the live limb
 - **WHEN** knee drive is in focus and the runner is still
@@ -247,14 +253,15 @@ choice SHALL persist for the component's lifetime, across focus and camera chang
 - **WHEN** the reader pauses and the focus and camera then change
 - **THEN** the button still offers "Play runner" and the phase stays frozen
 
-### Requirement: Reduced motion holds a still mid-stance pose
+### Requirement: Reduced motion holds a still pose
 
 Under reduced motion the runner SHALL NOT autoplay; it SHALL hold a still pose until the reader
 presses play. The still pose (under reduced motion, while paused, and on the first frame) SHALL be
 the key phase of the first focus parameter that has one, so that limb lies exactly on its
-annotation, and mid-stance otherwise. A still figure SHALL move to a new focus's still pose, and
-reduced motion switching on while the reader has not chosen to play SHALL stop the figure at its
-still pose.
+annotation, and mid-stance otherwise. The key phase SHALL be taken on the same leg in every
+camera (the leg a side view shows nearer), so a camera change never moves the still pose. A still
+figure SHALL move to a new focus's still pose, and reduced motion switching on while the reader has
+not chosen to play SHALL stop the figure at its still pose.
 
 #### Scenario: Reduced motion on load
 - **WHEN** the runner mounts with reduced motion preferred and no keyed focus
