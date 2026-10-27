@@ -5,17 +5,19 @@ import type { RefObject } from 'react'
 export const MOSTLY_VISIBLE_THRESHOLD = 0.9
 
 /**
- * Whether at least 90% of `ref`'s element is on screen. The tour gates the runner's intro on it, on
- * top of the runner's own "seen" signal (any part on screen), so the intro never plays out with the
- * figure mostly below the fold.
+ * Whether at least 90% of an element is on screen: the first match of `selector` inside `ref`'s
+ * element, or that element itself when nothing matches. The tour gates the runner's intro on its
+ * FIGURE (the drawing, not the caption, controls or legend around it), on top of the runner's own
+ * "seen" signal (any part on screen), so the intro never plays out with the figure below the fold.
  *
  * True where `IntersectionObserver` is unavailable: nothing can be measured, so nothing is held back.
  */
-export function useMostlyVisible(ref: RefObject<Element | null>): boolean {
+export function useMostlyVisible(ref: RefObject<Element | null>, selector?: string): boolean {
   const supported = typeof IntersectionObserver === 'function'
   const [visible, setVisible] = useState(false)
   useEffect(() => {
-    const element = ref.current
+    const container = ref.current
+    const element = (selector ? container?.querySelector(selector) : null) ?? container
     if (!element || typeof IntersectionObserver !== 'function') return
     const observer = new IntersectionObserver(
       (entries) => {
@@ -33,6 +35,6 @@ export function useMostlyVisible(ref: RefObject<Element | null>): boolean {
     )
     observer.observe(element)
     return () => observer.disconnect()
-  }, [ref])
+  }, [ref, selector])
   return supported ? visible : true
 }

@@ -66,6 +66,9 @@ export const TOUR_RAIL_CLASS =
 const RUNNER_HEIGHT_CLASS =
   'h-56 lg:h-[calc(100dvh_-_var(--motion-story-header-height,88px)_-_11rem)]'
 
+/** The runner's drawing inside the rail, which the intro waits to see. */
+const RUNNER_FIGURE_SELECTOR = 'figure svg'
+
 /** Every area's metrics in tour order: the intro applies the figure's parameters in this order. */
 const INTRO_ORDER: readonly MetricId[] = FOCUS_AREA_ORDER.flatMap((area) => FOCUS_AREAS[area].metricIds)
 
@@ -187,8 +190,8 @@ interface TourBodyProps {
  *
  * The intro plays first, from `introPreset`, which is the runner's camera for as long as the intro
  * runs (no stop is shown then), so the two agree on which lateral parameters get a step. It starts
- * only once the rail is at least 90% on screen as well as seen by the runner, so it never plays out
- * below the fold. Reading on past the first stop ends it.
+ * only once the runner's figure (its drawing) is at least 90% on screen as well as seen by the
+ * runner, so it never plays out below the fold. Reading on past the first stop ends it.
  *
  * The runner's focus is the shown stop's HEADLINE metric only, so the figure never labels a number
  * the stop's text does not state.
@@ -211,13 +214,14 @@ function TourBody({
 
   const params = useMemo(() => bindRunnerParams(heuristics), [heuristics])
   const [runnerSeen, setRunnerSeen] = useState(false)
-  const railVisible = useMostlyVisible(railRef)
+  // The figure, not the whole rail: its caption, Pause row and legend may sit below the fold.
+  const figureVisible = useMostlyVisible(railRef, RUNNER_FIGURE_SELECTOR)
   const intro = useRunnerIntro({
     bound: params,
     resultKey,
     order: INTRO_ORDER,
     camera: introPreset,
-    active: runnerSeen && railVisible,
+    active: runnerSeen && figureVisible,
   })
   const { running: introRunning, skip: skipIntro } = intro
   useEffect(() => {

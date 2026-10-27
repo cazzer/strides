@@ -359,7 +359,7 @@ describe('RunnerTour — the runner follows the active stop', () => {
     expect(props.camera).toBe('feetFront')
   })
 
-  it('holds the intro until 90% of the rail is on screen', async () => {
+  it('holds the intro until 90% of the runner figure is on screen', async () => {
     vi.useFakeTimers()
     const observers: Array<{ callback: IntersectionObserverCallback; target: Element | null }> = []
     vi.stubGlobal(
@@ -397,6 +397,7 @@ describe('RunnerTour — the runner follows the active stop', () => {
         }
       })
     const { container } = renderTour({ resultKey: nextKey() })
+    // The mocked runner draws no figure, so the rail itself stands in for it here.
     expect(observers.some(({ target }) => target === rail(container))).toBe(true)
     report(0.5)
     act(() => vi.advanceTimersByTime(INTRO_HOLD_MS * 4))

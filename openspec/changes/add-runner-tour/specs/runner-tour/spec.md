@@ -84,7 +84,8 @@ With no stop active the runner SHALL show the whole figure from the side at full
 The tour SHALL play the runner's adopt-your-gait intro first, once per result: on the whole figure
 from the side, or on the feet from the front for a session with front-view clips only, so its
 lateral measurements get a step. The same camera SHALL be the runner's while the intro runs. The
-intro SHALL NOT start until at least 90% of the runner's rail is on screen. It plays
+intro SHALL NOT start until at least 90% of the runner's figure (its drawing; the caption, the
+controls and the legend around it may be off screen) is on screen. It plays
 once: a remount or a re-render of the same result (including the scale-pass graft) SHALL NOT replay
 it, and replaying the tour SHALL, from the top of the tour. While the intro runs no stop SHALL point the camera, and the intro
 SHALL end when the active stop moves past the first stop. Under reduced motion the intro SHALL NOT

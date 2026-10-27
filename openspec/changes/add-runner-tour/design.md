@@ -184,9 +184,11 @@ and `metricTier`. Nothing comes from `src/runner`.
 - **Intro.** `useRunnerIntro` with `order` = every area's metrics in tour order, `camera` =
   `introCamera(coverage)` (`feetFront` for a front-only session, whose lateral parameters need a
   view that sees sideways movement; `wholeBodySide` otherwise) — the runner's own camera for as long
-  as the intro runs, since no stop is shown then — and `active` = `onActiveChange` AND the rail
-  being ≥ 90% on screen (the tour's own `IntersectionObserver`), so the intro never plays out below
-  the fold. For the same reason the session shows no coverage notice above the tour; the end block
+  as the intro runs, since no stop is shown then — and `active` = `onActiveChange` AND the runner's
+  figure (its `svg`, found through the rail) being ≥ 90% on screen (the tour's own
+  `IntersectionObserver`), so the intro never plays out below the fold. Gating on the whole rail
+  held the intro at scroll 0 on a 1280×800 screen, where the rail's Pause row and legend sit just
+  below the fold. For the same reason the session shows no coverage notice above the tour; the end block
   carries it, its hint the add-a-clip control itself. Replay tour scrolls the view region to the
   top, instantly, before focusing the heading. `resultKey` is the session's clip ids plus a
   replay count that "Replay tour" increments, so a replay plays the intro again and the scale-pass
