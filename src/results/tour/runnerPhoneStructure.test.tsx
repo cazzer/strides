@@ -42,5 +42,13 @@ describe('the runner hooks the phone tour styles', () => {
     expect(controls.contains(screen.getByRole('button', { name: 'Pause runner' }))).toBe(true)
     expect([...figure.querySelectorAll('button')].every((button) => controls.contains(button))).toBe(true)
     expect(controls.querySelectorAll(':scope > p')).toHaveLength(1)
+
+    // A short phone's row shows Pause as its icon alone: the rule hides the text of a control
+    // with an `aria-label` (its accessible name) and keeps its first `span` child (the icon);
+    // Skip intro has no `aria-label`, so it keeps its words.
+    const pause = screen.getByRole('button', { name: 'Pause runner' })
+    expect(pause).toHaveAttribute('aria-label', 'Pause runner')
+    expect(pause.querySelector(':scope > span')).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByRole('button', { name: 'Skip intro' })).not.toHaveAttribute('aria-label')
   })
 })

@@ -1,11 +1,13 @@
 import { act, render } from '@testing-library/react'
 import { useRef } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { useMostlyVisible } from './useMostlyVisible'
+import { MOSTLY_VISIBLE_MIN_HEIGHT, mostlyVisibleMinHeight, useMostlyVisible } from './useMostlyVisible'
 
 interface Observed {
   callback: IntersectionObserverCallback
   target: Element | null
+  /** How many times `observe` was called (observing again delivers a fresh entry). */
+  observes: number
 }
 
 function stubObserver(): Observed[] {
@@ -15,11 +17,12 @@ function stubObserver(): Observed[] {
     class {
       record: Observed
       constructor(callback: IntersectionObserverCallback) {
-        this.record = { callback, target: null }
+        this.record = { callback, target: null, observes: 0 }
         observed.push(this.record)
       }
       observe(target: Element) {
         this.record.target = target
+        this.record.observes += 1
       }
       disconnect() {}
       unobserve() {}
@@ -31,7 +34,17 @@ function stubObserver(): Observed[] {
   return observed
 }
 
-function report(observed: Observed[], ratio: number, height = 100 * ratio, viewport = 800) {
+/**
+ * Delivers one entry: `ratio` of the element on screen, `height` px of it, in a `viewport` px root.
+ * The element's own height defaults to what the ratio implies (200 px when nothing is on screen).
+ */
+function report(
+  observed: Observed[],
+  ratio: number,
+  height = 200 * ratio,
+  viewport = 800,
+  elementHeight = ratio > 0 ? height / ratio : 200,
+) {
   act(() => {
     for (const { callback, target } of observed) {
       callback(
@@ -39,6 +52,7 @@ function report(observed: Observed[], ratio: number, height = 100 * ratio, viewp
           {
             intersectionRatio: ratio,
             intersectionRect: { height },
+            boundingClientRect: { height: elementHeight },
             rootBounds: { height: viewport },
             target,
           } as unknown as IntersectionObserverEntry,
@@ -88,6 +102,72 @@ describe('useMostlyVisible', () => {
     const seen: boolean[] = []
     render(<Harness onVisible={(v) => seen.push(v)} />)
     report(observed, 0.5, 760, 800)
+    expect(seen.at(-1)).toBe(true)
+  })
+
+  it('never counts a zero-height element, which an IntersectionObserver reports as wholly on screen', () => {
+    const observed = stubObserver()
+    const seen: boolean[] = []
+    render(<Harness selector="figure svg" onVisible={(v) => seen.push(v)} />)
+    // What Chrome reports for a zero-area SVG inside the viewport (strides-xsl3).
+    report(observed, 1, 0, 800, 0)
+    expect(seen.at(-1)).toBe(false)
+  })
+
+  it(`needs the element to be at least ${MOSTLY_VISIBLE_MIN_HEIGHT} px tall`, () => {
+    const observed = stubObserver()
+    const seen: boolean[] = []
+    render(<Harness selector="figure svg" onVisible={(v) => seen.push(v)} />)
+    report(observed, 1, MOSTLY_VISIBLE_MIN_HEIGHT - 1, 800, MOSTLY_VISIBLE_MIN_HEIGHT - 1)
+    expect(seen.at(-1)).toBe(false)
+    report(observed, 1, MOSTLY_VISIBLE_MIN_HEIGHT, 800, MOSTLY_VISIBLE_MIN_HEIGHT)
+    expect(seen.at(-1)).toBe(true)
+    // The floor applies to the fill-the-viewport rule too.
+    report(observed, 0.5, 760, 800, 100)
+    expect(seen.at(-1)).toBe(false)
+  })
+
+  it('lowers the floor to a quarter of a short viewport, so a landscape phone still plays the intro', () => {
+    expect(mostlyVisibleMinHeight(800)).toBe(MOSTLY_VISIBLE_MIN_HEIGHT)
+    expect(mostlyVisibleMinHeight(375)).toBe(93.75)
+    expect(mostlyVisibleMinHeight(undefined)).toBe(MOSTLY_VISIBLE_MIN_HEIGHT)
+    expect(mostlyVisibleMinHeight(0)).toBe(MOSTLY_VISIBLE_MIN_HEIGHT)
+    const observed = stubObserver()
+    const seen: boolean[] = []
+    render(<Harness selector="figure svg" onVisible={(v) => seen.push(v)} />)
+    // 667×375: the drawing gets 117 px (its floor is the whole stage there).
+    report(observed, 1, 117, 375, 117)
+    expect(seen.at(-1)).toBe(true)
+    report(observed, 1, 93, 375, 93)
+    expect(seen.at(-1)).toBe(false)
+    // Never zero.
+    report(observed, 1, 0, 375, 0)
+    expect(seen.at(-1)).toBe(false)
+  })
+
+  it('re-reads the element when it resizes, as growing from 0 px while on screen crosses no threshold', () => {
+    const observed = stubObserver()
+    const resizes: ResizeObserverCallback[] = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resizes.push(callback)
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+    const seen: boolean[] = []
+    render(<Harness selector="figure svg" onVisible={(v) => seen.push(v)} />)
+    expect(observed[0].observes).toBe(1)
+    report(observed, 1, 0, 800, 0)
+    expect(seen.at(-1)).toBe(false)
+    // The figure gets its room: the hook observes it again, and the fresh entry counts.
+    act(() => resizes[0]([], {} as ResizeObserver))
+    expect(observed[0].observes).toBe(2)
+    report(observed, 1, 219, 548, 219)
     expect(seen.at(-1)).toBe(true)
   })
 

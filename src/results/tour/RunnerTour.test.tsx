@@ -9,6 +9,7 @@ import type { ScalePassStatus, VideoAnalysisState } from '../types'
 import { hasCompactBar } from '../summary/summaryLabels'
 import { RunnerTour } from './RunnerTour'
 import { tourPlan } from './tourPlan'
+import { SHORT_PHONE_QUERY } from './useShortPhoneLayout'
 
 // The real runner draws SVG on a rAF loop; what this file checks is which camera, focus, rate and
 // intro the tour hands it, and that it is mounted once for the tour's whole life. It reports itself
@@ -121,6 +122,30 @@ function setReducedMotion(reduced: boolean) {
   })) as unknown as typeof window.matchMedia
 }
 
+/** A matchMedia whose short-phone query matches as `set` says; `set` fires its change listeners. */
+function stubShortPhone(initial: boolean): { set: (matches: boolean) => void } {
+  const state = { matches: initial }
+  const listeners = new Set<() => void>()
+  window.matchMedia = vi.fn((query: string) => ({
+    get matches() {
+      return query === SHORT_PHONE_QUERY ? state.matches : false
+    },
+    media: query,
+    onchange: null,
+    addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+    removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia
+  return {
+    set: (matches) => {
+      state.matches = matches
+      act(() => listeners.forEach((listener) => listener()))
+    },
+  }
+}
+
 /** Visible words a stop's prose carries (design.md D4): the value line, sr-only text, citations,
  * the phone panel's band-bar key (the bar's legend, as beside the runner at `lg`) and the end block
  * are excluded; the end block is budgeted on its own. */
@@ -231,6 +256,73 @@ describe('RunnerTour — shell', () => {
     expect(container.querySelectorAll('.runner-tour__panel-legend').length).toBeGreaterThan(0)
     // Every stop is labelled by its heading still, through the panel.
     expect(screen.getByRole('region', { name: 'Landing' })).toHaveAttribute('data-tour-stop', 'landing')
+  })
+
+  it('on a short phone, puts the dots and Skip in one row with the runner’s controls, without remounting it', async () => {
+    const phone = stubShortPhone(true)
+    const { container, onLeaveTour } = renderTour()
+
+    const heading = screen.getByRole('heading', { level: 2, name: 'Your runner model' })
+    const skip = screen.getByRole('button', { name: 'Skip to summary' })
+    // The bar keeps only the heading, which stays the tour's entry point and comes first.
+    expect(heading.parentElement?.children).toHaveLength(1)
+    expect(heading.compareDocumentPosition(skip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // The row is a sticky cell of the body's grid.
+    const row = skip.closest('.runner-tour__header')!
+    expect(row).toHaveClass('sticky')
+    expect(row.parentElement).toHaveClass('runner-tour__body')
+    expect(row.querySelector('nav[aria-label="Tour stops"]')).not.toBeNull()
+    // Visibly "Summary"; the name is unchanged.
+    expect(skip.querySelector('.sr-only')).toHaveTextContent('Skip to')
+    // The runner is told to lay its controls over the row.
+    expect((await lastRunnerProps()).className).toContain('[data-runner-part=controls]]:w-fit')
+    fireEvent.click(skip)
+    expect(onLeaveTour).toHaveBeenCalledTimes(1)
+
+    // Turning the phone (no longer short): back in the bar, and the runner is never remounted.
+    phone.set(false)
+    expect(screen.getByRole('button', { name: 'Skip to summary' }).closest('.runner-tour__header')).toBe(
+      heading.parentElement,
+    )
+    expect(container.querySelector('.runner-tour__body .runner-tour__header')).toBeNull()
+    expect((await lastRunnerProps()).className).not.toContain('[data-runner-part=controls]]:w-fit')
+    expect(runner.mounts).toBe(1)
+  })
+
+  it('on a short phone, orders the shared row as it reads: the runner’s controls, the dots, Skip, then the stops', () => {
+    stubShortPhone(true)
+    const { container } = renderTour()
+    const row = screen.getByRole('button', { name: 'Skip to summary' }).closest('.runner-tour__header')!
+    // The runner's controls (Skip intro, Pause) are drawn over the row's start from inside the
+    // rail: the rail comes first in the DOM, so Tab reaches them first.
+    expect(rail(container).compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const stops = container.querySelector('.runner-tour__stops')!
+    expect(row.compareDocumentPosition(stops) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const order = [...row.querySelectorAll('a, button')].map((el) => el.getAttribute('data-tour-action'))
+    expect(order.at(-1)).toBe('skip')
+    expect(order.slice(0, -1).length).toBeGreaterThan(0)
+    expect(order.slice(0, -1).every((key) => key?.startsWith('dot:'))).toBe(true)
+  })
+
+  it('keeps focus on the same dot or Skip when they move between the bar and a short phone’s row', () => {
+    const phone = stubShortPhone(false)
+    renderTour()
+    act(() => screen.getByRole('button', { name: 'Skip to summary' }).focus())
+    phone.set(true)
+    const inRow = screen.getByRole('button', { name: 'Skip to summary' })
+    expect(inRow.closest('.runner-tour__body')).not.toBeNull()
+    expect(document.activeElement).toBe(inRow)
+
+    act(() => screen.getByRole('link', { name: /^Stop 3 of 7/ }).focus())
+    phone.set(false)
+    const dot = screen.getByRole('link', { name: /^Stop 3 of 7/ })
+    expect(dot.closest('.runner-tour__body')).toBeNull()
+    expect(document.activeElement).toBe(dot)
+
+    // Focus the reader took away is left alone.
+    act(() => dot.blur())
+    phone.set(true)
+    expect(document.activeElement).toBe(document.body)
   })
 
   it('ends with "See all measurements", which leaves the tour', () => {
@@ -414,7 +506,9 @@ describe('RunnerTour — the runner follows the active stop', () => {
             [
               {
                 intersectionRatio: ratio,
-                intersectionRect: { height: 100 * ratio },
+                intersectionRect: { height: 200 * ratio },
+                // Tall enough for the gate's height floor (`MOSTLY_VISIBLE_MIN_HEIGHT`).
+                boundingClientRect: { height: 200 },
                 rootBounds: { height: 800 },
                 target,
               } as unknown as IntersectionObserverEntry,

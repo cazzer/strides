@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { RefObject } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import type { FormHeuristicsResult, MetricId } from '../../heuristics/types'
 import { FOCUS_AREAS, FOCUS_AREA_ORDER } from '../../guidance/focusAreas'
 import type { TourStopId } from '../../guidance/focusAreas'
@@ -22,6 +22,7 @@ import type { TourPlan } from './tourPlan'
 import { AreaStop, OneThingStop } from './TourStop'
 import { useActiveStop } from './useActiveStop'
 import { useMostlyVisible } from './useMostlyVisible'
+import { useShortPhoneLayout } from './useShortPhoneLayout'
 
 export interface RunnerTourProps extends GuidedResultsViewProps {
   /** The reader skipped (or finished) the tour. The session remembers the summary as the landing
@@ -48,11 +49,29 @@ export interface RunnerTourProps extends GuidedResultsViewProps {
  * `lg`. Below `lg` the heading is visually hidden (it stays the tour's focus target), so the dots and
  * Skip share one row, and the tour measures the bar (`--runner-tour-bar-height`,
  * `useBarHeightProperty`) rather than assuming its height.
+ *
+ * On a short phone (`useShortPhoneLayout`) the dots and Skip move into the tour's body, as one row
+ * shared with the runner's controls (`TOUR_BAR_ROW_CLASS`), and this bar holds only the heading, so
+ * it takes no room (`TOUR_HEADING_ONLY_CLASS`).
  */
 export const TOUR_BAR_CLASS =
   'runner-tour__header sticky top-[var(--motion-story-header-height,88px)] z-[5] flex min-h-14 flex-wrap items-center justify-between gap-x-4 gap-y-2 bg-white py-2 dark:bg-black'
+/** The bar on a short phone: just the visually hidden heading, which takes no room. */
+const TOUR_HEADING_ONLY_CLASS = 'runner-tour__heading-only'
 /** The bar's dots and Skip: a group beside the heading at `lg`, the whole row below it. */
 const TOUR_BAR_ACTIONS_CLASS = 'flex items-center gap-4 max-lg:w-full max-lg:justify-between max-lg:gap-2'
+/**
+ * A short phone's one row for the tour's dots and Skip AND the runner's controls (Skip intro, Pause,
+ * laid over the row's start, which the row's padding leaves clear: `--rt-controls-width`, measured
+ * by `useControlsWidthProperty`). It is a cell of the body's grid beside the runner, so it sticks
+ * exactly when the runner's controls do (a sticky element only moves within its containing block;
+ * in the tour's bar, above the body, the two would part company until the tour reached the top),
+ * opaque and edge to edge like the old control row, at the top of the stage (`--rt-controls`). The
+ * dots wrap onto 24 px lines of their own rather than pushing Skip off the row.
+ */
+const TOUR_BAR_ROW_CLASS =
+  'runner-tour__header sticky top-[var(--motion-story-header-height,88px)] z-[5] col-start-1 row-start-1 -mx-4 flex self-start border-b-2 border-black bg-white py-1 pr-4 pl-[calc(1rem_+_var(--rt-controls-width,0px)_+_0.5rem)] sm:-mx-6 sm:pr-6 sm:pl-[calc(1.5rem_+_var(--rt-controls-width,0px)_+_0.5rem)] dark:border-white dark:bg-black'
+const TOUR_BAR_ROW_ACTIONS_CLASS = 'flex min-w-0 flex-1 items-start justify-between gap-2'
 /**
  * The runner and the stops: the rail first (left) and wider at `lg`. Below `lg` the runner's parts
  * and the stops share ONE grid cell, so the runner is a background the stops' panels scroll over:
@@ -62,13 +81,22 @@ const TOUR_BAR_ACTIONS_CLASS = 'flex items-center gap-4 max-lg:w-full max-lg:jus
  * The phone geometry, as custom properties every phone rule below reads:
  * - `--rt-top`: where the runner sticks, under the session header and the tour's bar;
  * - `--rt-controls`: the runner's control row (44 px targets and their padding), which overlays the
- *   top of the stage;
- * - `--rt-reserve`: how much of the bottom of the viewport the active stop's panel covers at rest,
- *   which the drawing keeps clear of, so the camera's target (the focus body part) sits in the
- *   uncovered part. Measured (`usePanelReserveProperty`); the value here is the fallback.
+ *   top of the stage; on a short phone the row it shares with the tour's dots and Skip, measured
+ *   (`useRowHeightProperty`);
+ * - `--rt-draw-top`: where the drawing starts in the stage, just under that row;
+ * - `--rt-draw-min`: the drawing's floor, `max(40svh, 200px)`, or the whole stage below
+ *   `--rt-draw-top` if that is less. The drawing is never shrunk below it to make room for a panel
+ *   (`strides-xsl3`): a panel that needs more room overlaps the drawing's bottom instead, on its
+ *   translucent surface;
+ * - `--rt-clear`: the top of the floor that no panel covers at rest (85% of it). The camera centres
+ *   its target (the focus body part) in the drawing and the focus parts reach no lower than that,
+ *   so the panel's height is capped to leave it clear (`TOUR_PANEL_CLASS`);
+ * - `--rt-reserve`: how much of the bottom of the viewport the active stop's panel covers at rest.
+ *   The drawing stops above it whenever that still leaves it its floor, so the camera's target sits
+ *   in the uncovered part. Measured (`usePanelReserveProperty`); the value here is the fallback.
  */
 export const TOUR_BODY_CLASS =
-  'runner-tour__body grid grid-cols-1 lg:grid-cols-[minmax(18rem,2fr)_minmax(0,3fr)] lg:items-start lg:gap-8 [--rt-top:calc(var(--motion-story-header-height,88px)_+_var(--runner-tour-bar-height,3.75rem))] [--rt-controls:3.25rem] [--rt-reserve:min(17.5rem,50%)]'
+  'runner-tour__body grid grid-cols-1 lg:grid-cols-[minmax(18rem,2fr)_minmax(0,3fr)] lg:items-start lg:gap-8 [--rt-top:calc(var(--motion-story-header-height,88px)_+_var(--runner-tour-bar-height,3.75rem))] [--rt-controls:3.25rem] [--rt-draw-top:calc(var(--rt-controls)_+_0.25rem)] [--rt-draw-min:min(max(40svh,200px),calc(100dvh_-_var(--rt-top)_-_var(--rt-draw-top)))] [--rt-clear:calc(var(--rt-draw-min)_*_0.85)] [--rt-reserve:min(17.5rem,50%)]'
 /**
  * The runner's rail: sticky under the header and the tour's bar at `lg`. Below `lg` it has no box
  * of its own (`contents`): the runner and its notes become cells of the body's grid, so they can be
@@ -87,14 +115,16 @@ export const TOUR_RAIL_CLASS =
  * - the stage: a background as tall as the viewport under the bar, edge to edge, under the panels.
  *   Edge to edge is `-mx-4 sm:-mx-6`, which undoes the session's `<main>` padding (`px-4 sm:px-6`,
  *   `MultiClipVideoSession`): change one and the other must follow, or the page scrolls sideways;
- * - the drawing: inset from the stage's top by the control row and from its bottom by the active
- *   panel's reserve, so its centre (the camera's target) is in the part of the screen no panel
- *   covers. Clipped at its top edge (the control row's border) but free below and to the sides, so
- *   a zoomed-in figure runs on behind the panel; the ground hairline is hidden, as it would show
- *   through the panel as a stray rule;
- * - the control row (Skip intro, Pause): stuck under the bar ABOVE the panels, opaque, so it stays
- *   tappable whatever scrolls under it, and taking no room in the flow. Its "Dashed: …" note hangs
- *   below it, at the top of the notes stack;
+ * - the drawing: inset from the stage's top by the control row (`--rt-draw-top`) and from its
+ *   bottom by the active panel's reserve, but never shorter than its floor (`--rt-draw-min`), so
+ *   its centre (the camera's target) is in the part of the screen no panel covers. Clipped at its
+ *   top edge (the control row's border) but free below and to the sides, so a zoomed-in figure runs
+ *   on behind the panel; the ground hairline is hidden, as it would show through the panel as a
+ *   stray rule;
+ * - the control row (Skip intro, Pause, `RUNNER_CONTROL_ROW_CLASS`): stuck under the bar ABOVE the
+ *   panels, opaque, so it stays tappable whatever scrolls under it, and taking no room in the flow.
+ *   Its "Dashed: …" note hangs below it, at the top of the notes stack. On a short phone the
+ *   controls are laid over the start of the tour's own row instead (`RUNNER_CONTROLS_IN_ROW_CLASS`);
  * - the caption: for assistive technology only (the tour's bar already says whose model this is).
  */
 const RUNNER_CLASS = [
@@ -104,10 +134,25 @@ const RUNNER_CLASS = [
   'max-lg:[&_[data-runner-part=stage]]:pointer-events-none max-lg:[&_[data-runner-part=stage]]:sticky max-lg:[&_[data-runner-part=stage]]:top-[var(--rt-top)] max-lg:[&_[data-runner-part=stage]]:-mx-4 max-lg:[&_[data-runner-part=stage]]:h-[calc(100dvh_-_var(--rt-top))] max-lg:[&_[data-runner-part=stage]]:flex-none sm:max-lg:[&_[data-runner-part=stage]]:-mx-6',
   // An explicit height, not `bottom`: an absolutely positioned SVG with `height: auto` takes its
   // viewBox's aspect ratio rather than stretching between `top` and `bottom`.
-  'max-lg:[&_[data-runner-part=drawing]]:top-[calc(var(--rt-controls)_+_0.25rem)] max-lg:[&_[data-runner-part=drawing]]:h-[calc(100%_-_var(--rt-controls)_-_0.25rem_-_var(--rt-reserve))] max-lg:[&_[data-runner-part=drawing]]:overflow-visible max-lg:[&_[data-runner-part=drawing]]:[clip-path:inset(0_-100vw_-100vh_-100vw)] max-lg:[&_[data-ground]]:hidden',
+  'max-lg:[&_[data-runner-part=drawing]]:top-[var(--rt-draw-top)] max-lg:[&_[data-runner-part=drawing]]:h-[max(calc(100%_-_var(--rt-draw-top)_-_var(--rt-reserve)),var(--rt-draw-min))] max-lg:[&_[data-runner-part=drawing]]:overflow-visible max-lg:[&_[data-runner-part=drawing]]:[clip-path:inset(0_-100vw_-100vh_-100vw)] max-lg:[&_[data-ground]]:hidden',
+].join(' ')
+/** The runner's own control row below `lg`, over the top of the stage (see `RUNNER_CLASS`). */
+const RUNNER_CONTROL_ROW_CLASS = [
   'max-lg:[&_[data-runner-part=controls]]:sticky max-lg:[&_[data-runner-part=controls]]:top-[var(--rt-top)] max-lg:[&_[data-runner-part=controls]]:z-[3] max-lg:[&_[data-runner-part=controls]]:order-first max-lg:[&_[data-runner-part=controls]]:-mx-4 max-lg:[&_[data-runner-part=controls]]:-mb-[var(--rt-controls)] max-lg:[&_[data-runner-part=controls]]:h-[var(--rt-controls)] max-lg:[&_[data-runner-part=controls]]:justify-end max-lg:[&_[data-runner-part=controls]]:border-b-2 max-lg:[&_[data-runner-part=controls]]:border-black max-lg:[&_[data-runner-part=controls]]:bg-white max-lg:[&_[data-runner-part=controls]]:px-4 max-lg:[&_[data-runner-part=controls]]:py-1 sm:max-lg:[&_[data-runner-part=controls]]:-mx-6 sm:max-lg:[&_[data-runner-part=controls]]:px-6 max-lg:dark:[&_[data-runner-part=controls]]:border-white max-lg:dark:[&_[data-runner-part=controls]]:bg-black',
   // The control row's note, out of the row and onto the notes' surface below its left end.
   'max-lg:[&_[data-runner-part=controls]>p]:absolute max-lg:[&_[data-runner-part=controls]>p]:left-4 max-lg:[&_[data-runner-part=controls]>p]:top-full max-lg:[&_[data-runner-part=controls]>p]:mt-1 max-lg:[&_[data-runner-part=controls]>p]:bg-white/85 max-lg:[&_[data-runner-part=controls]>p]:px-2 max-lg:[&_[data-runner-part=controls]>p]:py-1 max-lg:[&_[data-runner-part=controls]>p]:backdrop-blur-[3px] max-lg:[&_[data-runner-part=controls]>p:empty]:hidden sm:max-lg:[&_[data-runner-part=controls]>p]:left-6 max-lg:dark:[&_[data-runner-part=controls]>p]:bg-black/85',
+].join(' ')
+/**
+ * A short phone's controls: no row of their own, but laid over the start of the tour's row
+ * (`TOUR_BAR_ROW_CLASS`, a cell of the same grid, so the two stick together): as wide as their
+ * buttons, 0.25rem down to sit in the row's `py-1`, above it (`z-[6]` over its `z-[5]`), taking no
+ * room in the flow. Pause shows its icon alone (its accessible name is its `aria-label`), and the
+ * "Dashed: …" note hangs below the row.
+ */
+const RUNNER_CONTROLS_IN_ROW_CLASS = [
+  'max-lg:[&_[data-runner-part=controls]]:sticky max-lg:[&_[data-runner-part=controls]]:top-[calc(var(--motion-story-header-height,88px)_+_0.25rem)] max-lg:[&_[data-runner-part=controls]]:z-[6] max-lg:[&_[data-runner-part=controls]]:order-first max-lg:[&_[data-runner-part=controls]]:mt-1 max-lg:[&_[data-runner-part=controls]]:-mb-12 max-lg:[&_[data-runner-part=controls]]:h-11 max-lg:[&_[data-runner-part=controls]]:w-fit max-lg:[&_[data-runner-part=controls]]:self-start max-lg:[&_[data-runner-part=controls]]:gap-2 max-lg:[&_[data-runner-part=controls]]:p-0',
+  'max-lg:[&_[data-runner-part=controls]_button]:px-2 max-lg:[&_[data-runner-part=controls]_button[aria-label]]:text-[0px] max-lg:[&_[data-runner-part=controls]_button[aria-label]>span]:mr-0 max-lg:[&_[data-runner-part=controls]_button[aria-label]>span]:text-xs',
+  'max-lg:[&_[data-runner-part=controls]>p]:absolute max-lg:[&_[data-runner-part=controls]>p]:left-0 max-lg:[&_[data-runner-part=controls]>p]:top-full max-lg:[&_[data-runner-part=controls]>p]:mt-2 max-lg:[&_[data-runner-part=controls]>p]:w-max max-lg:[&_[data-runner-part=controls]>p]:max-w-[14rem] max-lg:[&_[data-runner-part=controls]>p]:bg-white/85 max-lg:[&_[data-runner-part=controls]>p]:px-2 max-lg:[&_[data-runner-part=controls]>p]:py-1 max-lg:[&_[data-runner-part=controls]>p]:backdrop-blur-[3px] max-lg:[&_[data-runner-part=controls]>p:empty]:hidden max-lg:dark:[&_[data-runner-part=controls]>p]:bg-black/85',
 ].join(' ')
 /**
  * The runner's notes (slow motion): under the figure at `lg`; below it, a stack stuck at the top
@@ -167,9 +212,18 @@ export function RunnerTour({ onLeaveTour, resultKey, coverage, onAddClip, ...gui
   const stopIds: TourStopId[] =
     plan === null ? [] : [...plan.areaStops.map((stop) => stop.view.area), 'oneThing']
   const active = useActiveStop(rootRef, stopIds)
+  const shortPhone = useShortPhoneLayout()
+  const hasBody = heuristics !== null && plan !== null
+  // On a short phone the dots and Skip share the runner's control row, in the body (only once
+  // there is one: until then they stay here).
+  const actionsInBody = shortPhone && hasBody
+  useActionFocusAcrossMoves(rootRef, actionsInBody)
+  const actions = (
+    <TourBarActions stopIds={stopIds} active={active} onLeaveTour={onLeaveTour} compact={actionsInBody} />
+  )
   return (
     <div ref={rootRef} className="runner-tour">
-      <div ref={barRef} className={TOUR_BAR_CLASS}>
+      <div ref={barRef} className={actionsInBody ? TOUR_HEADING_ONLY_CLASS : TOUR_BAR_CLASS}>
         {/* The tour's focus target after a switch (`data-view-entry`): a heading rather than Skip, so
             a reader arriving here hears where they are rather than an action they did not ask for. */}
         <h2
@@ -179,12 +233,7 @@ export function RunnerTour({ onLeaveTour, resultKey, coverage, onAddClip, ...gui
         >
           Your runner model
         </h2>
-        <div className={TOUR_BAR_ACTIONS_CLASS}>
-          {stopIds.length > 0 && <TourProgress stopIds={stopIds} active={active} />}
-          <button type="button" onClick={onLeaveTour} className={SKIP_CLASS}>
-            Skip to summary
-          </button>
-        </div>
+        {!actionsInBody && actions}
       </div>
       <GuidedResultsView {...guidedProps}>
         {heuristics && plan !== null ? (
@@ -197,6 +246,7 @@ export function RunnerTour({ onLeaveTour, resultKey, coverage, onAddClip, ...gui
             resultKey={resultKey}
             onSeeAll={onLeaveTour}
             onAddClip={onAddClip}
+            barRow={actionsInBody ? actions : null}
           />
         ) : null}
       </GuidedResultsView>
@@ -274,16 +324,158 @@ function usePanelReserveProperty(
 }
 
 /**
+ * Publishes the runner's control row's width on `rootRef`'s element as `--rt-controls-width`: on a
+ * short phone the controls sit over the start of the tour's row, which starts its own content after
+ * them. Measured, as the row holds Skip intro only while the intro runs.
+ */
+function useControlsWidthProperty(
+  railRef: RefObject<HTMLElement | null>,
+  rootRef: RefObject<HTMLElement | null>,
+): void {
+  useEffect(() => {
+    const root = rootRef.current
+    const controls = railRef.current?.querySelector<HTMLElement>('[data-runner-part="controls"]')
+    if (!root || !controls) return
+    const set = (width: number) => root.style.setProperty('--rt-controls-width', `${Math.ceil(width)}px`)
+    set(controls.getBoundingClientRect().width)
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[entries.length - 1]
+      if (entry) set(entry.borderBoxSize?.[0]?.inlineSize ?? entry.target.getBoundingClientRect().width)
+    })
+    observer.observe(controls)
+    return () => observer.disconnect()
+  }, [railRef, rootRef])
+}
+
+/**
+ * Publishes a short phone's shared row's height on `rootRef`'s element as `--rt-controls`, the room
+ * the drawing starts below (it grows when the dots wrap). Removed with the row, so the class's
+ * value for the runner's own control row applies again.
+ */
+function useRowHeightProperty(
+  rowRef: RefObject<HTMLElement | null>,
+  rootRef: RefObject<HTMLElement | null>,
+  hasRow: boolean,
+): void {
+  useEffect(() => {
+    const row = rowRef.current
+    const root = rootRef.current
+    if (!hasRow || !row || !root) return
+    const set = (height: number) => root.style.setProperty('--rt-controls', `${Math.ceil(height)}px`)
+    set(row.getBoundingClientRect().height)
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver((entries) => {
+            const height = borderBoxHeight(entries[entries.length - 1])
+            if (height !== null) set(height)
+          })
+    observer?.observe(row)
+    return () => {
+      observer?.disconnect()
+      root.style.removeProperty('--rt-controls')
+    }
+  }, [rowRef, rootRef, hasRow])
+}
+
+/** The `data-tour-action` of the dot or Skip an event target is in, if any. */
+function actionKey(target: EventTarget | null): string | null {
+  return target instanceof Element ? (target.closest('[data-tour-action]')?.getAttribute('data-tour-action') ?? null) : null
+}
+
+/**
+ * Keeps keyboard focus on the dot or Skip the reader was on when they move between the tour's bar
+ * and a short phone's shared row (`moved` flips: the phone turned, the window resized). The move
+ * remounts them, which would drop focus to the page; the matching control in its new place takes it
+ * instead, as `ModelRunner` hands a removed Skip intro's focus on to Play/Pause.
+ */
+function useActionFocusAcrossMoves(rootRef: RefObject<HTMLElement | null>, moved: boolean): void {
+  const focusedRef = useRef<string | null>(null)
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const onFocusIn = (event: FocusEvent) => {
+      focusedRef.current = actionKey(event.target)
+    }
+    const onFocusOut = (event: FocusEvent) => {
+      // A control removed by the move keeps its key (focus goes nowhere, and it is detached);
+      // focus moving anywhere else, or the reader blurring it, drops the key.
+      const removed = event.relatedTarget === null && event.target instanceof Node && !event.target.isConnected
+      if (!removed) focusedRef.current = actionKey(event.relatedTarget)
+    }
+    root.addEventListener('focusin', onFocusIn)
+    root.addEventListener('focusout', onFocusOut)
+    return () => {
+      root.removeEventListener('focusin', onFocusIn)
+      root.removeEventListener('focusout', onFocusOut)
+    }
+  }, [rootRef])
+  useLayoutEffect(() => {
+    const key = focusedRef.current
+    if (key === null) return
+    const focused = document.activeElement
+    if (focused !== null && focused !== document.body) return
+    rootRef.current?.querySelector<HTMLElement>(`[data-tour-action="${key}"]`)?.focus()
+  }, [moved, rootRef])
+}
+
+interface TourBarActionsProps {
+  stopIds: readonly TourStopId[]
+  active: TourStopId | null
+  onLeaveTour: () => void
+  /** The short phone's shared row: the dots wrap, and Skip reads "Summary" (its accessible name
+   * stays "Skip to summary"). */
+  compact: boolean
+}
+
+/** The tour's dots and Skip, in the tour's bar or (on a short phone) in the row it shares with the
+ * runner's controls. */
+function TourBarActions({ stopIds, active, onLeaveTour, compact }: TourBarActionsProps) {
+  return (
+    <div className={compact ? TOUR_BAR_ROW_ACTIONS_CLASS : TOUR_BAR_ACTIONS_CLASS}>
+      {stopIds.length > 0 && <TourProgress stopIds={stopIds} active={active} compact={compact} />}
+      <button type="button" onClick={onLeaveTour} className={SKIP_CLASS} data-tour-action="skip">
+        {compact ? (
+          <>
+            <span className="sr-only">Skip to</span> summary
+          </>
+        ) : (
+          'Skip to summary'
+        )}
+      </button>
+    </div>
+  )
+}
+
+/**
  * Where the reader is: one dot per stop, each a link to its `#tour-<stop>` fragment, the active one
  * filled and `aria-current`. Each tells assistive technology "Stop N of M" and the stop's name.
+ * Compact (a short phone's shared row), the dots take the room beside Skip and wrap onto 24 px lines.
  */
-function TourProgress({ stopIds, active }: { stopIds: readonly TourStopId[]; active: TourStopId | null }) {
+function TourProgress({
+  stopIds,
+  active,
+  compact = false,
+}: {
+  stopIds: readonly TourStopId[]
+  active: TourStopId | null
+  compact?: boolean
+}) {
   return (
-    <nav aria-label="Tour stops" className="runner-tour__progress">
-      <ol className="flex items-center">
+    <nav
+      aria-label="Tour stops"
+      className={compact ? 'runner-tour__progress min-w-[4.5rem] flex-1 self-center' : 'runner-tour__progress'}
+    >
+      <ol className={compact ? 'flex flex-wrap items-center' : 'flex items-center'}>
         {stopIds.map((id, index) => (
           <li key={id}>
-            <a href={`#${tourStopDomId(id)}`} aria-current={id === active ? 'step' : undefined} className={DOT_LINK}>
+            <a
+              href={`#${tourStopDomId(id)}`}
+              aria-current={id === active ? 'step' : undefined}
+              className={DOT_LINK}
+              data-tour-action={`dot:${id}`}
+            >
               <span aria-hidden="true" className={`${DOT} ${id === active ? DOT_ACTIVE : ''}`} />
               <span className="sr-only">
                 Stop {index + 1} of {stopIds.length}: {id === 'oneThing' ? ONE_THING_LABEL : FOCUS_AREAS[id].label}
@@ -314,6 +506,9 @@ interface TourBodyProps {
   resultKey: string
   onSeeAll: () => void
   onAddClip?: () => void
+  /** On a short phone, the tour's dots and Skip, for the row they share with the runner's
+   * controls at the top of the body; otherwise null (they are in the tour's bar). */
+  barRow: ReactNode
 }
 
 /**
@@ -338,11 +533,15 @@ function TourBody({
   resultKey,
   onSeeAll,
   onAddClip,
+  barRow,
 }: TourBodyProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const railRef = useRef<HTMLDivElement>(null)
+  const rowRef = useRef<HTMLDivElement>(null)
   useRevealFragment(rootRef)
   usePanelReserveProperty(rootRef, active ?? stopIds[0] ?? null)
+  useControlsWidthProperty(railRef, rootRef)
+  useRowHeightProperty(rowRef, rootRef, barRow !== null)
   const reducedMotion = usePrefersReducedMotion()
   const activeIndex = active === null ? -1 : stopIds.indexOf(active)
 
@@ -391,7 +590,7 @@ function TourBody({
           overrides={intro.overrides}
           intro={{ running: introRunning, onSkip: skipIntro }}
           onActiveChange={setRunnerSeen}
-          className={RUNNER_CLASS}
+          className={`${RUNNER_CLASS} ${barRow !== null ? RUNNER_CONTROLS_IN_ROW_CLASS : RUNNER_CONTROL_ROW_CLASS}`}
         />
         <div className={RUNNER_NOTES_CLASS}>
           {playbackRate < 1 && !reducedMotion && (
@@ -404,6 +603,13 @@ function TourBody({
           {showLegend && <BandLegend className="runner-tour__legend mt-2 max-lg:hidden" />}
         </div>
       </div>
+      {/* After the rail, so the tab order follows the row left to right: the runner's controls
+          (laid over its start), then the dots and Skip. Its grid cell places it, not its order. */}
+      {barRow !== null && (
+        <div ref={rowRef} className={TOUR_BAR_ROW_CLASS}>
+          {barRow}
+        </div>
+      )}
       <div className="runner-tour__stops min-w-0 max-lg:relative max-lg:z-[1] max-lg:col-start-1 max-lg:row-start-1">
         {plan.areaStops.map((stop) => (
           <AreaStop key={stop.view.area} stop={stop} />

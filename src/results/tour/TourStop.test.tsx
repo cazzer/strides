@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { FormHeuristicsResult } from '../../heuristics/types'
 import type { FocusAreaId } from '../../guidance/focusAreas'
@@ -73,6 +73,44 @@ describe('AreaStop', () => {
     const { container } = render(<AreaStop stop={areaStop('knees')} />)
     expect(container.querySelector('details')).toBeNull()
     expect(container.textContent).not.toContain(METRIC_DESCRIPTIONS.kneeFlexion)
+  })
+})
+
+describe('a panel that scrolls inside itself (a short phone’s cap)', () => {
+  it('is a focusable group named by the stop’s heading, with a visible focus ring, only while it overflows', () => {
+    const resizes: ResizeObserverCallback[] = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resizes.push(callback)
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+    const size = { scroll: 300, client: 96 }
+    const scrollHeight = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => size.scroll)
+    const clientHeight = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => size.client)
+    try {
+      const { container } = render(<AreaStop stop={areaStop('rhythm')} />)
+      const panel = container.querySelector<HTMLElement>('.runner-tour__panel')!
+      expect(panel).toHaveAttribute('tabindex', '0')
+      expect(screen.getByRole('group', { name: 'Rhythm' })).toBe(panel)
+      expect(panel).toHaveClass('focus-visible:outline')
+
+      // It grows to fit (a taller screen): an ordinary panel again, out of the tab order.
+      size.client = 300
+      act(() => resizes.forEach((callback) => callback([], {} as ResizeObserver)))
+      expect(panel).not.toHaveAttribute('tabindex')
+      expect(panel).not.toHaveAttribute('role')
+      expect(screen.queryByRole('group')).toBeNull()
+    } finally {
+      scrollHeight.mockRestore()
+      clientHeight.mockRestore()
+      vi.unstubAllGlobals()
+    }
   })
 })
 

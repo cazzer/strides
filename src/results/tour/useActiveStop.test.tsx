@@ -128,4 +128,46 @@ describe('useActiveStop', () => {
     expect(remove).toHaveBeenCalledWith('resize', expect.any(Function))
     remove.mockRestore()
   })
+
+  it('keeps the line below the tour’s sticky bar where the bar reaches past 42% (a short phone)', () => {
+    // A bar that sticks at 300 px and is 54 px tall ends at 354 px, past 42% of jsdom's 768 px
+    // (322.6 px). The line moves to a quarter of the way down the rest: 354 + 414 / 4 = 457.5 px.
+    function WithBar({ onActive }: { onActive: (id: TourStopId | null) => void }) {
+      const rootRef = useRef<HTMLDivElement>(null)
+      onActive(useActiveStop(rootRef, IDS))
+      return (
+        <div ref={rootRef}>
+          <div className="runner-tour__header" style={{ position: 'sticky', top: '300px' }} />
+          {IDS.map((id) => (
+            <section key={id} data-tour-stop={id} />
+          ))}
+        </div>
+      )
+    }
+    const tops: Record<string, number> = { rhythm: 356, knees: 768, oneThing: 1100 }
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      const bar = this.classList.contains('runner-tour__header')
+      // Where the bar is now (scrolled away, say) does not matter: where it sticks does.
+      const top = bar ? -500 : (tops[this.dataset.tourStop ?? ''] ?? 10_000)
+      const height = bar ? 54 : 400
+      return { top, bottom: top + height, left: 0, right: 0, width: 0, height, x: 0, y: top, toJSON: () => ({}) }
+    }
+    expect(line()).toBeLessThan(356)
+    const seen: Array<TourStopId | null> = []
+    render(<WithBar onActive={(id) => seen.push(id)} />)
+    // The first stop at rest, its top just under the bar: active, though below 42%.
+    expect(seen.at(-1)).toBe('rhythm')
+
+    tops.rhythm = -50
+    tops.knees = 458
+    act(() => {
+      fireEvent.scroll(window)
+    })
+    expect(seen.at(-1)).toBe('rhythm')
+    tops.knees = 457
+    act(() => {
+      fireEvent.scroll(window)
+    })
+    expect(seen.at(-1)).toBe('knees')
+  })
 })
