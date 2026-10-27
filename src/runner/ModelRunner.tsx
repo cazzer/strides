@@ -37,7 +37,8 @@ import {
   type AnnotationKind,
   type RunnerAnnotationLabel,
 } from './runnerAnnotations'
-import { RUNNER_PARAM_SEGMENTS, runnerParamValues } from './runnerParams'
+import { flashAnchor, labelBox, placeFlash, type LabelBox } from './introFlash'
+import { runnerParamValues } from './runnerParams'
 import {
   CAMERA_TWEEN_MS,
   EDGE_JOINT_INDICES,
@@ -50,7 +51,6 @@ import {
   VIEW_HALF_WIDTH,
   cameraFromKey,
   cameraKey,
-  clampLabelX,
   describeRunner,
   drawOrder,
   easeInOutCubic,
@@ -117,15 +117,25 @@ export interface RunnerOverrides {
   values?: Partial<RunnerParams>
   /** Drawn instead of `params[id].source` (a parameter not yet applied draws neutral). */
   sources?: Partial<Record<RunnerParamId, RunnerSource>>
-  /** A short label beside a parameter's part, e.g. its value as it is applied. */
+  /**
+   * A short label for a parameter as it is applied, beside a fixed point of its part (frozen for
+   * as long as the same flash and values are passed, never following the stride) and clear of
+   * the visible annotation labels.
+   */
   flash?: { paramId: RunnerParamId; text: string } | null
-  /** Interpolated per frame by the loop, on top of `values`. */
+  /**
+   * Interpolated per frame by the loop, on top of `values`. While it is passed, the focus
+   * annotations of the parameters in its `to` are hidden (the flash speaks for them).
+   */
   valueTween?: RunnerValueTween | null
 }
 
-/** The intro beat's skip control (ps19.3, `useRunnerIntro`). */
+/** The intro beat's controls (ps19.3, `useRunnerIntro`). */
 export interface RunnerIntroControl {
-  /** While true (and motion is allowed), a "Skip" button sits beside Play/Pause. */
+  /**
+   * While true (and motion is allowed) a "Skip intro" button sits beside Play/Pause, Pause also
+   * skips, and the legend reads "Dashed: not applied yet".
+   */
   running: boolean
   onSkip: () => void
 }
@@ -140,6 +150,8 @@ export interface ModelRunnerProps {
   label: string
   overrides?: RunnerOverrides
   intro?: RunnerIntroControl
+  /** Called with whether the figure is seen (tab visible and on screen), on mount and on change. */
+  onActiveChange?: (active: boolean) => void
   className?: string
 }
 
@@ -182,7 +194,7 @@ interface DrawTargets {
   paths: { el: SVGPathElement; points: readonly Vec3[]; closed: boolean }[]
   labels: { lines: SVGTSpanElement[]; label: RunnerAnnotationLabel }[]
   ground: SVGLineElement | null
-  flash: { el: SVGTextElement; paramId: RunnerParamId; chars: number } | null
+  flash: { el: SVGTextElement; anchor: Vec3; chars: number } | null
 }
 
 interface Scene {
@@ -287,7 +299,7 @@ type Annotations = ReturnType<typeof planAnnotations>['annotations']
 function collectTargets(
   svg: SVGSVGElement,
   annotations: Annotations,
-  flash: RunnerOverrides['flash'],
+  flash: { anchor: Vec3; chars: number } | null,
 ): DrawTargets {
   const segments = Array.from(svg.querySelectorAll<SVGLineElement>('line[data-edge-index]'), (el) => {
     const [a, b] = EDGE_JOINT_INDICES[Number(el.dataset.edgeIndex)]
@@ -314,7 +326,7 @@ function collectTargets(
     paths,
     labels,
     ground: svg.querySelector<SVGLineElement>('line[data-ground]'),
-    flash: flashEl && flash ? { el: flashEl, paramId: flash.paramId, chars: flash.text.length } : null,
+    flash: flashEl && flash ? { el: flashEl, ...flash } : null,
   }
 }
 
@@ -331,6 +343,7 @@ export function ModelRunner({
   label,
   overrides,
   intro,
+  onActiveChange,
   className = '',
 }: ModelRunnerProps) {
   const figureRef = useRef<HTMLElement>(null)
@@ -387,11 +400,16 @@ export function ModelRunner({
     [params, values, sources, focusParams, annotationKind, target.yawDeg, floor],
   )
   // A still figure shows a limb mark only at its key phase; a playing one shows every mark.
-  const annotations = useMemo(
-    () =>
-      playing ? allAnnotations : allAnnotations.filter((a) => shownWhileStill(a, heldPhase)),
-    [playing, allAnnotations, heldPhase],
-  )
+  const valueTween = overrides?.valueTween ?? null
+  // A parameter tweening in shows only its flash: its annotation would duplicate the value and
+  // draw the arc at the neutral geometry it is leaving.
+  const tweening = valueTween ? Object.keys(valueTween.to).join(',') : ''
+  const annotations = useMemo(() => {
+    const hidden = new Set(tweening.split(','))
+    return allAnnotations.filter(
+      (a) => !hidden.has(a.paramId) && (playing || shownWhileStill(a, heldPhase)),
+    )
+  }, [playing, allAnnotations, heldPhase, tweening])
   const edgeStyles = useMemo(
     () => SKELETON_EDGES.map((edge) => segmentStyle(edge, sources, focusParams)),
     [sources, focusParams],
@@ -405,8 +423,16 @@ export function ModelRunner({
     [edgeStyles, values, heldPhase, target],
   )
   const flash = overrides?.flash ?? null
-  const valueTween = overrides?.valueTween ?? null
-  const skipShown = intro?.running === true && !reduced
+  const introRunning = intro?.running === true && !reduced
+  // The flash's world point, taken once per flash from the values its tween ends at.
+  const flashPoint = useMemo(() => {
+    if (!flash) return null
+    const end = valueTween ? mixValues(values, valueTween.from, valueTween.to, 1) : values
+    return {
+      anchor: flashAnchor(flash.paramId, end, heldPhase, target.yawDeg, floor),
+      chars: flash.text.length,
+    }
+  }, [flash, valueTween, values, heldPhase, target.yawDeg, floor])
 
   const phaseRef = useRef<number>(heldPhase)
   const heldPhaseRef = useRef(heldPhase)
@@ -447,6 +473,7 @@ export function ModelRunner({
       el.setAttribute('d', closed ? `${d}Z` : d)
     }
     const fontUnits = RUNNER_PX.label * unit
+    const boxes: LabelBox[] = []
     for (const { lines, label: text } of labels) {
       const layout = placeLabel(
         projectPoint(text.anchor, cam),
@@ -456,19 +483,18 @@ export function ModelRunner({
         (text.side === 'left' ? RUNNER_PX.labelGapLeft : RUNNER_PX.labelGap) * unit,
       )
       lines.forEach((line, i) => setPoint(line, 'x', 'y', layout.x, layout.ys[i]))
+      const chars = Math.max(0, ...text.lines.map((line) => line.length))
+      boxes.push(labelBox(layout.x, labelAlign(text.side), layout.ys, chars, fontUnits))
     }
     if (flashTarget) {
-      const [edge] = RUNNER_PARAM_SEGMENTS[flashTarget.paramId]
-      const maxY = VIEW_HALF_HEIGHT - fontUnits
-      let x = -VIEW_HALF_WIDTH
-      let y = -maxY
-      if (edge) {
-        const a = projected[COMMON_KEYPOINT_NAMES.indexOf(edge[0])]
-        const b = projected[COMMON_KEYPOINT_NAMES.indexOf(edge[1])]
-        x = Math.max(a.x, b.x) + RUNNER_PX.labelGap * 2 * unit
-        y = Math.min(maxY, Math.max(-maxY, (a.y + b.y) / 2))
-      }
-      setPoint(flashTarget.el, 'x', 'y', clampLabelX(x, 'start', flashTarget.chars, fontUnits), y)
+      const at = placeFlash(
+        projectPoint(flashTarget.anchor, cam),
+        flashTarget.chars,
+        fontUnits,
+        RUNNER_PX.labelGap * 2 * unit,
+        boxes,
+      )
+      setPoint(flashTarget.el, 'x', 'y', at.x, at.y)
     }
   })
 
@@ -481,7 +507,7 @@ export function ModelRunner({
       values,
       floor,
       pxPerUnit,
-      targets: collectTargets(svg, annotations, flash),
+      targets: collectTargets(svg, annotations, flashPoint),
     }
     drawRef.current()
   })
@@ -541,12 +567,20 @@ export function ModelRunner({
   }, [heldPhase, reduced, choice, playing])
 
   // A Skip button removed while focused would drop focus to the page: move it to Play/Pause.
+  const onActiveChangeRef = useRef(onActiveChange)
   useLayoutEffect(() => {
-    if (skipShown || !skipFocusedRef.current) return
+    onActiveChangeRef.current = onActiveChange
+  })
+  useEffect(() => {
+    onActiveChangeRef.current?.(active)
+  }, [active])
+
+  useLayoutEffect(() => {
+    if (introRunning || !skipFocusedRef.current) return
     skipFocusedRef.current = false
     const focused = document.activeElement
     if (focused === null || focused === document.body) playButtonRef.current?.focus()
-  }, [skipShown])
+  }, [introRunning])
 
   // Hand the loop the latest play state and start or stop it (every render, after the effects
   // above have set up any tween).
@@ -754,13 +788,12 @@ export function ModelRunner({
       <p className="sr-only">{description}</p>
       <div className="flex items-center justify-between gap-3 pt-2">
         <p aria-hidden="true" className="min-w-0 font-sans text-xs text-neutral-600 dark:text-neutral-400">
-          {legend ? 'Dashed: not measured' : ''}
+          {legend ? (introRunning ? 'Dashed: not applied yet' : 'Dashed: not measured') : ''}
         </p>
         <div className="flex shrink-0 items-center gap-2">
-          {skipShown && (
+          {introRunning && (
             <button
               type="button"
-              aria-label="Skip intro"
               onClick={intro?.onSkip}
               onFocus={() => {
                 skipFocusedRef.current = true
@@ -770,14 +803,18 @@ export function ModelRunner({
               }}
               className={CONTROL_CLASS}
             >
-              Skip
+              Skip intro
             </button>
           )}
           <button
             ref={playButtonRef}
             type="button"
             aria-label={playing ? 'Pause runner' : 'Play runner'}
-            onClick={() => setChoice(playing ? 'pause' : 'play')}
+            onClick={() => {
+              // Pausing mid-intro skips it: the still figure is the final one.
+              if (introRunning && playing) intro?.onSkip()
+              setChoice(playing ? 'pause' : 'play')
+            }}
             className={CONTROL_CLASS}
           >
             <span aria-hidden="true" className="mr-1.5 inline-block w-3 text-center">
