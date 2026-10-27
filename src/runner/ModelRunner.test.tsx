@@ -973,7 +973,8 @@ describe('ModelRunner cadence beat', () => {
       }
     }
     expect(strong).toBeGreaterThan(0)
-    expect(Math.max(...feet.map((f) => f.slide))).toBeLessThan(0.2)
+    // The 0.30 stance slides the foot back a little faster than the 0.38 one did (0.208 here).
+    expect(Math.max(...feet.map((f) => f.slide))).toBeLessThan(0.25)
   })
 
   /** Ring onsets (opacity rising) per ring through the real loop over `ms`. */
@@ -1063,10 +1064,13 @@ describe('ModelRunner cadence beat', () => {
   it('keeps the ticks on the ground while a tween changes the figure’s height; the head label rides it', () => {
     // A wide frame, so the head label is never held at the frame's top edge.
     const camera: CameraState = { yawDeg: 0, pitchDeg: 0, zoom: 0.8, target: { x: 0, y: 1.8, z: 0 } }
-    const lower = [VALUES.pelvisBounce + 0.1, VALUES.pelvisBounce - 0.05]
+    // The neutral bounce sits near the bounce that stands the figure lowest, so take whichever
+    // candidate moves the standing height more, up or down.
+    const heightChange = (params: RunnerParams) => Math.abs(pelvisHeight(params) - pelvisHeight(VALUES))
+    const shifted = [VALUES.pelvisBounce + 0.1, VALUES.pelvisBounce - 0.05]
       .map((pelvisBounce) => ({ ...VALUES, pelvisBounce }))
-      .sort((a, b) => pelvisHeight(a) - pelvisHeight(b))[0]
-    expect(pelvisHeight(lower)).toBeLessThan(pelvisHeight(VALUES) - 1e-3)
+      .sort((a, b) => heightChange(b) - heightChange(a))[0]
+    expect(heightChange(shifted)).toBeGreaterThan(1e-3)
     const { rerenderWith, container } = setup({ camera, focus: RHYTHM })
     fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
     const tick = () =>
@@ -1079,16 +1083,16 @@ describe('ModelRunner cadence beat', () => {
       focus: RHYTHM,
       overrides: {
         valueTween: {
-          from: { pelvisBounce: lower.pelvisBounce },
-          to: { pelvisBounce: lower.pelvisBounce },
+          from: { pelvisBounce: shifted.pelvisBounce },
+          to: { pelvisBounce: shifted.pelvisBounce },
           durationMs: 10_000,
-          key: 'lower',
+          key: 'shifted',
         },
       },
     })
     advance(100)
     expect(tick()).toBe(tickBefore)
-    const drop = (pelvisHeight(VALUES) - pelvisHeight(lower)) * camera.zoom
+    const drop = (pelvisHeight(VALUES) - pelvisHeight(shifted)) * camera.zoom
     expect(labelY() - labelBefore).toBeCloseTo(drop, 3)
   })
 })

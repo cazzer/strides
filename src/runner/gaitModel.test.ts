@@ -33,6 +33,10 @@ import type { Joint3D, RunnerParamId, RunnerParams } from './types'
 
 const PARAM_IDS = Object.keys(RUNNER_PARAM_SPECS) as RunnerParamId[]
 
+function fract(value: number): number {
+  return value - Math.floor(value)
+}
+
 function withParams(overrides: Partial<Record<RunnerParamId, number>>): RunnerParams {
   return { ...NEUTRAL_RUNNER_PARAMS, ...overrides }
 }
@@ -157,8 +161,8 @@ const PIN_DOMAIN = grid({
 
 /** Per landing offset past the declared domain: the worst stance sink and swing dip allowed. */
 const FALLBACK_BOUNDS: readonly (readonly [number, { stance: number; swing: number }])[] = [
-  // Measured worst (stance / swing): 0.056 / −0.060, 0.077 / −0.083, 0.089 / −0.096,
-  // 0.108 / −0.115, 0.138 / −0.146, 0.181 / −0.188.
+  // Measured worst (stance / swing), 0.30 stance: 0.056 / −0.027, 0.077 / −0.050, 0.089 / −0.066,
+  // 0.108 / −0.087, 0.138 / −0.121, 0.181 / −0.169. The bounds are the 0.38 stance's, kept.
   [0.35, { stance: 0.06, swing: -0.065 }],
   [0.4, { stance: 0.08, swing: -0.09 }],
   [0.45, { stance: 0.095, swing: -0.1 }],
@@ -302,29 +306,61 @@ function sinusoidFrameStep(params: RunnerParams): number {
 describe('the bounce plays smoothly at 30 fps', () => {
   const CADENCES = [150, 174, 190]
 
-  it('moves the hips no more than 1.3× a sinusoid per frame, with steady step peaks, up to the neutral bounce', () => {
-    for (const pelvisBounce of [0.03, 0.07, 0.1, 0.14]) {
+  /** Every bounce at every cadence: the per-frame hip change and step-peak spread it is held to. */
+  function expectSmooth(bounces: readonly number[], frameRatio: number, spreadFraction: number) {
+    for (const pelvisBounce of bounces) {
       for (const cadence of CADENCES) {
         const params = withParams({ pelvisBounce, cadence })
         const { largestStep, peakSpread } = hipAt30Fps(params)
         const label = `${pelvisBounce} @ ${cadence}`
-        expect(largestStep, label).toBeLessThanOrEqual(1.3 * sinusoidFrameStep(params))
-        expect(peakSpread, label).toBeLessThanOrEqual(0.12 * pelvisBounce)
+        expect(largestStep, label).toBeLessThanOrEqual(frameRatio * sinusoidFrameStep(params))
+        expect(peakSpread, label).toBeLessThanOrEqual(spreadFraction * pelvisBounce)
       }
     }
+  }
+
+  it('moves the hips no more than 1.3× a sinusoid per frame, with steady step peaks, up to a 0.22 bounce', () => {
+    // Measured worst over the cadences: 1.069× up to 0.17, 1.176× at 0.2, 1.283× at 0.22.
+    expectSmooth([0.03, 0.07, 0.1, 0.14, 0.17, 0.2, 0.22], 1.3, 0.12)
   }, DOMAIN_SWEEP_TIMEOUT_MS)
 
   it('holds larger bounces to their measured known limit (design.md D15)', () => {
-    for (const pelvisBounce of [0.17, 0.2, 0.3, 0.5]) {
-      for (const cadence of CADENCES) {
-        const params = withParams({ pelvisBounce, cadence })
-        const { largestStep, peakSpread } = hipAt30Fps(params)
-        const label = `${pelvisBounce} @ ${cadence}`
-        expect(largestStep, label).toBeLessThanOrEqual(2.8 * sinusoidFrameStep(params))
-        expect(peakSpread, label).toBeLessThanOrEqual(0.35 * pelvisBounce)
-      }
-    }
+    // The planted leg absorbs only STANCE_DROP; the rest of the bounce happens in the 0.20 flight.
+    // Measured worst: 1.411× / 0.096 at 0.25, 1.568× / 0.107 at 0.3, 1.764× / 0.120 at 0.4,
+    // 1.881× / 0.128 at 0.5 (frame ratio / spread over the bounce).
+    expectSmooth([0.25, 0.3], 1.6, 0.12)
+    expectSmooth([0.4, 0.5], 1.9, 0.13)
   }, DOMAIN_SWEEP_TIMEOUT_MS)
+})
+
+describe('the gait phases', () => {
+  it('puts mid-stance halfway through stance and the flight peak midway through flight', () => {
+    const { leftContact, rightContact, midStance, stanceEnd } = GAIT_PHASES
+    expect(Math.abs(midStance - (leftContact + stanceEnd) / 2)).toBeLessThan(1e-12)
+    // The hips peak midway from toe-off to the other contact, a quarter cycle after mid-stance, so
+    // a small bounce is a true sinusoid. The peak shows up as the hips' highest sample.
+    const flightPeak = (stanceEnd + rightContact) / 2
+    expect(Math.abs(flightPeak - midStance - 0.25)).toBeLessThan(1e-12)
+    const hip = (p: number) => joint(poseAt(p, NEUTRAL_RUNNER_PARAMS), 'left_hip').y
+    const samples = Array.from({ length: 1000 }, (_, i) => i / 2000)
+    const highest = samples.reduce((best, p) => (hip(p) > hip(best) ? p : best), 0)
+    expect(Math.abs(highest - flightPeak)).toBeLessThan(1e-9)
+  })
+
+  it('keeps the bounce keys on the 1/1000 sampling grid, so their extremes are sampled exactly', () => {
+    for (const key of [2 * GAIT_PHASES.midStance, 2 * GAIT_PHASES.stanceEnd, GAIT_PHASES.stanceEnd + 0.5]) {
+      expect(Math.abs(key * 1000 - Math.round(key * 1000))).toBeLessThan(1e-9)
+    }
+  })
+
+  it('holds every swing key phase while the other leg is in stance, and starts the swing arc after toe-off', () => {
+    const otherLegInStance = (q: number) => fract(q + 0.5) < GAIT_PHASES.stanceEnd
+    const arcMid = (GAIT_PHASES.swingArcStart + GAIT_PHASES.swingArcEnd) / 2
+    for (const q of [GAIT_PHASES.peakThigh, GAIT_PHASES.peakSwingKneeBend, arcMid]) {
+      expect(otherLegInStance(q), `${q}`).toBe(true)
+    }
+    expect(GAIT_PHASES.swingArcStart).toBeGreaterThanOrEqual(GAIT_PHASES.stanceEnd)
+  })
 })
 
 describe('poseAt loops seamlessly', () => {

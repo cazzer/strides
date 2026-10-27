@@ -65,10 +65,12 @@ const LANDING_WINDOW_LENGTH = 0.25
 
 /**
  * The landing camera's window: from 0.15 before the near (right) leg's contact (cycle phase 0.5)
- * to 0.10 after it. Late swing into early stance, so the reader sees the foot come down. The
- * after-contact side stops short of where a large overstride's stance foot gives way below the
- * ground (gaitModel D15: at 0.512, −0.063 torso lengths by 0.15 after contact, visible at 1280 px).
- * Each pass rests on the contact frame, and briefly on its last frame.
+ * to 0.10 after it. Late swing into early stance, so the reader sees the foot come down. A large
+ * overstride's stance foot gives way below the ground (gaitModel D15); with the 0.30 stance that
+ * starts sooner after contact, so at the demo clip's 0.512 the end frame (0.10 after contact)
+ * already sinks −0.045 torso lengths (−0.049 by 0.15 after). The window is kept for its framing;
+ * the end hold shows that sink briefly. Each pass rests on the contact frame, and briefly on its
+ * last frame.
  */
 export const LANDING_PHASE_WINDOW: PhaseWindow = Object.freeze({
   start: LANDING_WINDOW_START,
