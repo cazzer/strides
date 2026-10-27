@@ -136,9 +136,25 @@ its `# FAILED` row; the scale-pass shape still only warns on stderr.
   the tour. `fixed` would paint over the page above the tour at scroll 0, and one element holding
   both would make a single stacking context, so the runner could not sit under the panels while
   its controls sit over them. The drawing is inset by `--rt-reserve` (the active panel's measured
-  height). The document snaps (`y proximity`) to slot ends except the first.
+  height) but never below its floor `--rt-draw-min` = `max(40svh, 200px)`; a longer panel overlaps
+  the drawing's bottom and is capped (`max-h`, scrolls inside) to leave the top 85% of the floor
+  (`--rt-clear`) uncovered: the focus joints measured live reach 74–82% of the drawing's height,
+  posture lowest (`strides-xsl3`). The document snaps (`y proximity`) to slot ends except the first.
+- **A short phone (< 64rem wide, ≤ 720 px tall, `useShortPhoneLayout`) has no separate control
+  row.** The dots and Skip render in a sticky row that is a cell of the BODY's grid (the bar keeps
+  only the sr-only heading, 0 px), and the runner's controls are laid over that row's start
+  (`--rt-controls-width`, measured; `--rt-controls` = the row's measured height). Not the other way
+  round: a sticky element only moves within its containing block, so controls placed over the
+  tour's bar from inside the runner sat below it until the tour reached the top. Only the dots and
+  Skip move between the two places; the runner never remounts. Skip reads "Summary" there (name
+  unchanged); Pause is icon-only (`button[aria-label]` text at 0 px).
+- **The reading line never sits above the stuck bar** (`useActiveStop`): max(42%, a quarter of the
+  way down under the bar's STUCK bottom = its sticky `top` + height). Before `strides-xsl3`, below
+  ~620 px tall the 42% line was inside the chrome and the runner showed the stop before the one at
+  rest.
 - **The intro is gated on `useMostlyVisible`**: the runner's FIGURE (the svg,
-  `[data-runner-part=drawing]`) must be ≥ 90% on screen (or fill 90% of the viewport), on top of the runner's own
+  `[data-runner-part=drawing]`) must be ≥ 90% on screen (or fill 90% of the viewport) AND ≥ 120 px
+  tall (an IntersectionObserver reports ratio 1 for a zero-area target; a resize re-observes), on top of the runner's own
   `onActiveChange` (tab visible and any part on screen). Gating on the whole rail held the intro at
   scroll 0 on 1280×800, where the Pause row and legend sit below the fold. Once step 0 has begun,
   the timers keep running while unseen (the renderer's tween is wall-clock). Leaving during the
@@ -173,4 +189,7 @@ summary → open the first row and wait for its evidence canvas → Classic tabl
   0–53 px (375×548 and 375×600: 0 at every stop; 375×667: 53), because the sticky session header,
   tour bar and control row plus `--rt-reserve` leave it no room. `useMostlyVisible` passes for a
   zero-area svg, so the intro plays unseen there. Not fixed here: layout and gate belong together.
+  **Fixed in `strides-xsl3`** (change `fix-short-phone-runner`): 40% of the viewport at every stop
+  at 375×548/600/667 and 390×844, focus above the panel; the panel window at 375×548 is 96 px
+  (scrolls inside) until `strides-pmvo` slims the 200 px session header.
 - Screenshots: `trn26-*.png` in the trn2.6 session scratchpad (not committed).
