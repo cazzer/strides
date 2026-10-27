@@ -126,6 +126,11 @@ export interface RunnerAnnotation {
   clamped: boolean
   /** The leg (or arm) the annotation sits on. */
   side: RunnerSide
+  /**
+   * The cycle phase the mark is built at, for a limb parameter; null for one that reads the same
+   * at any phase (torso, bounce, arms). A still figure shows a limb mark only at this phase.
+   */
+  keyPhase: number | null
 }
 
 export type RunnerSide = 'left' | 'right'
@@ -140,6 +145,8 @@ export interface AnnotationInput {
   kind?: AnnotationKind
   /** The target camera's yaw: picks the near limb in a side view, the stance leg in a front one. */
   cameraYawDeg: number
+  /** `footFloor(values)`, computed once by the caller. */
+  floor: number
 }
 
 export interface AnnotationPlan {
@@ -176,7 +183,7 @@ export function phaseForLeg(side: RunnerSide, q: number): number {
   return side === 'left' ? fract(q) : fract(q - 0.5)
 }
 
-function circularDistance(a: number, b: number): number {
+export function circularDistance(a: number, b: number): number {
   const d = fract(a - b)
   return Math.min(d, 1 - d)
 }
@@ -435,14 +442,30 @@ const BUILDERS: Readonly<Record<Exclude<RunnerParamId, 'cadence'>, Builder>> = {
   },
 }
 
+/** Tolerance for "the figure is at this mark's key phase". */
+const KEY_PHASE_TOLERANCE = 1e-6
+
+/**
+ * Whether a mark is drawn on a still figure held at `heldPhase`: a limb mark only when the figure
+ * is at its key phase (otherwise it would float off the figure); the others always. While the
+ * figure plays every mark is drawn, since the live limb passes through each key phase.
+ */
+export function shownWhileStill(annotation: RunnerAnnotation, heldPhase: number): boolean {
+  return (
+    annotation.keyPhase === null ||
+    circularDistance(annotation.keyPhase, heldPhase) < KEY_PHASE_TOLERANCE
+  )
+}
+
 /**
  * The held phase and the annotations for the measured focus parameters, in focus order. A
  * neutral focus parameter gets none (there is no measurement to annotate), nor does cadence, nor
  * does a parameter whose kind the `kind` filter excludes.
  *
- * Side views annotate the limbs nearer the camera. Front views (|cos yaw| < 0.5) have no near
- * side, so each limb annotation goes on the leg that is at its key phase nearest the held phase
- * (the stance leg for a contact parameter held at contact), and the arms on the stance side.
+ * The held phase is always taken on the leg a side view would call near (cos yaw >= 0: right),
+ * front views included, so a camera change never moves the held phase by half a stride. Side
+ * views annotate the near limbs; front views (|cos yaw| < 0.5) put each limb mark on the leg that
+ * is at its key phase nearest the held phase (the held leg for the first), arms on the stance side.
  */
 export function planAnnotations({
   bound,
@@ -451,6 +474,7 @@ export function planAnnotations({
   focusParams,
   kind,
   cameraYawDeg,
+  floor,
 }: AnnotationInput): AnnotationPlan {
   const eligible = focusParams.filter((paramId) => {
     const natural = PARAM_ANNOTATION_KIND[paramId]
@@ -468,7 +492,7 @@ export function planAnnotations({
   const heldPhase =
     keyed === undefined
       ? GAIT_PHASES.midStance
-      : phaseForLeg(frontal ? 'left' : near, KEY_LEG_PHASE[keyed] as number)
+      : phaseForLeg(near, KEY_LEG_PHASE[keyed] as number)
   const sideFor = (paramId: RunnerParamId): RunnerSide => {
     if (!frontal) return near
     const q = KEY_LEG_PHASE[paramId]
@@ -478,7 +502,6 @@ export function planAnnotations({
       ? 'left'
       : 'right'
   }
-  const floor = footFloor(values)
 
   const annotations = eligible.flatMap((paramId): RunnerAnnotation[] => {
     const param = bound[paramId]
@@ -505,6 +528,7 @@ export function planAnnotations({
       },
       clamped: param.clamped,
       side,
+      keyPhase: q === null ? null : phase,
     }
     return [annotation]
   })

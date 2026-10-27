@@ -541,3 +541,65 @@ describe('ModelRunner under reduced motion', () => {
     expect(screen.getByRole('button', { name: 'Pause runner' })).toBeInTheDocument()
   })
 })
+
+describe('ModelRunner review round 2', () => {
+  it('shows a still figure only the marks at its held phase, and every mark while playing', () => {
+    mockReducedMotion(true)
+    const { container } = setup({ camera: 'legsSide', focus: { metricIds: ['kneeDrive', 'kneeFlexion'] } })
+    expect(container.querySelector('[data-annotation="peakThighAngle"] [data-role="mark"]')).not.toBeNull()
+    expect(container.querySelector('[data-annotation="peakSwingKneeBend"] [data-role="mark"]')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Play runner' }))
+    expect(container.querySelector('[data-annotation="peakSwingKneeBend"] [data-role="mark"]')).not.toBeNull()
+    // The value stays in the text alternative while the mark is hidden.
+    expect(container.querySelector('p.sr-only')?.textContent).toContain('Knee flexion 110.0°')
+  })
+
+  it('keeps the held phase when a paused camera turns from side to front', () => {
+    const { rerenderWith } = setup({ camera: 'footSide', focus: { metricIds: ['overstriding'] } })
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    const held = phaseForLeg('right', GAIT_PHASES.leftContact)
+    rerenderWith({ camera: 'footSide', focus: { metricIds: ['stepWidth'] } })
+    expectPose(held, 'footSide')
+    rerenderWith({ camera: 'feetFront', focus: { metricIds: ['stepWidth'] } })
+    advance(1000)
+    expectPose(held, 'feetFront')
+  })
+
+  it('treats a zero-length value tween as finished', () => {
+    const { rerenderWith } = setup()
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    rerenderWith({
+      overrides: { valueTween: { from: { torsoPitch: 0 }, to: { torsoPitch: 20 }, durationMs: 0, key: 'z' } },
+    })
+    expectPose(GAIT_PHASES.midStance, 'wholeBodySide', { ...VALUES, torsoPitch: 20 })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('runs a value tween on wall-clock time: hidden past its end, it resumes at `to`', () => {
+    const { rerenderWith } = setup()
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    const tween = { from: { torsoPitch: 0 }, to: { torsoPitch: 20 }, durationMs: 1000, key: 'w' }
+    rerenderWith({ overrides: { valueTween: tween } })
+    advance(300)
+    setVisibility('hidden')
+    expect(vi.getTimerCount()).toBe(0)
+    advance(2000)
+    setVisibility('visible')
+    expectPose(GAIT_PHASES.midStance, 'wholeBodySide', { ...VALUES, torsoPitch: 20 })
+    advance(100)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('runs a value tween and a camera tween together to both ends', () => {
+    const { rerenderWith } = setup()
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    rerenderWith({
+      camera: 'torsoSide',
+      overrides: { valueTween: { from: { torsoPitch: 0 }, to: { torsoPitch: 20 }, durationMs: 900, key: 'c' } },
+    })
+    const { maxStep } = sampleFrames(1000, 'right_shoulder')
+    expect(maxStep).toBeLessThan(0.15)
+    expectPose(GAIT_PHASES.midStance, 'torsoSide', { ...VALUES, torsoPitch: 20 })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})

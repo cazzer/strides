@@ -14,6 +14,7 @@ import {
   labelLines,
   phaseForLeg,
   planAnnotations,
+  shownWhileStill,
   type AnnotationInput,
   type AnnotationPlan,
   type RunnerAnnotation,
@@ -30,12 +31,14 @@ function plan(
   focusParams: readonly RunnerParamId[],
   extra: Partial<AnnotationInput> = {},
 ): AnnotationPlan {
+  const values = extra.values ?? runnerParamValues(bound)
   return planAnnotations({
     bound,
-    values: runnerParamValues(bound),
+    values,
     sources: effectiveSources(bound),
     focusParams,
     cameraYawDeg: 0,
+    floor: footFloor(values),
     ...extra,
   })
 }
@@ -208,15 +211,22 @@ describe('the held phase', () => {
     )
   })
 
-  it('puts a front view’s limb marks on the leg at its key phase', () => {
-    const { heldPhase, annotations } = plan(bindAll(), ['stepWidth', 'swingFootArc'], {
-      cameraYawDeg: 90,
-    })
-    expect(heldPhase).toBe(0)
-    const [step, swing] = annotations
-    expect(step.side).toBe('left')
-    // At phase 0 the right leg (leg phase 0.5) is nearer its mid-arc key than the left (0).
-    expect(swing.side).toBe('right')
+  it('takes a front view’s held phase on the same leg a side view does', () => {
+    const side = plan(bindAll(), ['stepWidth', 'swingFootArc'], { cameraYawDeg: 0 })
+    const front = plan(bindAll(), ['stepWidth', 'swingFootArc'], { cameraYawDeg: 90 })
+    expect(front.heldPhase).toBe(side.heldPhase)
+    expect(front.heldPhase).toBe(phaseForLeg('right', GAIT_PHASES.leftContact))
+    const [step, swing] = front.annotations
+    expect(step.side).toBe('right')
+    expect(step.keyPhase).toBe(front.heldPhase)
+    // At that phase the left leg (leg phase 0.5) is nearer its mid-arc key than the right (0).
+    expect(swing.side).toBe('left')
+  })
+
+  it('shows a still figure only the marks at its held phase', () => {
+    const { heldPhase, annotations } = plan(bindAll(), ['peakThighAngle', 'peakSwingKneeBend', 'torsoPitch'])
+    expect(annotations.map((a) => shownWhileStill(a, heldPhase))).toEqual([true, false, true])
+    expect(annotations[2].keyPhase).toBeNull()
   })
 })
 

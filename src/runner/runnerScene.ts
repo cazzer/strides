@@ -46,6 +46,8 @@ export const RUNNER_PX = {
   label: 13,
   labelHalo: 3,
   labelGap: 6,
+  /** Left-side labels end at their anchor: a little more room clears a bracket's tick. */
+  labelGapLeft: 10,
 } as const
 
 /** Label line pitch, in font sizes. */
@@ -247,6 +249,15 @@ export function neutralEdgeInFrame(
   return EDGE_JOINT_INDICES.some(
     ([a, b], i) => edgeStyles[i] === 'neutral' && (inFrame(a) || inFrame(b)),
   )
+}
+
+/**
+ * A value tween's progress (0..1) at wall-clock `now`, from when its key first appeared. A
+ * non-positive duration is already finished. Shared by the drawing and the cadence integration.
+ */
+export function valueTweenProgress(durationMs: number, startedAt: number, now: number): number {
+  if (!(durationMs > 0)) return 1
+  return Math.min(1, Math.max(0, (now - startedAt) / durationMs))
 }
 
 /**

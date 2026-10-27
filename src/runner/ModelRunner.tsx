@@ -33,6 +33,7 @@ import { cyclesPerSecond, poseAt } from './gaitModel'
 import {
   footFloor,
   planAnnotations,
+  shownWhileStill,
   type AnnotationKind,
   type RunnerAnnotationLabel,
 } from './runnerAnnotations'
@@ -64,6 +65,7 @@ import {
   placeLabel,
   sanitizeRate,
   segmentStyle,
+  valueTweenProgress,
   type RunnerSource,
   type SegmentStyle,
 } from './runnerScene'
@@ -89,9 +91,13 @@ export interface RunnerFocus {
  * A tween of parameter values run by the renderer's own loop, so a multi-second intro never
  * re-renders React per frame. It starts when its `key` first appears and runs linearly over
  * `durationMs` from `from` (missing ids: the base values) to `to`; ids not named in `to` stay at
- * the base values. Once finished it holds `to` exactly for as long as the same key is passed.
- * It keeps running while the runner is paused (like a camera tween), stops while the tab is
- * hidden or the figure is offscreen, and jumps to `to` under reduced motion.
+ * the base values. Progress is WALL-CLOCK time since the key first appeared
+ * (`performance.now()`), so it stays in step with the caller's own timers: while the tab is hidden
+ * or the figure offscreen the loop stops, and it resumes at the right progress. A non-positive
+ * `durationMs` is already finished. It runs while the runner is paused (like a camera tween) and
+ * jumps to `to` under reduced motion. Once finished it holds `to` exactly for as long as the same
+ * key is passed. **The key is the identity:** passing the same key with a different `from`, `to`
+ * or `durationMs` is ignored; use a new key for a new tween.
  */
 export interface RunnerValueTween {
   from: Partial<RunnerParams>
@@ -187,7 +193,8 @@ interface ValueTweenState {
   from: Partial<RunnerParams>
   to: Partial<RunnerParams>
   durationMs: number
-  elapsedMs: number
+  /** `performance.now()` when the key first appeared; -Infinity once jumped to the end. */
+  startedAt: number
 }
 
 interface Live {
@@ -204,8 +211,17 @@ function fmt(value: number): string {
   return value.toFixed(4)
 }
 
-function valueTweenRunning(tween: ValueTweenState | null): boolean {
-  return tween !== null && tween.elapsedMs < tween.durationMs
+function progressOf(tween: ValueTweenState, now: number): number {
+  return valueTweenProgress(tween.durationMs, tween.startedAt, now)
+}
+
+function valueTweenRunning(tween: ValueTweenState | null, now: number): boolean {
+  return tween !== null && progressOf(tween, now) < 1
+}
+
+/** The values drawn now: the static values, with any value tween applied. */
+function drawnValues(base: RunnerParams, tween: ValueTweenState | null, now: number): RunnerParams {
+  return tween ? mixValues(base, tween.from, tween.to, progressOf(tween, now)) : base
 }
 
 function subscribeVisibility(onChange: () => void): () => void {
@@ -341,7 +357,8 @@ export function ModelRunner({
   const focusMetrics = focus?.metricIds
   const focusParams = useMemo(() => focusParamsOf(focusMetrics ?? []), [focusMetrics])
   const annotationKind = focus?.annotation
-  const { heldPhase, annotations } = useMemo(
+  const floor = useMemo(() => footFloor(values), [values])
+  const { heldPhase, annotations: allAnnotations } = useMemo(
     () =>
       planAnnotations({
         bound: params,
@@ -350,10 +367,16 @@ export function ModelRunner({
         focusParams,
         kind: annotationKind,
         cameraYawDeg: target.yawDeg,
+        floor,
       }),
-    [params, values, sources, focusParams, annotationKind, target.yawDeg],
+    [params, values, sources, focusParams, annotationKind, target.yawDeg, floor],
   )
-  const floor = useMemo(() => footFloor(values), [values])
+  // A still figure shows a limb mark only at its key phase; a playing one shows every mark.
+  const annotations = useMemo(
+    () =>
+      playing ? allAnnotations : allAnnotations.filter((a) => shownWhileStill(a, heldPhase)),
+    [playing, allAnnotations, heldPhase],
+  )
   const edgeStyles = useMemo(
     () => SKELETON_EDGES.map((edge) => segmentStyle(edge, sources, focusParams)),
     [sources, focusParams],
@@ -385,10 +408,7 @@ export function ModelRunner({
     if (!scene) return
     const cam = cameraNowRef.current
     const unit = 1 / scene.pxPerUnit
-    const tween = valueTweenRef.current
-    const drawn = tween
-      ? mixValues(scene.values, tween.from, tween.to, tween.durationMs > 0 ? tween.elapsedMs / tween.durationMs : 1)
-      : scene.values
+    const drawn = drawnValues(scene.values, valueTweenRef.current, performance.now())
     const projected = projectPose(poseAt(phaseRef.current, drawn), cam)
     const { segments, joints, paths, labels, ground, flash: flashTarget } = scene.targets
     for (const { el, a, b } of segments) {
@@ -417,7 +437,7 @@ export function ModelRunner({
         text.side,
         text.lines,
         fontUnits,
-        RUNNER_PX.labelGap * unit,
+        (text.side === 'left' ? RUNNER_PX.labelGapLeft : RUNNER_PX.labelGap) * unit,
       )
       lines.forEach((line, i) => setPoint(line, 'x', 'y', layout.x, layout.ys[i]))
     }
@@ -483,11 +503,11 @@ export function ModelRunner({
         from: valueTween.from,
         to: valueTween.to,
         durationMs: valueTween.durationMs,
-        elapsedMs: 0,
+        startedAt: performance.now(),
       }
     }
     const tween = valueTweenRef.current as ValueTweenState
-    if (reduced) tween.elapsedMs = tween.durationMs
+    if (reduced) tween.startedAt = -Infinity
     drawRef.current()
   }, [valueTween, reduced])
 
@@ -520,7 +540,9 @@ export function ModelRunner({
       const live = liveRef.current
       return (
         live.active &&
-        (live.playing || cameraTweenRef.current !== null || valueTweenRunning(valueTweenRef.current))
+        (live.playing ||
+          cameraTweenRef.current !== null ||
+          valueTweenRunning(valueTweenRef.current, performance.now()))
       )
     }
     const stop = () => {
@@ -531,6 +553,8 @@ export function ModelRunner({
     const tick = (now: number) => {
       raf = 0
       if (!wants()) {
+        // A wall-clock value tween can finish between draws: draw its end state once, then stop.
+        drawRef.current()
         stop()
         return
       }
@@ -551,21 +575,10 @@ export function ModelRunner({
       if (nextDue < now) nextDue = now + FRAME_MS
       const live = liveRef.current
       const scene = sceneRef.current
-      const valueTweenState = valueTweenRef.current
-      if (valueTweenState && valueTweenRunning(valueTweenState)) {
-        valueTweenState.elapsedMs = Math.min(valueTweenState.durationMs, valueTweenState.elapsedMs + stepMs)
-      }
       if (live.playing && scene) {
-        const drawnCadence = valueTweenState
-          ? mixValues(
-              scene.values,
-              valueTweenState.from,
-              valueTweenState.to,
-              valueTweenState.elapsedMs / Math.max(1, valueTweenState.durationMs),
-            )
-          : scene.values
+        const drawn = drawnValues(scene.values, valueTweenRef.current, performance.now())
         phaseRef.current = fract(
-          phaseRef.current + (stepMs / 1000) * cyclesPerSecond(drawnCadence) * live.rate,
+          phaseRef.current + (stepMs / 1000) * cyclesPerSecond(drawn) * live.rate,
         )
       }
       const cameraTween = cameraTweenRef.current
