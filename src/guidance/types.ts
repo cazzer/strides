@@ -513,8 +513,10 @@ export interface MetricGuidance {
    * What running-economy research found ACROSS RUNNERS for this quantity, and which side of the
    * band that finding points away from — or `null`, which is the answer for every metric but two.
    *
-   * It feeds the guided view's "Energy cost" headline and nothing else: it renders only there,
-   * never on a card (narrative-metric-headlines design.md D3).
+   * Its `costlySide` decides whether a reading earns a cue in the tour and the summary
+   * (`pastCostlySide`, `bandApplicability.ts`). `text` and `url` render nowhere: the guided view's
+   * "Energy cost" headline that showed them was deleted (`strides-trn2.7`). They stay as the record
+   * the side rests on, under the same rules.
    *
    * Rules, each pinned by test in `metricGuidance.test.ts`:
    *
@@ -530,12 +532,12 @@ export interface MetricGuidance {
    *    improves), no grading word, and nothing about injury — this is an economy finding.
    * 4. **`costlySide` is the side of the band the association points AWAY from** — where a reading
    *    goes with a higher energy cost. It is the opposite of `tryLine.direction`'s side, and a test
-   *    pins that: a headline that fired on the side its own studied change moves toward would be
-   *    advice to go further out.
+   *    pins that: a cue that fired on the side its own studied change moves toward would be advice
+   *    to go further out.
    *
-   * A headline fires only when the value lies strictly beyond the band's outermost finite bound on
-   * `costlySide` (`pastCostlySide` in `src/results/guidedHeadlines.ts`) at the `'normal'` tier;
-   * a caveated reading past that bound is reported in one line instead. The band is still an
+   * A cue fires only when the value lies strictly beyond the band's outermost finite bound on
+   * `costlySide` (`pastCostlySide`) at the `'normal'` tier, among the other conditions in
+   * `feedbackPoints.ts`. The band is still an
    * observed range, not a target, and nothing here gives it a preferred end: the side names where a
    * published association points, not where the runner should be.
    */

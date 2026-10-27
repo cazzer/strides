@@ -1215,8 +1215,7 @@ describe('MultiClipVideoSession — results view mode', () => {
     await loadOneReadyClip()
 
     expect(mountedView()).toBe('tour')
-    // The tour's body, not the guided measurements: the runner's rail beside the stops.
-    expect(document.querySelector('.guided-results__group')).toBeNull()
+    // The tour's body: the runner's rail beside the stops.
     expect(document.querySelector('.runner-tour .runner-tour__rail')).not.toBeNull()
     expect(document.querySelector('.runner-tour [data-tour-stop="oneThing"]')).not.toBeNull()
     expect(window.location.search).toBe('?clip=demo')
@@ -1252,7 +1251,6 @@ describe('MultiClipVideoSession — results view mode', () => {
     await loadOneReadyClip()
 
     expect(mountedView()).toBe('classic')
-    expect(document.querySelector('.guided-results__group')).toBeNull()
     const back = screen.getByRole('button', { name: 'Show summary' })
     expect(screen.getByRole('main')).toContainElement(back)
     expect(screen.getByRole('banner')).not.toContainElement(back)

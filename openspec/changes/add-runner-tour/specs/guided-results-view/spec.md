@@ -159,3 +159,56 @@ view". The two-option Guided/Classic toggle is replaced by per-view controls.
 **Migration**: `?view=guide` renders the runner tour. `?view=classic` is unchanged. An absent or
 unrecognised `view` renders the remembered landing (the summary) when one is set, otherwise the tour.
 The `ResultsViewToggle` component is deleted.
+
+### Requirement: The guided view ranks metrics into three groups by what can be said about them
+
+**Reason**: No view presents the three groups any more. The summary groups cards by focus area, one
+collapsed row per measured area in tour order, and the tour by stop; the guided body that rendered
+the banded, unbanded and not-measured groups was deleted (`strides-trn2.7`). Neither view orders
+anything by the runner's own readings.
+
+**Migration**: See results-summary "The summary shows the model runner beside one row per measured
+focus area" and "Unmeasured metrics sit in one final collapsed Not measured row". A shared
+remediation link (overstriding's on the cadence card) is still attached by the guidance data and
+renders on the card as before.
+
+### Requirement: The three bounce measures are introduced together, each linking to its own entry
+
+**Reason**: The bounce introduction lived only in the deleted guided body, and no view renders it.
+The three bounce measures now sit together in the summary's rhythm row and the tour's rhythm stop.
+
+**Migration**: None. Each measure keeps its own card with its own evidence and limits.
+
+### Requirement: A headline appears only where its spokesman reads past its cited band on the costly side
+
+**Reason**: The "Energy cost" section was deleted with the guided body, and no view renders a
+headline. Its threshold survives as the cue rule: a reading earns a cue only past its band's
+outermost finite bound on the costly side.
+
+**Migration**: See runner-feedback "A cue appears only where the studied change applies to this
+value", which states the same threshold.
+
+### Requirement: Each story has one fixed spokesman and yields at most one headline
+
+**Reason**: No view renders an "Energy cost" headline any more, so it has no story to speak for.
+
+**Migration**: None. Every metric keeps its own card.
+
+### Requirement: Headlines render in evidence order, never in order of the runner's readings
+
+**Reason**: No view renders an "Energy cost" headline any more.
+
+**Migration**: None. The tour and the summary follow the fixed focus-area order.
+
+### Requirement: An empty headline section says where each story stands, without grading
+
+**Reason**: No view renders an "Energy cost" section any more, empty or not.
+
+**Migration**: None. Where nothing earns a cue, the tour's one-thing stop says so (runner-feedback).
+
+### Requirement: A headline states the position, the association, and the card's own cautions
+
+**Reason**: No view renders an "Energy cost" headline any more.
+
+**Migration**: None. A card still carries its position, its mandatory notes, its studied-change line
+and its source clip.

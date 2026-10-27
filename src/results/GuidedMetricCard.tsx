@@ -350,7 +350,7 @@ function CorroborationList({
  * test enforces both, and that the link is one of this metric's own recorded studies of changes.
  * The study's kind, summary and full citation are in the disclosure, where it renders again as text.
  */
-export function TryLine({
+function TryLine({
   text,
   link,
   cadence,
@@ -388,12 +388,6 @@ export interface GuidedMetricCardProps {
   clipCount: number
   sourceLabel?: string
   onOpenEvidenceVideo?: (clipIndex: number, timestamp: number, returnFocus: HTMLButtonElement | null) => void
-  /**
-   * `'framed'` (default) draws the card's own 2 px frame. `'divided'` separates it from the card
-   * above with a top rule only — for cards inside a group that is already framed, where a frame
-   * per card would nest three borders deep on a phone.
-   */
-  variant?: 'framed' | 'divided'
 }
 
 /**
@@ -409,7 +403,6 @@ export function GuidedMetricCard({
   clipCount,
   sourceLabel,
   onOpenEvidenceVideo,
-  variant = 'framed',
 }: GuidedMetricCardProps) {
   const headingId = useId()
   const { metric, guidance, band } = entry
@@ -456,16 +449,11 @@ export function GuidedMetricCard({
     ? `${joined.charAt(0).toUpperCase()}${joined.slice(1)}${count}`
     : 'More on this measurement'
 
-  const frame =
-    variant === 'framed'
-      ? 'border-2 border-black p-5 dark:border-white'
-      : 'border-t-2 border-black pt-5 dark:border-white'
-
   return (
     <article
       id={guidedEntryId(metric.metric)}
       tabIndex={-1}
-      className={`guided-results__card scroll-mt-4 space-y-4 ${frame} ${FOCUS}`}
+      className={`guided-results__card scroll-mt-4 space-y-4 border-t-2 border-black pt-5 dark:border-white ${FOCUS}`}
       aria-labelledby={headingId}
       data-metric={metric.metric}
       data-motion-metric={metric.metric}

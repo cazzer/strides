@@ -133,7 +133,6 @@ export const FocusAreaRow = memo(function FocusAreaRow({
               clipCount={clipCount}
               sourceLabel={sourceLabelFor(entry.metric.metric)}
               onOpenEvidenceVideo={onOpenEvidenceVideo}
-              variant="divided"
             />
           ))}
         </div>

@@ -26,28 +26,8 @@ import type { AreaFeedback, CitedLine } from './feedbackPoints'
 import { FOCUS_AREAS, FOCUS_AREA_ORDER, focusAreaView } from './focusAreas'
 import type { FocusAreaId, FocusAreaView } from './focusAreas'
 import { METRIC_GUIDANCE } from './metricGuidance'
+import { FEEDBACK_VERIFIED_URLS } from './__fixtures__/feedbackVerifiedUrls'
 import type { MetricGuidance, MetricTier } from './types'
-
-/**
- * Every URL a why line, cue or non-point may cite. **Closed**: a URL not in this set cannot ship in
- * a feedback line without this file failing. Each member was opened on 2026-10-27 and found to
- * state the line that cites it; the quoted sentence is in add-runner-tour design.md. Each member
- * must also appear in docs/prd/runner-led-results-research.md or among METRIC_GUIDANCE's own URLs.
- */
-const FEEDBACK_VERIFIED_URLS: ReadonlySet<string> = new Set([
-  // Why lines
-  'https://pmc.ncbi.nlm.nih.gov/articles/PMC11127892/',
-  'https://pmc.ncbi.nlm.nih.gov/articles/PMC4296200',
-  'https://pmc.ncbi.nlm.nih.gov/articles/PMC11809138/',
-  'https://pmc.ncbi.nlm.nih.gov/articles/PMC5473370/',
-  'https://journals.biologists.com/jeb/article/218/21/3406/14416/',
-  // Non-points
-  'https://www.theinjuryclinic.com.au/wp-content/uploads/2021/06/Anderson2020_Article_WhatAreTheBenefitsAndRisksAsso.pdf',
-  'https://pubmed.ncbi.nlm.nih.gov/21316058/',
-  // Cues: each cue-capable metric's existing Try line, reused verbatim
-  'https://ijspt.scholasticahq.com/article/90909-a-one-session-gait-retraining-protocol-with-metronome-augmentation-increases-cadence-in-novice-and-recreational-runners',
-  'https://pmc.ncbi.nlm.nih.gov/articles/PMC6088121/',
-])
 
 const GRADING_WORDS =
   /\b(good|bad|poor|better|worse|best|worst|optimal|ideal|excessive|healthy|unhealthy|target|goal|should|correct|incorrect|normal|abnormal)\b/i
@@ -752,7 +732,7 @@ describe('selectOneThing', () => {
     })
   })
 
-  describe('agrees with the Energy cost headline on which side is past the band', () => {
+  describe('agrees with pastCostlySide on which side is past the band', () => {
     function entryFor(fused: FormHeuristicsResult, id: MetricId) {
       return {
         metric: fused[id],

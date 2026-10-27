@@ -54,8 +54,8 @@ export function formatGuidedValue(
 }
 
 /**
- * The headline value a guided card prints, and the value the contents list repeats beside its
- * link — one function, so the two can never disagree.
+ * The headline value a guided card prints — and, through `guidedHeadlineParts`, the value every
+ * summary row and tour stop prints — one function, so they can never disagree.
  *
  * A banded entry prints at its band's precision (`formatMeasuredBandValue`, see above); every other
  * entry prints exactly as the classic panel does. A not-measured entry has no headline: the view
@@ -84,11 +84,7 @@ export interface GuidedHeadlineParts {
  * else so the two can never disagree about which is which.
  *
  * `position` is `null` for an entry with no band or no value: there is nothing to be positioned
- * against. `value` is always {@link guidedHeadline}'s own answer for a non-excluded entry, so the
- * headline and the contents list can never print a value differently.
- *
- * **The contents list keeps calling `guidedHeadline`, not this.** It prints one value per row in a
- * three-column grid; a position fragment there would wrap every row.
+ * against. `value` is always {@link guidedHeadline}'s own answer for a non-excluded entry.
  */
 export function guidedHeadlineParts(
   entry: GuidedEntry,
@@ -96,7 +92,7 @@ export function guidedHeadlineParts(
 ): GuidedHeadlineParts {
   const { band, metric } = entry
   const value = guidedHeadline(entry, false) ?? formatGuidedValue(metric)
-  // `standalone`: no scale renders beside this headline (the "Energy cost" section), so the
+  // `standalone`: no full scale renders beside this headline (a summary row, a tour stop), so the
   // position must name its range itself rather than say "the range shown".
   const describe = standalone
     ? describeBandPositionStandalone

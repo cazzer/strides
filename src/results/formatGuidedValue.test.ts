@@ -74,7 +74,7 @@ describe('formatGuidedValue — matches MetricsPanel formatValue', () => {
   })
 })
 
-describe('guidedHeadline — one value for the card headline and the contents list', () => {
+describe('guidedHeadline — one value for the card headline, the summary row and the tour stop', () => {
   it("prints a banded entry at its band's precision, so 163.5 is not rounded onto a bound", () => {
     const [entry] = guidedGroups(
       makeHeuristics({ cadence: makeMetric('cadence', { value: 163.5 }) }),
@@ -120,7 +120,7 @@ describe('guidedHeadlineParts — the two halves of a card headline', () => {
     })
   })
 
-  it('prints the same value the contents list does, on every entry', () => {
+  it('gives guidedHeadlineParts the same value, on every entry', () => {
     const { banded, unbanded } = guidedGroups(makeHeuristics())
     expect(banded.length + unbanded.length).toBeGreaterThan(0)
     for (const entry of [...banded, ...unbanded]) {
@@ -146,7 +146,7 @@ describe('guidedHeadlineParts — the two halves of a card headline', () => {
     expect(guidedHeadlineParts(withoutValue).value).toBe('Not available')
   })
 
-  it('leaves the contents list value-only, so its rows do not wrap', () => {
+  it('keeps the value free of position words: the position is its own half', () => {
     const [entry] = guidedGroups(makeHeuristics()).banded
     expect(guidedHeadline(entry, false)).not.toContain('percentile')
     expect(guidedHeadlineParts(entry).position).toContain('percentile')
