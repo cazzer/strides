@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { RefObject } from 'react'
 import type { PoseDetector } from '../pose/detector'
 import type { ModelLoadStates } from '../pose/modelLoadState'
 import { AddClipAction } from '../video/AddClipAction'
@@ -8,7 +9,7 @@ import { releaseClipPoster } from '../video/posterFrame'
 import { ClipSlot } from './ClipSlot'
 import { clipHostsLiveElement } from './clipStripStatus'
 import type { ClipPendingLoad } from './ClipSlot'
-import { GuidedResultsView } from './GuidedResultsView'
+import type { GuidedResultsViewProps } from './GuidedResultsView'
 import { MotionStoryStage } from './MotionStoryStage'
 import type { MetricCardEvidence } from './MetricsPanel'
 import { ModelLoadStripEntry } from './ModelLoadStripEntry'
@@ -16,9 +17,11 @@ import { describeModelLoadStripStatus } from './modelLoadStripStatus'
 import { ResultsView } from './ResultsView'
 import { SessionCoverageNotice } from './SessionCoverageNotice'
 import { sessionCoverage } from './sessionCoverage'
-import { ResultsViewToggle } from './ResultsViewToggle'
+import { readResultsLanding, writeResultsLanding } from './resultsLanding'
 import { resolveResultsViewMode, writeResultsViewMode } from './resultsViewMode'
 import type { ResultsViewMode } from './resultsViewMode'
+import { ResultsSummary } from './summary/ResultsSummary'
+import { RunnerTour } from './tour/RunnerTour'
 import { useScreenWakeLock } from './useScreenWakeLock'
 import { useSessionEvidence } from './useSessionEvidence'
 import type { EvidenceSection } from './useSessionEvidence'
@@ -35,6 +38,38 @@ import { clipViewLabel } from './clipProvenance'
 /** Stable empty list, so "extraction has not settled yet" never hands the cards a fresh
  * identity on every render. */
 const NO_EVIDENCE: readonly EvidenceSection[] = []
+
+/**
+ * Publishes the sticky header's height on `<main>` as `--motion-story-header-height`, for the two
+ * rules that read it (`index.css`): the classic view's sticky motion stage, and the scroll margin on
+ * every card and `.guided-results__scroll-target`. On `<main>` rather than on the stage, because the
+ * stage renders beside the classic view only; set there, every other view's scroll targets would
+ * fall back to the 88 px guess and land under a header that is often taller.
+ */
+function useHeaderHeightProperty(
+  headerRef: RefObject<HTMLElement | null>,
+  mainRef: RefObject<HTMLElement | null>,
+): void {
+  useEffect(() => {
+    const header = headerRef.current
+    const main = mainRef.current
+    if (!header || !main) return
+    const update = () => {
+      main.style.setProperty(
+        '--motion-story-header-height',
+        `${Math.ceil(header.getBoundingClientRect().height)}px`,
+      )
+    }
+    update()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', update)
+      return () => window.removeEventListener('resize', update)
+    }
+    const observer = new ResizeObserver(update)
+    observer.observe(header)
+    return () => observer.disconnect()
+  }, [headerRef, mainRef])
+}
 
 export interface MultiClipVideoSessionProps {
   /** The one shared, stateful pose detector for the whole page — handed to exactly one active
@@ -125,7 +160,9 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
   // once for the single-clip flow (WebcamCapture, #4).
   const headingRef = useRef<HTMLHeadingElement>(null)
   const headerRef = useRef<HTMLElement>(null)
+  const mainRef = useRef<HTMLElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
+  useHeaderHeightProperty(headerRef, mainRef)
   // Seeded EMPTY, and that is the whole point: a session with no clips is now representable, so
   // the zero-clip state is genuinely "no clips" rather than "one slot whose videoSource.status is
   // 'empty'". Every clip, the first one included, is now created by `addClip` and loaded through a
@@ -181,16 +218,37 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
     }
     previouslyPresentedRef.current = presentedClipId
   }, [presentedClipId])
-  // Which results view renders. Seeded ONCE from the address (lazy initialiser, so a later render
-  // never re-reads it) and written back on every change, so a reload or a shared link lands on the
-  // same view. Guided unless the address says exactly `?view=classic` — see `resultsViewMode.ts`.
+  // Which results view renders: the tour, the summary or the classic table. Seeded ONCE from the
+  // address and the remembered landing (lazy initialiser, so a later render never re-reads either),
+  // and written back to the address on every switch — which, for tour and summary, means removing
+  // `view`. See `resultsViewMode.ts` and `resultsLanding.ts`.
   const [resultsViewMode, setResultsViewMode] = useState<ResultsViewMode>(() =>
-    resolveResultsViewMode(window.location.search),
+    resolveResultsViewMode(window.location.search, readResultsLanding()),
   )
-  const handleResultsViewModeChange = useCallback((mode: ResultsViewMode) => {
+  // Set by a reader's switch, never by the initial mount: focus moves into the new view only when
+  // the control the reader just used has been unmounted underneath them.
+  const focusViewAfterSwitchRef = useRef(false)
+  const viewRegionRef = useRef<HTMLDivElement>(null)
+  const showView = useCallback((mode: ResultsViewMode) => {
+    focusViewAfterSwitchRef.current = true
     setResultsViewMode(mode)
     writeResultsViewMode(mode)
   }, [])
+  const leaveTour = useCallback(() => {
+    writeResultsLanding()
+    showView('summary')
+  }, [showView])
+  const replayTour = useCallback(() => showView('tour'), [showView])
+  const showSummary = useCallback(() => showView('summary'), [showView])
+  const showClassic = useCallback(() => showView('classic'), [showView])
+  useEffect(() => {
+    if (!focusViewAfterSwitchRef.current) return
+    focusViewAfterSwitchRef.current = false
+    // Every view's own controls come first in its region — Skip in the tour, Replay in the
+    // summary, Back to summary above the classic table — so the first enabled button IS the
+    // new view's first control.
+    viewRegionRef.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus()
+  }, [resultsViewMode])
 
   const handleReport = useCallback((clipId: string, session: ClipSession) => {
     setClipStates((prev) => {
@@ -400,6 +458,23 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
     headingRef.current?.focus()
   }, [clipStates, headingRef])
 
+  // What every results view is given — identical by construction (`GuidedResultsViewProps` IS
+  // `ResultsViewProps`), so the three stay interchangeable at the one conditional that picks one.
+  const resultsViewProps: GuidedResultsViewProps = {
+    analysis: aggregate,
+    onTryAgain: handleTryAgain,
+    onStartOver: handleStartOver,
+    evidence,
+    clipCount: clips.length,
+    clipViews,
+    sourceIndices,
+    onOpenEvidenceVideo: clips.every(
+      (clip) => !clipHostsLiveElement(clip.analysis.phase, clip.analysis.scalePass.status),
+    )
+      ? openEvidenceVideo
+      : undefined,
+  }
+
   return (
     <>
       <header ref={headerRef} className="sticky top-0 z-10 border-b-2 border-black dark:border-white bg-white dark:bg-black px-4 sm:px-6 py-4">
@@ -510,7 +585,7 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 sm:px-6 py-10 space-y-8">
+      <main ref={mainRef} className="mx-auto max-w-6xl px-4 sm:px-6 py-10 space-y-8">
         {/*
           What a reader has to be able to READ about a clip cannot live in a 96x72 strip entry: the
           load-error alert and its Try again in particular, which `video-input`'s "Clear error
@@ -556,59 +631,52 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
         {coverage && <SessionCoverageNotice coverage={coverage} onAddClip={requestAddClip} />}
 
         {/*
+          ONE view, chosen by a conditional — never two mounted with one hidden. The evidence
+          imagery is real canvas ELEMENTS and a node has one parent, so a second mounted view would
+          silently take every canvas from the first (guided-results-view design.md D7.3). All three
+          take the same results props, and a switch unmounts one and mounts the other, so the
+          canvases move across rather than being lost. The tour and the summary each wrap exactly
+          one `GuidedResultsView`; only the classic table sits beside the motion stage.
+
           In the page body, not the header: the header's clip strip is `flex-1` and gives up width to
           anything beside it, and a strip entry squeezed or scrolled out of view is a concealed clip
           element — which costs sampled frames (`strides-kyu.13`).
         */}
         {anyClipVideoReady && (
-          <ResultsViewToggle mode={resultsViewMode} onChange={handleResultsViewModeChange} />
-        )}
-
-        {/*
-          ONE view, chosen by a conditional — never both mounted with one hidden. The evidence
-          imagery is real canvas ELEMENTS and a node has one parent, so a second mounted view would
-          silently take every canvas from the first (guided-results-view design.md D7.3). The two
-          take identical props, and the swap unmounts one and mounts the other, so the canvases move
-          across rather than being lost.
-        */}
-        {anyClipVideoReady && (
-          <div className={aggregate.phase === 'idle' || aggregate.phase === 'error'
-            ? ''
-            : 'lg:grid lg:grid-cols-[minmax(16rem,19rem)_minmax(0,1fr)] lg:items-start lg:gap-6'}>
-            <MotionStoryStage
-              analysis={aggregate}
-              clips={clips}
-              sourceIndices={sourceIndices}
-              evidence={evidence}
-              resultsRef={resultsRef}
-              headerRef={headerRef}
-              viewMode={resultsViewMode}
-            />
-            <div ref={resultsRef} className="min-w-0">
-          {resultsViewMode === 'guide' ? (
-            <GuidedResultsView
-              analysis={aggregate}
-              onTryAgain={handleTryAgain}
-              onStartOver={handleStartOver}
-              evidence={evidence}
-              clipCount={clips.length}
-              clipViews={clipViews}
-              sourceIndices={sourceIndices}
-              onOpenEvidenceVideo={clips.every((clip) => !clipHostsLiveElement(clip.analysis.phase, clip.analysis.scalePass.status)) ? openEvidenceVideo : undefined}
-            />
-          ) : (
-            <ResultsView
-              analysis={aggregate}
-              onTryAgain={handleTryAgain}
-              onStartOver={handleStartOver}
-              evidence={evidence}
-              clipCount={clips.length}
-              clipViews={clipViews}
-              sourceIndices={sourceIndices}
-              onOpenEvidenceVideo={clips.every((clip) => !clipHostsLiveElement(clip.analysis.phase, clip.analysis.scalePass.status)) ? openEvidenceVideo : undefined}
-            />
-          )}
-            </div>
+          <div ref={viewRegionRef} className="space-y-8">
+            {resultsViewMode === 'tour' && <RunnerTour {...resultsViewProps} onLeaveTour={leaveTour} />}
+            {resultsViewMode === 'summary' && (
+              <ResultsSummary
+                {...resultsViewProps}
+                onReplayTour={replayTour}
+                onOpenClassic={showClassic}
+              />
+            )}
+            {resultsViewMode === 'classic' && (
+              <>
+                <button
+                  type="button"
+                  onClick={showSummary}
+                  className="inline-flex items-center justify-center border-2 border-black px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black transition-colors hover:bg-black hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:border-white dark:text-white dark:hover:bg-white dark:hover:text-black"
+                >
+                  Back to summary
+                </button>
+                <div className={aggregate.phase === 'idle' || aggregate.phase === 'error'
+                  ? ''
+                  : 'lg:grid lg:grid-cols-[minmax(16rem,19rem)_minmax(0,1fr)] lg:items-start lg:gap-6'}>
+                  <MotionStoryStage
+                    analysis={aggregate}
+                    clips={clips}
+                    sourceIndices={sourceIndices}
+                    evidence={evidence}
+                    resultsRef={resultsRef}
+                  />
+                  <div ref={resultsRef} className="min-w-0">
+                    <ResultsView {...resultsViewProps} />
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
 

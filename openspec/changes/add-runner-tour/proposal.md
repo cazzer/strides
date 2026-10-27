@@ -26,6 +26,14 @@ later tickets (`strides-trn2.2`, `.3`, `.5`).
 - Tests pinning every URL, the word budgets, the no-grading rule and the one-thing rules.
 - `docs/prd/runner-led-results-research.md` gains the verified Arellano & Kram 2011 citation that
   the step-width non-point rests on.
+- View routing (`strides-trn2.2`): three results views, the runner tour (the new default), the
+  results summary and the classic table. `?view=tour|summary|classic` selects one, and the legacy
+  `?view=guide` maps to the tour. An absent or unrecognised value falls back to a remembered landing
+  (`localStorage` `strides.resultsLanding = 'summary'`, written on Skip), else the tour. The
+  Guided/Classic toggle is replaced by Skip to summary, Replay tour, a "Classic table" footer link
+  and Back to summary. `src/results/tour/RunnerTour.tsx` and `src/results/summary/ResultsSummary.tsx`
+  are stubs that wrap the existing guided view; the motion stage renders beside the classic table
+  only.
 
 ## Capabilities
 
@@ -33,7 +41,18 @@ later tickets (`strides-trn2.2`, `.3`, `.5`).
 
 - `runner-feedback`: focus-area grouping and cited feedback points (why, cue, non-point, one thing).
 
+### Modified Capabilities
+
+- `guided-results-view`: the runner tour replaces the guided view as the default; exactly one of
+  three views is mounted; every view carries the one "Analysis complete." line.
+- `results-view`: the motion stage is scoped to the classic view.
+
 ## Impact
 
-No UI, no change to `src/heuristics/**`, to any band, or to any Try line text. `src/guidance`
-imports nothing from `src/results` or `src/runner`; `src/results` re-exports what moved.
+The data layer (`strides-trn2.1`) has no UI, and changes nothing in `src/heuristics/**`, any band,
+or any Try line text. `src/guidance` imports nothing from `src/results` or `src/runner`;
+`src/results` re-exports what moved.
+
+View routing (`strides-trn2.2`) changes which view a bare address opens on (the tour, not the guided
+view) and deletes `ResultsViewToggle`. It changes no measurement and no evidence planning. The e2e
+suite and the A/B harness still find exactly one "Analysis complete." line in every view.

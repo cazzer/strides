@@ -17,8 +17,8 @@ says "classic stays the default" or "opt-in" describes the pre-flip state. Spec:
 - **Where:** `src/guidance/` (`METRIC_GUIDANCE` in `metricGuidance.ts`, `MetricScale.tsx`,
   `bandPosition.ts`, `formatBandValue.ts`, `types.ts`); `src/results/GuidedResultsView.tsx`,
   `GuidedMetricCard.tsx`, `guidedGroups.ts` (pure three-group partition; group 3 is
-  `metricTier === 'excluded'`), `formatGuidedValue.ts`; `resultsViewMode.ts` +
-  `ResultsViewToggle.tsx` (`history.replaceState`, no router). The only wiring is one conditional in
+  `metricTier === 'excluded'`), `formatGuidedValue.ts`; `resultsViewMode.ts`
+  (`history.replaceState`, no router; `ResultsViewToggle.tsx` was deleted by `strides-trn2.2`). The only wiring is one conditional in
   `MultiClipVideoSession.tsx`. `ResultsView.tsx` is untouched; `MetricsPanel.tsx` lost only
   `METRIC_DESCRIPTIONS`, moved verbatim to `metricDescriptions.ts` (`fd3d1f7`).
 - **The governing rule: a band is cited or it does not ship.** No band is invented, pooled across
@@ -51,10 +51,18 @@ it**. Toggling unmounts one view and mounts the other, and the canvases move acr
 ⚠️ **Both views must render `role="status"` starting "Analysis complete."** — the e2e suite and
 `scripts/ab-person-selection.mjs` wait on that text, so either view can be driven.
 
-**Driving it:** the bare `/strides/` on the derived port is guided now; `?view=classic` for classic. Hooks: `.guided-results`,
-`.guided-results__group` (`--banded` / `--unbanded` / `--not-measured`; the last two are
-`<details>`, collapsed), `nav[aria-label="Measurements on this page"]`, `.metric-scale`. The A/B
-harness never passes `?view=`, reads the classic default, and is unaffected.
+**Driving it (since `strides-trn2.2`, 2026-10-27):** the bare `/strides/` on the derived port
+opens the **runner tour** (`.runner-tour`), or the **summary** (`.results-summary`) once
+`localStorage['strides.resultsLanding'] === 'summary'` (written by "Skip to summary"; a fresh
+Playwright context has none). `?view=tour|summary|classic` selects one explicitly; `?view=guide`
+maps to the tour. Both the tour and the summary are, for now, stubs wrapping exactly one
+`GuidedResultsView`, so its hooks still apply: `.guided-results`, `.guided-results__group`
+(`--banded` / `--unbanded` / `--not-measured`; the last two are `<details>`, collapsed),
+`nav[aria-label="Measurements on this page"]`, `.metric-scale`. The motion stage (`.motion-story`)
+renders beside the classic table only. The Guided/Classic toggle is gone; the controls are "Skip to
+summary", "Replay tour", the summary footer's "Classic table" and classic's "Back to summary". The
+A/B harness never passes `?view=`, so it drives the tour, and still finds exactly one "Analysis
+complete." line.
 
 **Live-verified 2026-09-15 (`strides-kgi.7`)** on all three demo clips, real GPU, one upload per
 clip: every clip reaches "Analysis complete." at `?view=guide`, banded metrics render a scale with

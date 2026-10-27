@@ -23,3 +23,13 @@
 
 - [x] 4.1 `openspec validate add-runner-tour --strict`.
 - [x] 4.2 `npm run lint`, `npx tsc -b`, `npx vitest run`.
+
+## 5. View routing (`strides-trn2.2`)
+
+- [x] 5.1 `resultsViewMode.ts`: resolve `tour|summary|classic`, map `guide` to tour, fall back to the remembered landing, else tour; only classic is written to the address.
+- [x] 5.2 `resultsLanding.ts`: read/write `strides.resultsLanding`, with every storage access (the `localStorage` getter included) inside try/catch.
+- [x] 5.3 Stubs `tour/RunnerTour.tsx` and `summary/ResultsSummary.tsx`: runner slot, their own controls, exactly one `GuidedResultsView`, no completion line of their own.
+- [x] 5.4 `MultiClipVideoSession.tsx`: mount exactly one view; motion stage beside classic only; Back to summary; header-height property on `<main>`; focus the new view's first control after a switch. Delete `ResultsViewToggle`.
+- [x] 5.5 Spec deltas: REMOVE "The guided results view is the default", ADD "The runner tour is the default results view", MODIFY the single-mount and completion-line requirements, and scope the motion-stage requirements in `results-view` to classic.
+- [x] 5.6 Tests: every URL form × landing, throwing storage, the canvas surviving tour → summary → classic → summary, one completion line after every step.
+- [x] 5.7 Verify: lint, `tsc -b`, `vitest run`, `openspec validate --strict`, the e2e suite and a live run on `park-side-landscape.mp4`.
