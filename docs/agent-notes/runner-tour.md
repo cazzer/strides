@@ -249,37 +249,58 @@ errors.
 
 ## Bounce composite reading (`strides-xki9`)
 
-The rhythm area's three bounce metrics read as ONE reading in the tour and the summary, headlined
-by vertical ratio, with a line citing what it was derived from. Change:
-`openspec/changes/compose-bounce-reading` (design D1–D7). Classic view unchanged.
+The rhythm area's three bounce metrics read as ONE reading in the summary (and a secondary value in
+the tour), headlined by vertical ratio, with a line citing what vertical ratio was computed from.
+Change: `openspec/changes/compose-bounce-reading` (design D1–D7, D3 and D6 revised in review
+round 1). Classic view unchanged. A presentation grouping, never a score.
 
 - **Presentation only:** `src/guidance/compositeReadings.ts` (`COMPOSITE_READINGS.bounce`: VR, VO_cm,
   VO; `areaReadings`; `bounceDerivation`). `FOCUS_AREAS`, `focusAreaView`'s headline, `feedbackFor`
   and `selectOneThing` never read it, so the area headline, why line, cue and one thing cannot move.
-  `SummaryArea` gained `readings` and `bounce` beside an unchanged `entries` (the summary's runner
-  focus and the evidence map still read `entries`). The row/stop headline is the FIRST READING's
-  headline, which differs from `view.headline` when cadence is excluded and VO_cm is measured
-  (the stop shows VR; feedback is still VO_cm's area feedback).
-- **The From line** (`formatBounceDerivation`): `From bounce 7.2 cm and stride 6.3 torso lengths
-  (3 strides)`. Bounce = VO_cm, else VO as "% of torso length"; stride = VO / VR, which is exactly
-  `strideLengthPx / torsoLengthPx` because both read the same hip-bounce fit under the default
-  `hipMid` signal (unit-tested on synthetic gait in `compositeReadings.test.ts`); count = VR's
-  `sampleSize` (stride pairs). Each figure only from VR's own clip (`sourceIndices`); never stride in
-  metres (circular). Shown only when VR heads the reading; a VO_cm/VO fallback headline cites nothing.
-- **Summary:** `CompositeReading.tsx` = `section.results-summary__composite[data-composite=bounce]`
-  (aria-label "Bounce"), the headline card with `p.guided-results__derived-from` under its headline
-  (NOT `guided-results__derivation`: that class is the band's "Derived range" in the card's
-  disclosure), then ONE `details.results-summary__composite-more` ("Also: …", closed, cards
-  mounted). Its chevron uses the named group `group/more`: a plain `group-open:` would follow the
-  row. The row's "Also:" names the composite once ("Also: Vertical ratio").
-- **Tour:** the stop headline is the first reading's. With cadence measured, rhythm adds
-  `div.runner-tour__value.runner-tour__value--secondary[data-composite=bounce]` (label, `text-2xl`
-  value, sr-only position, confidence when caveated, `p.runner-tour__derivation`), no bar. It is
-  excluded from the 25-word budget like the value line; a From line is capped at 14 words.
-  Cadence excluded: VR is the stop headline (bar + From line) and the runner focus, which binds no
-  parameter, so no bounce label on the figure (VO_cm was the focus there before).
+  `SummaryArea` gained `readings` and `bounce` beside an unchanged `entries`.
+- **The From line cites only VR's own inputs** (`formatBounceDerivation`): `From hip bounce 15.3% of
+  torso ÷ stride length 6.3 torsos (median of 3)`. VR = MoveNet hip-bounce px ÷ median stride px;
+  VO (relative) is that same fit over the torso, so VO = bounce in torsos and VO / VR = stride in
+  torsos, and the "÷" is true arithmetic. Count = VR's `sampleSize`, written "median of N" so
+  "stride" only names the length. Figures only when VO is from VR's clip (`sourceIndices`) and the
+  signal is `hipMid` (guarded on `DEFAULT_HEURISTICS_CONFIG`, since the result does not record it:
+  `strides-1k3w`); otherwise `From hip bounce ÷ stride length (median of N)`. ⚠️ **Never VO_cm**: it
+  is a separate MediaPipe fit (the scale pass), maybe of another subject, and VR does not read it.
+  The first version cited "bounce 7.2 cm" and switched in place when the graft landed; review
+  round 1 removed that. The line never changes when the scale pass lands.
+- **Summary:** row headline = first reading's headline; "Also:" names the composite once ("Also:
+  Vertical ratio"). Opened: `CompositeReading.tsx` = `div.results-summary__composite[role=group]
+  [aria-label=Bounce][data-composite=bounce]`, the headline card with `p.guided-results__derived-from`
+  (muted `text-sm`) under its headline (NOT `guided-results__derivation`: that class is the band's
+  "Derived range" in the card's disclosure), then ONE `details.results-summary__composite-more` in
+  the card disclosure's idiom, named "Same bounce in cm and % of torso length" (or the one unit).
+- **Tour:** every stop keeps the area's own `view.headline` (feedback and runner focus as on base).
+  When VR IS the headline (side-portrait) its From line (`p.runner-tour__derivation`) follows the
+  bar and legend. Otherwise, with VR measured and heading the bounce reading, rhythm ends with
+  `div.runner-tour__value.runner-tour__value--secondary[data-composite=bounce]`: "Vertical ratio",
+  value with its band position VISIBLE, confidence when caveated; no bar, no From line. No block
+  when VR is excluded (approach: cadence alone, as base). Both excluded from the 25-word budget; the
+  From line ≤ 14 words.
+- `MultiClipVideoSession` memoises `sourceIndices` on its content (a JSON key) so the downstream
+  memos hold.
 
-### Live check, 2026-10-27 (`strides-xki9`, `dc438980`)
+### Live re-check after review round 1, 2026-10-27 (`5ec01178`)
+
+Real GPU, port 5231, fresh context per run, no page or console errors, one "Analysis complete."
+status everywhere.
+
+| run | tour rhythm stop (DOM order) | summary rhythm row |
+|---|---|---|
+| side-landscape 1280 light | Cadence 174 + bar, why line, then "Vertical ratio 2.46% · lowest 5% of Garmin's table"; no From line; identical before and after the scale pass | VR card, From "hip bounce 15.4% of torso ÷ stride length 6.3 torsos (median of 3)" in muted text; "Same bounce in cm and % of torso length" (44 px) opens to two canvases |
+| side-landscape 390×844 dark | same; the panel (229 px, scrolls inside, as on base) shows the why line's first words at rest again, as base did | same (VR 2.40%, bounce 15.2%) |
+| side-portrait 1280 light | VR 3.00% headline (Medium), bar, then From "hip bounce 17.2% of torso ÷ stride length 5.7 torsos (median of 2)" | "Same bounce in % of torso length" |
+| park-approach 1280 light | Cadence 181 alone (VR excluded), as base | VO_cm headline card, no From line; "Same bounce in % of torso length" |
+
+The round-0 phone cost (`strides-3v4t`: the VR block pushed the why line out of the panel at rest)
+is gone with the block moved after the prose; the bead is closed. Screenshots: scratchpad
+`xki9-live/r1-*.png`.
+
+### Live check before review round 1, 2026-10-27 (`strides-xki9`, `dc438980`; superseded where round 1 changed the copy)
 
 Real GPU (ANGLE Metal, M4 Pro), port 5231 (derived, `assertServesThisCheckout`), one browser
 process, fresh context per run, no page or console errors in any run, exactly one "Analysis
