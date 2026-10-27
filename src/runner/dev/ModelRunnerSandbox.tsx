@@ -78,6 +78,14 @@ const SCENARIOS: readonly Scenario[] = [
     camera: 'wholeBodySide',
     focus: { metricIds: ['verticalOscillation', 'armSwingAmplitude'] },
   },
+  {
+    // Past the pin's declared domain (design.md D15): the bindings outrank the pin, so the
+    // mid-stance foot (the still frame here) may dip a little below the ground.
+    id: 'big-landing',
+    title: 'Big overstride, mid-stance',
+    params: bind('all', { overstriding: makeMetric('overstriding', { value: 0.5 }) }),
+    camera: 'legsSide',
+  },
 ]
 
 const PRESETS = Object.keys(CAMERA_PRESETS) as CameraPreset[]
