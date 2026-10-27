@@ -5,12 +5,13 @@ import { makeMetric } from '../results/__fixtures__/metricResult'
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { bindAll, bindOnly } from './__fixtures__/boundParams'
-import { CAMERA_PRESETS, projectPose } from './camera'
+import { CAMERA_PRESETS, projectPoint, projectPose } from './camera'
 import { GAIT_PHASES, poseAt } from './gaitModel'
 import { ModelRunner, RUNNER_CAPTION, type ModelRunnerProps } from './ModelRunner'
+import { footFloor, phaseForLeg } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
-import { RUNNER_PARAM_IDS, edgeKey } from './runnerScene'
-import type { CameraState } from './types'
+import { FAR_OPACITY, RUNNER_PARAM_IDS, UNFOCUSED_OPACITY, edgeKey } from './runnerScene'
+import type { CameraPreset, CameraState, RunnerParams } from './types'
 
 const LABEL = 'Wireframe runner'
 const HEAD_EDGES = new Set(
@@ -18,16 +19,27 @@ const HEAD_EDGES = new Set(
     edgeKey,
   ),
 )
+const VALUES = runnerParamValues(bindAll())
 
 class FakeIntersectionObserver {
   static instances: FakeIntersectionObserver[] = []
   readonly callback: IntersectionObserverCallback
+  disconnect = vi.fn()
   constructor(callback: IntersectionObserverCallback) {
     this.callback = callback
     FakeIntersectionObserver.instances.push(this)
   }
   observe() {}
-  disconnect() {}
+  unobserve() {}
+}
+
+class FakeResizeObserver {
+  static instances: FakeResizeObserver[] = []
+  disconnect = vi.fn()
+  constructor() {
+    FakeResizeObserver.instances.push(this)
+  }
+  observe() {}
   unobserve() {}
 }
 
@@ -50,18 +62,30 @@ function setVisibility(state: DocumentVisibilityState) {
   })
 }
 
-function setReducedMotion(matches: boolean) {
+/** A matchMedia mock whose `change` listeners can be fired. */
+function mockReducedMotion(initial: boolean) {
+  const state = { matches: initial }
+  const listeners = new Set<() => void>()
   vi.stubGlobal('matchMedia', (media: string) => ({
-    matches,
+    get matches() {
+      return state.matches
+    },
     media,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
+    addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+    removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
   }))
+  return {
+    set(matches: boolean) {
+      state.matches = matches
+      act(() => listeners.forEach((listener) => listener()))
+    },
+  }
 }
 
 beforeEach(() => {
   vi.useFakeTimers()
   FakeIntersectionObserver.instances = []
+  FakeResizeObserver.instances = []
   vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
   visibility = 'visible'
   Object.defineProperty(document, 'visibilityState', {
@@ -111,7 +135,11 @@ function dashedEdges(): string[] {
     .sort()
 }
 
-function expectPose(phase: number, camera: CameraState | 'wholeBodySide', values = runnerParamValues(bindAll())) {
+function expectPose(
+  phase: number,
+  camera: CameraState | CameraPreset,
+  values: RunnerParams = VALUES,
+) {
   const projected = projectPose(poseAt(phase, values), camera)
   for (const [j, name] of COMMON_KEYPOINT_NAMES.entries()) {
     expect(joint(name).cx).toBeCloseTo(projected[j].x, 3)
@@ -119,17 +147,27 @@ function expectPose(phase: number, camera: CameraState | 'wholeBodySide', values
   }
 }
 
-/** Counts how many 16 ms steps over `ms` moved the knee; returns the counts and largest step. */
-function sampleFrames(ms: number): { draws: number; maxStep: number } {
-  let previous = Number(jointCx())
+/** First and last points of a path's `d`. */
+function pathEnds(d: string | null): { x: number; y: number }[] {
+  const points = [...(d ?? '').matchAll(/[ML](-?[\d.]+) (-?[\d.]+)/g)].map((m) => ({
+    x: Number(m[1]),
+    y: Number(m[2]),
+  }))
+  return [points[0], points[points.length - 1]]
+}
+
+/** Counts how many 16 ms steps over `ms` moved `name`; returns the count and largest step. */
+function sampleFrames(ms: number, name: KeypointName = 'right_knee'): { draws: number; maxStep: number } {
+  let previous = joint(name)
   let draws = 0
   let maxStep = 0
   for (let t = 0; t < ms; t += 16) {
     advance(16)
-    const now = Number(jointCx())
-    if (now !== previous) {
+    const now = joint(name)
+    const step = Math.hypot(now.cx - previous.cx, now.cy - previous.cy)
+    if (step > 0) {
       draws += 1
-      maxStep = Math.max(maxStep, Math.abs(now - previous))
+      maxStep = Math.max(maxStep, step)
     }
     previous = now
   }
@@ -155,6 +193,22 @@ describe('ModelRunner drawing', () => {
     expect(dashedEdges()).toEqual(SKELETON_EDGES.map(edgeKey).sort())
   })
 
+  it('dims far measured parts no further than 0.75, never dims neutral dashes, and recedes the unfocused parts', () => {
+    const { container, rerenderWith } = setup({ params: bindOnly(['kneeDrive', 'kneeFlexion']) })
+    const opacity = (edge: string) =>
+      container.querySelector(`[data-edge="${edge}"]`)?.getAttribute('opacity') ?? null
+    expect(opacity('left_hip-left_knee')).toBe(String(FAR_OPACITY))
+    expect(opacity('right_hip-right_knee')).toBeNull()
+    expect(opacity('left_shoulder-left_elbow')).toBeNull()
+    expect(Number(FAR_OPACITY)).toBeGreaterThanOrEqual(0.75)
+
+    rerenderWith({ params: bindAll(), focus: { metricIds: ['kneeDrive'] } })
+    expect(opacity('right_hip-right_knee')).toBeNull()
+    expect(container.querySelector('[data-edge="right_hip-right_knee"]')?.getAttribute('data-style')).toBe('focus')
+    expect(opacity('right_knee-right_ankle')).toBe(String(UNFOCUSED_OPACITY))
+    expect(opacity('left_ear-nose')).toBeNull()
+  })
+
   it('accents and annotates a measured focus area with its metric’s value', () => {
     const { container, rerenderWith } = setup({ focus: { metricIds: ['trunkLean'] } })
     expect(container.querySelector('[data-edge="left_shoulder-left_hip"]')?.getAttribute('data-style')).toBe('focus')
@@ -165,6 +219,7 @@ describe('ModelRunner drawing', () => {
     for (const path of annotation?.querySelectorAll('path') ?? []) {
       expect(path.getAttribute('d')).toMatch(/^M-?\d/)
     }
+    expect(annotation?.querySelector('[data-role="fill"]')?.getAttribute('d')).toMatch(/Z$/)
 
     rerenderWith({ focus: { metricIds: ['verticalRatio', 'stepWidthCm'] } })
     expect(container.querySelector('[data-annotation]')).toBeNull()
@@ -176,22 +231,41 @@ describe('ModelRunner drawing', () => {
     expect(Array.from(container.querySelectorAll('[data-annotation]'), (el) => el.getAttribute('data-annotation'))).toEqual(['pelvisBounce'])
   })
 
-  it('marks a clamped focus value as drawn at a limit', () => {
+  it('marks a clamped focus value as shown approximately', () => {
     const params = bindAll({
       overstriding: makeMetric('overstriding', { value: 0.05 }),
       footStrikePattern: makeMetric('footStrikePattern', { value: 0.1 }),
     })
     const { container } = setup({ params, camera: 'footSide', focus: { metricIds: ['footStrikePattern'] } })
     const lines = container.querySelectorAll('[data-annotation="contactShankOffset"] text tspan')
-    expect(Array.from(lines, (line) => line.textContent)).toEqual(['Heel strike (proxy)', 'drawn at limit'])
+    expect(Array.from(lines, (line) => line.textContent)).toEqual(['Heel strike (proxy)', 'shown approximately'])
     for (const line of lines) expect(line.getAttribute('x')).not.toBeNull()
     expect(container.querySelector('p.sr-only')?.textContent).toContain(
       'drawn at a limit of the figure, not at the measured value',
     )
   })
 
-  it('renders a flash label and draws override values, returning exactly to the bound ones', () => {
-    setReducedMotion(true)
+  it('holds the still frame at the focus’s key phase, so the annotated joint is the live joint', () => {
+    mockReducedMotion(true)
+    const { container, rerenderWith } = setup({ camera: 'legsSide', focus: { metricIds: ['kneeDrive'] } })
+    const held = phaseForLeg('right', GAIT_PHASES.peakThigh)
+    expectPose(held, 'legsSide')
+    // The arc's wedge starts at its centre: the live near hip.
+    const [centre] = pathEnds(container.querySelector('[data-annotation="peakThighAngle"] [data-role="fill"]')?.getAttribute('d') ?? null)
+    expect(centre.x).toBeCloseTo(joint('right_hip').cx, 3)
+    expect(centre.y).toBeCloseTo(joint('right_hip').cy, 3)
+
+    rerenderWith({ camera: 'footSide', focus: { metricIds: ['overstriding'] } })
+    expectPose(phaseForLeg('right', GAIT_PHASES.leftContact), 'footSide')
+    const [, end] = pathEnds(container.querySelector('[data-annotation="landingOffset"] [data-role="mark"]')?.getAttribute('d') ?? null)
+    expect(end.x).toBeCloseTo(joint('right_ankle').cx, 3)
+
+    rerenderWith({ camera: 'wholeBodySide', focus: { metricIds: ['trunkLean'] } })
+    expectPose(GAIT_PHASES.midStance, 'wholeBodySide')
+  })
+
+  it('renders a flash label and draws static override values, returning exactly to the bound ones', () => {
+    mockReducedMotion(true)
     const { container, rerenderWith } = setup()
     const before = jointCx('right_shoulder')
     rerenderWith({ overrides: { values: { torsoPitch: 25 }, flash: { paramId: 'torsoPitch', text: '25.0°' } } })
@@ -201,6 +275,24 @@ describe('ModelRunner drawing', () => {
     rerenderWith({ overrides: undefined })
     expect(jointCx('right_shoulder')).toBe(before)
     expect(container.querySelector('[data-flash]')).toBeNull()
+  })
+
+  it('stands the figure on the lowest foot point over the cycle', () => {
+    const { container } = setup()
+    const y = Number(container.querySelector('[data-ground]')?.getAttribute('y1'))
+    const expected = projectPoint(
+      { x: CAMERA_PRESETS.wholeBodySide.target.x, y: footFloor(VALUES), z: 0 },
+      'wholeBodySide',
+    ).y
+    expect(y).toBeCloseTo(expected, 3)
+  })
+
+  it('shows the dashed legend only when a dashed part is in frame', () => {
+    const { container, rerenderWith } = setup()
+    const legend = () => container.querySelector('figure p[aria-hidden="true"]')?.textContent
+    expect(legend()).toBe('Dashed: not measured')
+    rerenderWith({ camera: 'feetFront' })
+    expect(legend()).toBe('')
   })
 })
 
@@ -222,7 +314,8 @@ describe('ModelRunner accessibility', () => {
     const button = screen.getByRole('button', { name: 'Pause runner' })
     expect(button.closest('[aria-hidden="true"]')).toBeNull()
     expect(button.className).not.toMatch(/(^|\s)(\w+:)?(hidden|sr-only|invisible)(\s|$)/)
-    expect(button.textContent).toBe('Pause')
+    expect(button.textContent).toContain('Pause')
+    expect(button.querySelector('[aria-hidden="true"]')?.textContent).toBe('❚❚')
   })
 })
 
@@ -268,7 +361,7 @@ describe('ModelRunner animation loop', () => {
     expect(jointCx()).not.toBe(frozen)
   })
 
-  it('keeps the figure continuous when cadence changes mid-run', () => {
+  it('keeps the figure continuous when cadence or rate changes mid-run', () => {
     const { rerenderWith } = setup()
     const { maxStep } = sampleFrames(400)
     const before = jointCx()
@@ -276,6 +369,10 @@ describe('ModelRunner animation loop', () => {
     expect(jointCx()).toBe(before)
     const { maxStep: after } = sampleFrames(400)
     expect(after).toBeLessThanOrEqual(maxStep)
+    rerenderWith({ params: bindAll({ cadence: makeMetric('cadence', { value: 150 }) }), playbackRate: 2 })
+    expect(vi.getTimerCount()).toBe(1)
+    const { maxStep: faster } = sampleFrames(400)
+    expect(faster).toBeLessThanOrEqual(maxStep * 2.1)
   })
 
   it('runs one loop under StrictMode', () => {
@@ -289,6 +386,56 @@ describe('ModelRunner animation loop', () => {
     advance(200)
     expect(jointCx()).not.toBe(before)
     expect(vi.getTimerCount()).toBe(1)
+  })
+
+  it('leaves no frame pending and disconnects its observers on unmount', () => {
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+    const { unmount } = setup()
+    advance(100)
+    expect(vi.getTimerCount()).toBe(1)
+    unmount()
+    expect(vi.getTimerCount()).toBe(0)
+    expect(FakeIntersectionObserver.instances.every((o) => o.disconnect.mock.calls.length > 0)).toBe(true)
+    expect(FakeResizeObserver.instances.length).toBeGreaterThan(0)
+    expect(FakeResizeObserver.instances.every((o) => o.disconnect.mock.calls.length > 0)).toBe(true)
+  })
+})
+
+describe('ModelRunner value tween (the intro seam)', () => {
+  it('interpolates in the loop with no React commits, ending exactly at `to`', () => {
+    const onRender = vi.fn()
+    const tree = (overrides?: ModelRunnerProps['overrides']) => (
+      <Profiler id="runner" onRender={onRender}>
+        <ModelRunner {...props({ overrides })} />
+      </Profiler>
+    )
+    const { rerender } = render(tree())
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    const tween = { from: { torsoPitch: 0 }, to: { torsoPitch: 20 }, durationMs: 1000, key: 'intro-1' }
+    rerender(tree({ valueTween: tween }))
+    const renders = onRender.mock.calls.length
+    expectPose(GAIT_PHASES.midStance, 'wholeBodySide', { ...VALUES, torsoPitch: 0 })
+    expect(vi.getTimerCount()).toBe(1)
+    const { maxStep } = sampleFrames(1100, 'right_shoulder')
+    expect(onRender.mock.calls.length).toBe(renders)
+    // 20° over ~30 frames: no step bigger than a couple of degrees' worth of shoulder travel.
+    expect(maxStep).toBeLessThan(0.06)
+    expectPose(GAIT_PHASES.midStance, 'wholeBodySide', { ...VALUES, torsoPitch: 20 })
+    expect(vi.getTimerCount()).toBe(0)
+    // The same key again does not restart it; removing it returns to the bound values.
+    rerender(tree({ valueTween: { ...tween } }))
+    expectPose(GAIT_PHASES.midStance, 'wholeBodySide', { ...VALUES, torsoPitch: 20 })
+    rerender(tree())
+    expectPose(GAIT_PHASES.midStance, 'wholeBodySide')
+  })
+
+  it('jumps to the end under reduced motion', () => {
+    mockReducedMotion(true)
+    setup({
+      overrides: { valueTween: { from: { torsoPitch: 0 }, to: { torsoPitch: 20 }, durationMs: 1000, key: 1 } },
+    })
+    expectPose(GAIT_PHASES.midStance, 'wholeBodySide', { ...VALUES, torsoPitch: 20 })
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 
@@ -304,19 +451,22 @@ describe('ModelRunner pause control', () => {
     advance(1000)
     expect(joint('left_ankle')).toEqual(paused)
 
-    rerenderWith({ camera: side, focus: { metricIds: ['kneeDrive'] } })
+    // A focus with no key phase leaves the held phase alone: the frozen pose stays put.
+    rerenderWith({ camera: side, focus: { metricIds: ['trunkLean'] } })
     expect(screen.getByRole('button', { name: 'Play runner' })).toBeInTheDocument()
     expect(joint('left_ankle')).toEqual(paused)
 
-    rerenderWith({ camera: closer, focus: { metricIds: ['trunkLean'] } })
+    // A keyed focus moves the still figure to its key phase; the choice stays.
+    rerenderWith({ camera: side, focus: { metricIds: ['kneeDrive'] } })
+    expect(screen.getByRole('button', { name: 'Play runner' })).toBeInTheDocument()
+    const held = phaseForLeg('right', GAIT_PHASES.peakThigh)
+    expectPose(held, side)
+
+    rerenderWith({ camera: closer, focus: { metricIds: ['kneeDrive'] } })
     expect(screen.getByRole('button', { name: 'Play runner' })).toBeInTheDocument()
     advance(1000)
     expect(vi.getTimerCount()).toBe(0)
-    // Same yaw, so the move is affine: the frozen pose, reprojected through the new camera.
-    const worldX = paused.cx / side.zoom + side.target.x
-    const worldY = -paused.cy / side.zoom + side.target.y
-    expect(joint('left_ankle').cx).toBeCloseTo(closer.zoom * (worldX - closer.target.x), 3)
-    expect(joint('left_ankle').cy).toBeCloseTo(-closer.zoom * (worldY - closer.target.y), 3)
+    expectPose(held, closer)
 
     const reprojected = joint('left_ankle')
     fireEvent.click(screen.getByRole('button', { name: 'Play runner' }))
@@ -325,15 +475,14 @@ describe('ModelRunner pause control', () => {
   })
 
   it('tweens a camera change over about 600 ms', () => {
-    const side = CAMERA_PRESETS.wholeBodySide
-    const { rerenderWith } = setup({ camera: side })
+    const { rerenderWith } = setup({ camera: 'wholeBodySide' })
     fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
     const from = joint('right_ankle')
     rerenderWith({ camera: 'feetFront' })
     expect(joint('right_ankle')).toEqual(from)
     advance(300)
     const mid = joint('right_ankle')
-    const to = projectPose(poseAt(GAIT_PHASES.midStance, runnerParamValues(bindAll())), 'feetFront')[
+    const to = projectPose(poseAt(GAIT_PHASES.midStance, VALUES), 'feetFront')[
       COMMON_KEYPOINT_NAMES.indexOf('right_ankle')
     ]
     expect(mid.cy).toBeGreaterThan(Math.min(from.cy, to.y))
@@ -342,11 +491,24 @@ describe('ModelRunner pause control', () => {
     expectPose(GAIT_PHASES.midStance, CAMERA_PRESETS.feetFront)
     expect(vi.getTimerCount()).toBe(0)
   })
+
+  it('retargets mid-tween from where the camera is, without a jump', () => {
+    const { rerenderWith } = setup({ camera: 'wholeBodySide' })
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    rerenderWith({ camera: 'feetFront' })
+    const { maxStep } = sampleFrames(304, 'right_ankle')
+    const before = joint('right_ankle')
+    rerenderWith({ camera: 'torsoSide' })
+    expect(joint('right_ankle')).toEqual(before)
+    const { maxStep: retargeted } = sampleFrames(800, 'right_ankle')
+    expect(retargeted).toBeLessThan(Math.max(maxStep * 3, 0.5))
+    expectPose(GAIT_PHASES.midStance, 'torsoSide')
+  })
 })
 
 describe('ModelRunner under reduced motion', () => {
   it('holds a still mid-stance pose, cuts the camera, and plays on request', () => {
-    setReducedMotion(true)
+    mockReducedMotion(true)
     const { rerenderWith } = setup()
     expect(screen.getByRole('button', { name: 'Play runner' })).toBeInTheDocument()
     expectPose(GAIT_PHASES.midStance, 'wholeBodySide')
@@ -363,6 +525,19 @@ describe('ModelRunner under reduced motion', () => {
     advance(200)
     expect(joint('right_ankle')).not.toEqual(before)
     rerenderWith({ camera: 'legsSide', focus: { metricIds: ['kneeFlexion'] } })
+    expect(screen.getByRole('button', { name: 'Pause runner' })).toBeInTheDocument()
+  })
+
+  it('switching reduced motion on live stops and returns to the still frame', () => {
+    const media = mockReducedMotion(false)
+    setup({ focus: { metricIds: ['overstriding'] } })
+    expect(screen.getByRole('button', { name: 'Pause runner' })).toBeInTheDocument()
+    advance(500)
+    media.set(true)
+    expect(screen.getByRole('button', { name: 'Play runner' })).toBeInTheDocument()
+    expect(vi.getTimerCount()).toBe(0)
+    expectPose(phaseForLeg('right', GAIT_PHASES.leftContact), 'wholeBodySide')
+    media.set(false)
     expect(screen.getByRole('button', { name: 'Pause runner' })).toBeInTheDocument()
   })
 })

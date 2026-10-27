@@ -7,7 +7,7 @@ import type { MetricId } from '../heuristics/types'
 import { METRIC_LABELS } from '../results/metricConfidence'
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
-import { CAMERA_FRAME_HALF_HEIGHT, projectPose, resolveCamera } from './camera'
+import { CAMERA_FRAME_HALF_HEIGHT, CAMERA_PRESETS, projectPose, resolveCamera } from './camera'
 import { GAIT_PHASES, poseAt } from './gaitModel'
 import { formatRunnerValue, type LabelSide } from './runnerAnnotations'
 import { RUNNER_PARAM_SEGMENTS, RUNNER_PARAM_SPECS, paramForMetric } from './runnerParams'
@@ -35,11 +35,11 @@ export const VIEW_HALF_HEIGHT = CAMERA_FRAME_HALF_HEIGHT
 /** CSS-pixel sizes, divided by the live pixels-per-viewBox-unit before they are drawn. */
 export const RUNNER_PX = {
   measuredStroke: 3,
-  focusStroke: 4.5,
+  focusStroke: 6,
   neutralStroke: 2.5,
   neutralDash: 5,
   joint: 3.5,
-  focusJoint: 4.5,
+  focusJoint: 5,
   markStroke: 2,
   guideStroke: 1,
   groundStroke: 1,
@@ -51,10 +51,28 @@ export const RUNNER_PX = {
 /** Label line pitch, in font sizes. */
 export const LABEL_LINE_HEIGHT = 1.2
 
-/** Opacity of the parts on the far side of the body. */
-export const FAR_OPACITY = 0.55
+/**
+ * Opacity of measured parts on the far side of the body: dimmed for depth, never so far that a
+ * solid part reads as the neutral grey.
+ */
+export const FAR_OPACITY = 0.75
+/**
+ * Opacity of measured parts outside the focus while a focus is shown: with the wider focus
+ * stroke, a cue that does not rely on the accent hue.
+ */
+export const UNFOCUSED_OPACITY = 0.7
 /** How far behind hip-mid (torso lengths) a part must sit to count as far. */
 export const FAR_DEPTH = 0.05
+
+/**
+ * A part's opacity. Neutral parts are never dimmed: their dashes must keep their contrast against
+ * either background.
+ */
+export function partOpacity(style: SegmentStyle, far: boolean, focusShown: boolean): number {
+  if (style === 'neutral') return 1
+  const dims = [far ? FAR_OPACITY : 1, style === 'measured' && focusShown ? UNFOCUSED_OPACITY : 1]
+  return Math.min(...dims)
+}
 
 export type RunnerSource = 'measured' | 'neutral'
 export type RunnerSources = Readonly<Record<RunnerParamId, RunnerSource>>
@@ -137,11 +155,16 @@ export interface DrawOrder {
 }
 
 /**
- * Painter's order for the mid-stance pose seen through `camera`, far to near, and which parts sit
- * far enough behind hip-mid to draw dimmed. Fixed per camera and parameter set, not per frame.
+ * Painter's order for the pose at `phase` (the held phase) seen through `camera`, far to near, and
+ * which parts sit far enough behind hip-mid to draw dimmed. Fixed per camera and parameter set,
+ * not per frame.
  */
-export function drawOrder(values: RunnerParams, camera: CameraPreset | CameraState): DrawOrder {
-  const projected = projectPose(poseAt(GAIT_PHASES.midStance, values), camera)
+export function drawOrder(
+  values: RunnerParams,
+  camera: CameraPreset | CameraState,
+  phase: number = GAIT_PHASES.midStance,
+): DrawOrder {
+  const projected = projectPose(poseAt(phase, values), camera)
   const depth = projected.map((p) => p.depth)
   const hip = (depth[JOINT_INDEX.get('left_hip') as number] + depth[JOINT_INDEX.get('right_hip') as number]) / 2
   const edgeDepth = EDGE_JOINT_INDICES.map(([a, b]) => (depth[a] + depth[b]) / 2)
@@ -199,6 +222,54 @@ export function cameraKey(camera: CameraPreset | CameraState): string {
   if (typeof camera === 'string') return camera
   const { yawDeg, pitchDeg, zoom, target } = resolveCamera(camera)
   return [yawDeg, pitchDeg, zoom, target.x, target.y, target.z].join('|')
+}
+
+/** The camera a `cameraKey` names (inverse of `cameraKey`). */
+export function cameraFromKey(key: string): CameraState {
+  if (key in CAMERA_PRESETS) return CAMERA_PRESETS[key as CameraPreset]
+  const [yawDeg, pitchDeg, zoom, x, y, z] = key.split('|').map(Number)
+  return { yawDeg, pitchDeg, zoom, target: { x, y, z } }
+}
+
+/**
+ * Whether any neutral edge has an endpoint inside the frame for this pose and camera: the
+ * "Dashed: not measured" legend only explains dashes the reader can see.
+ */
+export function neutralEdgeInFrame(
+  edgeStyles: readonly SegmentStyle[],
+  values: RunnerParams,
+  phase: number,
+  camera: CameraPreset | CameraState,
+): boolean {
+  const projected = projectPose(poseAt(phase, values), camera)
+  const inFrame = (j: number) =>
+    Math.abs(projected[j].x) <= VIEW_HALF_WIDTH && Math.abs(projected[j].y) <= VIEW_HALF_HEIGHT
+  return EDGE_JOINT_INDICES.some(
+    ([a, b], i) => edgeStyles[i] === 'neutral' && (inFrame(a) || inFrame(b)),
+  )
+}
+
+/**
+ * The values a value tween draws at progress `t` (0..1, linear): each parameter named in `to`
+ * runs from `from` (or `base`) to `to`; every other parameter stays at `base`. At t = 1 the
+ * named parameters are exactly `to`.
+ */
+export function mixValues(
+  base: RunnerParams,
+  from: Partial<RunnerParams>,
+  to: Partial<RunnerParams>,
+  t: number,
+): RunnerParams {
+  const u = Math.min(1, Math.max(0, t))
+  return Object.fromEntries(
+    RUNNER_PARAM_IDS.map((id) => {
+      const end = to[id]
+      if (end === undefined || !Number.isFinite(end)) return [id, base[id]]
+      if (u >= 1) return [id, end]
+      const start = from[id] !== undefined && Number.isFinite(from[id]) ? (from[id] as number) : base[id]
+      return [id, start + (end - start) * u]
+    }),
+  ) as Record<RunnerParamId, number>
 }
 
 export function easeInOutCubic(t: number): number {

@@ -3,15 +3,19 @@ import { makeMetric } from '../results/__fixtures__/metricResult'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { bindAll, bindOnly } from './__fixtures__/boundParams'
 import { projectPoint } from './camera'
-import { GAIT_PHASES, MODEL_PROPORTIONS, poseAt } from './gaitModel'
+import { GAIT_PHASES, MODEL_PROPORTIONS, PELVIS_HEIGHT, poseAt } from './gaitModel'
 import {
   CLAMPED_LABEL_SUFFIX,
+  KEY_LEG_PHASE,
   PARAM_ANNOTATION_KIND,
   RUNNER_METRIC_UNITS,
-  buildAnnotations,
+  footFloor,
   formatRunnerValue,
   labelLines,
+  phaseForLeg,
+  planAnnotations,
   type AnnotationInput,
+  type AnnotationPlan,
   type RunnerAnnotation,
 } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
@@ -21,35 +25,43 @@ import type { BoundRunnerParams, CameraState, RunnerMetricId, RunnerParamId, Vec
 const SIDE: CameraState = { yawDeg: 0, pitchDeg: 0, zoom: 1.7, target: { x: 0.1, y: 1, z: 0 } }
 const FRONT: CameraState = { yawDeg: 90, pitchDeg: 0, zoom: 2.4, target: { x: 0, y: 0.3, z: 0 } }
 
+function plan(
+  bound: BoundRunnerParams,
+  focusParams: readonly RunnerParamId[],
+  extra: Partial<AnnotationInput> = {},
+): AnnotationPlan {
+  return planAnnotations({
+    bound,
+    values: runnerParamValues(bound),
+    sources: effectiveSources(bound),
+    focusParams,
+    cameraYawDeg: 0,
+    ...extra,
+  })
+}
+
 function annotate(
   bound: BoundRunnerParams,
   focusParams: readonly RunnerParamId[],
   extra: Partial<AnnotationInput> = {},
 ): RunnerAnnotation[] {
-  return buildAnnotations({
-    bound,
-    values: runnerParamValues(bound),
-    sources: effectiveSources(bound),
-    focusParams,
-    nearSide: 'right',
-    ...extra,
-  })
+  return plan(bound, focusParams, extra).annotations
 }
 
-function only(bound: BoundRunnerParams, paramId: RunnerParamId): RunnerAnnotation {
-  const [annotation, ...rest] = annotate(bound, [paramId])
+function only(bound: BoundRunnerParams, paramId: RunnerParamId, yaw = 0): RunnerAnnotation {
+  const [annotation, ...rest] = annotate(bound, [paramId], { cameraYawDeg: yaw })
   expect(rest).toEqual([])
   expect(annotation.paramId).toBe(paramId)
   return annotation
 }
 
-function projectedLength(points: readonly Vec3[], camera: CameraState): number {
-  const a = projectPoint(points[0], camera)
-  const b = projectPoint(points[points.length - 1], camera)
-  return Math.hypot(b.x - a.x, b.y - a.y)
+function screenLength(a: Vec3, b: Vec3, camera: CameraState): number {
+  const p = projectPoint(a, camera)
+  const q = projectPoint(b, camera)
+  return Math.hypot(q.x - p.x, q.y - p.y) / camera.zoom
 }
 
-/** Screen angle at `centre` from ray a to ray b, degrees. */
+/** Screen angle at `centre` from point a to point b, degrees in [0, 180]. */
 function screenAngle(centre: Vec3, a: Vec3, b: Vec3, camera: CameraState): number {
   const c = projectPoint(centre, camera)
   const p = projectPoint(a, camera)
@@ -58,8 +70,25 @@ function screenAngle(centre: Vec3, a: Vec3, b: Vec3, camera: CameraState): numbe
   return Math.abs((((angle * 180) / Math.PI + 540) % 360) - 180)
 }
 
-function jointAt(phase: number, bound: BoundRunnerParams, name: KeypointName): Vec3 {
+function liveJoint(phase: number, bound: BoundRunnerParams, name: KeypointName): Vec3 {
   return poseAt(phase, runnerParamValues(bound))[COMMON_KEYPOINT_NAMES.indexOf(name)]
+}
+
+function hipMid(phase: number, bound: BoundRunnerParams): Vec3 {
+  const l = liveJoint(phase, bound, 'left_hip')
+  const r = liveJoint(phase, bound, 'right_hip')
+  return { x: (l.x + r.x) / 2, y: (l.y + r.y) / 2, z: (l.z + r.z) / 2 }
+}
+
+function sampleCycle(fn: (phase: number) => number, samples = 2000): { min: number; max: number } {
+  let min = Infinity
+  let max = -Infinity
+  for (let i = 0; i < samples; i += 1) {
+    const v = fn(i / samples)
+    min = Math.min(min, v)
+    max = Math.max(max, v)
+  }
+  return { min, max }
 }
 
 describe('units and labels', () => {
@@ -83,11 +112,12 @@ describe('units and labels', () => {
     expect(bound.torsoPitch).toMatchObject({ value: 35, metricValue: 40, clamped: true })
     const annotation = only(bound, 'torsoPitch')
     expect(annotation.label.text).toBe(`40.0°${CLAMPED_LABEL_SUFFIX}`)
+    expect(CLAMPED_LABEL_SUFFIX).toBe(' · shown approximately')
     expect(annotation.clamped).toBe(true)
     expect(only(bindAll(), 'torsoPitch').label.text).toBe('5.0°')
   })
 
-  it('says a foot strike that gave way to a measured landing was drawn at a limit', () => {
+  it('says a foot strike that gave way to a measured landing is shown approximately', () => {
     const bound = bindAll({
       overstriding: makeMetric('overstriding', { value: 0.05 }),
       footStrikePattern: makeMetric('footStrikePattern', { value: 0.1 }),
@@ -96,7 +126,7 @@ describe('units and labels', () => {
     expect(landing.label.text).toBe('5.0% of torso length')
     expect(landing.clamped).toBe(false)
     expect(strike.label.text).toBe(`Heel strike (proxy)${CLAMPED_LABEL_SUFFIX}`)
-    expect(strike.label.lines).toEqual(['Heel strike (proxy)', 'drawn at limit'])
+    expect(strike.label.lines).toEqual(['Heel strike (proxy)', 'shown approximately'])
     expect(landing.label.lines).toEqual(['5.0%', 'of torso length'])
     expect(strike.clamped).toBe(true)
   })
@@ -104,8 +134,12 @@ describe('units and labels', () => {
   it('breaks a long label into lines, never changing its words', () => {
     expect(labelLines('5.0°', false)).toEqual(['5.0°'])
     expect(labelLines('15.0% of torso length', false)).toEqual(['15.0%', 'of torso length'])
-    expect(labelLines('15.0% of torso length', true)).toEqual(['15.0%', 'of torso length', 'drawn at limit'])
-    expect(labelLines('7.5 cm', true)).toEqual(['7.5 cm', 'drawn at limit'])
+    expect(labelLines('15.0% of torso length', true)).toEqual([
+      '15.0%',
+      'of torso length',
+      'shown approximately',
+    ])
+    expect(labelLines('7.5 cm', true)).toEqual(['7.5 cm', 'shown approximately'])
   })
 })
 
@@ -128,9 +162,7 @@ describe('which annotations are drawn', () => {
     expect(annotate(bindOnly(['cadence']), ['torsoPitch'])).toEqual([])
     const bound = bindAll()
     expect(
-      annotate(bound, ['torsoPitch'], {
-        sources: effectiveSources(bound, { torsoPitch: 'neutral' }),
-      }),
+      annotate(bound, ['torsoPitch'], { sources: effectiveSources(bound, { torsoPitch: 'neutral' }) }),
     ).toEqual([])
   })
 
@@ -143,72 +175,172 @@ describe('which annotations are drawn', () => {
       'landingOffset',
     ])
   })
+
+  it('draws no limb-shaped guide: every guide is a short two-point line', () => {
+    for (const id of RUNNER_PARAM_IDS) {
+      if (id === 'cadence') continue
+      for (const yaw of [0, 90]) {
+        for (const guide of only(bindAll(), id, yaw).guides) {
+          expect(guide).toHaveLength(2)
+          const [a, b] = guide
+          expect(Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z)).toBeLessThan(MODEL_PROPORTIONS.thigh)
+        }
+      }
+    }
+  })
 })
 
-describe('the marks are the drawn values, exactly', () => {
+describe('the held phase', () => {
+  it('is mid-stance without a keyed focus', () => {
+    expect(plan(bindAll(), []).heldPhase).toBe(GAIT_PHASES.midStance)
+    expect(plan(bindAll(), ['torsoPitch', 'pelvisBounce', 'armSwing']).heldPhase).toBe(
+      GAIT_PHASES.midStance,
+    )
+    expect(plan(bindOnly(['cadence']), ['peakThighAngle']).heldPhase).toBe(GAIT_PHASES.midStance)
+  })
+
+  it('is the first keyed focus parameter’s key phase on the near leg', () => {
+    expect(plan(bindAll(), ['torsoPitch', 'peakThighAngle', 'landingOffset']).heldPhase).toBe(
+      phaseForLeg('right', GAIT_PHASES.peakThigh),
+    )
+    expect(plan(bindAll(), ['landingOffset'], { cameraYawDeg: 180 }).heldPhase).toBe(
+      phaseForLeg('left', GAIT_PHASES.leftContact),
+    )
+  })
+
+  it('puts a front view’s limb marks on the leg at its key phase', () => {
+    const { heldPhase, annotations } = plan(bindAll(), ['stepWidth', 'swingFootArc'], {
+      cameraYawDeg: 90,
+    })
+    expect(heldPhase).toBe(0)
+    const [step, swing] = annotations
+    expect(step.side).toBe('left')
+    // At phase 0 the right leg (leg phase 0.5) is nearer its mid-arc key than the left (0).
+    expect(swing.side).toBe('right')
+  })
+})
+
+describe('the marks are the drawn values and lie on the live figure', () => {
   const bound = bindAll()
   const values = runnerParamValues(bound)
+  const heldFor = (id: RunnerParamId, yaw = 0) => plan(bound, [id], { cameraYawDeg: yaw }).heldPhase
 
-  it.each([
-    ['pelvisBounce', values.pelvisBounce],
-    ['armSwing', values.armSwing],
-    ['landingOffset', values.landingOffset],
-    ['contactShankOffset', values.contactShankOffset],
-  ] as const)('%s spans its value in the side view', (paramId, value) => {
-    const [mark] = only(bound, paramId).marks
-    expect(projectedLength(mark, SIDE) / SIDE.zoom).toBeCloseTo(value, 9)
+  it('trunk lean: the arc sweeps the lean, from vertical to hip-mid→shoulder-mid', () => {
+    const phase = heldFor('torsoPitch')
+    const [arcPoints] = only(bound, 'torsoPitch').marks
+    const hip = hipMid(phase, bound)
+    const ls = liveJoint(phase, bound, 'left_shoulder')
+    const rs = liveJoint(phase, bound, 'right_shoulder')
+    const shoulder = { x: (ls.x + rs.x) / 2, y: (ls.y + rs.y) / 2, z: 0 }
+    const end = arcPoints[arcPoints.length - 1]
+    expect(screenAngle(hip, end, shoulder, SIDE)).toBeCloseTo(0, 9)
+    expect(screenAngle(hip, arcPoints[0], { ...hip, y: hip.y + 1 }, SIDE)).toBeCloseTo(0, 9)
+    expect(screenAngle(hip, arcPoints[0], end, SIDE)).toBeCloseTo(values.torsoPitch, 9)
   })
 
-  it.each([
-    ['stepWidth', values.stepWidth * MODEL_PROPORTIONS.hipWidth],
-    ['swingFootArc', values.swingFootArc * MODEL_PROPORTIONS.hipWidth],
-  ] as const)('%s spans value × hip width in the front view', (paramId, length) => {
-    const [mark] = only(bound, paramId).marks
-    expect(projectedLength(mark, FRONT) / FRONT.zoom).toBeCloseTo(length, 9)
+  it('knee drive: the arc runs from the down vertical onto the live thigh at the held phase', () => {
+    const phase = heldFor('peakThighAngle')
+    const [arcPoints] = only(bound, 'peakThighAngle').marks
+    const hip = liveJoint(phase, bound, 'right_hip')
+    const knee = liveJoint(phase, bound, 'right_knee')
+    expect(screenAngle(hip, arcPoints[arcPoints.length - 1], knee, SIDE)).toBeCloseTo(0, 9)
+    expect(screenAngle(hip, arcPoints[0], { ...hip, y: hip.y - 1 }, SIDE)).toBeCloseTo(0, 9)
+    expect(screenAngle(hip, arcPoints[0], arcPoints[arcPoints.length - 1], SIDE)).toBeCloseTo(
+      values.peakThighAngle,
+      9,
+    )
   })
 
-  it.each(['torsoPitch', 'peakThighAngle', 'peakSwingKneeBend'] as const)(
-    '%s sweeps its value between its two rays, and the arc ends on them',
-    (paramId) => {
-      const { guides, marks } = only(bound, paramId)
-      const reference = guides[0]
-      const valueRay = guides[guides.length - 1]
-      const centre = valueRay[0]
-      const refEnd = reference[reference.length - 1]
-      const valueEnd = valueRay[1]
-      expect(screenAngle(centre, refEnd, valueEnd, SIDE)).toBeCloseTo(values[paramId], 9)
-      const [arc] = marks
-      expect(screenAngle(centre, refEnd, arc[0], SIDE)).toBeCloseTo(0, 9)
-      expect(screenAngle(centre, valueEnd, arc[arc.length - 1], SIDE)).toBeCloseTo(0, 9)
-    },
-  )
-
-  it('lays the knee-drive and knee-flexion rays along the key pose’s own segments', () => {
-    const peak = GAIT_PHASES.peakThigh - 0.5
-    const hip = jointAt(peak, bound, 'right_hip')
-    const knee = jointAt(peak, bound, 'right_knee')
-    const thighRay = only(bound, 'peakThighAngle').guides[1]
-    expect(screenAngle(hip, knee, thighRay[1], SIDE)).toBeCloseTo(0, 9)
-
-    const bend = GAIT_PHASES.peakSwingKneeBend - 0.5
-    const bendKnee = jointAt(bend, bound, 'right_knee')
-    const ankle = jointAt(bend, bound, 'right_ankle')
-    const shankRay = only(bound, 'peakSwingKneeBend').guides[1]
-    expect(screenAngle(bendKnee, ankle, shankRay[1], SIDE)).toBeCloseTo(0, 9)
+  it('knee flexion: the arc runs from the thigh’s continuation onto the live shank', () => {
+    const phase = heldFor('peakSwingKneeBend')
+    const [arcPoints] = only(bound, 'peakSwingKneeBend').marks
+    const hip = liveJoint(phase, bound, 'right_hip')
+    const knee = liveJoint(phase, bound, 'right_knee')
+    const ankle = liveJoint(phase, bound, 'right_ankle')
+    const beyond = { x: 2 * knee.x - hip.x, y: 2 * knee.y - hip.y, z: knee.z }
+    expect(screenAngle(knee, arcPoints[0], beyond, SIDE)).toBeCloseTo(0, 9)
+    expect(screenAngle(knee, arcPoints[arcPoints.length - 1], ankle, SIDE)).toBeCloseTo(0, 9)
+    expect(screenAngle(knee, beyond, ankle, SIDE)).toBeCloseTo(values.peakSwingKneeBend, 9)
   })
 
-  it('draws a mid-tween override value, not the bound one', () => {
+  it('bounce: the bracket spans hip-mid’s height range over a cycle', () => {
+    const [span] = only(bound, 'pelvisBounce').marks
+    const range = sampleCycle((p) => hipMid(p, bound).y)
+    expect(Math.min(span[0].y, span[1].y)).toBeCloseTo(range.min, 6)
+    expect(Math.max(span[0].y, span[1].y)).toBeCloseTo(range.max, 6)
+    expect(screenLength(span[0], span[1], SIDE)).toBeCloseTo(values.pelvisBounce, 12)
+    expect((span[0].y + span[1].y) / 2).toBe(PELVIS_HEIGHT)
+  })
+
+  it('arm swing: the bracket spans the wrist’s travel below the shoulder', () => {
+    const [span] = only(bound, 'armSwing').marks
+    const range = sampleCycle(
+      (p) => liveJoint(p, bound, 'right_wrist').y - liveJoint(p, bound, 'right_shoulder').y,
+    )
+    expect(range.max - range.min).toBeCloseTo(values.armSwing, 4)
+    expect(screenLength(span[0], span[1], SIDE)).toBeCloseTo(values.armSwing, 12)
+  })
+
+  it('landing: the offset runs from hip-mid to the live contact ankle', () => {
+    const phase = heldFor('landingOffset')
+    const [[start, end]] = only(bound, 'landingOffset').marks
+    expect(start.x).toBeCloseTo(hipMid(phase, bound).x, 12)
+    expect(end.x).toBeCloseTo(liveJoint(phase, bound, 'right_ankle').x, 12)
+    expect(screenLength(start, end, SIDE)).toBeCloseTo(values.landingOffset, 9)
+    expect(start.y).toBeLessThan(footFloor(values))
+  })
+
+  it('foot strike: the offset runs from the live knee to the live ankle at contact', () => {
+    const phase = heldFor('contactShankOffset')
+    const [[start, end]] = only(bound, 'contactShankOffset').marks
+    expect(start.x).toBeCloseTo(liveJoint(phase, bound, 'right_knee').x, 12)
+    expect(end.x).toBeCloseTo(liveJoint(phase, bound, 'right_ankle').x, 12)
+    expect(screenLength(start, end, SIDE)).toBeCloseTo(values.contactShankOffset, 9)
+  })
+
+  it('step width: from the midline to the live contact ankle, value × hip width', () => {
+    const phase = heldFor('stepWidth', 90)
+    const annotation = only(bound, 'stepWidth', 90)
+    const [[start, end]] = annotation.marks
+    expect(start.z).toBe(0)
+    expect(end.z).toBeCloseTo(liveJoint(phase, bound, `${annotation.side}_ankle`).z, 12)
+    expect(screenLength(start, end, FRONT)).toBeCloseTo(values.stepWidth * MODEL_PROPORTIONS.hipWidth, 9)
+  })
+
+  it('swing-foot arc: ends at the live swing ankle at mid-arc, value × hip width long', () => {
+    const phase = heldFor('swingFootArc', 90)
+    const annotation = only(bound, 'swingFootArc', 90)
+    const [[start, end]] = annotation.marks
+    expect(phase).toBe(phaseForLeg(annotation.side, KEY_LEG_PHASE.swingFootArc as number))
+    const ankle = liveJoint(phase, bound, `${annotation.side}_ankle`)
+    expect(end).toEqual({ x: ankle.x, y: ankle.y, z: ankle.z })
+    expect(screenLength(start, end, FRONT)).toBeCloseTo(
+      values.swingFootArc * MODEL_PROPORTIONS.hipWidth,
+      9,
+    )
+  })
+
+  it('draws a static override value, not the bound one, and labels the bound metric', () => {
     const tweened = { ...values, torsoPitch: 12 }
     const [annotation] = annotate(bound, ['torsoPitch'], { values: tweened })
-    const [reference, valueRay] = annotation.guides
-    expect(screenAngle(valueRay[0], reference[1], valueRay[1], SIDE)).toBeCloseTo(12, 9)
+    const [arcPoints] = annotation.marks
+    const hip = annotation.fills[0][0]
+    expect(screenAngle(hip, arcPoints[0], arcPoints[arcPoints.length - 1], SIDE)).toBeCloseTo(12, 9)
     expect(annotation.label.text).toBe('5.0°')
   })
 
-  it('puts the per-limb marks on the near side', () => {
-    const right = only(bound, 'landingOffset').marks[0][0].z
-    const [left] = annotate(bound, ['landingOffset'], { nearSide: 'left' })
-    expect(right).toBeGreaterThan(0)
-    expect(left.marks[0][0].z).toBeLessThan(0)
+  it('puts side-view limb marks on the near side', () => {
+    expect(only(bound, 'landingOffset').marks[0][0].z).toBeGreaterThan(0)
+    expect(only(bound, 'landingOffset', 180).marks[0][0].z).toBeLessThan(0)
+  })
+})
+
+describe('footFloor', () => {
+  it('is the lowest foot point over the cycle, near the ground for the neutral runner', () => {
+    const values = runnerParamValues(bindOnly([]))
+    const floor = footFloor(values)
+    expect(Math.abs(floor)).toBeLessThan(0.02)
+    const range = sampleCycle((p) => liveJoint(p, bindOnly([]), 'left_heel').y, 120)
+    expect(floor).toBeLessThanOrEqual(range.min)
   })
 })

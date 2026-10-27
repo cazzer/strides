@@ -5,20 +5,18 @@
 import { StrictMode, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import '../../index.css'
-import { makeHeuristics, makeMetric } from '../../results/__fixtures__/metricResult'
+import { makeMetric } from '../../results/__fixtures__/metricResult'
 import type { FormHeuristicsResult, MetricId } from '../../heuristics/types'
+import { bindAll, bindOnly } from '../__fixtures__/boundParams'
 import { CAMERA_PRESETS } from '../camera'
 import { ModelRunner, type RunnerFocus } from '../ModelRunner'
-import { bindRunnerParams } from '../runnerParams'
 import type { BoundRunnerParams, CameraPreset } from '../types'
 
 function bind(
   measured: readonly MetricId[] | 'all',
   overrides: Partial<FormHeuristicsResult> = {},
 ): BoundRunnerParams {
-  return bindRunnerParams(makeHeuristics(overrides), (metric) =>
-    measured === 'all' || measured.includes(metric.metric) ? 'normal' : 'excluded',
-  )
+  return measured === 'all' ? bindAll(overrides) : bindOnly(measured, overrides)
 }
 
 interface Scenario {

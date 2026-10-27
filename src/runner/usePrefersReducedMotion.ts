@@ -2,10 +2,18 @@ import { useSyncExternalStore } from 'react'
 
 const QUERY = '(prefers-reduced-motion: reduce)'
 
+// One MediaQueryList for the page, re-created only if `window.matchMedia` itself is replaced
+// (a test stubbing it).
+let cachedFor: typeof window.matchMedia | null = null
+let cached: MediaQueryList | null = null
+
 function query(): MediaQueryList | null {
-  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-    ? window.matchMedia(QUERY)
-    : null
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return null
+  if (cachedFor !== window.matchMedia) {
+    cachedFor = window.matchMedia
+    cached = window.matchMedia(QUERY)
+  }
+  return cached
 }
 
 function subscribe(onChange: () => void): () => void {

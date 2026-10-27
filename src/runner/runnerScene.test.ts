@@ -10,6 +10,9 @@ import {
   RUNNER_PARAM_IDS,
   VIEW_HALF_HEIGHT,
   VIEW_HALF_WIDTH,
+  FAR_OPACITY,
+  UNFOCUSED_OPACITY,
+  cameraFromKey,
   cameraKey,
   clampLabelX,
   describeRunner,
@@ -19,6 +22,9 @@ import {
   focusParamsOf,
   jointStyles,
   labelAlign,
+  mixValues,
+  neutralEdgeInFrame,
+  partOpacity,
   placeLabel,
   sanitizeRate,
   segmentStyle,
@@ -215,5 +221,43 @@ describe('small helpers', () => {
     expect(labelAlign('right')).toBe('start')
     expect(labelAlign('left')).toBe('end')
     expect(labelAlign('above')).toBe('middle')
+  })
+})
+
+describe('render helpers', () => {
+  it('never dims a neutral part, and dims measured ones no further than the floor', () => {
+    expect(partOpacity('neutral', true, true)).toBe(1)
+    expect(partOpacity('measured', false, false)).toBe(1)
+    expect(partOpacity('measured', true, false)).toBe(FAR_OPACITY)
+    expect(partOpacity('measured', false, true)).toBe(UNFOCUSED_OPACITY)
+    expect(partOpacity('measured', true, true)).toBe(Math.min(FAR_OPACITY, UNFOCUSED_OPACITY))
+    expect(partOpacity('focus', false, true)).toBe(1)
+    expect(partOpacity('focus', true, true)).toBe(FAR_OPACITY)
+  })
+
+  it('round-trips a camera through its key', () => {
+    expect(cameraFromKey(cameraKey('legsSide'))).toBe(CAMERA_PRESETS.legsSide)
+    const state = { yawDeg: 30, pitchDeg: 5, zoom: 1.25, target: { x: 0.1, y: 1.2, z: -0.05 } }
+    expect(cameraFromKey(cameraKey(state))).toEqual(state)
+  })
+
+  it('mixes tween values linearly, exactly `to` at the end, base elsewhere', () => {
+    const base = runnerParamValues(bindAll())
+    const half = mixValues(base, { torsoPitch: 0 }, { torsoPitch: 20, cadence: 200 }, 0.5)
+    expect(half.torsoPitch).toBe(10)
+    expect(half.cadence).toBe((base.cadence + 200) / 2)
+    expect(half.armSwing).toBe(base.armSwing)
+    const end = mixValues(base, { torsoPitch: 0 }, { torsoPitch: 20 }, 1)
+    expect(end.torsoPitch).toBe(20)
+    expect(mixValues(base, { torsoPitch: 0 }, { torsoPitch: 20 }, 0).torsoPitch).toBe(0)
+  })
+
+  it('finds a neutral edge in frame only when one is', () => {
+    const values = runnerParamValues(bindAll())
+    const styles = SKELETON_EDGES.map((edge) =>
+      segmentStyle(edge, effectiveSources(bindAll()), []),
+    )
+    expect(neutralEdgeInFrame(styles, values, 0.19, 'wholeBodySide')).toBe(true)
+    expect(neutralEdgeInFrame(styles, values, 0.19, 'feetFront')).toBe(false)
   })
 })
