@@ -3,13 +3,15 @@ import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import {
   CONTACT_PARAMS,
+  GAIT_PHASES,
   MODEL_PROPORTIONS,
+  PELVIS_HEIGHT,
   cyclesPerSecond,
+  pelvisHeight,
   poseAt,
   realizeParams,
 } from './gaitModel'
 import {
-  DENSE_PHASES,
   MEASURE_PARAM,
   hipWidth,
   joint,
@@ -25,6 +27,7 @@ import {
   measureVerticalOscillation,
   torsoLength,
 } from './__fixtures__/measureModel'
+import { KEY_LEG_PHASE, phaseForLeg } from './runnerAnnotations'
 import { NEUTRAL_RUNNER_PARAMS, RUNNER_PARAM_SPECS } from './runnerParams'
 import type { Joint3D, RunnerParamId, RunnerParams } from './types'
 
@@ -90,16 +93,238 @@ describe('poseAt structure', () => {
     expect(hipWidth(pose)).toBeCloseTo(MODEL_PROPORTIONS.hipWidth, 12)
   })
 
-  it('puts the neutral runner on the ground: its lowest foot point over the cycle is y ≈ 0', () => {
-    const lowest = Math.min(
-      ...DENSE_PHASES.flatMap((p) =>
-        poseAt(p, NEUTRAL_RUNNER_PARAMS)
-          .filter((j) => /ankle|heel|foot_index/.test(j.name))
-          .map((j) => j.y),
-      ),
-    )
-    expect(Math.abs(lowest)).toBeLessThan(0.005)
+})
+
+/** The lowest point (ankle, heel or toe) of the left foot at cycle phase `phase`. */
+function lowestLeftFoot(params: RunnerParams, phase: number): number {
+  const pose = poseAt(phase, params)
+  return Math.min(
+    joint(pose, 'left_ankle').y,
+    joint(pose, 'left_heel').y,
+    joint(pose, 'left_foot_index').y,
+  )
+}
+
+/** The left foot's worst distance from the ground through stance, (0, stanceEnd] at 1/`steps`. */
+function stancePinError(params: RunnerParams, steps = 1000): number {
+  let worst = 0
+  for (let i = 1; i <= GAIT_PHASES.stanceEnd * steps; i += 1) {
+    worst = Math.max(worst, Math.abs(lowestLeftFoot(params, i / steps)))
+  }
+  return worst
+}
+
+/** The left foot's lowest point through swing, (stanceEnd, 1) at 1/`steps`: negative is underground. */
+function swingClearance(params: RunnerParams, steps = 1000): number {
+  let lowest = Infinity
+  for (let i = Math.floor(GAIT_PHASES.stanceEnd * steps) + 1; i < steps; i += 1) {
+    lowest = Math.min(lowest, lowestLeftFoot(params, i / steps))
+  }
+  return lowest
+}
+
+/** The domain grid's sampling: coarser than the corners' 1/1000, since it has 3600 sets. */
+const DOMAIN_STEPS = 250
+
+function grid(axes: Partial<Record<RunnerParamId, readonly number[]>>): RunnerParams[] {
+  return Object.entries(axes).reduce<RunnerParams[]>(
+    (sets, [id, values]) => sets.flatMap((set) => (values ?? []).map((v) => ({ ...set, [id]: v }))),
+    [NEUTRAL_RUNNER_PARAMS],
+  )
+}
+
+/** The parameters that shape the legs or the figure's height, at their range ends. */
+const LEG_CORNERS = grid(
+  Object.fromEntries(
+    (
+      ['pelvisBounce', 'landingOffset', 'contactShankOffset', 'peakThighAngle', 'peakSwingKneeBend', 'stepWidth'] as const
+    ).map((id) => [id, RUNNER_PARAM_SPECS[id].range]),
+  ),
+).map((params) => realizeParams(params))
+
+/**
+ * The declared realistic domain the pin holds over (design.md D15): landing offsets up to 0.3
+ * torso lengths, everything else across its realistic spread.
+ */
+const PIN_DOMAIN = grid({
+  pelvisBounce: [0, 0.07, 0.14, 0.2, 0.3],
+  landingOffset: [-0.1, 0, 0.15, 0.3],
+  contactShankOffset: [-0.2, -0.05, 0.08, 0.2, 0.3],
+  peakThighAngle: [15, 20, 40, 85],
+  peakSwingKneeBend: [60, 100, 150],
+  stepWidth: [-1, 0.3, 1.5],
+}).map((params) => realizeParams(params))
+
+/** Per landing offset past the declared domain: the worst stance sink and swing dip allowed. */
+const FALLBACK_BOUNDS: readonly (readonly [number, { stance: number; swing: number }])[] = [
+  // Measured worst (stance / swing): 0.056 / −0.060, 0.077 / −0.083, 0.089 / −0.096,
+  // 0.108 / −0.115, 0.138 / −0.146, 0.181 / −0.188.
+  [0.35, { stance: 0.06, swing: -0.065 }],
+  [0.4, { stance: 0.08, swing: -0.09 }],
+  [0.45, { stance: 0.095, swing: -0.1 }],
+  [0.512, { stance: 0.11, swing: -0.12 }],
+  [0.6, { stance: 0.14, swing: -0.15 }],
+  [0.7, { stance: 0.185, swing: -0.19 }],
+]
+
+/** The domain sweeps sample thousands of poses; under a loaded full-suite run they need longer. */
+const DOMAIN_SWEEP_TIMEOUT_MS = 60_000
+
+describe('the stance foot stands on the ground', () => {
+  it('pins the neutral stance foot to y = 0 from contact to toe-off', () => {
+    expect(Math.abs(lowestLeftFoot(NEUTRAL_RUNNER_PARAMS, 0))).toBeLessThan(1e-12)
+    expect(stancePinError(NEUTRAL_RUNNER_PARAMS)).toBeLessThan(1e-9)
   })
+
+  it('puts the contact foot exactly on the ground for every parameter set', () => {
+    for (const params of [...CORNERS, ...LEG_CORNERS]) {
+      expect(Math.abs(lowestLeftFoot(params, 0))).toBeLessThan(1e-12)
+    }
+  })
+
+  it('pins the stance foot to within 0.01 over the declared domain and at the back-landing corners', () => {
+    const backLanding = LEG_CORNERS.filter((params) => params.landingOffset < 0)
+    expect(backLanding).toHaveLength(32)
+    for (const params of PIN_DOMAIN) {
+      expect(stancePinError(params, DOMAIN_STEPS), JSON.stringify(params)).toBeLessThan(0.01)
+    }
+    for (const params of backLanding) {
+      expect(stancePinError(params), JSON.stringify(params)).toBeLessThan(0.01)
+    }
+  }, DOMAIN_SWEEP_TIMEOUT_MS)
+
+  it('keeps the swing foot off the ground over the declared domain and at real overstrides', () => {
+    const overstrides = grid({
+      landingOffset: [0.35, 0.4, 0.512, 0.6, 0.7],
+      peakSwingKneeBend: [50, 100, 150],
+      stepWidth: [-1.5, 0.3, 1.5],
+      pelvisBounce: RUNNER_PARAM_SPECS.pelvisBounce.range,
+      contactShankOffset: RUNNER_PARAM_SPECS.contactShankOffset.range,
+      peakThighAngle: RUNNER_PARAM_SPECS.peakThighAngle.range,
+    }).map((params) => realizeParams(params))
+    let extremeWorst = 0
+    for (const params of [...PIN_DOMAIN, ...overstrides]) {
+      const clearance = swingClearance(params, DOMAIN_STEPS)
+      // The swing knee may not bend past the bound peak, so a 50° peak bend, or legs crossed to
+      // the far end of step width, can leave too little room to carry the foot clear under the
+      // lowest hips; past the demo clip's 0.512 landing the stance foot's own sink carries into
+      // early swing (design.md D15). Bounded below, measured.
+      if (params.peakSwingKneeBend < 60 || params.stepWidth < -1 || params.landingOffset > 0.52) {
+        extremeWorst = Math.min(extremeWorst, clearance)
+      } else {
+        expect(clearance, JSON.stringify(params)).toBeGreaterThanOrEqual(-0.005)
+      }
+    }
+    expect(extremeWorst).toBeGreaterThan(-0.2)
+  }, DOMAIN_SWEEP_TIMEOUT_MS)
+
+  it('lets the foot give way, by a bounded amount, where the bindings cannot keep it down', () => {
+    // Past the declared domain (landing 0.3), pinning needs a stance knee bend that would break
+    // kneeFlexion, so the mid-stance foot gives way. Bounds measured per landing (design.md D15),
+    // over every corner of the other leg parameters; the demo clip's landing is 0.512.
+    const others = Object.fromEntries(
+      (['pelvisBounce', 'contactShankOffset', 'peakThighAngle', 'peakSwingKneeBend', 'stepWidth'] as const)
+        .map((id) => [id, RUNNER_PARAM_SPECS[id].range]),
+    )
+    for (const [landingOffset, bound] of FALLBACK_BOUNDS) {
+      const sets = grid({ landingOffset: [landingOffset], ...others }).map((params) =>
+        realizeParams(params, new Set(CONTACT_PARAMS)),
+      )
+      expect(sets).toHaveLength(32)
+      for (const params of sets) {
+        const label = JSON.stringify(params)
+        expect(Math.abs(lowestLeftFoot(params, 0)), label).toBeLessThan(1e-12)
+        const stance = stancePinError(params)
+        const swing = swingClearance(params)
+        expect(stance, label).toBeLessThan(bound.stance)
+        expect(swing, label).toBeGreaterThan(bound.swing)
+        for (const id of PARAM_IDS) {
+          const { measure, tolerance } = MEASURE_PARAM[id]
+          expect(Math.abs(measure(params) - params[id]), `${id} ${label}`).toBeLessThanOrEqual(tolerance)
+        }
+      }
+    }
+  }, DOMAIN_SWEEP_TIMEOUT_MS)
+
+  it('every still frame the renderer holds shows a foot on the ground at the neutral parameters', () => {
+    const legPhases = [GAIT_PHASES.midStance, ...Object.values(KEY_LEG_PHASE).filter((q) => q !== null)]
+    for (const q of legPhases) {
+      for (const side of ['left', 'right'] as const) {
+        const pose = poseAt(phaseForLeg(side, q), NEUTRAL_RUNNER_PARAMS)
+        const lowest = Math.min(
+          ...pose.filter((j) => /ankle|heel|foot_index/.test(j.name)).map((j) => j.y),
+        )
+        expect(Math.abs(lowest), `${side} ${q}`).toBeLessThan(1e-9)
+      }
+    }
+  })
+
+  it('stands the neutral runner near the nominal framing height the camera presets aim at', () => {
+    // The camera presets keep their framing (D15): the neutral hips' mid-height sits 0.058 below.
+    expect(Math.abs(pelvisHeight(NEUTRAL_RUNNER_PARAMS) - PELVIS_HEIGHT)).toBeLessThan(0.06)
+  })
+
+  it('bends the neutral stance knee visibly at the mid-stance still frame', () => {
+    expect(kneeFlexionAt(poseAt(GAIT_PHASES.midStance, NEUTRAL_RUNNER_PARAMS), 'left'))
+      .toBeGreaterThan(20)
+  })
+})
+
+/**
+ * The hips drawn at 30 fps from several start phases: the largest change between frames, and the
+ * spread of each step's highest drawn hip over 12 steps (aliasing of the flight peak).
+ */
+function hipAt30Fps(params: RunnerParams): { largestStep: number; peakSpread: number } {
+  const perFrame = cyclesPerSecond(params) / 30
+  let largestStep = 0
+  let peakSpread = 0
+  for (const start of [0, 0.007, 0.013, 0.021, 0.033]) {
+    const phases = Array.from({ length: 30 * 8 }, (_, f) => start + f * perFrame)
+    const hips = phases.map((p) => joint(poseAt(p, params), 'left_hip').y)
+    for (let f = 1; f < hips.length; f += 1) {
+      largestStep = Math.max(largestStep, Math.abs(hips[f] - hips[f - 1]))
+    }
+    // One step runs from one mid-stance (the lowest hips) to the next.
+    const stepOf = (p: number) => Math.floor((p - GAIT_PHASES.midStance) * 2)
+    const peaks = new Map<number, number>()
+    phases.forEach((p, f) => peaks.set(stepOf(p), Math.max(peaks.get(stepOf(p)) ?? -Infinity, hips[f])))
+    const whole = [...peaks.values()].slice(1, 13)
+    peakSpread = Math.max(peakSpread, Math.max(...whole) - Math.min(...whole))
+  }
+  return { largestStep, peakSpread }
+}
+
+/** A sinusoidal bounce's largest change between 30 fps frames: the floor any bounce is held to. */
+function sinusoidFrameStep(params: RunnerParams): number {
+  return params.pelvisBounce * Math.sin(2 * Math.PI * (cyclesPerSecond(params) / 30))
+}
+
+describe('the bounce plays smoothly at 30 fps', () => {
+  const CADENCES = [150, 174, 190]
+
+  it('moves the hips no more than 1.3× a sinusoid per frame, with steady step peaks, up to the neutral bounce', () => {
+    for (const pelvisBounce of [0.03, 0.07, 0.1, 0.14]) {
+      for (const cadence of CADENCES) {
+        const params = withParams({ pelvisBounce, cadence })
+        const { largestStep, peakSpread } = hipAt30Fps(params)
+        const label = `${pelvisBounce} @ ${cadence}`
+        expect(largestStep, label).toBeLessThanOrEqual(1.3 * sinusoidFrameStep(params))
+        expect(peakSpread, label).toBeLessThanOrEqual(0.12 * pelvisBounce)
+      }
+    }
+  }, DOMAIN_SWEEP_TIMEOUT_MS)
+
+  it('holds larger bounces to their measured known limit (design.md D15)', () => {
+    for (const pelvisBounce of [0.17, 0.2, 0.3, 0.5]) {
+      for (const cadence of CADENCES) {
+        const params = withParams({ pelvisBounce, cadence })
+        const { largestStep, peakSpread } = hipAt30Fps(params)
+        const label = `${pelvisBounce} @ ${cadence}`
+        expect(largestStep, label).toBeLessThanOrEqual(2.8 * sinusoidFrameStep(params))
+        expect(peakSpread, label).toBeLessThanOrEqual(0.35 * pelvisBounce)
+      }
+    }
+  }, DOMAIN_SWEEP_TIMEOUT_MS)
 })
 
 describe('poseAt loops seamlessly', () => {
@@ -165,10 +390,13 @@ const FOOT: JointFamily[] = ['ankle', 'heel', 'foot_index']
 
 /**
  * The joint families each binding moves — exactly these, no fewer and no more. Every other joint
- * stays bit-identical. `pelvisBounce` moves every joint by one vertical shift (tested separately).
+ * keeps its x and z bit-identical, and its height changes only by one vertical shift per phase
+ * shared by the whole figure (the height that keeps the runner standing on the ground; no metric
+ * reads absolute height). The parameters that do not shape the legs move nothing else at all.
  */
-const MOVED_JOINTS: Record<Exclude<RunnerParamId, 'pelvisBounce'>, JointFamily[]> = {
+const MOVED_JOINTS: Record<RunnerParamId, JointFamily[]> = {
   cadence: [],
+  pelvisBounce: LEG,
   torsoPitch: ['shoulder', 'elbow', 'wrist', 'ear', 'nose'],
   armSwing: ['elbow', 'wrist'],
   peakThighAngle: LEG,
@@ -178,6 +406,14 @@ const MOVED_JOINTS: Record<Exclude<RunnerParamId, 'pelvisBounce'>, JointFamily[]
   stepWidth: LEG,
   swingFootArc: FOOT,
 }
+
+/** The parameters the figure's height depends on; every other one leaves the figure bit-identical. */
+const SHAPES_THE_LEGS = new Set<RunnerParamId>([
+  'pelvisBounce',
+  'landingOffset',
+  'contactShankOffset',
+  'stepWidth',
+])
 
 /**
  * Sweeps low → high with everything else neutral. Contact sweeps stay inside the conflict-free
@@ -214,29 +450,32 @@ describe('each binding moves only its own part, in the direction of its value', 
       }
     })
 
-    it(`${id}: moves exactly its own joints; every other joint is bit-identical`, () => {
+    it(`${id}: moves exactly its own joints; every other joint moves only with the whole figure`, () => {
       const low = withParams({ [id]: sweep[0] })
       const high = withParams({ [id]: sweep[sweep.length - 1] })
       const moved = new Set<JointFamily>()
+      let firstShift: number | null = null
       for (let i = 0; i < 48; i += 1) {
         const a = poseAt(i / 48, low)
         const b = poseAt(i / 48, high)
-        if (id === 'pelvisBounce') {
-          // Every joint, by the same vertical shift and nothing else.
-          const shift = b[0].y - a[0].y
-          a.forEach((j, k) => {
-            expect(b[k].x).toBe(j.x)
-            expect(b[k].z).toBe(j.z)
-            expect(b[k].y - j.y).toBeCloseTo(shift, 12)
-          })
-          continue
-        }
+        // The whole-figure vertical shift at this phase, read off a hip (no binding's own joint).
+        const shift = joint(b, 'left_hip').y - joint(a, 'left_hip').y
+        if (!SHAPES_THE_LEGS.has(id)) expect(shift).toBe(0)
+        // Only the bounce reshapes the hips' path; any other shift is one constant height change.
+        firstShift ??= shift
+        if (id !== 'pelvisBounce') expect(Math.abs(shift - firstShift)).toBeLessThan(1e-12)
         a.forEach((j, k) => {
-          if (Math.hypot(j.x - b[k].x, j.y - b[k].y, j.z - b[k].z) > 1e-6) moved.add(family(j.name))
-          if (!MOVED_JOINTS[id].includes(family(j.name))) expect(b[k]).toEqual(j)
+          if (Math.hypot(j.x - b[k].x, j.y + shift - b[k].y, j.z - b[k].z) > 1e-6) {
+            moved.add(family(j.name))
+          }
+          if (MOVED_JOINTS[id].includes(family(j.name))) return
+          expect(b[k].x).toBe(j.x)
+          expect(b[k].z).toBe(j.z)
+          if (SHAPES_THE_LEGS.has(id)) expect(Math.abs(b[k].y - j.y - shift)).toBeLessThan(1e-12)
+          else expect(b[k]).toEqual(j)
         })
       }
-      if (id !== 'pelvisBounce') expect([...moved].sort()).toEqual([...MOVED_JOINTS[id]].sort())
+      expect([...moved].sort()).toEqual([...MOVED_JOINTS[id]].sort())
     })
   }
 
@@ -293,6 +532,39 @@ const CONTACT_GRID: RunnerParams[] = [-0.3, -0.1, 0, 0.05, 0.1, 0.3, 0.7].flatMa
     ),
   ),
 )
+
+/** Deterministic PRNG (mulberry32), so a failing interior set can be reproduced. */
+function seededRandom(seed: number): () => number {
+  let state = seed >>> 0
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0
+    let t = state
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+describe('every bound value reads back exactly inside the ranges, not only at their corners', () => {
+  it('holds every MEASURE_PARAM binding on 500 seeded random interior parameter sets', () => {
+    const random = seededRandom(19_4)
+    for (let n = 0; n < 500; n += 1) {
+      const raw = Object.fromEntries(
+        PARAM_IDS.map((id) => {
+          const [lo, hi] = RUNNER_PARAM_SPECS[id].range
+          return [id, lo + (hi - lo) * random()]
+        }),
+      ) as RunnerParams
+      const measured = MEASURED_SUBSETS[Math.floor(random() * MEASURED_SUBSETS.length)]
+      const params = realizeParams(raw, measured)
+      for (const id of PARAM_IDS) {
+        const { measure, tolerance } = MEASURE_PARAM[id]
+        expect(Math.abs(measure(params) - params[id]), `${id} ${JSON.stringify(params)}`)
+          .toBeLessThanOrEqual(tolerance)
+      }
+    }
+  }, DOMAIN_SWEEP_TIMEOUT_MS)
+})
 
 describe('realizeParams: what the model draws for the contact leg', () => {
   it('measuring the model drawn from realized parameters returns every realized value', () => {

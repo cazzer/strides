@@ -7,7 +7,9 @@ of the nineteen `COMMON_KEYPOINT_NAMES`, in that order, for any real `phase`, wh
 phase is one full gait cycle (left contact at 0, right contact at 0.5). The pose SHALL be
 continuous in phase, SHALL be identical at phase 0 and phase 1, and every skeleton segment's length
 SHALL be constant over the cycle. The second half-cycle SHALL be the first mirrored. The body
-proportions SHALL be fixed and documented as illustrative.
+proportions SHALL be fixed and documented as illustrative. The stance leg SHALL be solved by
+inverse kinematics so the stance foot stands on the ground (see "The stance foot stands on the
+ground, and the bindings outrank it"); the swing leg SHALL follow keyframe curves.
 
 #### Scenario: The loop has no seam
 - **WHEN** the pose is computed at phase 0 and at phase 1 (or at phase 0 and just below phase 1)
@@ -91,7 +93,13 @@ Applying a bound metric's own formula to the model's joints SHALL return the par
 for every parameter in a conflict-free set (the swing-foot arc to within its percentile sampling,
 the peak metrics to within their extrema finder's sampling). Raising a parameter SHALL raise
 that measured quantity. Changing a parameter SHALL leave every joint outside that parameter's
-documented set of joints bit-identical. Cadence SHALL change only the cycle rate.
+documented set of joints unchanged, apart from one whole-figure vertical shift per phase that keeps
+the runner standing on the ground: those joints' forward and lateral coordinates SHALL stay
+bit-identical, and their heights SHALL differ only by that one shared shift. No metric reads
+absolute height, so the shift moves no binding. Cadence, torso pitch, arm swing and swing-foot arc
+do not change the figure's height, so every joint outside their sets SHALL stay bit-identical.
+Pelvis bounce SHALL move the legs as well as the shared shift, because the stance leg's solve
+depends on the hips' height through stance. Cadence SHALL change only the cycle rate.
 
 #### Scenario: More lean pitches the torso further and leaves the legs alone
 - **WHEN** torso pitch is raised from 0° to 20° with all else neutral
@@ -158,14 +166,43 @@ aside, which is never bundled).
 - **WHEN** the model-runner modules are added
 - **THEN** no file under `src/heuristics/` changes and every existing measurement test passes unchanged
 
+### Requirement: The stance foot stands on the ground, and the bindings outrank it
+
+The figure's height SHALL be solved per parameter set so that the contact foot's lowest point
+(ankle, heel or toe) is exactly on the ground (y = 0). Through stance, from contact to toe-off, the
+stance leg SHALL be solved so that the foot's lowest point stays on the ground: within numerical
+precision at the neutral parameters, and within 0.01 torso lengths over the declared realistic
+domain (landing offsets up to 0.3 torso lengths, which is the neutral overstride, every other leg
+parameter across its realistic spread) and at every range corner with the landing offset at its lower end. The bound values SHALL
+outrank the pin: where a parameter set cannot keep the foot down without breaking a binding (very
+large landing offsets), the mid-stance foot SHALL give way by a bounded amount, every bound value
+SHALL still read back exactly, and the contact foot SHALL still stand exactly on the ground. The
+figure SHALL never be raised so that the contact foot floats.
+
+#### Scenario: The neutral stance foot is planted through stance
+- **WHEN** the neutral runner is sampled from contact to toe-off
+- **THEN** the stance foot's lowest point is at y = 0 at every sample, to within numerical precision
+
+#### Scenario: Contact is on the ground for every parameter set
+- **WHEN** the runner is drawn at contact for any parameter set, including every range corner
+- **THEN** the contact foot's lowest point is at y = 0
+
+#### Scenario: Undrawable geometry gives way while bound values read back exactly
+- **WHEN** the landing offset is bound to 0.7 torso lengths, at any corner of the other leg parameters
+- **THEN** every bound value reads back exactly, the contact foot is on the ground, and the mid-stance foot is at most 0.19 torso lengths from it
+
+#### Scenario: Still frames show a planted foot
+- **WHEN** the renderer holds a still frame at mid-stance or at any limb parameter's key phase, at the neutral parameters
+- **THEN** one foot stands on the ground
+
 ### Requirement: The model runner renders measured parts solid and neutral parts dashed grey
 
 The renderer SHALL draw every skeleton edge, solid when the edge is measured and dashed grey when it
 is neutral, with joints as dots. Overridden sources (the intro beat's seam) SHALL take the place of
 the bound ones; without overrides the renderer SHALL draw exactly the bound parameter values and
 sources. A value tween passed through the seam SHALL be interpolated by the animation loop without
-re-rendering React, and SHALL end exactly at its target values. The ground SHALL be drawn at the
-lowest foot point over the cycle, as an illustrative reference.
+re-rendering React, and SHALL end exactly at its target values. The ground SHALL be drawn at
+y = 0, the plane the stance foot stands on.
 
 #### Scenario: Only knee drive is measured
 - **WHEN** the runner is rendered with only `kneeDrive` measured

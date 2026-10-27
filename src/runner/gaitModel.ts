@@ -6,8 +6,14 @@
  * curves, the foot shape and the arm geometry are a drawable stick figure, not measurements and not
  * targets. The only numbers that carry a claim are the bound parameters, and each one is realized
  * so that applying its metric's own formula to the joints this module returns gives back the
- * parameter's value (see `runnerParams.ts` and design.md D1). There is no inverse kinematics: the
- * stance foot is not pinned to the ground, so it slides and lifts a little during stance.
+ * parameter's value (see `runnerParams.ts` and design.md D1).
+ *
+ * The stance foot stands on the ground (design.md D15). The figure's height is solved so that the
+ * contact foot's lowest point is exactly on y = 0, and through stance the leg is solved by
+ * two-segment inverse kinematics so the foot stays on the ground while the ankle slides back under
+ * the hip. The bindings outrank the pin: where the geometry a parameter set asks for cannot keep
+ * the foot down without breaking a binding (very large landing offsets), the mid-stance foot gives
+ * way by a bounded amount instead, and the contact instant still sits exactly on the ground.
  *
  * Frame: x = direction of travel, y = up (ground at y = 0), z = the runner's right. Units are
  * torso lengths. Hip-mid sits at x = 0, z = 0. Phase 0..1 is one full gait cycle: left contact at
@@ -37,13 +43,17 @@ export const MODEL_PROPORTIONS = {
   nose: { forward: 0.12, up: 0.38 },
 } as const
 
+/** The ground plane's height. The stance foot stands on it (design.md D15). */
+export const GROUND_Y = 0
+
 /** The model's torso, for converting `verticalOscillationCm` into torso lengths. Illustrative. */
 export const MODEL_TORSO_LENGTH_CM = 50
 
 /**
- * Mean hip-mid height. Tuned once so that, at the neutral parameters, the lowest foot point over
- * the whole cycle sits on the ground (pinned by `gaitModel.test.ts`). Fixed rather than solved per
- * pose, because solving it would let a leg parameter move the torso.
+ * Nominal hip-mid height, for framing: the camera presets aim at it. The drawn height is
+ * `pelvisHeight(params)`, solved per parameter set so the contact foot stands on the ground; at the
+ * neutral parameters it is 0.058 below this (pinned by `gaitModel.test.ts`), which the framing
+ * absorbs, so the presets are unchanged.
  */
 export const PELVIS_HEIGHT = 1.8066
 
@@ -64,12 +74,22 @@ export const GAIT_PHASES = {
 
 const DEG = Math.PI / 180
 
-/** Stance/swing keyframes that no parameter binds. Illustrative. */
-const THIGH_TOE_OFF_DEG = -22
+/**
+ * Stance/swing keyframes that no parameter binds. Illustrative. The stance leg's angles come from
+ * the pin's inverse kinematics; these keys shape the swing and the toe-off target.
+ */
 const KNEE_MID_STANCE_DEG = 30
-const KNEE_TOE_OFF_DEG = 22
+const KNEE_TOE_OFF_DEG = 28
 const KNEE_LATE_SWING_DEG = 15
 const KNEE_LATE_SWING_PHASE = 0.9
+/**
+ * The swing knee holds most of its bend until the leg has passed under the hips, then extends:
+ * at this phase it has given up only `KNEE_MID_SWING_RELEASE` of its bend, so the swing foot clears
+ * the ground while the hips are at their lowest. Monotone after the peak, so the knee-flexion
+ * reading is unchanged. Illustrative.
+ */
+const KNEE_MID_SWING_PHASE = 0.76
+const KNEE_MID_SWING_RELEASE = 0.2
 /**
  * The contact knee bend is held at or below the mid-stance key, so late swing → contact →
  * mid-stance never forms a second prominent knee-flexion maximum (design.md D2, D4).
@@ -77,8 +97,33 @@ const KNEE_LATE_SWING_PHASE = 0.9
 const MAX_CONTACT_KNEE_DEG = KNEE_MID_STANCE_DEG
 const FOOT_MID_STANCE_DEG = 0
 const FOOT_TOE_OFF_DEG = -35
-const FOOT_MID_SWING_DEG = -20
+/** Toe only slightly down at peak swing knee bend, so the swing toe clears the ground. */
+const FOOT_MID_SWING_DEG = -5
 const FOOT_LATE_SWING_DEG = 5
+
+/**
+ * How far above their lowest the hips sit at contact and toe-off, torso lengths (design.md D15):
+ * the part of the bounce the planted stance leg absorbs. Large enough that a typical bounce mostly
+ * happens in stance (so the flight hop never jumps in one frame) and the mid-stance knee visibly
+ * bends; small enough that the stance knee stays under its cap. Illustrative.
+ */
+const STANCE_DROP = 0.1
+/** The flight peak of the hips, in leg phase: midway between toe-off and the other contact. */
+const FLIGHT_PEAK_PHASE = 0.44
+/**
+ * The stance knee's largest bend, above the larger of its contact and toe-off bends. Kept under
+ * `kneeFlexionMinProminenceDegrees` (20) so stance never forms a second prominent knee-flexion
+ * maximum. Illustrative.
+ */
+const STANCE_KNEE_PROMINENCE_MARGIN_DEG = 18
+/** The stance knee also stays this far below the swing peak, so the swing peak is the maximum. */
+const STANCE_KNEE_BELOW_SWING_DEG = 5
+/**
+ * How far the stance thigh may rise above its contact angle. Kept under
+ * `kneeDriveMinProminenceDegrees` (10) so stance never forms a second prominent thigh maximum.
+ * Illustrative.
+ */
+const STANCE_THIGH_RISE_MAX_DEG = 5
 
 /**
  * P80 − P20 of a raised cosine sampled uniformly over one full period, as a fraction of its peak:
@@ -278,22 +323,355 @@ function swingArcBump(q: number): number {
   return (1 - Math.cos(2 * Math.PI * u)) / 2
 }
 
-interface LegFrame {
+/** How far the foot's lowest point (heel or toe) sits below the ankle with the sole at `footDeg`. */
+function footDrop(footDeg: number): number {
+  const { heel, toe } = MODEL_PROPORTIONS
+  const f = footDeg * DEG
+  const below = (point: { along: number; normal: number }) =>
+    -(point.along * Math.sin(f) + point.normal * Math.cos(f))
+  return Math.max(below(heel), below(toe))
+}
+
+/** The toe's distance from the ankle, and its angle above the sole line. */
+const TOE_REACH = Math.hypot(MODEL_PROPORTIONS.toe.along, MODEL_PROPORTIONS.toe.normal)
+const TOE_ANGLE = Math.atan2(-MODEL_PROPORTIONS.toe.normal, MODEL_PROPORTIONS.toe.along)
+
+/** The sole angle whose toe sits `drop` below the ankle: the toe's drop is R·sin(φ − f). */
+function toeDownFootDeg(drop: number): number {
+  return (TOE_ANGLE - Math.asin(clamp(drop / TOE_REACH, -1, 1))) / DEG
+}
+
+/** The heel's distance from the ankle, and its angle below the sole line behind the ankle. */
+const HEEL_REACH = Math.hypot(MODEL_PROPORTIONS.heel.along, MODEL_PROPORTIONS.heel.normal)
+const HEEL_ANGLE = Math.atan2(-MODEL_PROPORTIONS.heel.normal, -MODEL_PROPORTIONS.heel.along)
+
+/** The sole angle whose heel sits `drop` below the ankle: the heel's drop is R·sin(f + ψ). */
+function heelDownFootDeg(drop: number): number {
+  return (Math.asin(clamp(drop / HEEL_REACH, -1, 1)) - HEEL_ANGLE) / DEG
+}
+
+/**
+ * The sole angle nearest `footDeg` that keeps the foot's lowest point at or above the ground, for
+ * an ankle `ankleHeight` above it: the toe (or heel) is turned up just enough. No binding reads
+ * the swing foot's heel or toe, so this only keeps the swing foot from passing through the ground.
+ * Flat is the most a turn can do; an ankle lower than the sole's depth is left to the leg.
+ */
+function footDegClearOfGround(footDeg: number, ankleHeight: number): number {
+  return clamp(
+    footDeg,
+    Math.min(0, toeDownFootDeg(ankleHeight)),
+    Math.max(0, heelDownFootDeg(ankleHeight)),
+  )
+}
+
+/**
+ * The bounce shape at contact and toe-off, in [−1, 1]: `STANCE_DROP` above the lowest hips, or the
+ * flight peak itself when the bounce is no larger than that. Continuous in the bounce.
+ */
+function stanceEndsBounceShape(bounce: number): number {
+  const stanceLimited = bounce > 0 ? -1 + 2 * Math.min(1, STANCE_DROP / bounce) : 1
+  return Math.min(SINUSOID_STANCE_ENDS_SHAPE, stanceLimited)
+}
+
+/**
+ * Where a sinusoidal bounce (lowest at mid-stance, highest at the flight peak) sits at contact and
+ * toe-off. A small bounce keeps this shape, so it moves no faster than a sinusoid would.
+ */
+const SINUSOID_STANCE_ENDS_SHAPE = -Math.cos(4 * Math.PI * GAIT_PHASES.midStance)
+
+/**
+ * The hips' height relative to `pelvisHeight`, as a fraction of half the bounce, in [−1, 1]. It
+ * repeats every half cycle (one step), and its keys sit at the half-cycle phase so they are hit
+ * exactly: lowest at mid-stance, highest at the flight peak, so the peak-to-peak is the bounce
+ * exactly. The hips stay low through stance, which leaves the stance leg room to stay planted.
+ */
+function bounceShape(p: number, bounce: number): number {
+  const atStanceEnds = stanceEndsBounceShape(bounce)
+  return periodicEase(
+    [
+      [0, atStanceEnds],
+      [2 * GAIT_PHASES.midStance, -1],
+      [2 * GAIT_PHASES.stanceEnd, atStanceEnds],
+      [2 * FLIGHT_PEAK_PHASE, 1],
+    ],
+    fract(2 * p),
+  )
+}
+
+/**
+ * The hip-mid height that puts the contact foot's lowest point exactly on the ground (y = 0). A
+ * whole-figure vertical placement: no metric reads absolute height, so it moves no binding.
+ */
+export function pelvisHeight(params: RunnerParams): number {
+  const legs = sagittalLegLengths(params.stepWidth)
+  const contact = solveContact(params)
+  return (
+    GROUND_Y +
+    footDrop(contact.shankDeg) +
+    legs.thigh * Math.cos(contact.thighDeg * DEG) +
+    legs.shank * Math.cos(contact.shankDeg * DEG) -
+    (params.pelvisBounce / 2) * stanceEndsBounceShape(params.pelvisBounce)
+  )
+}
+
+interface LegAngles {
+  thighDeg: number
+  kneeDeg: number
+  footDeg: number
+}
+
+interface StanceFrame {
   contact: ContactGeometry
+  legs: SagittalLegLengths
+  /** The stance ankle's side-view x relative to the hip, at contact and at toe-off. */
+  contactAnkleX: number
+  toeOffAnkleX: number
+  /** The hip-to-ankle distance at the stance knee's largest allowed bend. */
+  minStanceReach: number
+  maxStanceThighDeg: number
+  /**
+   * The stance knee's running maximum (contact included) at `STANCE_KNEE_SAMPLES` + 1 even steps
+   * over [0, stanceEnd], from the unfloored solve; null while it is being sampled.
+   */
+  kneeRunningMax: readonly number[] | null
+}
+
+/**
+ * The most the stance knee may straighten below its running maximum. The knee-flexion metric's
+ * extrema finder (`src/heuristics/extrema.ts`) is a zig-zag scan: a maximum counts once the series
+ * has risen `kneeFlexionMinProminenceDegrees` (20) from the last minimum and then fallen 20 from
+ * it. Holding every fall in stance under 20, less a margin for its 3-sample smoothing, means no
+ * stance maximum can count, whatever came before it; the swing peak stays the only one.
+ */
+const STANCE_KNEE_FALL_MAX_DEG = 18
+const STANCE_KNEE_SAMPLES = 64
+
+/** Linear interpolation of the sampled stance running maximum at leg phase q. */
+function stanceKneeRunningMax(q: number, samples: readonly number[]): number {
+  const u = clamp(q / GAIT_PHASES.stanceEnd, 0, 1) * STANCE_KNEE_SAMPLES
+  const i = Math.min(Math.floor(u), STANCE_KNEE_SAMPLES - 1)
+  return samples[i] + (samples[i + 1] - samples[i]) * (u - i)
+}
+
+interface LegFrame extends StanceFrame {
   /** sin of the whole leg's constant lateral tilt, outward positive. */
   sinTilt: number
   /** Peak extra outward sin of the shank's lateral tilt during the swing arc. */
   arcSinPeak: number
+  pelvisHeight: number
+  /** The stance solve at toe-off: where the swing curves start. */
+  toeOff: LegAngles
+  lateSwingKneeDeg: number
 }
 
-function legFrame(params: RunnerParams): LegFrame {
-  const { hipWidth, shank } = MODEL_PROPORTIONS
+function hipHeight(p: number, frame: LegFrame, params: RunnerParams): number {
+  return frame.pelvisHeight + (params.pelvisBounce / 2) * bounceShape(p, params.pelvisBounce)
+}
+
+/** The hip-to-ankle distance of a two-segment leg with knee bend `kneeRad`. */
+function legReach(kneeRad: number, legs: SagittalLegLengths): number {
+  const { thigh, shank } = legs
+  return Math.sqrt(thigh * thigh + shank * shank + 2 * thigh * shank * Math.cos(kneeRad))
+}
+
+/**
+ * The stance leg at leg phase q in (0, stanceEnd], by inverse kinematics: the ankle slides back
+ * linearly from its contact x to its toe-off x, at the height that puts the foot's lowest point on
+ * the ground. Where the leg cannot reach that far down, the heel lifts onto the toe. The bindings
+ * outrank the pin: the knee bend is capped so stance forms no second prominent knee-flexion
+ * maximum, the leg cannot over-extend, and the thigh may not rise into a second prominent thigh
+ * maximum. Where one of those engages, the foot gives way from the ground.
+ */
+function stanceAngles(q: number, hipY: number, frame: StanceFrame): LegAngles {
+  const { thigh, shank } = frame.legs
+  const reach = thigh + shank
+  const x =
+    frame.contactAnkleX + ((frame.toeOffAnkleX - frame.contactAnkleX) * q) / GAIT_PHASES.stanceEnd
+  let footDeg = periodicEase(
+    [
+      [GAIT_PHASES.leftContact, frame.contact.shankDeg],
+      [GAIT_PHASES.midStance, FOOT_MID_STANCE_DEG],
+      [GAIT_PHASES.stanceEnd, FOOT_TOE_OFF_DEG],
+    ],
+    q,
+  )
+  let ankleY = footDrop(footDeg)
+  const lowestReachable = hipY - Math.sqrt(Math.max(0, reach * reach - x * x))
+  if (lowestReachable > ankleY) {
+    ankleY = Math.min(lowestReachable, TOE_REACH)
+    footDeg = Math.min(footDeg, toeDownFootDeg(ankleY))
+  }
+  const v = ankleY - hipY
+  // The knee never straightens more than STANCE_KNEE_FALL_MAX_DEG below its running maximum: a cap
+  // on the reach. Where it binds the foot floats a little rather than form a second knee peak.
+  const kneeFloorDeg =
+    frame.kneeRunningMax === null
+      ? 0
+      : Math.max(0, stanceKneeRunningMax(q, frame.kneeRunningMax) - STANCE_KNEE_FALL_MAX_DEG)
+  const d = clamp(
+    Math.hypot(x, v),
+    frame.minStanceReach,
+    Math.min(reach, legReach(kneeFloorDeg * DEG, frame.legs)),
+  )
+  const thighRad =
+    Math.atan2(x, -v) +
+    Math.acos(clamp((thigh * thigh + d * d - shank * shank) / (2 * thigh * d), -1, 1))
+  const kneeRad =
+    Math.PI - Math.acos(clamp((thigh * thigh + shank * shank - d * d) / (2 * thigh * shank), -1, 1))
   return {
-    contact: solveContact(params),
-    sinTilt: legTiltSin(params.stepWidth),
-    arcSinPeak: (params.swingFootArc * hipWidth) / (shank * RAISED_COSINE_P80_P20),
+    thighDeg: Math.min(thighRad / DEG, frame.maxStanceThighDeg),
+    kneeDeg: kneeRad / DEG,
+    footDeg,
   }
 }
+
+/** The last frame built, reused while the parameters are unchanged (one figure, many phases). */
+let lastFrame: { params: RunnerParams; frame: LegFrame } | null = null
+
+function legFrame(params: RunnerParams): LegFrame {
+  const cached = lastFrame
+  if (
+    cached !== null &&
+    (Object.keys(params) as (keyof RunnerParams)[]).every((id) => cached.params[id] === params[id])
+  ) {
+    return cached.frame
+  }
+  const frame = buildLegFrame(params)
+  lastFrame = { params: { ...params }, frame }
+  return frame
+}
+
+function buildLegFrame(params: RunnerParams): LegFrame {
+  const { hipWidth, shank } = MODEL_PROPORTIONS
+  const contact = solveContact(params)
+  const legs = sagittalLegLengths(params.stepWidth)
+  const height = pelvisHeight(params)
+  const stanceEndsHipY =
+    height + (params.pelvisBounce / 2) * stanceEndsBounceShape(params.pelvisBounce)
+  const toeOffReach = legReach(KNEE_TOE_OFF_DEG * DEG, legs)
+  const toeOffAnkleDepth = stanceEndsHipY - footDrop(FOOT_TOE_OFF_DEG)
+  const maxStanceKneeDeg = Math.min(
+    params.peakSwingKneeBend - STANCE_KNEE_BELOW_SWING_DEG,
+    Math.max(KNEE_TOE_OFF_DEG, contact.kneeDeg) + STANCE_KNEE_PROMINENCE_MARGIN_DEG,
+  )
+  const stance: StanceFrame = {
+    contact,
+    legs,
+    contactAnkleX:
+      legs.thigh * Math.sin(contact.thighDeg * DEG) + legs.shank * Math.sin(contact.shankDeg * DEG),
+    toeOffAnkleX: -Math.sqrt(Math.max(0, toeOffReach ** 2 - toeOffAnkleDepth ** 2)),
+    minStanceReach: legReach(maxStanceKneeDeg * DEG, legs),
+    maxStanceThighDeg: Math.min(
+      Math.max(params.peakThighAngle, contact.thighDeg),
+      contact.thighDeg + STANCE_THIGH_RISE_MAX_DEG,
+    ),
+    kneeRunningMax: null,
+  }
+  const kneeRunningMax: number[] = [contact.kneeDeg]
+  for (let i = 1; i <= STANCE_KNEE_SAMPLES; i += 1) {
+    const q = (GAIT_PHASES.stanceEnd * i) / STANCE_KNEE_SAMPLES
+    const hipY = height + (params.pelvisBounce / 2) * bounceShape(q, params.pelvisBounce)
+    kneeRunningMax.push(Math.max(kneeRunningMax[i - 1], stanceAngles(q, hipY, stance).kneeDeg))
+  }
+  stance.kneeRunningMax = kneeRunningMax
+  return {
+    ...stance,
+    sinTilt: legTiltSin(params.stepWidth),
+    arcSinPeak: (params.swingFootArc * hipWidth) / (shank * RAISED_COSINE_P80_P20),
+    pelvisHeight: height,
+    toeOff: stanceAngles(GAIT_PHASES.stanceEnd, stanceEndsHipY, stance),
+    lateSwingKneeDeg: Math.max(KNEE_LATE_SWING_DEG, contact.kneeDeg),
+  }
+}
+
+/** Swing, toe-off → contact: forward-kinematic keyframe curves from the stance solve's toe-off. */
+function swingAngles(q: number, frame: LegFrame, params: RunnerParams): LegAngles {
+  const { contact, toeOff } = frame
+  return {
+    thighDeg: periodicEase(
+      [
+        [GAIT_PHASES.leftContact, contact.thighDeg],
+        [GAIT_PHASES.stanceEnd, toeOff.thighDeg],
+        [GAIT_PHASES.peakThigh, params.peakThighAngle],
+      ],
+      q,
+    ),
+    kneeDeg: periodicEase(
+      [
+        [GAIT_PHASES.leftContact, contact.kneeDeg],
+        [GAIT_PHASES.stanceEnd, toeOff.kneeDeg],
+        [GAIT_PHASES.peakSwingKneeBend, params.peakSwingKneeBend],
+        [
+          KNEE_MID_SWING_PHASE,
+          params.peakSwingKneeBend -
+            KNEE_MID_SWING_RELEASE * (params.peakSwingKneeBend - frame.lateSwingKneeDeg),
+        ],
+        [KNEE_LATE_SWING_PHASE, frame.lateSwingKneeDeg],
+      ],
+      q,
+    ),
+    footDeg: periodicEase(
+      [
+        [GAIT_PHASES.leftContact, contact.shankDeg],
+        [GAIT_PHASES.stanceEnd, toeOff.footDeg],
+        [GAIT_PHASES.peakSwingKneeBend, FOOT_MID_SWING_DEG],
+        [KNEE_LATE_SWING_PHASE, FOOT_LATE_SWING_DEG],
+      ],
+      q,
+    ),
+  }
+}
+
+function legAngles(q: number, hipY: number, frame: LegFrame, params: RunnerParams): LegAngles {
+  const { contact } = frame
+  // Contact is drawn from its own geometry, so the contact-instant bindings stay exact.
+  if (q === GAIT_PHASES.leftContact) {
+    return { thighDeg: contact.thighDeg, kneeDeg: contact.kneeDeg, footDeg: contact.shankDeg }
+  }
+  if (q <= GAIT_PHASES.stanceEnd) return stanceAngles(q, hipY, frame)
+  return swingAngles(q, frame, params)
+}
+
+/** The foot's lowest point below the ankle with the sole flat: the least any foot angle gives. */
+const SOLE_DEPTH = footDrop(0)
+
+/** Where the swing knee may bend extra to clear the ground: mid-swing, faded in and out. */
+const SWING_CLEARANCE_WINDOW = { start: 0.5, full: 0.56, fullEnd: 0.9, end: 0.97 } as const
+
+function swingClearanceWeight(q: number): number {
+  const { start, full, fullEnd, end } = SWING_CLEARANCE_WINDOW
+  if (q <= start || q >= end) return 0
+  if (q >= full && q <= fullEnd) return 1
+  const u = q < full ? (q - start) / (full - start) : (end - q) / (end - fullEnd)
+  return (1 - Math.cos(Math.PI * u)) / 2
+}
+
+/**
+ * The swing knee bend, bent further when needed so the ankle stays a sole's depth above the ground
+ * (the foot angle clamp then keeps heel and toe off it). `reachRatio` is the knee's height above
+ * that level over the shank's side-view length: below 1, the shank must lean back by acos of it.
+ * Never past the bound swing peak, so the knee-flexion reading stays the bound value; past 1 the
+ * need falls away steeply but continuously. No binding reads the swing ankle's height.
+ */
+function swingKneeClearOfGround(
+  q: number,
+  kneeDeg: number,
+  thighRad: number,
+  reachRatio: number,
+  peakSwingKneeBend: number,
+): number {
+  const weight = swingClearanceWeight(q)
+  if (weight === 0) return kneeDeg
+  const neededRad =
+    reachRatio <= 1
+      ? thighRad + Math.acos(Math.max(-1, reachRatio))
+      : thighRad - SWING_CLEARANCE_FALLOFF * (reachRatio - 1)
+  const needed = Math.min(neededRad / DEG, peakSwingKneeBend)
+  return Math.max(kneeDeg, kneeDeg + weight * (needed - kneeDeg))
+}
+
+/** How fast the clearance need falls away once the ankle clears, radians per unit of reach ratio. */
+const SWING_CLEARANCE_FALLOFF = 5
 
 interface LegJoints {
   knee: Vec3
@@ -308,39 +686,10 @@ interface LegJoints {
  */
 function legAt(q: number, side: -1 | 1, hip: Vec3, frame: LegFrame, params: RunnerParams): LegJoints {
   const { thigh, shank, heel, toe } = MODEL_PROPORTIONS
-  const { contact, sinTilt, arcSinPeak } = frame
-
-  const thighDeg = periodicEase(
-    [
-      [GAIT_PHASES.leftContact, contact.thighDeg],
-      [GAIT_PHASES.stanceEnd, THIGH_TOE_OFF_DEG],
-      [GAIT_PHASES.peakThigh, params.peakThighAngle],
-    ],
-    q,
-  )
-  const kneeDeg = periodicEase(
-    [
-      [GAIT_PHASES.leftContact, contact.kneeDeg],
-      [GAIT_PHASES.midStance, KNEE_MID_STANCE_DEG],
-      [GAIT_PHASES.stanceEnd, KNEE_TOE_OFF_DEG],
-      [GAIT_PHASES.peakSwingKneeBend, params.peakSwingKneeBend],
-      [KNEE_LATE_SWING_PHASE, KNEE_LATE_SWING_DEG],
-    ],
-    q,
-  )
-  const footDeg = periodicEase(
-    [
-      [GAIT_PHASES.leftContact, contact.shankDeg],
-      [GAIT_PHASES.midStance, FOOT_MID_STANCE_DEG],
-      [GAIT_PHASES.stanceEnd, FOOT_TOE_OFF_DEG],
-      [GAIT_PHASES.peakSwingKneeBend, FOOT_MID_SWING_DEG],
-      [KNEE_LATE_SWING_PHASE, FOOT_LATE_SWING_DEG],
-    ],
-    q,
-  )
+  const { sinTilt, arcSinPeak } = frame
+  const { thighDeg, kneeDeg, footDeg } = legAngles(q, hip.y, frame, params)
 
   const thighRad = thighDeg * DEG
-  const shankRad = (thighDeg - kneeDeg) * DEG
   const thighCos = Math.sqrt(1 - sinTilt * sinTilt)
   // The swing arc adds outward tilt to the shank alone, chosen so the shank's lateral component is
   // sinTilt·S plus a raised cosine: the ankle-minus-knee lateral range is then exactly the bump's.
@@ -352,12 +701,22 @@ function legAt(q: number, side: -1 | 1, hip: Vec3, frame: LegFrame, params: Runn
     y: hip.y - thigh * thighCos * Math.cos(thighRad),
     z: hip.z + side * thigh * sinTilt,
   }
+  const drawnKneeDeg = swingKneeClearOfGround(
+    q,
+    kneeDeg,
+    thighRad,
+    (knee.y - GROUND_Y - SOLE_DEPTH) / (shank * shankCos),
+    params.peakSwingKneeBend,
+  )
+  const shankRad = thighRad - drawnKneeDeg * DEG
   const ankle = {
     x: knee.x + shank * shankCos * Math.sin(shankRad),
     y: knee.y - shank * shankCos * Math.cos(shankRad),
     z: knee.z + side * shank * shankSin,
   }
-  const footRad = footDeg * DEG
+  const drawnFootDeg =
+    q > GAIT_PHASES.stanceEnd ? footDegClearOfGround(footDeg, ankle.y - GROUND_Y) : footDeg
+  const footRad = drawnFootDeg * DEG
   const sole = { x: Math.cos(footRad), y: Math.sin(footRad) }
   const normal = { x: -Math.sin(footRad), y: Math.cos(footRad) }
   const footPoint = (offset: { along: number; normal: number }): Vec3 => ({
@@ -420,13 +779,8 @@ export function poseAt(phase: number, params: RunnerParams): Joint3D[] {
   const p = fract(phase)
   const { hipWidth, shoulderWidth, ear, nose } = MODEL_PROPORTIONS
 
-  const hipMid = {
-    x: 0,
-    y:
-      PELVIS_HEIGHT -
-      (params.pelvisBounce / 2) * Math.cos(4 * Math.PI * (p - GAIT_PHASES.midStance)),
-    z: 0,
-  }
+  const frame = legFrame(params)
+  const hipMid = { x: 0, y: hipHeight(p, frame, params), z: 0 }
   const leftHip = { x: hipMid.x, y: hipMid.y, z: hipMid.z - hipWidth / 2 }
   const rightHip = { x: hipMid.x, y: hipMid.y, z: hipMid.z + hipWidth / 2 }
 
@@ -442,7 +796,6 @@ export function poseAt(phase: number, params: RunnerParams): Joint3D[] {
   const leftShoulder = torsoPoint(0, 0, -shoulderWidth / 2)
   const rightShoulder = torsoPoint(0, 0, shoulderWidth / 2)
 
-  const frame = legFrame(params)
   const leftLeg = legAt(p, -1, leftHip, frame, params)
   const rightLeg = legAt(fract(p + 0.5), 1, rightHip, frame, params)
   const leftArm = armAt(p, leftShoulder, params)

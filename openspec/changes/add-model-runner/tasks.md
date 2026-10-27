@@ -73,3 +73,18 @@
 - [x] 12.1 Overrides hold every parameter at its snapshot value; `onActiveChange(false)` on unmount; `camera` required; no steps finishes at once
 - [x] 12.2 Foot-strike and swing-arc flashes on the near ankle; lean flash end-aligned on the torso's back side; half-line clearance from labels, marks and guides; no flash blink under 150 ms
 - [x] 12.3 D14 records the ~5 s total; re-shot at the foot-strike and torso steps; gates
+
+## 13. Stance foot pinned to the ground (ps19.4)
+
+- [x] 13.1 `gaitModel.ts`: `pelvisHeight(params)` puts the contact foot on y = 0; stance-low bounce keyed at the half-cycle phase (exact VO); stance IK with heel lift, knee cap, reach clamp and thigh cap; swing curves start from the stance toe-off; `GROUND_Y`
+- [x] 13.2 `runnerAnnotations.ts`, `introFlash.ts`, `ModelRunner.tsx`: `footFloor` removed; ground and ground marks at y = 0; bounce bracket centred on `pelvisHeight`
+- [x] 13.3 Tests: pin at neutral, contact at every corner, declared domain and landing −0.3 corners within 0.01, swing clearance, landing 0.7 fallback bound with every binding exact, still frames planted; isolation restated (shared vertical shift); MEASURE_PARAM tests and tolerances unchanged
+- [x] 13.4 Sandbox big-overstride scenario; screenshots incl. the summary view; gates
+
+## 14. ps19.4 review rounds
+
+- [x] 14.1 Bounce: `STANCE_DROP` 0.10, sinusoid shape for small bounces; 30 fps smoothness tests to b = 0.14, larger b a recorded limit
+- [x] 14.2 Swing foot: angle clamp, mid-swing knee hold and clearance bend (never past the bound peak)
+- [x] 14.3 Stance knee never straightens 18° below its running maximum (kneeFlexion zig-zag regression); per-landing fallback sweep; seeded random interior binding check
+- [x] 14.4 Figure-hung annotation marks follow the figure's height during value tweens
+- [x] 14.5 Isolation tests tightened; domain sampled at 1/250
