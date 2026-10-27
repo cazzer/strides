@@ -289,7 +289,10 @@ node scripts/ab-person-selection.mjs \
   validated, since an unknown view silently resolves to the default. It exists for view-fidelity
   gates: on 2026-10-27, tour vs classic over side-landscape, side-portrait and front-approach, three
   fresh trials each with `--evidence`, was bit-identical in all 1968 rows but `elapsedMs` — the
-  tour's animating runner does not perturb the scale pass. ⚠️ The primary `[analysis-diagnostics]`
+  tour's animating runner does not perturb the scale pass. Two re-runs on the final commit agreed
+  row for row with the first. One of them lost its very FIRST trial (side-landscape, tour arm) to
+  the 300 s "never reached Analysis complete" timeout; 17 later tour trials, including a
+  side-landscape-only re-run, all completed, and the cause is not established. ⚠️ The primary `[analysis-diagnostics]`
   line predates the graft (VO_cm/stepWidthCm read `null` there); only the `[evidence-coverage]` rows
   carry scale-pass output.
 - **Clips**: `side-landscape`, `side-portrait`, `front-approach` (the three bundled demo clips —
