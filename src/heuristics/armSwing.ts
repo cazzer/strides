@@ -5,6 +5,7 @@ import { resolveBilateralPair, resolvePoint } from './keypoints'
 import { distance, median } from './mathUtils'
 import { fitSpectralSinusoid } from './spectralFit'
 import type { SpectralFitFailureReason, SpectralFitResult } from './spectralFit'
+import { analyzeHipBounce } from './hipBounce'
 import { resolvedSpanCenter, selectBounceInstants } from './bounceInstants'
 import {
   cropKeypoints,
@@ -104,6 +105,50 @@ export const MAX_SIDE_FREQUENCY_DISAGREEMENT = 0.25
 export const SIDE_FIT_QUALITY_DISPARITY_R2 = 0.2
 
 /**
+ * Half-width of the per-side frequency search, as a fraction of the clip's stride rate: the grid
+ * spans `[(1 − this), (1 + this)] × strideHz`.
+ *
+ * Wider than every arm-vs-stride gap measured live (side-landscape 1.40 vs 1.45 Hz, front-approach
+ * 1.50 vs 1.51, multiperson left 1.48 vs 1.45 — all under 4%) and far narrower than a 2×
+ * step-versus-stride confusion, which is therefore structurally off the grid rather than something
+ * a gate has to catch.
+ */
+export const ARM_SWING_BAND_HALF_WIDTH = 0.2
+
+/**
+ * Grid spacing as a fraction of the stride rate — 21 candidates across the band at ANY playback
+ * rate, so a ~7× slow-motion clip searched around 0.2 Hz gets the same relative resolution as a
+ * real-time one around 1.5 Hz. 0.02 × 1.5 Hz = 0.03 Hz, the same order as the shared bounce grid's
+ * 0.02 Hz step.
+ */
+export const ARM_SWING_BAND_STEP_FRACTION = 0.02
+
+/**
+ * The clip's STRIDE rate in clip-time Hz — half the hip-bounce frequency, because the hip bounces
+ * once per step and each arm swings once per stride — or `null` when the clip has no hip-bounce
+ * rhythm trustworthy enough to anchor the arm search to.
+ *
+ * Trusted on exactly the terms cadence trusts the same fit: `analyzeHipBounce`'s fit (including
+ * its sub-floor pass, which is how a retimed slow-motion clip gets an anchor at all) must be `ok`
+ * with `sinusoidR2 ≥ config.cadenceMinFitR2`. Unlike cadence this does NOT withhold on
+ * `subFloorRhythm`: cadence reports a real-time RATE, which a retimed clock gets wrong; the arm
+ * fit runs over the same clip-time samples the bounce was fitted on, so a clip-time anchor is the
+ * correct one for it.
+ *
+ * There is deliberately no fallback to the shared bounce band when this is `null`: searching the
+ * STEP band for a STRIDE-rate oscillation is the defect this anchor replaces.
+ */
+export function resolveStrideRateHz(
+  frames: RobustPoseFrame[],
+  config: HeuristicsConfig,
+): number | null {
+  const { fit } = analyzeHipBounce(frames, config)
+  if (!fit.ok || !(fit.sinusoidR2 >= config.cadenceMinFitR2)) return null
+  const strideHz = fit.frequencyHz / 2
+  return Number.isFinite(strideHz) && strideHz > 0 ? strideHz : null
+}
+
+/**
  * Minimum frames on which BOTH shoulders independently resolve for the scale trend to be fitted
  * at all — deliberately the same bar `fitSpectralSinusoid` sets for its own smallest fit
  * (`MIN_SPECTRAL_FIT_SAMPLES`), for the same reason: a low-order model over a handful of points
@@ -199,8 +244,9 @@ function solveTrendSystem(
  *   insurance for normal equations. Log space because
  *   scale is multiplicative — a 2× approach costs the same trend budget at any distance — and
  *   because the exponentiated trend is positive by construction, so the divisor can never cross
- *   zero. Three degrees of freedom because a 3-dof polynomial cannot represent ANY frequency in
- *   the fitted band (1.2–4 Hz over a multi-second window): the stride-rate wobble the
+ *   zero. Three degrees of freedom because a 3-dof polynomial cannot represent ANY frequency the
+ *   fit searches (every candidate completes at least one cycle inside the window): the stride-rate
+ *   wobble the
  *   inter-shoulder span genuinely carries (trunk counter-rotation, ~5.8% rms measured on Demo 2)
  *   structurally cannot leak into the divisor, where it would multiply straight into the swing
  *   series as in-band noise. A per-frame or heavily-smoothed divisor has no such guarantee.
@@ -333,7 +379,7 @@ export interface SideSwing {
    * reference scale (see `resolveScaleStabilizer`), `null` where it did not resolve, index-
    * parallel to `frames` — the shape `resolvedSpanCenter` reads. */
   seriesY: Array<number | null>
-  /** The spectral fit of that trace, over the shared bounce-frequency grid. */
+  /** The spectral fit of that trace, over the stride-rate-anchored grid. */
   fit: SpectralFitResult
   /** Frames where this side's shoulder AND wrist both resolved. */
   resolvedCount: number
@@ -343,8 +389,8 @@ export interface SideSwing {
 
 /**
  * Per-side wrist-relative-to-shoulder vertical (image-y) excursion, read as a spectral sinusoid
- * fit via the shared `fitSpectralSinusoid` primitive — the same estimator, over the same frequency
- * grid, that `verticalOscillation` and `cadence` read their own rhythms with.
+ * fit via the shared `fitSpectralSinusoid` primitive — the same estimator `verticalOscillation` and
+ * `cadence` read their own rhythms with, over a grid anchored on the clip's stride rate (below).
  *
  * Vertical, not horizontal or angular, and wrist rather than elbow, per design.md's original
  * reasoning: the sagittal shoulder-flexion rotation that drives arm swing is foreshortened face-on
@@ -378,19 +424,25 @@ export interface SideSwing {
  * primitive: the trend terms absorb whole-body drift instead of charging it to the swing, and the
  * fitted frequency is a rhythm rather than a count of whichever wiggles cleared a threshold.
  *
- * The frequency grid is deliberately the SHARED bounce band, not a halved "stride band", even
- * though one arm swing spans one stride and therefore sits at half the step rate. Measured both
- * ways on all three clips: on Demo 2 — the only clip where this metric is primary — the two bands
- * agree to within one grid step (1.48/1.48 Hz left, 1.52/1.53 Hz right, amplitudes within 0.3%)
- * while the halved band's `secondPeakRatio` is strictly worse (0.13 -> 0.25 left, 0.31 -> 0.69
- * right); and on both side-view clips the halved band lands on its own grid FLOOR (0.60 Hz at 1.02
- * and 1.25 observed cycles) — a grid-edge artifact, not a rhythm. The real limitation this leaves
- * is recorded on the exported function below.
+ * ## The frequency grid is anchored on the clip's stride rate
+ *
+ * The grid is `[(1 − ARM_SWING_BAND_HALF_WIDTH), (1 + ARM_SWING_BAND_HALF_WIDTH)] × strideHz` at
+ * `ARM_SWING_BAND_STEP_FRACTION × strideHz` (`resolveStrideRateHz` supplies the anchor;
+ * `measure-arm-swing-travel-at-stride-rate` design D1). It used to be the SHARED bounce band
+ * (1.2–4.0 Hz) — the STEP band — which has no candidate for a runner below 144 spm, none at all
+ * for a retimed slow-motion clip (~0.2 Hz on `park-side-portrait.mp4`), and always offers the 2×
+ * step-rate component as a rival.
+ *
+ * A FIXED halved band (0.6–2.0 Hz) was measured and rejected on 2026-08-29: both side-view clips
+ * landed on its 0.60 Hz floor, a grid-edge artifact. That record does not transfer to an ANCHORED
+ * band, which cannot offer 0.6 Hz to a 1.45 Hz stride at all; nor does the `secondPeakRatio`
+ * comparison made then — nothing on the arm path reads it, and inside a ±20% band its exclusion
+ * zone covers most of the grid.
  */
 export function computeSideSwing(
   frames: RobustPoseFrame[],
   side: 'left' | 'right',
-  config: HeuristicsConfig,
+  options: { strideHz: number },
 ): SideSwing {
   let resolvedCount = 0
   let interpolatedCount = 0
@@ -410,10 +462,11 @@ export function computeSideSwing(
     if (v !== null) samples.push({ t: frames[i].timestamp, v })
   })
 
+  const { strideHz } = options
   const fit = fitSpectralSinusoid(samples, {
-    minFrequencyHz: config.spectralFitMinFrequencyHz,
-    maxFrequencyHz: config.spectralFitMaxFrequencyHz,
-    frequencyStepHz: config.spectralFitFrequencyStepHz,
+    minFrequencyHz: (1 - ARM_SWING_BAND_HALF_WIDTH) * strideHz,
+    maxFrequencyHz: (1 + ARM_SWING_BAND_HALF_WIDTH) * strideHz,
+    frequencyStepHz: ARM_SWING_BAND_STEP_FRACTION * strideHz,
   })
 
   return { seriesY, fit, resolvedCount, interpolatedCount }

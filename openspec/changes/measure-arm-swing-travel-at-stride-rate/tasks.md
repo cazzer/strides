@@ -2,12 +2,12 @@
 
 ## 1. Search arm swing around the stride rate (`strides-eiil.1`, design D1)
 
-- [ ] 1.1 `resolveStrideRateHz(frames, config)` in `armSwing.ts`: hip-bounce frequency / 2, gated on
+- [x] 1.1 `resolveStrideRateHz(frames, config)` in `armSwing.ts`: hip-bounce frequency / 2, gated on
       `cadenceMinFitR2`, `null` otherwise
-- [ ] 1.2 `computeSideSwing` searches `[0.8, 1.2] × strideHz` at `0.02 × strideHz`
+- [x] 1.2 `computeSideSwing` searches `[0.8, 1.2] × strideHz` at `0.02 × strideHz`
       (`ARM_SWING_BAND_HALF_WIDTH`, `ARM_SWING_BAND_STEP_FRACTION`); the config grid is no longer read
-- [ ] 1.3 `armSwingAmplitude`: no anchor → `null` with the running-rhythm caveat
-- [ ] 1.4 Tests: 1.0/1.1 Hz swings recovered; a 0.2 Hz retimed swing recovered; a step-rate
+- [x] 1.3 `armSwingAmplitude`: no anchor → `null` with the running-rhythm caveat
+- [x] 1.4 Tests: 1.0/1.1 Hz swings recovered; a 0.2 Hz retimed swing recovered; a step-rate
       component cannot be chosen; no-anchor null; fixtures carry a whole-body bounce at 2× the swing
 - [ ] 1.5 Live arm snapshot after this fix (Phase E)
 

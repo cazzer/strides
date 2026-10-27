@@ -14,6 +14,7 @@ import {
   buildSideExemplar,
   caveatForFailure,
   computeSideSwing,
+  resolveStrideRateHz,
 } from './armSwing'
 
 function nullResult(
@@ -94,8 +95,19 @@ export function computeArmSwingAmplitude(
 ): MetricResult {
   const viewFitEntry = config.viewFitTable.armSwingAmplitude[view]
 
-  const left = computeSideSwing(frames, 'left', config)
-  const right = computeSideSwing(frames, 'right', config)
+  // The arm swing is searched around the clip's stride rate, so without one there is nothing to
+  // time it against — and no fallback band, because the shared bounce band is the defect the
+  // anchor replaced (`armSwing.ts`, "The frequency grid is anchored on the clip's stride rate").
+  const strideHz = resolveStrideRateHz(frames, config)
+  if (strideHz === null) {
+    return nullResult(
+      viewFitEntry.fit,
+      'No steady running rhythm was found in this clip, so the arm swing could not be timed against it.',
+    )
+  }
+
+  const left = computeSideSwing(frames, 'left', { strideHz })
+  const right = computeSideSwing(frames, 'right', { strideHz })
 
   // Worse-side aggregation throughout — see this function's doc for why an average is wrong here.
   const frameCoverage =
