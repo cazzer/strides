@@ -147,7 +147,7 @@ const PIN_DOMAIN = grid({
   pelvisBounce: [0, 0.07, 0.14, 0.2, 0.3],
   landingOffset: [-0.1, 0, 0.15, 0.3],
   contactShankOffset: [-0.2, -0.05, 0.08, 0.2, 0.3],
-  peakThighAngle: [15, 40, 85],
+  peakThighAngle: [15, 20, 40, 85],
   peakSwingKneeBend: [60, 100, 150],
   stepWidth: [-1, 0.3, 1.5],
 }).map((params) => realizeParams(params))
@@ -175,10 +175,29 @@ describe('the stance foot stands on the ground', () => {
     }
   }, DOMAIN_SWEEP_TIMEOUT_MS)
 
-  it('keeps the swing foot off the ground over the declared domain', () => {
-    for (const params of PIN_DOMAIN) {
-      expect(swingClearance(params), JSON.stringify(params)).toBeGreaterThan(-0.01)
+  it('keeps the swing foot off the ground over the declared domain and at real overstrides', () => {
+    const overstrides = grid({
+      landingOffset: [0.35, 0.4, 0.512, 0.6, 0.7],
+      peakSwingKneeBend: [50, 100, 150],
+      stepWidth: [-1.5, 0.3, 1.5],
+      pelvisBounce: RUNNER_PARAM_SPECS.pelvisBounce.range,
+      contactShankOffset: RUNNER_PARAM_SPECS.contactShankOffset.range,
+      peakThighAngle: RUNNER_PARAM_SPECS.peakThighAngle.range,
+    }).map((params) => realizeParams(params))
+    let extremeWorst = 0
+    for (const params of [...PIN_DOMAIN, ...overstrides]) {
+      const clearance = swingClearance(params)
+      // The swing knee may not bend past the bound peak, so a 50° peak bend, or legs crossed to
+      // the far end of step width, can leave too little room to carry the foot clear under the
+      // lowest hips; past the demo clip's 0.512 landing the stance foot's own sink carries into
+      // early swing (design.md D15). Bounded below, measured.
+      if (params.peakSwingKneeBend < 60 || params.stepWidth < -1 || params.landingOffset > 0.52) {
+        extremeWorst = Math.min(extremeWorst, clearance)
+      } else {
+        expect(clearance, JSON.stringify(params)).toBeGreaterThanOrEqual(-0.005)
+      }
     }
+    expect(extremeWorst).toBeGreaterThan(-0.2)
   }, DOMAIN_SWEEP_TIMEOUT_MS)
 
   it('lets the foot give way, by a bounded amount, where the bindings cannot keep it down', () => {

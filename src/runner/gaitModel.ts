@@ -83,6 +83,14 @@ const KNEE_TOE_OFF_DEG = 28
 const KNEE_LATE_SWING_DEG = 15
 const KNEE_LATE_SWING_PHASE = 0.9
 /**
+ * The swing knee holds most of its bend until the leg has passed under the hips, then extends:
+ * at this phase it has given up only `KNEE_MID_SWING_RELEASE` of its bend, so the swing foot clears
+ * the ground while the hips are at their lowest. Monotone after the peak, so the knee-flexion
+ * reading is unchanged. Illustrative.
+ */
+const KNEE_MID_SWING_PHASE = 0.76
+const KNEE_MID_SWING_RELEASE = 0.2
+/**
  * The contact knee bend is held at or below the mid-stance key, so late swing → contact →
  * mid-stance never forms a second prominent knee-flexion maximum (design.md D2, D4).
  */
@@ -333,6 +341,29 @@ function toeDownFootDeg(drop: number): number {
   return (TOE_ANGLE - Math.asin(clamp(drop / TOE_REACH, -1, 1))) / DEG
 }
 
+/** The heel's distance from the ankle, and its angle below the sole line behind the ankle. */
+const HEEL_REACH = Math.hypot(MODEL_PROPORTIONS.heel.along, MODEL_PROPORTIONS.heel.normal)
+const HEEL_ANGLE = Math.atan2(-MODEL_PROPORTIONS.heel.normal, -MODEL_PROPORTIONS.heel.along)
+
+/** The sole angle whose heel sits `drop` below the ankle: the heel's drop is R·sin(f + ψ). */
+function heelDownFootDeg(drop: number): number {
+  return (Math.asin(clamp(drop / HEEL_REACH, -1, 1)) - HEEL_ANGLE) / DEG
+}
+
+/**
+ * The sole angle nearest `footDeg` that keeps the foot's lowest point at or above the ground, for
+ * an ankle `ankleHeight` above it: the toe (or heel) is turned up just enough. No binding reads
+ * the swing foot's heel or toe, so this only keeps the swing foot from passing through the ground.
+ * Flat is the most a turn can do; an ankle lower than the sole's depth is left to the leg.
+ */
+function footDegClearOfGround(footDeg: number, ankleHeight: number): number {
+  return clamp(
+    footDeg,
+    Math.min(0, toeDownFootDeg(ankleHeight)),
+    Math.max(0, heelDownFootDeg(ankleHeight)),
+  )
+}
+
 /**
  * The bounce shape at contact and toe-off, in [−1, 1]: `STANCE_DROP` above the lowest hips, or the
  * flight peak itself when the bounce is no larger than that. Continuous in the bounce.
@@ -514,6 +545,11 @@ function swingAngles(q: number, frame: LegFrame, params: RunnerParams): LegAngle
         [GAIT_PHASES.leftContact, contact.kneeDeg],
         [GAIT_PHASES.stanceEnd, toeOff.kneeDeg],
         [GAIT_PHASES.peakSwingKneeBend, params.peakSwingKneeBend],
+        [
+          KNEE_MID_SWING_PHASE,
+          params.peakSwingKneeBend -
+            KNEE_MID_SWING_RELEASE * (params.peakSwingKneeBend - frame.lateSwingKneeDeg),
+        ],
         [KNEE_LATE_SWING_PHASE, frame.lateSwingKneeDeg],
       ],
       q,
@@ -540,6 +576,47 @@ function legAngles(q: number, hipY: number, frame: LegFrame, params: RunnerParam
   return swingAngles(q, frame, params)
 }
 
+/** The foot's lowest point below the ankle with the sole flat: the least any foot angle gives. */
+const SOLE_DEPTH = footDrop(0)
+
+/** Where the swing knee may bend extra to clear the ground: mid-swing, faded in and out. */
+const SWING_CLEARANCE_WINDOW = { start: 0.5, full: 0.56, fullEnd: 0.9, end: 0.97 } as const
+
+function swingClearanceWeight(q: number): number {
+  const { start, full, fullEnd, end } = SWING_CLEARANCE_WINDOW
+  if (q <= start || q >= end) return 0
+  if (q >= full && q <= fullEnd) return 1
+  const u = q < full ? (q - start) / (full - start) : (end - q) / (end - fullEnd)
+  return (1 - Math.cos(Math.PI * u)) / 2
+}
+
+/**
+ * The swing knee bend, bent further when needed so the ankle stays a sole's depth above the ground
+ * (the foot angle clamp then keeps heel and toe off it). `reachRatio` is the knee's height above
+ * that level over the shank's side-view length: below 1, the shank must lean back by acos of it.
+ * Never past the bound swing peak, so the knee-flexion reading stays the bound value; past 1 the
+ * need falls away steeply but continuously. No binding reads the swing ankle's height.
+ */
+function swingKneeClearOfGround(
+  q: number,
+  kneeDeg: number,
+  thighRad: number,
+  reachRatio: number,
+  peakSwingKneeBend: number,
+): number {
+  const weight = swingClearanceWeight(q)
+  if (weight === 0) return kneeDeg
+  const neededRad =
+    reachRatio <= 1
+      ? thighRad + Math.acos(Math.max(-1, reachRatio))
+      : thighRad - SWING_CLEARANCE_FALLOFF * (reachRatio - 1)
+  const needed = Math.min(neededRad / DEG, peakSwingKneeBend)
+  return Math.max(kneeDeg, kneeDeg + weight * (needed - kneeDeg))
+}
+
+/** How fast the clearance need falls away once the ankle clears, radians per unit of reach ratio. */
+const SWING_CLEARANCE_FALLOFF = 5
+
 interface LegJoints {
   knee: Vec3
   ankle: Vec3
@@ -557,7 +634,6 @@ function legAt(q: number, side: -1 | 1, hip: Vec3, frame: LegFrame, params: Runn
   const { thighDeg, kneeDeg, footDeg } = legAngles(q, hip.y, frame, params)
 
   const thighRad = thighDeg * DEG
-  const shankRad = (thighDeg - kneeDeg) * DEG
   const thighCos = Math.sqrt(1 - sinTilt * sinTilt)
   // The swing arc adds outward tilt to the shank alone, chosen so the shank's lateral component is
   // sinTilt·S plus a raised cosine: the ankle-minus-knee lateral range is then exactly the bump's.
@@ -569,12 +645,22 @@ function legAt(q: number, side: -1 | 1, hip: Vec3, frame: LegFrame, params: Runn
     y: hip.y - thigh * thighCos * Math.cos(thighRad),
     z: hip.z + side * thigh * sinTilt,
   }
+  const drawnKneeDeg = swingKneeClearOfGround(
+    q,
+    kneeDeg,
+    thighRad,
+    (knee.y - GROUND_Y - SOLE_DEPTH) / (shank * shankCos),
+    params.peakSwingKneeBend,
+  )
+  const shankRad = thighRad - drawnKneeDeg * DEG
   const ankle = {
     x: knee.x + shank * shankCos * Math.sin(shankRad),
     y: knee.y - shank * shankCos * Math.cos(shankRad),
     z: knee.z + side * shank * shankSin,
   }
-  const footRad = footDeg * DEG
+  const drawnFootDeg =
+    q > GAIT_PHASES.stanceEnd ? footDegClearOfGround(footDeg, ankle.y - GROUND_Y) : footDeg
+  const footRad = drawnFootDeg * DEG
   const sole = { x: Math.cos(footRad), y: Math.sin(footRad) }
   const normal = { x: -Math.sin(footRad), y: Math.cos(footRad) }
   const footPoint = (offset: { along: number; normal: number }): Vec3 => ({
