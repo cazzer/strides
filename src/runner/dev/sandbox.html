@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Model runner sandbox (dev only)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=League+Spartan:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <!--
+      Dev-only harness for ModelRunner screenshots: served by `npm run dev` at
+      /strides/src/runner/dev/sandbox.html. `vite build` bundles index.html only, so this page and
+      its script never reach dist/.
+    -->
+    <div id="root"></div>
+    <script type="module" src="./ModelRunnerSandbox.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,536 @@
+/**
+ * Value annotations for the model runner's focus area: an angle arc, a vertical bracket or a
+ * horizontal offset, built as world-space polylines so the renderer can project them through the
+ * live camera every frame.
+ *
+ * **The geometry is the drawn value, exactly; the label is the metric's own value.** An arc sweeps
+ * the parameter's drawn angle and a bracket or offset spans its drawn length, so the mark always
+ * agrees with the figure. The label prints `metricValue`, the number the metric reported, and says
+ * "shown approximately" when the figure could not draw it (`clamped`).
+ *
+ * **Annotations hang off the live figure, never a second one.** Each limb parameter is annotated
+ * on the pose its metric reads (its key phase), and the renderer's still frame holds the first
+ * annotated parameter's key phase, so that limb lies exactly on its mark. No limb-shaped guide is
+ * drawn: a ghost leg beside the runner would read as a target pose. Guides are short reference
+ * rays and extension ticks only. Pure: no React, no DOM.
+ */
+import { formatGuidedValue } from '../results/formatGuidedValue'
+import type { MetricResult } from '../heuristics/types'
+import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
+import { GAIT_PHASES, MODEL_PROPORTIONS, PELVIS_HEIGHT, poseAt } from './gaitModel'
+import type { RunnerSources } from './runnerScene'
+import type {
+  BoundRunnerParams,
+  Joint3D,
+  RunnerMetricId,
+  RunnerParamId,
+  RunnerParams,
+  Vec3,
+} from './types'
+
+export type AnnotationKind = 'angleArc' | 'bracket' | 'offset'
+
+/** Each parameter's natural annotation. Cadence moves no geometry, so it has none. */
+export const PARAM_ANNOTATION_KIND: Readonly<Record<RunnerParamId, AnnotationKind | null>> = {
+  cadence: null,
+  pelvisBounce: 'bracket',
+  torsoPitch: 'angleArc',
+  armSwing: 'bracket',
+  peakThighAngle: 'angleArc',
+  peakSwingKneeBend: 'angleArc',
+  landingOffset: 'offset',
+  contactShankOffset: 'offset',
+  stepWidth: 'offset',
+  swingFootArc: 'offset',
+}
+
+/**
+ * The LEG phase at which each limb parameter is read, so its annotation is drawn on the pose the
+ * metric measures. The rest (torso, bounce, arms) read the same at any phase and are drawn at the
+ * held phase.
+ */
+export const KEY_LEG_PHASE: Readonly<Record<RunnerParamId, number | null>> = {
+  cadence: null,
+  pelvisBounce: null,
+  torsoPitch: null,
+  armSwing: null,
+  peakThighAngle: GAIT_PHASES.peakThigh,
+  peakSwingKneeBend: GAIT_PHASES.peakSwingKneeBend,
+  landingOffset: GAIT_PHASES.leftContact,
+  contactShankOffset: GAIT_PHASES.leftContact,
+  stepWidth: GAIT_PHASES.leftContact,
+  /** Mid-arc: the swing-foot bump peaks halfway through its window. */
+  swingFootArc: (GAIT_PHASES.swingArcStart + GAIT_PHASES.swingArcEnd) / 2,
+}
+
+/** Each binding metric's `unit`, as its producing module in `src/heuristics/` reports it. */
+export const RUNNER_METRIC_UNITS: Readonly<Record<RunnerMetricId, MetricResult['unit']>> = {
+  cadence: 'stepsPerMinute',
+  verticalOscillation: 'ratio',
+  verticalOscillationCm: 'centimeters',
+  trunkLean: 'degrees',
+  armSwingAmplitude: 'ratio',
+  kneeDrive: 'degrees',
+  kneeFlexion: 'degrees',
+  overstriding: 'ratio',
+  footStrikePattern: 'ratio',
+  stepWidth: 'percent',
+  swingFootLateralExcursion: 'percent',
+}
+
+/** A metric's value as the guided cards print it (foot strike as its class). */
+export function formatRunnerValue(metricId: RunnerMetricId, metricValue: number): string {
+  return formatGuidedValue({ metric: metricId, value: metricValue, unit: RUNNER_METRIC_UNITS[metricId] })
+}
+
+const CLAMPED_LINE = 'shown approximately'
+export const CLAMPED_LABEL_SUFFIX = ` · ${CLAMPED_LINE}`
+const TORSO_UNIT = ' of torso length'
+
+/**
+ * The label as drawn, one entry per line: a "% of torso length" value breaks before its unit and
+ * a clamp note takes its own line, so no label is wider than a phone-width frame can hold.
+ */
+export function labelLines(value: string, clamped: boolean): string[] {
+  const lines = value.endsWith(TORSO_UNIT)
+    ? [value.slice(0, -TORSO_UNIT.length), TORSO_UNIT.trim()]
+    : [value]
+  return clamped ? [...lines, CLAMPED_LINE] : lines
+}
+
+/** Which side of its projected anchor a label's block sits on. */
+export type LabelSide = 'above' | 'below' | 'left' | 'right'
+
+export interface RunnerAnnotationLabel {
+  /** The whole label on one line. */
+  text: string
+  /** The label as drawn, one entry per line. */
+  lines: readonly string[]
+  /** World point the label hangs off. */
+  anchor: Vec3
+  side: LabelSide
+}
+
+type LabelPlacement = Pick<RunnerAnnotationLabel, 'anchor' | 'side'>
+
+export interface RunnerAnnotation {
+  paramId: RunnerParamId
+  kind: AnnotationKind
+  /** The value marks (arc, bracket and its ticks, offset line), drawn in the focus accent. */
+  marks: readonly (readonly Vec3[])[]
+  /** Closed areas behind an arc (its wedge), drawn as a faint accent fill. */
+  fills: readonly (readonly Vec3[])[]
+  /** Short reference rays and extension ticks, drawn thin and solid. Never limb-shaped. */
+  guides: readonly (readonly Vec3[])[]
+  label: RunnerAnnotationLabel
+  clamped: boolean
+  /** The leg (or arm) the annotation sits on. */
+  side: RunnerSide
+  /**
+   * The cycle phase the mark is built at, for a limb parameter; null for one that reads the same
+   * at any phase (torso, bounce, arms). A still figure shows a limb mark only at this phase.
+   */
+  keyPhase: number | null
+}
+
+export type RunnerSide = 'left' | 'right'
+
+export interface AnnotationInput {
+  bound: BoundRunnerParams
+  /** What the figure draws without a value tween (the bound values plus any static override). */
+  values: RunnerParams
+  sources: RunnerSources
+  focusParams: readonly RunnerParamId[]
+  /** Keep only annotations of this kind. Absent: every focus parameter's natural kind. */
+  kind?: AnnotationKind
+  /** The target camera's yaw: picks the near limb in a side view, the stance leg in a front one. */
+  cameraYawDeg: number
+  /** `footFloor(values)`, computed once by the caller. */
+  floor: number
+}
+
+export interface AnnotationPlan {
+  /**
+   * The phase the still frame holds (reduced motion, paused, first frame): the first annotated
+   * focus parameter's key phase, so that limb lies exactly on its mark; mid-stance without one.
+   */
+  heldPhase: number
+  annotations: RunnerAnnotation[]
+}
+
+const DEG = Math.PI / 180
+const JOINT_INDEX = new Map(COMMON_KEYPOINT_NAMES.map((name, index) => [name, index]))
+
+function joint(pose: readonly Joint3D[], name: KeypointName): Vec3 {
+  const { x, y, z } = pose[JOINT_INDEX.get(name) as number]
+  return { x, y, z }
+}
+
+function sideJoint(pose: readonly Joint3D[], side: RunnerSide, part: string): Vec3 {
+  return joint(pose, `${side}_${part}` as KeypointName)
+}
+
+function midpoint(a: Vec3, b: Vec3): Vec3 {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 }
+}
+
+function fract(value: number): number {
+  return value - Math.floor(value)
+}
+
+/** The cycle phase at which `side`'s leg is at its own leg phase `q`. */
+export function phaseForLeg(side: RunnerSide, q: number): number {
+  return side === 'left' ? fract(q) : fract(q - 0.5)
+}
+
+export function circularDistance(a: number, b: number): number {
+  const d = fract(a - b)
+  return Math.min(d, 1 - d)
+}
+
+/** The leg in the first (stance) half of its own cycle at `phase`. */
+function stanceSide(phase: number): RunnerSide {
+  return fract(phase) < 0.5 ? 'left' : 'right'
+}
+
+const FOOT_FLOOR_SAMPLES = 120
+const FOOT_POINTS: readonly KeypointName[] = [
+  'left_ankle',
+  'right_ankle',
+  'left_heel',
+  'right_heel',
+  'left_foot_index',
+  'right_foot_index',
+]
+
+/**
+ * The lowest foot point over a whole cycle. The model has no inverse kinematics, so away from the
+ * neutral values the feet can dip below or float above y = 0; the renderer draws its
+ * (illustrative) ground here so the figure never floats.
+ */
+export function footFloor(values: RunnerParams): number {
+  let floor = Infinity
+  for (let i = 0; i < FOOT_FLOOR_SAMPLES; i += 1) {
+    const pose = poseAt(i / FOOT_FLOOR_SAMPLES, values)
+    for (const name of FOOT_POINTS) floor = Math.min(floor, joint(pose, name).y)
+  }
+  return floor
+}
+
+/**
+ * A point in the sagittal plane through `centre`, at `alphaDeg` from the DOWN vertical with
+ * forward (+x, direction of travel) positive, `length` away.
+ */
+function ray(centre: Vec3, alphaDeg: number, length: number): Vec3 {
+  return {
+    x: centre.x + length * Math.sin(alphaDeg * DEG),
+    y: centre.y - length * Math.cos(alphaDeg * DEG),
+    z: centre.z,
+  }
+}
+
+function arc(centre: Vec3, fromDeg: number, toDeg: number, radius: number): Vec3[] {
+  const steps = Math.max(2, Math.ceil(Math.abs(toDeg - fromDeg) / 3))
+  return Array.from({ length: steps + 1 }, (_, i) =>
+    ray(centre, fromDeg + ((toDeg - fromDeg) * i) / steps, radius),
+  )
+}
+
+/** Short end ticks across a vertical span, `half` either side. */
+function verticalBracket(x: number, z: number, low: number, high: number, half: number) {
+  return [
+    [
+      { x, y: low, z },
+      { x, y: high, z },
+    ],
+    [
+      { x: x - half, y: high, z },
+      { x: x + half, y: high, z },
+    ],
+    [
+      { x: x - half, y: low, z },
+      { x: x + half, y: low, z },
+    ],
+  ]
+}
+
+function verticalTick(x: number, y: number, z: number, half: number): Vec3[] {
+  return [
+    { x, y: y - half, z },
+    { x, y: y + half, z },
+  ]
+}
+
+const BRACKET_TICK_HALF = 0.03
+const EXTENSION_OVERHANG = 0.04
+/** Reference rays reach just past their arc. */
+const RAY_OVERHANG = 0.12
+const ARM_SAMPLES = 240
+
+interface Built {
+  marks: Vec3[][]
+  fills: Vec3[][]
+  guides: Vec3[][]
+  label: LabelPlacement
+}
+
+interface BuildContext {
+  side: RunnerSide
+  /** The phase this annotation is drawn at: its key phase, or the held phase. */
+  phase: number
+  floor: number
+}
+
+type Builder = (value: number, values: RunnerParams, ctx: BuildContext) => Built
+
+function angleArc(centre: Vec3, fromDeg: number, toDeg: number, radius: number) {
+  const points = arc(centre, fromDeg, toDeg, radius)
+  return {
+    marks: [points],
+    fills: [[centre, ...points]],
+    guides: [
+      [centre, ray(centre, fromDeg, radius + RAY_OVERHANG)],
+      [centre, ray(centre, toDeg, radius + RAY_OVERHANG)],
+    ],
+  }
+}
+
+const BUILDERS: Readonly<Record<Exclude<RunnerParamId, 'cadence'>, Builder>> = {
+  torsoPitch(value, values, { phase }) {
+    const pose = poseAt(phase, values)
+    const hip = midpoint(joint(pose, 'left_hip'), joint(pose, 'right_hip'))
+    const radius = 0.6
+    return {
+      ...angleArc(hip, 180, 180 - value, radius),
+      // Beside the vertical reference ray, on the side the torso does not lean to.
+      label: { anchor: ray(hip, 180, radius * 0.75), side: value >= 0 ? 'left' : 'right' },
+    }
+  },
+  peakThighAngle(value, values, { side, phase }) {
+    const hip = sideJoint(poseAt(phase, values), side, 'hip')
+    const radius = 0.35
+    return {
+      ...angleArc(hip, 0, value, radius),
+      // At the arc's end on the thigh, outside the wedge.
+      label: { anchor: ray(hip, value, radius), side: value >= 0 ? 'right' : 'left' },
+    }
+  },
+  peakSwingKneeBend(value, values, { side, phase }) {
+    const pose = poseAt(phase, values)
+    const hip = sideJoint(pose, side, 'hip')
+    const knee = sideJoint(pose, side, 'knee')
+    // The thigh's own side-view direction: the continuation ray then lies exactly along it.
+    const thighDeg = Math.atan2(knee.x - hip.x, -(knee.y - hip.y)) / DEG
+    const radius = 0.3
+    return {
+      ...angleArc(knee, thighDeg, thighDeg - value, radius),
+      // At the arc's start on the thigh's continuation, on the side the shank does not fold to.
+      label: { anchor: ray(knee, thighDeg, radius), side: value >= 0 ? 'right' : 'left' },
+    }
+  },
+  pelvisBounce(value) {
+    // Hip-mid's height runs exactly PELVIS_HEIGHT ± bounce / 2 over the cycle.
+    const x = -0.4
+    const low = PELVIS_HEIGHT - value / 2
+    const high = PELVIS_HEIGHT + value / 2
+    return {
+      marks: verticalBracket(x, 0, low, high, BRACKET_TICK_HALF),
+      fills: [],
+      guides: [],
+      label: { anchor: { x, y: PELVIS_HEIGHT, z: 0 }, side: 'left' },
+    }
+  },
+  armSwing(value, values, { side, phase }) {
+    // The bracket spans the wrist's travel below the shoulder, hung from the held shoulder. Its
+    // LENGTH is the drawn value exactly; its top is located by sampling the cycle.
+    let highest = -Infinity
+    let reach = -Infinity
+    for (let i = 0; i < ARM_SAMPLES; i += 1) {
+      const pose = poseAt(i / ARM_SAMPLES, values)
+      const wrist = sideJoint(pose, side, 'wrist')
+      highest = Math.max(highest, wrist.y - sideJoint(pose, side, 'shoulder').y)
+      reach = Math.max(reach, wrist.x)
+    }
+    const shoulder = sideJoint(poseAt(phase, values), side, 'shoulder')
+    const x = reach + 0.15
+    const high = shoulder.y + highest
+    const low = high - value
+    return {
+      marks: verticalBracket(x, shoulder.z, low, high, BRACKET_TICK_HALF),
+      fills: [],
+      guides: [],
+      label: { anchor: { x, y: low, z: shoulder.z }, side: 'below' },
+    }
+  },
+  landingOffset(_value, values, { side, phase, floor }) {
+    const pose = poseAt(phase, values)
+    const hip = midpoint(joint(pose, 'left_hip'), joint(pose, 'right_hip'))
+    const ankle = sideJoint(pose, side, 'ankle')
+    const y = floor - 0.05
+    const z = ankle.z
+    const start = { x: hip.x, y, z }
+    const end = { x: ankle.x, y, z }
+    return {
+      marks: [[start, end]],
+      fills: [],
+      guides: [
+        // Short extension lines: up from the mark under hip-mid, and down from the ankle.
+        [
+          { x: hip.x, y: y - EXTENSION_OVERHANG, z },
+          { x: hip.x, y: floor + 0.25, z },
+        ],
+        [
+          { x: ankle.x, y: ankle.y, z },
+          { x: ankle.x, y: y - EXTENSION_OVERHANG, z },
+        ],
+      ],
+      label: { anchor: midpoint(start, end), side: 'below' },
+    }
+  },
+  contactShankOffset(_value, values, { side, phase }) {
+    const pose = poseAt(phase, values)
+    const knee = sideJoint(pose, side, 'knee')
+    const ankle = sideJoint(pose, side, 'ankle')
+    const y = (knee.y + ankle.y) / 2
+    const z = ankle.z
+    const start = { x: knee.x, y, z }
+    const end = { x: ankle.x, y, z }
+    return {
+      marks: [[start, end]],
+      fills: [],
+      guides: [verticalTick(knee.x, y, z, 0.06), verticalTick(ankle.x, y, z, 0.06)],
+      label: { anchor: { x: Math.max(knee.x, ankle.x), y, z }, side: 'right' },
+    }
+  },
+  stepWidth(_value, values, { side, phase, floor }) {
+    const ankle = sideJoint(poseAt(phase, values), side, 'ankle')
+    const y = floor - 0.06
+    const start = { x: ankle.x, y, z: 0 }
+    const end = { x: ankle.x, y, z: ankle.z }
+    return {
+      marks: [[start, end]],
+      fills: [],
+      guides: [
+        // The midline, short, and a drop from the contact ankle.
+        [
+          { x: ankle.x, y: y - EXTENSION_OVERHANG, z: 0 },
+          { x: ankle.x, y: floor + 0.3, z: 0 },
+        ],
+        [ankle, { x: ankle.x, y: y - EXTENSION_OVERHANG, z: ankle.z }],
+      ],
+      label: { anchor: midpoint(start, end), side: 'below' },
+    }
+  },
+  swingFootArc(value, values, { side, phase }) {
+    // Mid-arc, the ankle is at its widest; the span ends there and reaches back inward by the
+    // drawn range. Its position is illustrative, its length exact.
+    const ankle = sideJoint(poseAt(phase, values), side, 'ankle')
+    const outward = side === 'left' ? -1 : 1
+    const width = value * MODEL_PROPORTIONS.hipWidth
+    const start = { x: ankle.x, y: ankle.y, z: ankle.z - outward * width }
+    const end = { ...ankle }
+    return {
+      marks: [
+        [start, end],
+        verticalTick(start.x, start.y, start.z, EXTENSION_OVERHANG),
+        verticalTick(end.x, end.y, end.z, EXTENSION_OVERHANG),
+      ],
+      fills: [],
+      guides: [],
+      label: { anchor: midpoint(start, end), side: 'above' },
+    }
+  },
+}
+
+/** Tolerance for "the figure is at this mark's key phase". */
+const KEY_PHASE_TOLERANCE = 1e-6
+
+/**
+ * Whether a mark is drawn on a still figure held at `heldPhase`: a limb mark only when the figure
+ * is at its key phase (otherwise it would float off the figure); the others always. While the
+ * figure plays every mark is drawn, since the live limb passes through each key phase.
+ */
+export function shownWhileStill(annotation: RunnerAnnotation, heldPhase: number): boolean {
+  return (
+    annotation.keyPhase === null ||
+    circularDistance(annotation.keyPhase, heldPhase) < KEY_PHASE_TOLERANCE
+  )
+}
+
+/**
+ * The held phase and the annotations for the measured focus parameters, in focus order. A
+ * neutral focus parameter gets none (there is no measurement to annotate), nor does cadence, nor
+ * does a parameter whose kind the `kind` filter excludes.
+ *
+ * The held phase is always taken on the leg a side view would call near (cos yaw >= 0: right),
+ * front views included, so a camera change never moves the held phase by half a stride. Side
+ * views annotate the near limbs; front views (|cos yaw| < 0.5) put each limb mark on the leg that
+ * is at its key phase nearest the held phase (the held leg for the first), arms on the stance side.
+ */
+export function planAnnotations({
+  bound,
+  values,
+  sources,
+  focusParams,
+  kind,
+  cameraYawDeg,
+  floor,
+}: AnnotationInput): AnnotationPlan {
+  const eligible = focusParams.filter((paramId) => {
+    const natural = PARAM_ANNOTATION_KIND[paramId]
+    return (
+      natural !== null &&
+      bound[paramId].source === 'measured' &&
+      sources[paramId] === 'measured' &&
+      (kind === undefined || natural === kind)
+    )
+  })
+  const cosYaw = Math.cos(cameraYawDeg * DEG)
+  const frontal = Math.abs(cosYaw) < 0.5
+  const near: RunnerSide = cosYaw >= 0 ? 'right' : 'left'
+  const keyed = eligible.find((paramId) => KEY_LEG_PHASE[paramId] !== null)
+  const heldPhase =
+    keyed === undefined
+      ? GAIT_PHASES.midStance
+      : phaseForLeg(near, KEY_LEG_PHASE[keyed] as number)
+  const sideFor = (paramId: RunnerParamId): RunnerSide => {
+    if (!frontal) return near
+    const q = KEY_LEG_PHASE[paramId]
+    if (q === null) return stanceSide(heldPhase)
+    return circularDistance(phaseForLeg('left', q), heldPhase) <=
+      circularDistance(phaseForLeg('right', q), heldPhase)
+      ? 'left'
+      : 'right'
+  }
+
+  const annotations = eligible.flatMap((paramId): RunnerAnnotation[] => {
+    const param = bound[paramId]
+    if (param.source !== 'measured') return []
+    const side = sideFor(paramId)
+    const q = KEY_LEG_PHASE[paramId]
+    const phase = q === null ? heldPhase : phaseForLeg(side, q)
+    const built = BUILDERS[paramId as Exclude<RunnerParamId, 'cadence'>](values[paramId], values, {
+      side,
+      phase,
+      floor,
+    })
+    const value = formatRunnerValue(param.metricId, param.metricValue)
+    const annotation: RunnerAnnotation = {
+      paramId,
+      kind: PARAM_ANNOTATION_KIND[paramId] as AnnotationKind,
+      marks: built.marks,
+      fills: built.fills,
+      guides: built.guides,
+      label: {
+        text: value + (param.clamped ? CLAMPED_LABEL_SUFFIX : ''),
+        lines: labelLines(value, param.clamped),
+        ...built.label,
+      },
+      clamped: param.clamped,
+      side,
+      keyPhase: q === null ? null : phase,
+    }
+    return [annotation]
+  })
+  return { heldPhase, annotations }
+}

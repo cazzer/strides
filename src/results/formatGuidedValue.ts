@@ -32,7 +32,9 @@ const FOOT_STRIKE_CLASS_LABELS: Record<FootStrikeClass, string> = {
   forefoot: 'Forefoot strike',
 }
 
-export function formatGuidedValue(metric: MetricResult): string {
+export function formatGuidedValue(
+  metric: Pick<MetricResult, 'metric' | 'value' | 'unit'>,
+): string {
   if (metric.value === null) return 'Not available'
   if (metric.metric === 'footStrikePattern') {
     const cls = classifyFootStrike(
