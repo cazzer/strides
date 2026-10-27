@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { MetricId } from '../heuristics/types'
 import { makeHeuristics } from '../results/__fixtures__/metricResult'
 import { METRIC_LABELS } from '../results/metricConfidence'
-import type { MetricTier } from '../results/metricConfidence'
+import type { MetricTier } from './types'
 import { FOCUS_AREAS, FOCUS_AREA_ORDER, focusAreaView } from './focusAreas'
 
 /** Every `MetricId`, as a literal; pinned against `METRIC_LABELS`' keys below. */
@@ -112,6 +112,10 @@ describe('focusAreaView', () => {
     expect(view.supporting.map((focus) => focus.metric.metric)).toEqual([
       'verticalOscillation',
     ])
+    expect(view.excluded.map((focus) => focus.metric.metric)).toEqual([
+      'cadence',
+      'verticalRatio',
+    ])
   })
 
   it('headlines a caveated metric ahead of a later normal one', () => {
@@ -151,6 +155,9 @@ describe('focusAreaView', () => {
       expect(view.measured).toBe(false)
       expect(view.headline).toBeNull()
       expect(view.supporting).toEqual([])
+      expect(view.excluded.map((focus) => focus.metric.metric)).toEqual(
+        FOCUS_AREAS[area].metricIds,
+      )
     }
   })
 })

@@ -24,17 +24,17 @@ headline SHALL depend on the runner's values.
 ### Requirement: A why line or cue is cited or absent
 
 Every why line, cue and non-point SHALL carry an https URL from a pinned verified set, and SHALL be
-absent rather than unsourced where no opened source states it. A why line SHALL be chosen by the
-area's headline metric and SHALL be at most 14 words. A cue SHALL be the headline metric's existing
-Try line, verbatim, with that line's own URL.
+absent rather than unsourced where no opened source states it. A why line SHALL be at most 14 words
+and SHALL be chosen by the cue's metric when the stop has a cue, otherwise by the area's headline
+metric. A cue SHALL be the cued metric's existing Try line, verbatim, with that line's own URL.
 
 #### Scenario: The headline has no sourced why line
-- **WHEN** the rhythm area is headlined by vertical ratio
+- **WHEN** the rhythm area is headlined by vertical ratio and has no cue
 - **THEN** the area has no why line
 
-#### Scenario: The headline has a Try line that applies
-- **WHEN** the rhythm area is headlined by cadence
-- **THEN** the cue is cadence's Try line text and URL, unchanged
+#### Scenario: The cue comes from a supporting metric
+- **WHEN** cadence reads 175 steps/min and vertical oscillation reads 10.4 cm, both at the normal tier
+- **THEN** the rhythm stop's cue is the bounce Try line, unchanged, and its why line is the bounce why line
 
 ### Requirement: Feedback never grades the runner
 
@@ -52,13 +52,13 @@ Where an area has no cue, the system SHALL show the cited non-point of the first
 that area that has one. A stop SHALL never show both a cue and a non-point. Non-points SHALL exist
 only for metrics with no studied change.
 
-#### Scenario: Foot strike headlines the landing area
-- **WHEN** overstriding is excluded and foot strike pattern is measured
+#### Scenario: Landing has no cue
+- **WHEN** overstriding is measured, or excluded with foot strike pattern measured
 - **THEN** the landing stop shows the foot-strike non-point and no cue
 
-#### Scenario: Overstriding is measured
-- **WHEN** overstriding is measured
-- **THEN** the landing stop shows overstriding's cue and no non-point
+#### Scenario: Foot path
+- **WHEN** a step-width metric is measured
+- **THEN** the foot-path stop shows the step-width non-point, no why line and no cue
 
 ### Requirement: Knee areas never cue lifting the knees
 
@@ -71,46 +71,71 @@ record later gains, and no knees text SHALL suggest lifting the knees.
 
 ### Requirement: A cue appears only where the studied change applies to this value
 
-A cue SHALL be shown only where the existing Try-line withholding rule applies: it SHALL be withheld
-when the value is already outside its band on the side the cue moves toward.
+A metric SHALL earn a cue only when all of these hold: it is measured at the normal tier; its Try
+line exists and is not withheld by the Try-line withholding rule; it has a renderable cited band;
+and its value lies strictly beyond the band's outermost finite bound on the side its economy
+consequence names as costly — the Energy cost headline's threshold. An area's cue SHALL be the first
+such metric in the area in the one-thing priority order, headline or supporting. An unbanded metric
+SHALL never earn a cue.
 
 #### Scenario: Bounce is already below its band
 - **WHEN** the rhythm area is headlined by vertical oscillation in centimetres reading 4.42 cm
 - **THEN** the stop shows the why line and no cue
 
-### Requirement: The one thing is at most one cue, and never for a value inside its cited band
-
-The system SHALL choose at most one cue for the whole tour, walking a fixed priority (cadence,
-overstriding, vertical oscillation in centimetres, vertical oscillation, then the rest in tour
-order). A metric SHALL be eligible only at the normal tier, with a Try line that applies, a
-renderable cited band, and a value strictly beyond the band's outermost finite bound on the side the
-Try line moves away from — the same threshold as the Energy cost headline. Unbanded, caveated and
-excluded metrics SHALL never be chosen. With nothing eligible the result SHALL be that nothing calls
-for a change.
+#### Scenario: Cadence within the band's finite bounds
+- **WHEN** cadence reads 165 or 175 steps/min at the normal tier
+- **THEN** the rhythm stop has no cue
 
 #### Scenario: Low cadence
 - **WHEN** cadence reads 150 steps/min at the normal tier
-- **THEN** the one thing is cadence's cue
+- **THEN** the rhythm stop's cue is cadence's Try line
+
+#### Scenario: An unbanded metric
+- **WHEN** overstriding is measured at any value
+- **THEN** the landing stop has no cue
+
+### Requirement: The one thing is at most one cue, and never for a value within its band's finite bounds
+
+The system SHALL choose at most one cue for the whole tour: the first metric, across all areas, in a
+fixed priority (cadence, overstriding, vertical oscillation in centimetres, vertical oscillation,
+then the rest in tour order) that earns an area cue — so the one thing is always a cue the reader has
+already seen. With no such metric, the system SHALL report that nothing calls for a change ONLY when
+every cue-capable banded metric was measured at the normal tier. Otherwise it SHALL report that the
+answer is unclear, with a reason: caveated when a cue-capable reading is measured below the normal
+tier; pending when a scale-pass metric is not yet measured while that pass is pending or running;
+unmeasured otherwise.
 
 #### Scenario: Low cadence and high bounce together
 - **WHEN** cadence reads 150 and vertical oscillation reads 10.4 cm, both at the normal tier
 - **THEN** the one thing is cadence's cue
 
-#### Scenario: Every value is inside its band
-- **WHEN** cadence reads 153 or 174 and every other value is inside its band
+#### Scenario: The one thing matches the area cue
+- **WHEN** cadence reads 175 and vertical oscillation reads 10.4 cm, both at the normal tier
+- **THEN** the one thing is the bounce cue the rhythm stop shows
+
+#### Scenario: Every value is within its band's finite bounds
+- **WHEN** every cue-capable metric is measured at the normal tier within its band's finite bounds
 - **THEN** the result is that nothing calls for a change
 
-#### Scenario: A caveated or unbanded reading
-- **WHEN** the only reading past its band is caveated, or the reading is overstriding, which has no band
-- **THEN** it is never chosen
+#### Scenario: A caveated reading
+- **WHEN** cadence reads 150 steps/min below the normal tier
+- **THEN** the result is unclear, because the reading is caveated
+
+#### Scenario: The scale pass is still running
+- **WHEN** vertical oscillation in centimetres is not yet measured and the scale pass is pending or running
+- **THEN** the result is unclear, because a measurement is pending
+
+#### Scenario: A cue-capable metric was not measured
+- **WHEN** cadence is excluded, or vertical oscillation in centimetres is absent after the scale pass ends
+- **THEN** the result is unclear, because a measurement is missing
 
 ### Requirement: Each stop stays within 25 visible words
 
 A stop's visible words — the area label, the why line, and either the cue prefix with the cue or
 the non-point, counted by whitespace split and excluding the value, band and citation — SHALL be at
-most 25 for every possible headline and its longest action. The one-thing stop's label, prefix and
-cue SHALL be at most 25 words.
+most 25 for every possible cue and every possible headline with its longest non-point. The
+one-thing stop's label, prefix and cue SHALL be at most 25 words.
 
 #### Scenario: The longest rhythm stop
-- **WHEN** the rhythm area is headlined by cadence with its cue
+- **WHEN** the rhythm area is cued by cadence
 - **THEN** the stop is at most 25 visible words

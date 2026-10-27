@@ -3,7 +3,7 @@ import type {
   MetricId,
   MetricResult,
 } from '../heuristics/types'
-import type { MetricTier } from '../results/metricConfidence'
+import type { MetricTier } from './types'
 
 /**
  * The thirteen metrics grouped by the part of the body a runner would look at, in tour order
@@ -73,6 +73,11 @@ export interface FocusAreaView {
   headline: FocusMetric | null
   /** The area's other non-excluded metrics, in preference order. */
   supporting: FocusMetric[]
+  /**
+   * The area's excluded metrics, in preference order. Kept so the one-thing stop can tell "not
+   * measured" from "not measured yet" (a centimetre metric while the scale pass runs).
+   */
+  excluded: FocusMetric[]
   /** False exactly when every metric in the area is excluded. */
   measured: boolean
 }
@@ -83,15 +88,19 @@ export function focusAreaView(
   tiers: Readonly<Record<MetricId, MetricTier>>,
 ): FocusAreaView {
   const { label, metricIds } = FOCUS_AREAS[area]
-  const measured: FocusMetric[] = metricIds
-    .filter((id) => tiers[id] !== 'excluded')
-    .map((id) => ({ metric: fused[id] as MetricResult, tier: tiers[id] }))
-  const [headline = null, ...supporting] = measured
+  const all: FocusMetric[] = metricIds.map((id) => ({
+    metric: fused[id] as MetricResult,
+    tier: tiers[id],
+  }))
+  const [headline = null, ...supporting] = all.filter(
+    (focus) => focus.tier !== 'excluded',
+  )
   return {
     area,
     label,
     headline,
     supporting,
+    excluded: all.filter((focus) => focus.tier === 'excluded'),
     measured: headline !== null,
   }
 }

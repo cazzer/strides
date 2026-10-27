@@ -1,4 +1,5 @@
 import type { MetricId, MetricResult } from '../heuristics/types'
+import type { MetricTier } from '../guidance/types'
 
 export const METRIC_LABELS: Record<MetricId, string> = {
   verticalOscillation: 'Vertical oscillation',
@@ -41,7 +42,7 @@ export function confidenceLabel(metric: MetricResult): string {
   return 'Low confidence'
 }
 
-export type MetricTier = 'normal' | 'caveated' | 'excluded'
+export type { MetricTier }
 
 /**
  * Tiered layout driver (#37; exclusion rule reversed by exclude-only-unmeasurable-metrics —

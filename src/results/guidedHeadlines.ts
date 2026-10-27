@@ -2,8 +2,11 @@ import type { MetricId } from '../heuristics/types'
 import { bandBounds } from '../guidance/bandPosition'
 import { formatBandValue } from '../guidance/formatBandValue'
 import type { MetricGuidance } from '../guidance/types'
-import { renderableBand } from './guidedGroups'
+import { pastCostlySide, renderableBand } from '../guidance/bandApplicability'
 import type { GuidedEntry, GuidedGroups } from './guidedGroups'
+
+// Moved to src/guidance (add-runner-tour design.md D5); re-exported so importers are untouched.
+export { pastCostlySide }
 import { metricTier } from './metricConfidence'
 import type { ScalePassStatus } from './types'
 
@@ -90,27 +93,6 @@ export interface HeadlineSelection {
   headlines: GuidedHeadlineStory[]
   /** Every story, in `displayRank` order of its spokesman, with its status. */
   stories: StoryOutcome[]
-}
-
-/**
- * Whether the entry's value lies strictly beyond its band's outermost finite bound on the side its
- * economy consequence names as costly. `false` with no consequence, no band or no value. Says
- * nothing about tier; `selectHeadlines` applies that.
- *
- * "Strictly beyond the outermost FINITE bound" rather than "outside the band": cadence's lowest
- * zone is Garmin's open-ended `<153`, so a cadence of 150 is inside the band and still past its
- * lowest published bound. A value exactly on the bound does not trigger.
- */
-export function pastCostlySide(entry: GuidedEntry): boolean {
-  const consequence = entry.guidance.economyConsequence
-  const { band } = entry
-  const value = entry.metric.value
-  if (consequence === null || band === null || value === null) return false
-  const bounds = bandBounds(band)
-  if (bounds.length === 0) return false
-  return consequence.costlySide === 'below'
-    ? value < bounds[0]
-    : value > bounds[bounds.length - 1]
 }
 
 /**

@@ -9,11 +9,8 @@ import {
   makeVerticalOscillation,
   makeVerticalOscillationCm,
 } from '../results/__fixtures__/metricResult'
-import { guidedGroups } from '../results/guidedGroups'
-import type { GuidedEntry } from '../results/guidedGroups'
-import { pastCostlySide } from '../results/guidedHeadlines'
 import { METRIC_LABELS, metricTier } from '../results/metricConfidence'
-import type { MetricTier } from '../results/metricConfidence'
+import { pastCostlySide, renderableBand } from './bandApplicability'
 import {
   CUE_PREFIX,
   NON_POINTS,
@@ -28,7 +25,7 @@ import type { AreaFeedback, CitedLine } from './feedbackPoints'
 import { FOCUS_AREAS, FOCUS_AREA_ORDER, focusAreaView } from './focusAreas'
 import type { FocusAreaId, FocusAreaView } from './focusAreas'
 import { METRIC_GUIDANCE } from './metricGuidance'
-import type { MetricGuidance } from './types'
+import type { MetricGuidance, MetricTier } from './types'
 
 /**
  * Every URL a why line, cue or non-point may cite. **Closed**: a URL not in this set cannot ship in
@@ -43,14 +40,12 @@ const FEEDBACK_VERIFIED_URLS: ReadonlySet<string> = new Set([
   'https://pmc.ncbi.nlm.nih.gov/articles/PMC11809138/',
   'https://pmc.ncbi.nlm.nih.gov/articles/PMC5473370/',
   'https://journals.biologists.com/jeb/article/218/21/3406/14416/',
-  'https://pmc.ncbi.nlm.nih.gov/articles/PMC11283446/',
   // Non-points
   'https://www.theinjuryclinic.com.au/wp-content/uploads/2021/06/Anderson2020_Article_WhatAreTheBenefitsAndRisksAsso.pdf',
   'https://pubmed.ncbi.nlm.nih.gov/21316058/',
-  // Cues: each metric's existing Try line, reused verbatim
+  // Cues: each cue-capable metric's existing Try line, reused verbatim
   'https://ijspt.scholasticahq.com/article/90909-a-one-session-gait-retraining-protocol-with-metronome-augmentation-increases-cadence-in-novice-and-recreational-runners',
   'https://pmc.ncbi.nlm.nih.gov/articles/PMC6088121/',
-  'https://pmc.ncbi.nlm.nih.gov/articles/PMC3022995/',
 ])
 
 const GRADING_WORDS =
@@ -62,8 +57,6 @@ const KNEE_LIFT = /\blift\b|knees? up/i
 function words(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length
 }
-
-const CUE_AREAS = FOCUS_AREA_ORDER.filter((area) => area !== 'knees')
 
 function tryLineOf(id: MetricId) {
   return METRIC_GUIDANCE[id].tryLine
@@ -100,6 +93,13 @@ function excluding(
   }
   return makeHeuristics({ ...nulls, ...extra })
 }
+
+const cadence = (value: number, confidence?: number) =>
+  makeMetric('cadence', {
+    value,
+    ...(confidence === undefined ? {} : { confidence }),
+  })
+const bounce = (value: number | null) => makeVerticalOscillationCm({ value })
 
 function allLines(): Array<[string, CitedLine]> {
   return [
@@ -139,13 +139,18 @@ function researchRecordUrls(): Set<string> {
   return new Set(text.match(/https:\/\/[^\s)]+/g) ?? [])
 }
 
+/** Metrics whose cue can ever show: a Try line, a shown band and a costly side. */
+const CUE_CAPABLE: MetricId[] = (
+  Object.keys(METRIC_GUIDANCE) as MetricId[]
+).filter(
+  (id) =>
+    METRIC_GUIDANCE[id].tryLine !== null &&
+    METRIC_GUIDANCE[id].economyConsequence !== null &&
+    renderableBand(METRIC_GUIDANCE[id]) !== null,
+)
+
 describe('every feedback URL is verified and pinned', () => {
-  const cueUrls = CUE_AREAS.flatMap((area) =>
-    FOCUS_AREAS[area].metricIds.flatMap((id) => {
-      const line = tryLineOf(id)
-      return line === null ? [] : [line.url]
-    }),
-  )
+  const cueUrls = CUE_CAPABLE.map((id) => tryLineOf(id)!.url)
   const usedUrls = [...allLines().map(([, line]) => line.url), ...cueUrls]
 
   it('cites only pinned URLs', () => {
@@ -172,6 +177,10 @@ describe('every feedback URL is verified and pinned', () => {
       expect(known.has(url), url).toBe(true)
     }
   })
+
+  it('knows exactly two cue-capable metrics today', () => {
+    expect(CUE_CAPABLE.sort()).toEqual(['cadence', 'verticalOscillationCm'])
+  })
 })
 
 describe('why lines and non-points', () => {
@@ -187,11 +196,17 @@ describe('why lines and non-points', () => {
     }
   })
 
-  it('gives no why line where no source states one in that unit', () => {
-    expect(WHY_LINES.verticalRatio).toBeUndefined()
-    expect(WHY_LINES.verticalOscillation).toBeUndefined()
-    expect(WHY_LINES.footStrikePattern).toBeUndefined()
-    expect(WHY_LINES.swingFootLateralExcursion).toBeUndefined()
+  it('gives no why line where no source states one, or where a non-point stands', () => {
+    for (const id of [
+      'verticalRatio',
+      'verticalOscillation',
+      'footStrikePattern',
+      'stepWidth',
+      'stepWidthCm',
+      'swingFootLateralExcursion',
+    ] as const) {
+      expect(WHY_LINES[id], id).toBeUndefined()
+    }
   })
 
   it('places non-points only on metrics with no studied change', () => {
@@ -210,13 +225,8 @@ describe('feedback never grades the runner', () => {
     ['CUE_PREFIX', CUE_PREFIX],
     ['ONE_THING_LABEL', ONE_THING_LABEL],
     ['NOTHING_TO_CHANGE', NOTHING_TO_CHANGE],
-    ...CUE_AREAS.flatMap((area) =>
-      FOCUS_AREAS[area].metricIds.flatMap((id) => {
-        const line = tryLineOf(id)
-        return line === null
-          ? []
-          : [[`cue ${id}`, line.text] as [string, string]]
-      }),
+    ...CUE_CAPABLE.map(
+      (id) => [`cue ${id}`, tryLineOf(id)!.text] as [string, string],
     ),
   ]
 
@@ -225,30 +235,117 @@ describe('feedback never grades the runner', () => {
   })
 })
 
-describe('feedbackFor', () => {
-  it('reuses the headline metric’s Try line verbatim as the cue', () => {
-    for (const area of FOCUS_AREA_ORDER) {
-      const ids = FOCUS_AREAS[area].metricIds
-      ids.forEach((id, index) => {
-        const feedback = feedbackFor(
-          viewOf(area, excluding(ids.slice(0, index))),
-        )
-        const line = tryLineOf(id)
-        if (feedback.cue !== null) {
-          expect(line, id).not.toBeNull()
-          expect(feedback.cue).toEqual({
-            metric: id,
-            text: line!.text,
-            url: line!.url,
-          })
-        }
-      })
+describe('area cues', () => {
+  /** Every case that MUST carry a cue; every other case below must not. */
+  const withCue: Array<[string, FocusAreaId, FormHeuristicsResult, MetricId]> =
+    [
+      [
+        'cadence 150',
+        'rhythm',
+        makeHeuristics({ cadence: cadence(150) }),
+        'cadence',
+      ],
+      [
+        'cadence 150 + VO_cm 10.4',
+        'rhythm',
+        makeHeuristics({
+          cadence: cadence(150),
+          verticalOscillationCm: bounce(10.4),
+        }),
+        'cadence',
+      ],
+      [
+        'cadence 175 + VO_cm 10.4',
+        'rhythm',
+        makeHeuristics({
+          cadence: cadence(175),
+          verticalOscillationCm: bounce(10.4),
+        }),
+        'verticalOscillationCm',
+      ],
+      [
+        'cadence excluded + VO_cm 10.4',
+        'rhythm',
+        excluding(['cadence'], { verticalOscillationCm: bounce(10.4) }),
+        'verticalOscillationCm',
+      ],
+    ]
+
+  const withoutCue: Array<[string, FormHeuristicsResult]> = [
+    ['all defaults, in band', makeHeuristics()],
+    ['cadence 165', makeHeuristics({ cadence: cadence(165) })],
+    ['cadence 175', makeHeuristics({ cadence: cadence(175) })],
+    ['cadence 153, on the bound', makeHeuristics({ cadence: cadence(153) })],
+    ['cadence 150 caveated', makeHeuristics({ cadence: cadence(150, 0.5) })],
+    [
+      'VO_cm 4.42, cue withheld',
+      makeHeuristics({ verticalOscillationCm: bounce(4.42) }),
+    ],
+    [
+      'VO_cm 9.5, on the bound',
+      makeHeuristics({ verticalOscillationCm: bounce(9.5) }),
+    ],
+    [
+      'overstriding 10, unbanded',
+      makeHeuristics({
+        overstriding: makeMetric('overstriding', { value: 10 }),
+      }),
+    ],
+    [
+      'verticalOscillation 1, unbanded',
+      excluding(['cadence', 'verticalOscillationCm', 'verticalRatio'], {
+        verticalOscillation: makeVerticalOscillation({ value: 1 }),
+      }),
+    ],
+    [
+      'knees far out of band',
+      makeHeuristics({ kneeFlexion: makeMetric('kneeFlexion', { value: 20 }) }),
+    ],
+  ]
+
+  it.each(withCue)('%s: %s shows the %s cue', (_, area, fused, metric) => {
+    const line = tryLineOf(metric)!
+    expect(feedbackFor(viewOf(area, fused)).cue).toEqual({
+      metric,
+      text: line.text,
+      url: line.url,
+    })
+  })
+
+  it.each(withCue)('%s: no other area shows a cue', (_, area, fused) => {
+    for (const other of FOCUS_AREA_ORDER.filter((id) => id !== area)) {
+      expect(feedbackFor(viewOf(other, fused)).cue, other).toBeNull()
     }
   })
 
-  it('keys the why line by the headline metric', () => {
-    const rhythm = feedbackFor(viewOf('rhythm', makeHeuristics()))
-    expect(rhythm.why).toBe(WHY_LINES.cadence)
+  it.each(withoutCue)('%s: no area shows a cue', (_, fused) => {
+    for (const area of FOCUS_AREA_ORDER) {
+      expect(feedbackFor(viewOf(area, fused)).cue, area).toBeNull()
+    }
+  })
+
+  it('keys the why line to the cue, else to the headline', () => {
+    const bounceCue = feedbackFor(
+      viewOf(
+        'rhythm',
+        makeHeuristics({
+          cadence: cadence(175),
+          verticalOscillationCm: bounce(10.4),
+        }),
+      ),
+    )
+    expect(bounceCue.cue?.metric).toBe('verticalOscillationCm')
+    expect(bounceCue.why).toBe(WHY_LINES.verticalOscillationCm)
+
+    const cadenceCue = feedbackFor(
+      viewOf('rhythm', makeHeuristics({ cadence: cadence(150) })),
+    )
+    expect(cadenceCue.why).toBe(WHY_LINES.cadence)
+
+    const none = feedbackFor(viewOf('rhythm', makeHeuristics()))
+    expect(none.cue).toBeNull()
+    expect(none.why).toBe(WHY_LINES.cadence)
+
     const fallback = feedbackFor(
       viewOf('rhythm', excluding(['cadence', 'verticalOscillationCm'])),
     )
@@ -257,35 +354,37 @@ describe('feedbackFor', () => {
 
   it('withholds the bounce cue at the regression anchor VO_cm 4.42 cm', () => {
     const fused = excluding(['cadence'], {
-      verticalOscillationCm: makeVerticalOscillationCm({ value: 4.42 }),
+      verticalOscillationCm: bounce(4.42),
     })
     const feedback = feedbackFor(viewOf('rhythm', fused))
     expect(feedback.why).toBe(WHY_LINES.verticalOscillationCm)
     expect(feedback.cue).toBeNull()
     expect(feedback.nonPoint).toBeNull()
   })
+})
 
-  it('shows the bounce cue inside the band', () => {
-    const feedback = feedbackFor(viewOf('rhythm', excluding(['cadence'])))
-    expect(feedback.cue?.metric).toBe('verticalOscillationCm')
-  })
-
-  it('shows a non-point only where there is no cue', () => {
+describe('non-points', () => {
+  it('stands on landing whenever there is no cue, overstriding measured or not', () => {
     const landing = feedbackFor(viewOf('landing', makeHeuristics()))
-    expect(landing.cue?.metric).toBe('overstriding')
-    expect(landing.nonPoint).toBeNull()
+    expect(landing.cue).toBeNull()
+    expect(landing.why).toBe(WHY_LINES.overstriding)
+    expect(landing.nonPoint).toBe(NON_POINTS.footStrikePattern)
 
     const footStrikeOnly = feedbackFor(
       viewOf('landing', excluding(['overstriding'])),
     )
-    expect(footStrikeOnly.cue).toBeNull()
     expect(footStrikeOnly.why).toBeNull()
     expect(footStrikeOnly.nonPoint).toBe(NON_POINTS.footStrikePattern)
+  })
 
+  it('stands on foot path with no why line', () => {
     const footPath = feedbackFor(viewOf('footPath', makeHeuristics()))
-    expect(footPath.cue).toBeNull()
-    expect(footPath.nonPoint).toBe(NON_POINTS.stepWidthCm)
-
+    expect(footPath).toEqual({
+      area: 'footPath',
+      why: null,
+      cue: null,
+      nonPoint: NON_POINTS.stepWidthCm,
+    })
     const lateralOnly = feedbackFor(
       viewOf('footPath', excluding(['stepWidthCm', 'stepWidth'])),
     )
@@ -297,17 +396,14 @@ describe('feedbackFor', () => {
     })
   })
 
-  it('never shows a cue and a non-point together', () => {
-    for (const area of FOCUS_AREA_ORDER) {
-      const ids = FOCUS_AREAS[area].metricIds
-      ids.forEach((_, index) => {
-        const feedback = feedbackFor(
-          viewOf(area, excluding(ids.slice(0, index))),
-        )
-        expect(feedback.cue !== null && feedback.nonPoint !== null, area).toBe(
-          false,
-        )
-      })
+  it('never stands beside a cue', () => {
+    const fused = makeHeuristics({ cadence: cadence(150) })
+    for (const view of viewsOf(fused)) {
+      const feedback = feedbackFor(view)
+      expect(
+        feedback.cue !== null && feedback.nonPoint !== null,
+        view.area,
+      ).toBe(false)
     }
   })
 
@@ -336,21 +432,7 @@ describe('the knees area never cues lifting the knees', () => {
     for (const text of kneeTexts) expect(text).not.toMatch(KNEE_LIFT)
   })
 
-  it('has a null cue for every headline and value', () => {
-    for (const value of [10, 60, 90, 130, 170]) {
-      for (const excluded of [[], ['kneeFlexion']] as MetricId[][]) {
-        const fused = excluding(excluded, {
-          kneeDrive: makeMetric('kneeDrive', { value }),
-          ...(excluded.length === 0
-            ? { kneeFlexion: makeMetric('kneeFlexion', { value }) }
-            : {}),
-        })
-        expect(feedbackFor(viewOf('knees', fused)).cue).toBeNull()
-      }
-    }
-  })
-
-  it('stays null even if the guidance record gained a knee Try line', () => {
+  it('stays cue-free even if the guidance record gained an eligible knee cue', () => {
     const guidance: Record<MetricId, MetricGuidance> = {
       ...METRIC_GUIDANCE,
       kneeFlexion: {
@@ -360,21 +442,21 @@ describe('the knees area never cues lifting the knees', () => {
           url: 'https://example.org/',
           direction: 'higher',
         },
+        economyConsequence: {
+          text: 'x',
+          url: 'https://example.org/',
+          costlySide: 'below',
+        },
       },
     }
-    const views = viewsOf(makeHeuristics())
-    const knees = views.find((view) => view.area === 'knees')!
+    const fused = makeHeuristics({
+      kneeFlexion: makeMetric('kneeFlexion', { value: 20 }),
+    })
+    const knees = viewOf('knees', fused)
     expect(feedbackFor(knees, guidance).cue).toBeNull()
-    expect(
-      selectOneThing(
-        viewsOf(
-          makeHeuristics({
-            kneeFlexion: makeMetric('kneeFlexion', { value: 20 }),
-          }),
-        ),
-        guidance,
-      ),
-    ).toEqual({ kind: 'nothingToChange' })
+    expect(selectOneThing(viewsOf(fused), 'idle', guidance)).toEqual({
+      kind: 'nothingToChange',
+    })
   })
 })
 
@@ -390,34 +472,53 @@ describe('every stop stays within 25 visible words', () => {
   }
 
   it.each(FOCUS_AREA_ORDER)(
-    '%s, worst case over every headline and its longest action',
+    '%s, worst case over every cue and every headline with its longest non-point',
     (area) => {
       const ids = FOCUS_AREAS[area].metricIds
+      const label = words(FOCUS_AREAS[area].label)
       const longestNonPoint = Math.max(
         0,
         ...ids.map((id) => words(NON_POINTS[id]?.text ?? '')),
       )
       for (const id of ids) {
+        // Any metric with a Try line, banded or not, so a future band cannot overrun the budget.
         const line = area === 'knees' ? null : tryLineOf(id)
-        const cueWords = line === null ? 0 : words(`${CUE_PREFIX} ${line.text}`)
-        const total =
-          words(FOCUS_AREAS[area].label) +
-          words(WHY_LINES[id]?.text ?? '') +
-          Math.max(cueWords, longestNonPoint)
-        expect(total, `${area} headlined by ${id}`).toBeLessThanOrEqual(25)
+        if (line !== null) {
+          const withCue =
+            label +
+            words(WHY_LINES[id]?.text ?? '') +
+            words(`${CUE_PREFIX} ${line.text}`)
+          expect(withCue, `${area} cued by ${id}`).toBeLessThanOrEqual(25)
+        }
+        const withoutCue =
+          label + words(WHY_LINES[id]?.text ?? '') + longestNonPoint
+        expect(withoutCue, `${area} headlined by ${id}`).toBeLessThanOrEqual(25)
       }
     },
   )
 
-  it('holds for the feedback actually produced on in-band and fallback clips', () => {
-    for (const area of FOCUS_AREA_ORDER) {
-      const ids = FOCUS_AREAS[area].metricIds
-      ids.forEach((_, index) => {
-        const feedback = feedbackFor(
-          viewOf(area, excluding(ids.slice(0, index))),
-        )
-        expect(stopWords(area, feedback)).toBeLessThanOrEqual(25)
-      })
+  it('holds for the feedback produced on in-band, past-band and fallback clips', () => {
+    const clips = [
+      makeHeuristics(),
+      makeHeuristics({ cadence: cadence(150) }),
+      makeHeuristics({
+        cadence: cadence(175),
+        verticalOscillationCm: bounce(10.4),
+      }),
+    ]
+    for (const fused of clips) {
+      for (const area of FOCUS_AREA_ORDER) {
+        const ids = FOCUS_AREAS[area].metricIds
+        ids.forEach((_, index) => {
+          const view = focusAreaView(area, fused, {
+            ...tiersOf(fused),
+            ...Object.fromEntries(
+              ids.slice(0, index).map((id) => [id, 'excluded']),
+            ),
+          })
+          expect(stopWords(area, feedbackFor(view))).toBeLessThanOrEqual(25)
+        })
+      }
     }
   })
 
@@ -463,10 +564,9 @@ describe('selectOneThing', () => {
   const cadenceCue = tryLineOf('cadence')!
 
   it('picks the cadence cue for a cadence of 150 at the normal tier', () => {
-    const fused = makeHeuristics({
-      cadence: makeMetric('cadence', { value: 150 }),
-    })
-    expect(selectOneThing(viewsOf(fused))).toEqual({
+    expect(
+      selectOneThing(viewsOf(makeHeuristics({ cadence: cadence(150) }))),
+    ).toEqual({
       kind: 'cue',
       area: 'rhythm',
       metric: 'cadence',
@@ -477,26 +577,59 @@ describe('selectOneThing', () => {
 
   it('prefers cadence over bounce when both are past their bands', () => {
     const fused = makeHeuristics({
-      cadence: makeMetric('cadence', { value: 150 }),
-      verticalOscillationCm: makeVerticalOscillationCm({ value: 10.4 }),
+      cadence: cadence(150),
+      verticalOscillationCm: bounce(10.4),
     })
     const pick = selectOneThing(viewsOf(fused))
     expect(pick.kind === 'cue' && pick.metric).toBe('cadence')
   })
 
-  it('picks the bounce cue when only bounce is past its band', () => {
+  it('equals the rhythm stop’s cue at cadence 175 with VO_cm 10.4', () => {
     const fused = makeHeuristics({
-      verticalOscillationCm: makeVerticalOscillationCm({ value: 10.4 }),
+      cadence: cadence(175),
+      verticalOscillationCm: bounce(10.4),
     })
-    const pick = selectOneThing(viewsOf(fused))
-    expect(pick.kind === 'cue' && pick.metric).toBe('verticalOscillationCm')
-    expect(pick.kind === 'cue' && pick.area).toBe('rhythm')
+    const rhythmCue = feedbackFor(viewOf('rhythm', fused)).cue!
+    expect(rhythmCue.metric).toBe('verticalOscillationCm')
+    expect(selectOneThing(viewsOf(fused))).toEqual({
+      kind: 'cue',
+      area: 'rhythm',
+      ...rhythmCue,
+    })
   })
 
-  it.each([153, 174])('finds nothing to change at a cadence of %s', (value) => {
-    const fused = makeHeuristics({ cadence: makeMetric('cadence', { value }) })
-    expect(selectOneThing(viewsOf(fused))).toEqual({ kind: 'nothingToChange' })
+  it('is always one of the area cues the reader saw', () => {
+    for (const fused of [
+      makeHeuristics({ cadence: cadence(150) }),
+      makeHeuristics({ verticalOscillationCm: bounce(14) }),
+      makeHeuristics({
+        cadence: cadence(100),
+        verticalOscillationCm: bounce(14),
+      }),
+    ]) {
+      const views = viewsOf(fused)
+      const pick = selectOneThing(views)
+      expect(pick.kind).toBe('cue')
+      if (pick.kind !== 'cue') continue
+      const shown = views.map((view) => feedbackFor(view).cue)
+      expect(shown).toContainEqual({
+        metric: pick.metric,
+        text: pick.text,
+        url: pick.url,
+      })
+    }
   })
+
+  it.each([153, 165, 174, 175])(
+    'finds nothing to change at a cadence of %s',
+    (value) => {
+      expect(
+        selectOneThing(viewsOf(makeHeuristics({ cadence: cadence(value) }))),
+      ).toEqual({
+        kind: 'nothingToChange',
+      })
+    },
+  )
 
   it('finds nothing to change when every value is inside its band', () => {
     expect(selectOneThing(viewsOf(makeHeuristics()))).toEqual({
@@ -504,36 +637,17 @@ describe('selectOneThing', () => {
     })
   })
 
-  it('never chooses a caveated reading', () => {
-    const fused = makeHeuristics({
-      cadence: makeMetric('cadence', { value: 150, confidence: 0.5 }),
-    })
-    expect(metricTier(fused.cadence)).toBe('caveated')
-    expect(selectOneThing(viewsOf(fused))).toEqual({ kind: 'nothingToChange' })
+  it('finds nothing to change past a withheld Try line', () => {
+    expect(
+      selectOneThing(
+        viewsOf(makeHeuristics({ verticalOscillationCm: bounce(4.42) })),
+      ),
+    ).toEqual({ kind: 'nothingToChange' })
   })
 
-  it('never chooses a withheld Try line', () => {
-    const fused = makeHeuristics({
-      verticalOscillationCm: makeVerticalOscillationCm({ value: 4.42 }),
-    })
-    expect(selectOneThing(viewsOf(fused))).toEqual({ kind: 'nothingToChange' })
-  })
-
-  it('never chooses a metric whose Try line is absent', () => {
-    const guidance: Record<MetricId, MetricGuidance> = {
-      ...METRIC_GUIDANCE,
-      cadence: { ...METRIC_GUIDANCE.cadence, tryLine: null },
-    }
-    const fused = makeHeuristics({
-      cadence: makeMetric('cadence', { value: 150 }),
-    })
-    expect(selectOneThing(viewsOf(fused), guidance)).toEqual({
-      kind: 'nothingToChange',
-    })
-  })
-
-  it('never chooses unbanded overstriding, however large', () => {
+  it('never chooses unbanded overstriding or verticalOscillation, however large', () => {
     expect(METRIC_GUIDANCE.overstriding.band).toBeNull()
+    expect(METRIC_GUIDANCE.verticalOscillation.band).toBeNull()
     for (const value of [0.01, 0.5, 2, 10]) {
       const fused = makeHeuristics({
         overstriding: makeMetric('overstriding', { value }),
@@ -545,28 +659,101 @@ describe('selectOneThing', () => {
     }
   })
 
-  it('never chooses an excluded metric', () => {
-    const fused = makeHeuristics({
-      cadence: makeMetric('cadence', { value: 150, viewFit: 'unsuitable' }),
+  it('never chooses a metric whose Try line is absent', () => {
+    const guidance: Record<MetricId, MetricGuidance> = {
+      ...METRIC_GUIDANCE,
+      cadence: { ...METRIC_GUIDANCE.cadence, tryLine: null },
+    }
+    const pick = selectOneThing(
+      viewsOf(makeHeuristics({ cadence: cadence(150) })),
+      'idle',
+      guidance,
+    )
+    expect(pick).toEqual({ kind: 'nothingToChange' })
+  })
+
+  describe('says why it cannot tell', () => {
+    it('caveated: a past-band reading below the normal tier', () => {
+      const fused = makeHeuristics({ cadence: cadence(150, 0.5) })
+      expect(metricTier(fused.cadence)).toBe('caveated')
+      expect(selectOneThing(viewsOf(fused))).toEqual({
+        kind: 'unclear',
+        reason: 'caveated',
+      })
     })
-    expect(selectOneThing(viewsOf(fused))).toEqual({ kind: 'nothingToChange' })
+
+    it('caveated: an in-band reading below the normal tier', () => {
+      const fused = makeHeuristics({ cadence: cadence(170, 0.5) })
+      expect(selectOneThing(viewsOf(fused))).toEqual({
+        kind: 'unclear',
+        reason: 'caveated',
+      })
+    })
+
+    it.each(['pending', 'running'] as const)(
+      'pending: VO_cm is null while the scale pass is %s',
+      (status) => {
+        const fused = makeHeuristics({ verticalOscillationCm: bounce(null) })
+        expect(selectOneThing(viewsOf(fused), status)).toEqual({
+          kind: 'unclear',
+          reason: 'pending',
+        })
+      },
+    )
+
+    it.each(['idle', 'done', 'failed', 'skipped'] as const)(
+      'unmeasured: VO_cm is null and the scale pass is %s',
+      (status) => {
+        const fused = makeHeuristics({ verticalOscillationCm: bounce(null) })
+        expect(selectOneThing(viewsOf(fused), status)).toEqual({
+          kind: 'unclear',
+          reason: 'unmeasured',
+        })
+      },
+    )
+
+    it('unmeasured: cadence excluded by an unsuitable view', () => {
+      const fused = makeHeuristics({
+        cadence: makeMetric('cadence', { value: 150, viewFit: 'unsuitable' }),
+      })
+      expect(selectOneThing(viewsOf(fused))).toEqual({
+        kind: 'unclear',
+        reason: 'unmeasured',
+      })
+    })
+
+    it('unmeasured: a cue-capable metric missing from the areas passed', () => {
+      const views = viewsOf(makeHeuristics()).filter(
+        (view) => view.area !== 'rhythm',
+      )
+      expect(selectOneThing(views)).toEqual({
+        kind: 'unclear',
+        reason: 'unmeasured',
+      })
+    })
+
+    it('a cue still wins over any unclear reason', () => {
+      const fused = makeHeuristics({
+        cadence: cadence(150),
+        verticalOscillationCm: bounce(null),
+      })
+      expect(selectOneThing(viewsOf(fused), 'running').kind).toBe('cue')
+    })
   })
 
   describe('agrees with the Energy cost headline on which side is past the band', () => {
-    function entryFor(fused: FormHeuristicsResult, id: MetricId): GuidedEntry {
-      const entry = guidedGroups(fused).banded.find(
-        (candidate) => candidate.metric.metric === id,
-      )
-      if (entry === undefined) throw new Error(`${id} not banded`)
-      return entry
+    function entryFor(fused: FormHeuristicsResult, id: MetricId) {
+      return {
+        metric: fused[id],
+        guidance: METRIC_GUIDANCE[id],
+        band: renderableBand(METRIC_GUIDANCE[id]),
+      }
     }
 
     it.each([100, 150, 152.9, 153, 160, 174, 183, 184, 200])(
       'cadence %s',
       (value) => {
-        const fused = makeHeuristics({
-          cadence: makeMetric('cadence', { value }),
-        })
+        const fused = makeHeuristics({ cadence: cadence(value) })
         const pick = selectOneThing(viewsOf(fused))
         expect(pick.kind === 'cue' && pick.metric === 'cadence').toBe(
           pastCostlySide(entryFor(fused, 'cadence')),
@@ -577,9 +764,7 @@ describe('selectOneThing', () => {
     it.each([3, 4.42, 5.99, 6, 7.5, 9.5, 9.51, 10.4, 14])(
       'verticalOscillationCm %s',
       (value) => {
-        const fused = makeHeuristics({
-          verticalOscillationCm: makeVerticalOscillationCm({ value }),
-        })
+        const fused = makeHeuristics({ verticalOscillationCm: bounce(value) })
         const pick = selectOneThing(viewsOf(fused))
         expect(
           pick.kind === 'cue' && pick.metric === 'verticalOscillationCm',

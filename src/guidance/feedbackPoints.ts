@@ -1,14 +1,14 @@
 import type { MetricId } from '../heuristics/types'
 import {
+  pastCostlySide,
   renderableBand,
   tryLineApplies,
-  type GuidedEntry,
-} from '../results/guidedGroups'
-import { bandBounds } from './bandPosition'
+} from './bandApplicability'
+import type { GuidedEntry } from './bandApplicability'
 import { FOCUS_AREAS, FOCUS_AREA_ORDER } from './focusAreas'
 import type { FocusAreaId, FocusAreaView, FocusMetric } from './focusAreas'
 import { METRIC_GUIDANCE } from './metricGuidance'
-import type { MetricGuidance } from './types'
+import type { MetricGuidance, ScalePassStatus } from './types'
 
 /**
  * What a tour stop says about one focus area: why the area matters, the one studied change that
@@ -36,7 +36,7 @@ export interface CitedLine {
   evidence: EvidenceKind
 }
 
-/** The headline metric's own Try line, verbatim, where it applies to this reading. */
+/** An eligible metric's own Try line, verbatim. */
 export interface AreaCue {
   metric: MetricId
   text: string
@@ -45,6 +45,7 @@ export interface AreaCue {
 
 export interface AreaFeedback {
   area: FocusAreaId
+  /** Keyed to the cue's metric when there is a cue, else to the headline metric. */
   why: CitedLine | null
   /** Never both: a stop shows a cue or a non-point, or neither. */
   cue: AreaCue | null
@@ -58,48 +59,41 @@ const BRAUN_2024_URL = 'https://pmc.ncbi.nlm.nih.gov/articles/PMC11809138/'
 const FOLLAND_2017_URL = 'https://pmc.ncbi.nlm.nih.gov/articles/PMC5473370/'
 const LIEBERMAN_2015_URL =
   'https://journals.biologists.com/jeb/article/218/21/3406/14416/'
-const WANG_2024_URL = 'https://pmc.ncbi.nlm.nih.gov/articles/PMC11283446/'
 const ANDERSON_2020_URL =
   'https://www.theinjuryclinic.com.au/wp-content/uploads/2021/06/Anderson2020_Article_WhatAreTheBenefitsAndRisksAsso.pdf'
 const ARELLANO_KRAM_2011_URL = 'https://pubmed.ncbi.nlm.nih.gov/21316058/'
 
 const KNEE_BEND_WHY: CitedLine = {
-  text: 'More swing-leg knee and hip bend went with higher energy cost.',
+  text: 'Runners with more swing-leg hip and knee bend used more energy, not less.',
   url: FOLLAND_2017_URL,
   evidence: 'association',
 }
 
-const STEP_WIDTH_WHY: CitedLine = {
-  text: 'Narrower steps go with higher IT-band strain.',
-  url: WANG_2024_URL,
-  evidence: 'mixed',
-}
-
 const STEP_WIDTH_NON_POINT: CitedLine = {
-  text: 'Your own width is usually your most economical.',
+  text: 'Runners pushed off their own width used 3–15% more energy.',
   url: ARELLANO_KRAM_2011_URL,
   evidence: 'trial',
 }
 
 /**
- * Why an area matters, keyed by the metric that headlines it. Absent where no source states a why
- * in the unit that metric reports: `verticalRatio` and the torso-normalised `verticalOscillation`
- * (Van Hooren's only normalised bounce row is not significant), `footStrikePattern` (its stop
- * carries a non-point instead) and `swingFootLateralExcursion`.
+ * Why an area matters, keyed by metric. Absent where no source states a why in the unit that metric
+ * reports: `verticalRatio` and the torso-normalised `verticalOscillation` (Van Hooren's only
+ * normalised bounce row is not significant), `footStrikePattern` and the step-width pair (their
+ * stops carry a non-point instead) and `swingFootLateralExcursion`.
  */
 export const WHY_LINES: Partial<Record<MetricId, CitedLine>> = {
   cadence: {
-    text: 'Higher cadence goes with slightly lower energy cost.',
+    text: 'Quicker-stepping runners use slightly less energy, on average.',
     url: VAN_HOOREN_2024_URL,
     evidence: 'association',
   },
   verticalOscillationCm: {
-    text: 'Less bounce goes with lower energy cost.',
+    text: 'Less-bouncy runners tend to use less energy.',
     url: VAN_HOOREN_2024_URL,
     evidence: 'association',
   },
   armSwingAmplitude: {
-    text: 'Running with arms held still raised energy cost 3–13%.',
+    text: 'Running with arms held still took 3–13% more energy.',
     url: ARELLANO_KRAM_2014_URL,
     evidence: 'trial',
   },
@@ -115,14 +109,12 @@ export const WHY_LINES: Partial<Record<MetricId, CitedLine>> = {
     url: LIEBERMAN_2015_URL,
     evidence: 'association',
   },
-  stepWidthCm: STEP_WIDTH_WHY,
-  stepWidth: STEP_WIDTH_WHY,
 }
 
 /** Where the evidence says not to change what this metric measures. */
 export const NON_POINTS: Partial<Record<MetricId, CitedLine>> = {
   footStrikePattern: {
-    text: "Most distance runners land heel-first; changing it isn't recommended for uninjured runners.",
+    text: "Most distance runners land heel-first; switching isn't recommended for uninjured heel-strikers.",
     url: ANDERSON_2020_URL,
     evidence: 'mixed',
   },
@@ -131,8 +123,8 @@ export const NON_POINTS: Partial<Record<MetricId, CitedLine>> = {
 }
 
 /** Rendered before a cue's text, which starts mid-sentence. */
-export const CUE_PREFIX = 'If you choose:'
-export const ONE_THING_LABEL = 'Your one thing'
+export const CUE_PREFIX = 'One studied option:'
+export const ONE_THING_LABEL = 'One thing to try'
 export const NOTHING_TO_CHANGE = 'Nothing here calls for a change.'
 
 /**
@@ -141,10 +133,16 @@ export const NOTHING_TO_CHANGE = 'Nothing here calls for a change.'
  */
 const NO_CUE_AREAS: ReadonlySet<FocusAreaId> = new Set(['knees'])
 
+/** Grafted from the background scale pass, so "not measured" may mean "not measured yet". */
+const SCALE_PASS_METRICS: ReadonlySet<MetricId> = new Set([
+  'verticalOscillationCm',
+  'stepWidthCm',
+])
+
 /**
- * The order `selectOneThing` walks: the studied changes with the strongest evidence first (step
- * rate, then overstriding, which the same step-rate change moves, then bounce), then every other
- * metric in tour order.
+ * The order cues are chosen in, within an area and across the tour: the studied changes with the
+ * strongest evidence first (step rate, then overstriding, which the same step-rate change moves,
+ * then bounce), then every other metric in tour order.
  */
 export const ONE_THING_PRIORITY: readonly MetricId[] = (() => {
   const first: MetricId[] = [
@@ -157,10 +155,9 @@ export const ONE_THING_PRIORITY: readonly MetricId[] = (() => {
   return [...first, ...rest.filter((id) => !first.includes(id))]
 })()
 
-function guidedEntry(
-  focus: FocusMetric,
-  guidance: Record<MetricId, MetricGuidance>,
-): GuidedEntry {
+type Guidance = Record<MetricId, MetricGuidance>
+
+function guidedEntry(focus: FocusMetric, guidance: Guidance): GuidedEntry {
   const metricGuidance = guidance[focus.metric.metric]
   return {
     metric: focus.metric,
@@ -169,36 +166,69 @@ function guidedEntry(
   }
 }
 
-function cueFor(
-  area: FocusAreaId,
-  focus: FocusMetric,
-  guidance: Record<MetricId, MetricGuidance>,
-): AreaCue | null {
-  if (NO_CUE_AREAS.has(area)) return null
+/**
+ * A metric whose cue could ever be shown: it has a Try line, a renderable cited band and an economy
+ * consequence naming its costly side. Today exactly `cadence` and `verticalOscillationCm`.
+ */
+function cueCapable(id: MetricId, guidance: Guidance): boolean {
+  const entry = guidance[id]
+  return (
+    entry.tryLine !== null &&
+    entry.economyConsequence !== null &&
+    renderableBand(entry) !== null
+  )
+}
+
+/**
+ * Whether this reading earns its Try line as a cue (design.md D3): normal tier, the Try line applies,
+ * the band is renderable, and the value is strictly past the band's outermost finite bound on the
+ * costly side — the Energy cost headline's own threshold. Never an unbanded metric, never a value
+ * within the band's finite bounds.
+ */
+function cueEligible(focus: FocusMetric, guidance: Guidance): boolean {
+  if (focus.tier !== 'normal') return false
   const entry = guidedEntry(focus, guidance)
-  const { tryLine } = entry.guidance
-  if (tryLine === null || !tryLineApplies(entry)) return null
-  return { metric: focus.metric.metric, text: tryLine.text, url: tryLine.url }
+  if (entry.guidance.tryLine === null || entry.band === null) return false
+  return tryLineApplies(entry) && pastCostlySide(entry)
+}
+
+function measuredIn(view: FocusAreaView): FocusMetric[] {
+  return view.headline === null ? [] : [view.headline, ...view.supporting]
+}
+
+function areaCue(view: FocusAreaView, guidance: Guidance): AreaCue | null {
+  if (NO_CUE_AREAS.has(view.area)) return null
+  const measured = measuredIn(view)
+  for (const id of ONE_THING_PRIORITY) {
+    const focus = measured.find((candidate) => candidate.metric.metric === id)
+    if (focus === undefined || !cueEligible(focus, guidance)) continue
+    const tryLine = guidance[id].tryLine!
+    return { metric: id, text: tryLine.text, url: tryLine.url }
+  }
+  return null
 }
 
 export function feedbackFor(
   view: FocusAreaView,
-  guidance: Record<MetricId, MetricGuidance> = METRIC_GUIDANCE,
+  guidance: Guidance = METRIC_GUIDANCE,
 ): AreaFeedback {
   const { area, headline } = view
   if (headline === null) {
     return { area, why: null, cue: null, nonPoint: null }
   }
-  const why = WHY_LINES[headline.metric.metric] ?? null
-  const cue = cueFor(area, headline, guidance)
+  const cue = areaCue(view, guidance)
+  const why = WHY_LINES[cue?.metric ?? headline.metric.metric] ?? null
   const nonPoint =
     cue === null
-      ? ([headline, ...view.supporting]
+      ? (measuredIn(view)
           .map((focus) => NON_POINTS[focus.metric.metric])
           .find((line) => line !== undefined) ?? null)
       : null
   return { area, why, cue, nonPoint }
 }
+
+/** Why the one-thing stop cannot say either "this one" or "nothing here calls for a change". */
+export type OneThingUnclearReason = 'caveated' | 'pending' | 'unmeasured'
 
 export type OneThing =
   | {
@@ -209,61 +239,60 @@ export type OneThing =
       url: string
     }
   | { kind: 'nothingToChange' }
+  | { kind: 'unclear'; reason: OneThingUnclearReason }
 
 /**
- * Whether a reading is past its cited band on the side its studied change moves away from — the
- * same threshold as the Energy cost headline (`pastCostlySide`, `src/results/guidedHeadlines.ts`):
- * strictly beyond the outermost FINITE bound, so cadence's open-ended `<153` zone counts as beyond
- * while a value exactly on a bound does not. A metric with no renderable band is never past it.
- */
-function pastBandAwayFromCue(entry: GuidedEntry): boolean {
-  const { tryLine } = entry.guidance
-  const { band } = entry
-  const value = entry.metric.value
-  if (tryLine === null || band === null || value === null) return false
-  const bounds = bandBounds(band)
-  if (bounds.length === 0) return false
-  return tryLine.direction === 'higher'
-    ? value < bounds[0]
-    : value > bounds[bounds.length - 1]
-}
-
-/**
- * At most one cue for the whole tour: the first metric in `ONE_THING_PRIORITY` that is measured at
- * the normal tier, whose Try line applies, and whose value lies beyond its cited band on the side
- * that line moves away from. Never a value inside its band, never an unbanded metric (so
- * overstriding stays dormant until it has a band), never a caveated reading.
+ * At most one cue for the whole tour: the first eligible metric across all areas in
+ * `ONE_THING_PRIORITY` order — so always one of the area cues the reader already saw.
+ *
+ * With none eligible, "nothing to change" is claimed only when every cue-capable metric was
+ * measured at the normal tier. Otherwise the answer is unclear, and says why, in this order:
+ * `'caveated'` (a cue-capable reading is measured but not at the normal tier), `'pending'` (a
+ * scale-pass metric is not measured yet while that pass is pending or running), `'unmeasured'`.
  */
 export function selectOneThing(
   areas: readonly FocusAreaView[],
-  guidance: Record<MetricId, MetricGuidance> = METRIC_GUIDANCE,
+  scalePassStatus: ScalePassStatus = 'idle',
+  guidance: Guidance = METRIC_GUIDANCE,
 ): OneThing {
-  const measured = new Map<
-    MetricId,
-    { area: FocusAreaId; focus: FocusMetric }
-  >()
+  const cues = new Map<MetricId, { area: FocusAreaId; cue: AreaCue }>()
   for (const view of areas) {
-    if (NO_CUE_AREAS.has(view.area)) continue
-    const focuses =
-      view.headline === null ? [] : [view.headline, ...view.supporting]
-    for (const focus of focuses) {
-      measured.set(focus.metric.metric, { area: view.area, focus })
-    }
+    const cue = areaCue(view, guidance)
+    if (cue !== null) cues.set(cue.metric, { area: view.area, cue })
   }
   for (const id of ONE_THING_PRIORITY) {
-    const found = measured.get(id)
-    if (found === undefined || found.focus.tier !== 'normal') continue
-    const entry = guidedEntry(found.focus, guidance)
-    const { tryLine } = entry.guidance
-    if (tryLine === null || !tryLineApplies(entry)) continue
-    if (!pastBandAwayFromCue(entry)) continue
-    return {
-      kind: 'cue',
-      area: found.area,
-      metric: id,
-      text: tryLine.text,
-      url: tryLine.url,
+    const found = cues.get(id)
+    if (found === undefined) continue
+    return { kind: 'cue', area: found.area, ...found.cue }
+  }
+
+  const scalePassRunning =
+    scalePassStatus === 'pending' || scalePassStatus === 'running'
+  const reasons = new Set<OneThingUnclearReason>()
+  const seen = new Set<MetricId>()
+  for (const view of areas) {
+    if (NO_CUE_AREAS.has(view.area)) continue
+    for (const focus of [...measuredIn(view), ...view.excluded]) {
+      const id = focus.metric.metric
+      if (!cueCapable(id, guidance)) continue
+      seen.add(id)
+      if (focus.tier === 'caveated') reasons.add('caveated')
+      else if (focus.tier === 'excluded') {
+        const stillMeasuring =
+          scalePassRunning &&
+          SCALE_PASS_METRICS.has(id) &&
+          focus.metric.value === null
+        reasons.add(stillMeasuring ? 'pending' : 'unmeasured')
+      }
     }
+  }
+  const missing = FOCUS_AREA_ORDER.filter((area) => !NO_CUE_AREAS.has(area))
+    .flatMap((area) => FOCUS_AREAS[area].metricIds)
+    .some((id) => cueCapable(id, guidance) && !seen.has(id))
+  if (missing) reasons.add('unmeasured')
+
+  for (const reason of ['caveated', 'pending', 'unmeasured'] as const) {
+    if (reasons.has(reason)) return { kind: 'unclear', reason }
   }
   return { kind: 'nothingToChange' }
 }
