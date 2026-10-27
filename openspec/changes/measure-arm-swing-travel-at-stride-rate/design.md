@@ -126,5 +126,21 @@ not represented, and nothing in a side clip can say whether it differs.
 
 ## Measurement
 
-Filled in from the live A/B (Phase E): see `docs/agent-notes/mediapipe-front-view.md`
+Live A/B, real GPU, fresh process, 1 trial (fresh trials are exactly reproducible), each checkout
+on its own derived port. Full per-side table and keyframes: `docs/agent-notes/mediapipe-front-view.md`
 "Arm swing at stride rate, per-stride travel, near arm side-on".
+
+| clip | base | after D1 | after D2 | after D3 |
+|---|---|---|---|---|
+| front-approach | 0.23355 @ 0.413 | 0.23326 @ 0.413 | 0.33101 @ 0.413 | 0.33101 @ 0.413 primary |
+| side-landscape | null | null | null | 0.51251 @ 0.460 tolerated (near L) |
+| side-portrait | null | null | null | 0.42595 @ 0.142 tolerated (near R, 1 cycle) |
+| multiperson | null | null | null | 0.54641 @ 0.367 tolerated (near L) |
+| fused demo | 0.234 front | — | — | 51.3% Medium, side-landscape |
+
+Every non-arm field bit-identical to base at every phase on all four clips (md5 + diff of the
+canonicalised reports with `elapsedMs` and all `armSwingAmplitude` keys dropped). Travel ÷
+fundamental: 1.23–1.78 front, 1.28 side-landscape near, 1.23 multiperson near, 1.67 side-portrait
+near. Side-portrait's near-arm fit sits on the band floor (0.156 Hz) with ~1.5 cycles — below the
+window's own frequency resolution — and its single-window travel (0.426 T) reads above the ~0.30 T
+visible in keyframes; its 0.142 confidence carries that.

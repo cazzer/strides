@@ -9,7 +9,7 @@
 - [x] 1.3 `armSwingAmplitude`: no anchor → `null` with the running-rhythm caveat
 - [x] 1.4 Tests: 1.0/1.1 Hz swings recovered; a 0.2 Hz retimed swing recovered; a step-rate
       component cannot be chosen; no-anchor null; fixtures carry a whole-body bounce at 2× the swing
-- [ ] 1.5 Live arm snapshot after this fix (Phase E)
+- [x] 1.5 Live arm snapshot after this fix (Phase E)
 
 ## 2. Report per-stride travel (`strides-eiil.2`, design D2)
 
@@ -19,7 +19,7 @@
       caveat
 - [x] 2.4 Tests: pure sine, sine + 2nd harmonic, triangle, single-frame spike, jitter, realistic
       fixture
-- [ ] 2.5 Live arm snapshot after this fix (Phase E)
+- [x] 2.5 Live arm snapshot after this fix (Phase E)
 
 ## 3. Side view reads the near arm (`strides-eiil.3`, design D3)
 
@@ -38,8 +38,8 @@
 
 ## 4. Verification and record
 
-- [ ] 4.1 Live A/B main vs branch on side-landscape, side-portrait, front-approach, multiperson:
+- [x] 4.1 Live A/B main vs branch on side-landscape, side-portrait, front-approach, multiperson:
       every non-arm field bit-identical
-- [ ] 4.2 Arm value/confidence/viewFit/caveat per clip, base and after each fix
-- [ ] 4.3 Keyframe sanity: near arm on side-landscape (left) and side-portrait (right)
-- [ ] 4.4 `docs/agent-notes/mediapipe-front-view.md` table + rationale; CLAUDE.md "Current facts" line
+- [x] 4.2 Arm value/confidence/viewFit/caveat per clip, base and after each fix
+- [x] 4.3 Keyframe sanity: near arm on side-landscape (left) and side-portrait (right)
+- [x] 4.4 `docs/agent-notes/mediapipe-front-view.md` table + rationale; CLAUDE.md "Current facts" line
