@@ -154,6 +154,7 @@ Unit tests mock the detector, so **verify UI/pipeline changes live** before call
 | `area-floor.md` | touching `retroactivePersonSelection.ts` thresholds |
 | `app-shell.md` | header clip strip, `ClipStripEntry`, add-a-clip, presentation/playback |
 | `guided-results-view.md` | `src/guidance/`, guided cards, bands, scale palette, word budgets |
+| `runner-tour.md` | `src/runner`, `src/results/tour`, `src/results/summary`, focus areas, view routing, the view A/B gate |
 | `metric-layer-changes.md` | a reading that disagrees with a number quoted in the notes |
 | `mediapipe-front-view.md` | `viewDetection.ts`, SER/BSR, `stepWidth`/`stepWidthCm`, scale-pass graft |
 | `evidence.md` | `evidenceFrames.ts`, `extractFrames.ts`, annotations, crops, seek offset, coverage tables |
