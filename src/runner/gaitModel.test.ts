@@ -105,23 +105,26 @@ function lowestLeftFoot(params: RunnerParams, phase: number): number {
   )
 }
 
-/** The left foot's worst distance from the ground through stance, (0, stanceEnd] at 1/1000. */
-function stancePinError(params: RunnerParams): number {
+/** The left foot's worst distance from the ground through stance, (0, stanceEnd] at 1/`steps`. */
+function stancePinError(params: RunnerParams, steps = 1000): number {
   let worst = 0
-  for (let i = 1; i <= GAIT_PHASES.stanceEnd * 1000; i += 1) {
-    worst = Math.max(worst, Math.abs(lowestLeftFoot(params, i / 1000)))
+  for (let i = 1; i <= GAIT_PHASES.stanceEnd * steps; i += 1) {
+    worst = Math.max(worst, Math.abs(lowestLeftFoot(params, i / steps)))
   }
   return worst
 }
 
-/** The left foot's lowest point through swing, (stanceEnd, 1) at 1/1000: negative is underground. */
-function swingClearance(params: RunnerParams): number {
+/** The left foot's lowest point through swing, (stanceEnd, 1) at 1/`steps`: negative is underground. */
+function swingClearance(params: RunnerParams, steps = 1000): number {
   let lowest = Infinity
-  for (let i = GAIT_PHASES.stanceEnd * 1000 + 1; i < 1000; i += 1) {
-    lowest = Math.min(lowest, lowestLeftFoot(params, i / 1000))
+  for (let i = Math.floor(GAIT_PHASES.stanceEnd * steps) + 1; i < steps; i += 1) {
+    lowest = Math.min(lowest, lowestLeftFoot(params, i / steps))
   }
   return lowest
 }
+
+/** The domain grid's sampling: coarser than the corners' 1/1000, since it has 3600 sets. */
+const DOMAIN_STEPS = 250
 
 function grid(axes: Partial<Record<RunnerParamId, readonly number[]>>): RunnerParams[] {
   return Object.entries(axes).reduce<RunnerParams[]>(
@@ -182,7 +185,10 @@ describe('the stance foot stands on the ground', () => {
   it('pins the stance foot to within 0.01 over the declared domain and at the back-landing corners', () => {
     const backLanding = LEG_CORNERS.filter((params) => params.landingOffset < 0)
     expect(backLanding).toHaveLength(32)
-    for (const params of [...PIN_DOMAIN, ...backLanding]) {
+    for (const params of PIN_DOMAIN) {
+      expect(stancePinError(params, DOMAIN_STEPS), JSON.stringify(params)).toBeLessThan(0.01)
+    }
+    for (const params of backLanding) {
       expect(stancePinError(params), JSON.stringify(params)).toBeLessThan(0.01)
     }
   }, DOMAIN_SWEEP_TIMEOUT_MS)
@@ -198,7 +204,7 @@ describe('the stance foot stands on the ground', () => {
     }).map((params) => realizeParams(params))
     let extremeWorst = 0
     for (const params of [...PIN_DOMAIN, ...overstrides]) {
-      const clearance = swingClearance(params)
+      const clearance = swingClearance(params, DOMAIN_STEPS)
       // The swing knee may not bend past the bound peak, so a 50° peak bend, or legs crossed to
       // the far end of step width, can leave too little room to carry the foot clear under the
       // lowest hips; past the demo clip's 0.512 landing the stance foot's own sink carries into
@@ -404,8 +410,6 @@ const MOVED_JOINTS: Record<RunnerParamId, JointFamily[]> = {
 /** The parameters the figure's height depends on; every other one leaves the figure bit-identical. */
 const SHAPES_THE_LEGS = new Set<RunnerParamId>([
   'pelvisBounce',
-  'peakThighAngle',
-  'peakSwingKneeBend',
   'landingOffset',
   'contactShankOffset',
   'stepWidth',
@@ -450,12 +454,16 @@ describe('each binding moves only its own part, in the direction of its value', 
       const low = withParams({ [id]: sweep[0] })
       const high = withParams({ [id]: sweep[sweep.length - 1] })
       const moved = new Set<JointFamily>()
+      let firstShift: number | null = null
       for (let i = 0; i < 48; i += 1) {
         const a = poseAt(i / 48, low)
         const b = poseAt(i / 48, high)
         // The whole-figure vertical shift at this phase, read off a hip (no binding's own joint).
         const shift = joint(b, 'left_hip').y - joint(a, 'left_hip').y
         if (!SHAPES_THE_LEGS.has(id)) expect(shift).toBe(0)
+        // Only the bounce reshapes the hips' path; any other shift is one constant height change.
+        firstShift ??= shift
+        if (id !== 'pelvisBounce') expect(Math.abs(shift - firstShift)).toBeLessThan(1e-12)
         a.forEach((j, k) => {
           if (Math.hypot(j.x - b[k].x, j.y + shift - b[k].y, j.z - b[k].z) > 1e-6) {
             moved.add(family(j.name))
