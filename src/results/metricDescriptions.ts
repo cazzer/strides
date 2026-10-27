@@ -4,7 +4,7 @@ import type { MetricId } from '../heuristics/types'
  * What each metric measures, in the reader's terms — one sentence or three, and never a verdict.
  *
  * Moved here verbatim from `MetricsPanel.tsx` (guided-results-view, strides-kgi.5) so that both
- * results views read the SAME copy. The alternative was a second twelve-string table in the guided
+ * results views read the SAME copy. The alternative was a second thirteen-string table in the guided
  * view, and two tables of prose that are meant to say the same thing drift the first time someone
  * edits one of them — with nothing failing, because both still render a sentence. `MetricsPanel`
  * renders exactly the DOM it rendered before the move; its own test suite is the proof.

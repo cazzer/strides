@@ -472,7 +472,7 @@ describe('The contents list names every measurement and reaches it, even inside 
     ).toBeTruthy()
   })
 
-  it('lists all twelve in page order, each with its value or "not measured", and no zone words', () => {
+  it('lists all thirteen in page order, each with its value or "not measured", and no zone words', () => {
     const heuristics = makeHeuristics({
       cadence: makeMetric('cadence', { value: 163.5 }),
       kneeDrive: makeMetric('kneeDrive', { value: null, confidence: 0 }),
@@ -2281,7 +2281,7 @@ describe('Evidence arrives as input and renders into the card it belongs to', ()
     expect(card('Cadence').querySelector('canvas')).toBeNull()
   })
 
-  it('places each of twelve distinct canvases once, in its own card, and none for an excluded metric', () => {
+  it('places each of thirteen distinct canvases once, in its own card, and none for an excluded metric', () => {
     const excluded: MetricId[] = ['kneeDrive', 'stepWidthCm', 'cadence']
     const evidence = ALL_IDS.map((id) => ({
       metric: id,

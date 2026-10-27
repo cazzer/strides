@@ -230,7 +230,7 @@ a blank field.
 
 ### Requirement: Metrics panel readouts with measurability and confidence tiers
 
-The system SHALL display, for each of the twelve `MetricId`s in `FormHeuristicsResult`, its value in
+The system SHALL display, for each of the thirteen `MetricId`s in `FormHeuristicsResult`, its value in
 plain language and a label naming the metric, partitioned into three tiers that determine how —
 and whether — a value renders at all, rather than a single uniform card style for every metric.
 Exclusion is reserved for metrics that are **structurally unmeasurable** — nothing was measured
@@ -2598,4 +2598,44 @@ a live region. Neither behaviour SHALL change how frames are sampled or detected
 
 - **WHEN** a clip is analysing on a coarse-pointer device
 - **THEN** a non-live notice says analysis can take a minute or more and to keep the tab open
+
+### Requirement: Swing-foot lateral excursion appears with neutral interpretation and paired path evidence
+
+The results views SHALL label the metric "Swing-foot lateral excursion" and describe ankle travel
+relative to the same-side knee during early-to-mid swing, in percent of hip width. Guidance SHALL
+explain the terminal third exclusion and SHALL be unbanded
+and SHALL state that this is not heel rotation or a diagnosis. When evidence is available, the
+system SHALL show two instants of one complete swing near its low and high quantile offsets, with
+the measured knee's vertical line and the ankle's horizontal offset marked at each instant.
+
+#### Scenario: A usable swing has evidence at both ends of its range
+
+- **WHEN** a typical usable swing has drawable frames near its low and high offset quantiles
+- **THEN** one paired evidence image depicts those two positions of the same foot
+
+### Requirement: The results surface explains illustrative and detected running motion
+
+The system SHALL display a two-dimensional illustrative runner during sampling and processing, label it as an illustration, and show an actual detected pose only after analysis is ready. The first transition to detected pose SHALL respect reduced-motion preference. The illustration SHALL NOT be presented as universal ideal form or used to grade the runner.
+
+#### Scenario: Analysis is still running
+- **WHEN** a clip is being sampled or processed
+- **THEN** the stage shows the moving illustrative wireframe and does not claim to show progressively detected joints
+
+#### Scenario: Analysis becomes ready
+- **WHEN** all clips finish analysis and a robust pose exists for the selected metric
+- **THEN** the stage transitions once from the illustration to that measured pose
+
+### Requirement: Each metric visual uses its own evidence source
+
+The system SHALL select the metric's winning clip and pose frames, display available ghosted evidence behind a detected trace, and keep the evidence canvas in its original card. Centimeter metrics SHALL use the corresponding scale-pass pose frames. Keyboard focus, guided-result hashes, and scrolling SHALL update the selected metric.
+
+On a small screen, the system SHALL keep a compact metric rail visible while scrolling and provide an accessible expanded view of the same metric visual. A change in the winning source clip SHALL never leave old clip imagery attributed to the new winner during evidence re-extraction.
+
+#### Scenario: A metric comes from a second clip
+- **WHEN** the reader focuses a metric whose winning source is clip two
+- **THEN** the stage uses clip two's pose and evidence and identifies clip two
+
+#### Scenario: Evidence is pending, absent, or the metric is excluded
+- **WHEN** no extracted image can yet or ever be shown
+- **THEN** the stage states the condition and does not imply an extracted image exists
 

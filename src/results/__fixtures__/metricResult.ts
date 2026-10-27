@@ -151,7 +151,7 @@ export function makeMetric<M extends MetricId>(
     caveat: defaults.caveat,
     // `exemplars` is ABSENT, which is itself a valid state (`MetricResult.exemplars`: absent, never
     // an empty array, when nothing cleared the quality gate). A generic default exemplar would be
-    // wrong for eleven of twelve metrics — `kind` is per metric and `cadence` never emits one — so
+    // wrong for twelve of thirteen metrics — `kind` is per metric and `cadence` never emits one — so
     // a test that needs evidence states the exemplar it means.
     ...overrides,
     metric,
@@ -286,13 +286,14 @@ export interface HeuristicsFixtureOptions {
 }
 
 /**
- * A complete `FormHeuristicsResult`: `makeView()` plus all twelve metrics at their defaults, each
+ * A complete `FormHeuristicsResult`: `makeView()` plus all thirteen metrics at their defaults, each
  * `'normal'` tier, with `overrides` replacing whole slots.
  *
  * ⚠️ **The default is view-INCOHERENT, and has to be.** `DEFAULT_VIEW_FIT_TABLE` makes `stepWidth`,
- * `stepWidthCm` and `armSwingAmplitude` front-primary and every other gated metric side-primary, so
- * no single view gives all twelve `viewFit: 'primary'` — a real side-view run would mark those three
- * `'unsuitable'` and exclude them. The factory keeps every metric `'primary'` because "all twelve
+ * `stepWidthCm`, `armSwingAmplitude` and `swingFootLateralExcursion` front-primary and every other
+ * gated metric side-primary, so no single view gives all thirteen `viewFit: 'primary'` — a real
+ * side-view run would mark those four `'unsuitable'` and exclude them. The factory keeps every
+ * metric `'primary'` because "all thirteen
  * measured and normal" is what a test reaching for the default wants, and nothing in
  * `src/results/` re-derives a metric's `viewFit` from `view`: it is computed once, inside
  * `computeFormHeuristics`, and carried verbatim through fusion and the scale-pass graft. A test

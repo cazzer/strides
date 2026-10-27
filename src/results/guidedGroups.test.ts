@@ -55,7 +55,7 @@ describe('guidedGroups — the three groups, by what can honestly be said', () =
     ]).toEqual([5, 8, 0])
   })
 
-  it('accounts for all twelve metrics exactly once', () => {
+  it('accounts for all thirteen metrics exactly once', () => {
     const groups = guidedGroups(makeHeuristics())
     const all = [
       ...groups.banded,

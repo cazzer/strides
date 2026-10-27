@@ -15,7 +15,7 @@ import { metricTier } from './metricConfidence'
 import type { ScalePassStatus } from './types'
 
 /**
- * How the guided results view partitions and orders the twelve metrics.
+ * How the guided results view partitions and orders the thirteen metrics.
  *
  * Pure, so the page's structure is decided somewhere a test can read it without rendering. Three
  * groups, by what can honestly be said about each metric on this clip (guided-results-view spec,

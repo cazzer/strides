@@ -118,7 +118,7 @@ Unit tests mock the detector, so **verify UI/pipeline changes live** before call
 
 ## Current facts that older notes contradict
 
-- `MetricId` has **twelve** members; `armSwingSymmetry` was withdrawn → read as `armSwingAmplitude`.
+- `MetricId` has **thirteen** members (the thirteenth is `swingFootLateralExcursion`); `armSwingSymmetry` was withdrawn → read as `armSwingAmplitude`.
 - `COMMON_KEYPOINT_NAMES` is **19** (heel/foot_index added), not 12 or 15.
 - The evidence gallery is gone; evidence is inline, annotated, in each card (`w-36`, ~142 px).
 - `view.confidence` was rescaled (`strides-2iw`) — front-label confidences before 2026-08-29 aren't
