@@ -3,6 +3,7 @@ import type { FormHeuristicsResult, MetricId } from '../../heuristics/types'
 import { FOCUS_AREAS, FOCUS_AREA_ORDER } from '../../guidance/focusAreas'
 import type { TourStopId } from '../../guidance/focusAreas'
 import { ModelRunner } from '../../runner/ModelRunner'
+import type { RunnerFocus } from '../../runner/ModelRunner'
 import { bindRunnerParams } from '../../runner/runnerParams'
 import { usePrefersReducedMotion } from '../../runner/usePrefersReducedMotion'
 import { useRunnerIntro } from '../../runner/useRunnerIntro'
@@ -100,6 +101,17 @@ export function RunnerTour({ onLeaveTour, resultKey, coverage, ...guidedProps }:
   )
 }
 
+/**
+ * `runnerFocusFor` over a comma-joined list of metric ids, memoised on the list itself: the result
+ * is rebuilt on every session render, and a focus of the same ids must stay the same object.
+ */
+function useRunnerFocus(metricKey: string): RunnerFocus | undefined {
+  return useMemo(
+    () => (metricKey === '' ? undefined : runnerFocusFor(metricKey.split(',') as MetricId[])),
+    [metricKey],
+  )
+}
+
 interface TourBodyProps {
   heuristics: FormHeuristicsResult
   scalePassStatus: ScalePassStatus
@@ -151,11 +163,7 @@ function TourBody({ heuristics, scalePassStatus, coverage, resultKey, onSeeAll }
       : shown === 'oneThing' && plan.oneThing.kind === 'cue'
         ? [plan.oneThing.metric]
         : []
-  const focusKey = focusMetrics.join(',')
-  const focus = useMemo(
-    () => (focusKey === '' ? undefined : runnerFocusFor(focusKey.split(',') as MetricId[])),
-    [focusKey],
-  )
+  const focus = useRunnerFocus(focusMetrics.join(','))
   const { camera, playbackRate } = shown === null ? NO_FOCUS_CAMERA : stopCamera(shown)
   const runnerLabel = shownArea === null ? 'whole body' : shownArea.view.label.toLowerCase()
   const anyBar = plan.areaStops.some(({ entries: [headline] }) => hasCompactBar(headline))

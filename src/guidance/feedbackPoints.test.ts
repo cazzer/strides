@@ -16,6 +16,7 @@ import {
   NON_POINTS,
   NOTHING_TO_CHANGE,
   ONE_THING_LABEL,
+  ONE_THING_UNCLEAR,
   ONE_THING_PRIORITY,
   WHY_LINES,
   feedbackFor,
@@ -225,6 +226,9 @@ describe('feedback never grades the runner', () => {
     ['CUE_PREFIX', CUE_PREFIX],
     ['ONE_THING_LABEL', ONE_THING_LABEL],
     ['NOTHING_TO_CHANGE', NOTHING_TO_CHANGE],
+    ...Object.entries(ONE_THING_UNCLEAR).map(
+      ([reason, text]) => [`ONE_THING_UNCLEAR.${reason}`, text] as [string, string],
+    ),
     ...CUE_CAPABLE.map(
       (id) => [`cue ${id}`, tryLineOf(id)!.text] as [string, string],
     ),
@@ -534,6 +538,13 @@ describe('every stop stays within 25 visible words', () => {
     expect(
       words(`${ONE_THING_LABEL} ${NOTHING_TO_CHANGE}`),
     ).toBeLessThanOrEqual(25)
+  })
+})
+
+describe('ONE_THING_UNCLEAR', () => {
+  it.each(Object.entries(ONE_THING_UNCLEAR))('%s is at most 14 words, and 25 with the label', (_, text) => {
+    expect(words(text)).toBeLessThanOrEqual(14)
+    expect(words(`${ONE_THING_LABEL} ${text}`)).toBeLessThanOrEqual(25)
   })
 })
 

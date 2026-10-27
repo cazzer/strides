@@ -1215,8 +1215,10 @@ describe('MultiClipVideoSession — results view mode', () => {
     await loadOneReadyClip()
 
     expect(mountedView()).toBe('tour')
-    expect(document.querySelector('.guided-results__group')).not.toBeNull()
-    expect(document.querySelector('.runner-tour .results-runner-slot')).toHaveAttribute('aria-hidden', 'true')
+    // The tour's body, not the guided measurements: the runner's rail beside the stops.
+    expect(document.querySelector('.guided-results__group')).toBeNull()
+    expect(document.querySelector('.runner-tour .runner-tour__rail')).not.toBeNull()
+    expect(document.querySelector('.runner-tour [data-tour-stop="oneThing"]')).not.toBeNull()
     expect(window.location.search).toBe('?clip=demo')
     expect(window.location.hash).toBe('#top')
   })
@@ -1380,7 +1382,9 @@ describe('MultiClipVideoSession — results view mode', () => {
     window.history.back()
     await waitFor(() => expect(mountedView()).toBe('tour'))
     expect(window.localStorage.getItem('strides.resultsLanding')).toBe('summary')
-    expect(document.querySelector('.runner-tour .evidence-image > canvas')).toBe(canvas)
+    // The tour holds no card, so the canvas is out of the document until a card view mounts.
+    expect(document.querySelector('.runner-tour .evidence-image')).toBeNull()
+    expect(canvas.isConnected).toBe(false)
 
     window.history.forward()
     await waitFor(() => expect(mountedView()).toBe('summary'))
@@ -1441,16 +1445,18 @@ describe('MultiClipVideoSession — results view mode', () => {
     ).toMatch(/^\d+px$/)
   })
 
-  it('moves the SAME evidence canvas through tour → summary → classic → summary, never losing it', async () => {
+  it('mounts no canvas in the tour, then moves the SAME canvas through summary → classic → summary', async () => {
     const canvas = await settleOneEvidenceCanvas()
     await loadOneReadyClip()
 
     expect(mountedView()).toBe('tour')
-    // Identity, not a lookalike: the one node the extractor produced is what each view shows.
-    expect(document.querySelector('.runner-tour .guided-results .evidence-image > canvas')).toBe(canvas)
+    // The tour mounts no metric card and so no evidence canvas; the summary is the first to.
+    expect(document.querySelector('.runner-tour .evidence-image')).toBeNull()
+    expect(canvas.isConnected).toBe(false)
 
     fireEvent.click(screen.getByRole('button', { name: 'Skip to summary' }))
     expect(mountedView()).toBe('summary')
+    // Identity, not a lookalike: the one node the extractor produced is what each view shows.
     expect(document.querySelector('.results-summary .guided-results .evidence-image > canvas')).toBe(canvas)
 
     fireEvent.click(screen.getByRole('button', { name: 'Classic table' }))

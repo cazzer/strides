@@ -112,4 +112,11 @@ describe('summaryRows', () => {
     const cadence = areas.flatMap(({ entries }) => entries).find((e) => e.metric.metric === 'cadence')!
     expect(cadence.band).not.toBeNull()
   })
+
+  it('returns all six areas’ views, measured or not, in tour order', () => {
+    const { views, areas } = summaryRows(withUnmeasured(['armSwingAmplitude']))
+    expect(views.map((view) => view.area)).toEqual(FOCUS_AREA_ORDER)
+    expect(views.find((view) => view.area === 'arms')?.measured).toBe(false)
+    expect(areas.map((area) => area.view)).toEqual(views.filter((view) => view.measured))
+  })
 })

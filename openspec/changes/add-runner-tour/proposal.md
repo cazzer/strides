@@ -40,6 +40,8 @@ later tickets (`strides-trn2.2`, `.3`, `.5`).
 ### New Capabilities
 
 - `runner-feedback`: focus-area grouping and cited feedback points (why, cue, non-point, one thing).
+- `runner-tour`: the tour view (`strides-trn2.3`): one runner beside one stop per measured area and
+  the one-thing stop, the active stop pointing the camera, the intro first, a sticky Skip.
 
 ### Modified Capabilities
 
@@ -56,3 +58,8 @@ or any Try line text. `src/guidance` imports nothing from `src/results` or `src/
 View routing (`strides-trn2.2`) changes which view a bare address opens on (the tour, not the guided
 view) and deletes `ResultsViewToggle`. It changes no measurement and no evidence planning. The e2e
 suite and the A/B harness still find exactly one "Analysis complete." line in every view.
+
+The tour (`strides-trn2.3`) replaces the stub's body with the runner and its stops and mounts no
+metric card, so evidence canvases first mount in the summary. It changes no measurement and no
+evidence planning; an A/B of the tour against the classic view is bit-identical but `elapsedMs`.
+`scripts/ab-person-selection.mjs` gains a `--view-arm` plane for that gate.
