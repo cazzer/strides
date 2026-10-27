@@ -79,12 +79,13 @@ const SCENARIOS: readonly Scenario[] = [
     focus: { metricIds: ['verticalOscillation', 'armSwingAmplitude'] },
   },
   {
-    // Past the pin's declared domain (design.md D15): the bindings outrank the pin, so the
-    // mid-stance foot (the still frame here) may dip a little below the ground.
+    // Past the pin's declared domain (design.md D15): the bindings outrank the pin, so through
+    // stance the foot may dip a little below the ground. The still frame holds contact.
     id: 'big-landing',
-    title: 'Big overstride, mid-stance',
+    title: 'Big overstride',
     params: bind('all', { overstriding: makeMetric('overstriding', { value: 0.5 }) }),
-    camera: 'legsSide',
+    camera: 'footSide',
+    focus: { metricIds: ['overstriding'] },
   },
 ]
 
