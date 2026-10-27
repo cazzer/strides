@@ -28,6 +28,7 @@ export function RunnerTour({ onLeaveTour, ...guidedProps }: RunnerTourProps) {
       <div className="results-runner-slot" aria-hidden="true" />
       <button
         type="button"
+        data-view-entry
         onClick={onLeaveTour}
         className="inline-flex items-center justify-center border-2 border-black px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black transition-colors hover:bg-black hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:border-white dark:text-white dark:hover:bg-white dark:hover:text-black"
       >

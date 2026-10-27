@@ -5,7 +5,8 @@
 ## The guided results view — `?view=guide` (2026-09-15, epic `strides-kgi`)
 
 **A second results page** that sets each metric against a published reference band where one can
-be cited. ⚠️ **Guided is the DEFAULT since 2026-10-16** (`strides-8c3`, change
+be cited. ⚠️ **Superseded 2026-10-27 (`strides-trn2.2`): the runner tour is the default now; see
+"Driving it" below.** The rest of this callout is the 2026-10-16 state. **Guided was the DEFAULT from 2026-10-16** (`strides-8c3`, change
 `results-ux-round-one`): `resolveResultsViewMode` selects classic only for exactly one
 `?view=classic`; absent, `?view=guide`, unknown, `CLASSIC` or a repeated param all resolve guided.
 The A/B harness and e2e suite therefore drive the guided view now — measured bit-identical to the
@@ -18,7 +19,7 @@ says "classic stays the default" or "opt-in" describes the pre-flip state. Spec:
   `bandPosition.ts`, `formatBandValue.ts`, `types.ts`); `src/results/GuidedResultsView.tsx`,
   `GuidedMetricCard.tsx`, `guidedGroups.ts` (pure three-group partition; group 3 is
   `metricTier === 'excluded'`), `formatGuidedValue.ts`; `resultsViewMode.ts`
-  (`history.replaceState`, no router; `ResultsViewToggle.tsx` was deleted by `strides-trn2.2`). The only wiring is one conditional in
+  (`history.pushState` per switch, no router; `ResultsViewToggle.tsx` was deleted by `strides-trn2.2`). The only wiring is one conditional in
   `MultiClipVideoSession.tsx`. `ResultsView.tsx` is untouched; `MetricsPanel.tsx` lost only
   `METRIC_DESCRIPTIONS`, moved verbatim to `metricDescriptions.ts` (`fd3d1f7`).
 - **The governing rule: a band is cited or it does not ship.** No band is invented, pooled across
@@ -60,7 +61,8 @@ maps to the tour. Both the tour and the summary are, for now, stubs wrapping exa
 (`--banded` / `--unbanded` / `--not-measured`; the last two are `<details>`, collapsed),
 `nav[aria-label="Measurements on this page"]`, `.metric-scale`. The motion stage (`.motion-story`)
 renders beside the classic table only. The Guided/Classic toggle is gone; the controls are "Skip to
-summary", "Replay tour", the summary footer's "Classic table" and classic's "Back to summary". The
+summary", "Replay tour", the summary footer's "Classic table" and classic's "Show summary". Each switch pushes a `{ stridesView }` history entry, so `page.goBack()`
+steps to the previous view (the load entry is stamped too; an unstamped `#` entry keeps the view). The
 A/B harness never passes `?view=`, so it drives the tour, and still finds exactly one "Analysis
 complete." line.
 

@@ -18,7 +18,12 @@ import { ResultsView } from './ResultsView'
 import { SessionCoverageNotice } from './SessionCoverageNotice'
 import { sessionCoverage } from './sessionCoverage'
 import { readResultsLanding, writeResultsLanding } from './resultsLanding'
-import { resolveResultsViewMode, writeResultsViewMode } from './resultsViewMode'
+import {
+  pushResultsViewMode,
+  resolveResultsViewMode,
+  resultsViewModeFromHistoryState,
+  stampResultsViewMode,
+} from './resultsViewMode'
 import type { ResultsViewMode } from './resultsViewMode'
 import { ResultsSummary } from './summary/ResultsSummary'
 import { RunnerTour } from './tour/RunnerTour'
@@ -219,20 +224,47 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
     previouslyPresentedRef.current = presentedClipId
   }, [presentedClipId])
   // Which results view renders: the tour, the summary or the classic table. Seeded ONCE from the
-  // address and the remembered landing (lazy initialiser, so a later render never re-reads either),
-  // and written back to the address on every switch — which, for tour and summary, means removing
-  // `view`. See `resultsViewMode.ts` and `resultsLanding.ts`.
+  // address and the remembered landing (lazy initialiser, so a later render never re-reads either).
+  // Every switch the reader makes pushes a history entry stamped with its view, so browser Back
+  // steps back through the views instead of leaving the page and losing the analysis. See
+  // `resultsViewMode.ts` and `resultsLanding.ts`.
   const [resultsViewMode, setResultsViewMode] = useState<ResultsViewMode>(() =>
     resolveResultsViewMode(window.location.search, readResultsLanding()),
   )
-  // Set by a reader's switch, never by the initial mount: focus moves into the new view only when
-  // the control the reader just used has been unmounted underneath them.
+  const resultsViewModeRef = useRef(resultsViewMode)
+  useEffect(() => {
+    resultsViewModeRef.current = resultsViewMode
+  }, [resultsViewMode])
+  // Set by a switch (a control, or browser Back/Forward), never by the initial mount: focus moves
+  // into the new view only when the view the reader was in has been unmounted underneath them.
   const focusViewAfterSwitchRef = useRef(false)
   const viewRegionRef = useRef<HTMLDivElement>(null)
   const showView = useCallback((mode: ResultsViewMode) => {
     focusViewAfterSwitchRef.current = true
     setResultsViewMode(mode)
-    writeResultsViewMode(mode)
+    pushResultsViewMode(mode)
+  }, [])
+  useEffect(() => {
+    // The entry the page loaded on gets the view it opened with, so Back to it restores that view
+    // even if the remembered landing has changed since. Its address is left as it is.
+    stampResultsViewMode(resultsViewModeRef.current)
+    const onPopState = (event: PopStateEvent) => {
+      const stamped = resultsViewModeFromHistoryState(event.state)
+      if (stamped === null) {
+        // Not an entry a switch created. In practice it is one an in-page `#` link created (the
+        // guided view's measurement links), and that link changed no view. Re-resolving it from the
+        // address would be wrong: in a replayed tour with the summary remembered, the address says
+        // summary. So it keeps the view on screen, and gets stamped with it for next time.
+        stampResultsViewMode(resultsViewModeRef.current)
+        return
+      }
+      if (stamped === resultsViewModeRef.current) return
+      focusViewAfterSwitchRef.current = true
+      // The entry is already in history; setting the view must not push another.
+      setResultsViewMode(stamped)
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
   }, [])
   const leaveTour = useCallback(() => {
     writeResultsLanding()
@@ -244,10 +276,10 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
   useEffect(() => {
     if (!focusViewAfterSwitchRef.current) return
     focusViewAfterSwitchRef.current = false
-    // Every view's own controls come first in its region — Skip in the tour, Replay in the
-    // summary, Back to summary above the classic table — so the first enabled button IS the
-    // new view's first control.
-    viewRegionRef.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus()
+    // Each view marks its one entry control explicitly: Skip to summary in the tour, Replay tour
+    // in the summary, Show summary above the classic table. A marker rather than "the first button",
+    // so a control a later ticket puts in the runner slot cannot take focus by position.
+    viewRegionRef.current?.querySelector<HTMLElement>('[data-view-entry]')?.focus()
   }, [resultsViewMode])
 
   const handleReport = useCallback((clipId: string, session: ClipSession) => {
@@ -656,10 +688,11 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
               <>
                 <button
                   type="button"
+                  data-view-entry
                   onClick={showSummary}
                   className="inline-flex items-center justify-center border-2 border-black px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black transition-colors hover:bg-black hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:border-white dark:text-white dark:hover:bg-white dark:hover:text-black"
                 >
-                  Back to summary
+                  Show summary
                 </button>
                 <div className={aggregate.phase === 'idle' || aggregate.phase === 'error'
                   ? ''

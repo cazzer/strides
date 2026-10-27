@@ -19,13 +19,18 @@ read as no remembered landing.
 
 Selecting the classic view SHALL write `view=classic` to the address, so a reload or a shared link
 renders the classic view. Selecting the tour or the summary SHALL remove the `view` parameter from
-the address rather than write a value. Writing the address SHALL replace the current history entry
-rather than add one.
+the address rather than write a value.
+
+Each switch the reader makes SHALL add a history entry that records the view it shows, so the
+browser's Back and Forward step through the views the reader visited without leaving the page.
+Returning to an entry SHALL restore the view that entry records, and SHALL NOT add an entry of its
+own. The entry the page loaded on SHALL record the view it opened with. An entry that records no
+view, such as one an in-page link created, SHALL leave the view on screen unchanged.
 
 Each view SHALL offer keyboard-operable controls to the others: the tour a control to skip to the
-summary; the summary a control to replay the tour and a control to open the classic table; the
-classic view a control to return to the summary. After a reader's switch, focus SHALL move to the
-new view's first control.
+summary; the summary, below its results, a control to replay the tour and a control to open the
+classic table; the classic view a control to show the summary. Each view SHALL mark one of its
+controls as its entry control, and after a switch focus SHALL move to the new view's entry control.
 
 Selecting a view SHALL NOT require a routing library.
 
@@ -64,7 +69,13 @@ Selecting a view SHALL NOT require a routing library.
 
 - **WHEN** any of the three views renders
 - **THEN** it offers native buttons, operable from the keyboard, that reach the other views as listed
-  above, and activating one moves focus to the new view's first control
+  above, and activating one moves focus to the new view's entry control
+
+#### Scenario: Browser Back returns to the previous view
+
+- **WHEN** the reader moves from the summary to the classic view and then presses the browser's Back
+- **THEN** the summary renders again with its evidence imagery intact, the address carries no `view`
+  parameter, and the page has not been left
 
 #### Scenario: No routing library
 

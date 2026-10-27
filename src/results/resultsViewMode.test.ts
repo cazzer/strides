@@ -3,7 +3,9 @@ import type { ResultsLanding } from './resultsLanding'
 import {
   resolveResultsViewMode,
   searchWithResultsViewMode,
-  writeResultsViewMode,
+  pushResultsViewMode,
+  resultsViewModeFromHistoryState,
+  stampResultsViewMode,
 } from './resultsViewMode'
 import type { ResultsViewMode } from './resultsViewMode'
 
@@ -109,7 +111,24 @@ describe('searchWithResultsViewMode', () => {
   })
 })
 
-describe('writeResultsViewMode', () => {
+describe('resultsViewModeFromHistoryState', () => {
+  it.each([
+    [{ stridesView: 'tour' }, 'tour'],
+    [{ stridesView: 'summary', other: 1 }, 'summary'],
+    [{ stridesView: 'classic' }, 'classic'],
+    [{ stridesView: 'guide' }, null],
+    [{ stridesView: 'Classic' }, null],
+    [{ stridesView: 3 }, null],
+    [{}, null],
+    [null, null],
+    ['tour', null],
+    [undefined, null],
+  ] as const)('%j → %s', (state, expected) => {
+    expect(resultsViewModeFromHistoryState(state)).toBe(expected)
+  })
+})
+
+describe('pushResultsViewMode / stampResultsViewMode', () => {
   let originalHref: string
 
   beforeEach(() => {
@@ -121,51 +140,52 @@ describe('writeResultsViewMode', () => {
     vi.restoreAllMocks()
   })
 
-  it('writes view=classic, preserving the path, every other param and the hash', () => {
+  it('pushes view=classic, preserving the path, every other param and the hash', () => {
     window.history.replaceState(null, '', '/strides/?clip=2&q=a%20b#results')
-    writeResultsViewMode('classic')
+    const lengthBefore = window.history.length
+    pushResultsViewMode('classic')
+    expect(window.history.length).toBe(lengthBefore + 1)
     expect(window.location.pathname).toBe('/strides/')
     expect(window.location.search).toBe('?clip=2&q=a%20b&view=classic')
     expect(window.location.hash).toBe('#results')
+    expect(window.history.state).toEqual({ stridesView: 'classic' })
   })
 
-  it.each(['tour', 'summary'] as const)('strips view entirely for %s, preserving everything else', (mode) => {
+  it.each(['tour', 'summary'] as const)('pushes %s with view stripped, preserving everything else', (mode) => {
     window.history.replaceState(null, '', '/strides/?clip=2&view=classic#results')
-    writeResultsViewMode(mode)
-    expect(window.location.pathname).toBe('/strides/')
+    pushResultsViewMode(mode)
     expect(window.location.search).toBe('?clip=2')
     expect(window.location.hash).toBe('#results')
+    expect(window.history.state).toEqual({ stridesView: mode })
   })
 
-  it('leaves no dangling ? when view was the only parameter', () => {
-    window.history.replaceState(null, '', '/strides/?view=classic')
-    writeResultsViewMode('tour')
+  it('pushes even when the address does not change, since tour and summary share one', () => {
+    window.history.replaceState(null, '', '/strides/')
+    const push = vi.spyOn(window.history, 'pushState')
+    pushResultsViewMode('summary')
+    pushResultsViewMode('tour')
+    expect(push).toHaveBeenCalledTimes(2)
     expect(window.location.href).toBe(new URL('/strides/', originalHref).href)
   })
 
-  it('replaces rather than pushes, and keeps the existing history state object', () => {
-    const state = { some: 'state' }
-    window.history.replaceState(state, '', '/strides/')
+  it('stamps the current entry without changing its address, adding an entry, or dropping other state', () => {
+    window.history.replaceState({ some: 'state' }, '', '/strides/?view=guide#top')
     const lengthBefore = window.history.length
     const push = vi.spyOn(window.history, 'pushState')
-    writeResultsViewMode('classic')
+    stampResultsViewMode('tour')
     expect(push).not.toHaveBeenCalled()
     expect(window.history.length).toBe(lengthBefore)
-    expect(window.history.state).toEqual(state)
+    expect(window.location.search).toBe('?view=guide')
+    expect(window.location.hash).toBe('#top')
+    expect(window.history.state).toEqual({ some: 'state', stridesView: 'tour' })
   })
 
-  it('does not touch history when the address already says what is being written', () => {
-    window.history.replaceState(null, '', '/strides/?view=classic')
-    const replace = vi.spyOn(window.history, 'replaceState')
-    writeResultsViewMode('classic')
-    expect(replace).not.toHaveBeenCalled()
-  })
-
-  it('survives a reload: what it writes is what resolve reads back', () => {
+  it('survives a reload: what a push writes is what resolve reads back', () => {
     window.history.replaceState(null, '', '/strides/')
-    writeResultsViewMode('classic')
+    pushResultsViewMode('classic')
     expect(resolveResultsViewMode(window.location.search, 'summary')).toBe('classic')
-    writeResultsViewMode('tour')
+    pushResultsViewMode('tour')
     expect(resolveResultsViewMode(window.location.search, null)).toBe('tour')
   })
 })
+

@@ -24,19 +24,23 @@ export function ResultsSummary({ onReplayTour, onOpenClassic, ...guidedProps }: 
     <div className="results-summary space-y-6">
       {/* Where the model runner will stand (`strides-trn2.5`). */}
       <div className="results-runner-slot" aria-hidden="true" />
-      <button
-        type="button"
-        onClick={onReplayTour}
-        className="inline-flex items-center justify-center border-2 border-black px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black transition-colors hover:bg-black hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:border-white dark:text-white dark:hover:bg-white dark:hover:text-black"
-      >
-        Replay tour
-      </button>
       <GuidedResultsView {...guidedProps} />
-      <footer className="border-t-2 border-black pt-4 dark:border-white">
+      {/* Both controls live down here, not at the top: the tour's Skip sits at the top, and a
+          control at the same spot in the summary would catch a double click or tap and send the
+          reader straight back. `min-h-11` keeps each a 44 px touch target. */}
+      <footer className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t-2 border-black pt-4 dark:border-white">
+        <button
+          type="button"
+          data-view-entry
+          onClick={onReplayTour}
+          className="inline-flex min-h-11 items-center px-1 font-sans text-sm font-semibold text-black underline underline-offset-4 hover:text-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:text-white dark:hover:text-brand-400"
+        >
+          Replay tour
+        </button>
         <button
           type="button"
           onClick={onOpenClassic}
-          className="font-sans text-sm font-semibold text-black underline underline-offset-4 hover:text-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:text-white dark:hover:text-brand-400"
+          className="inline-flex min-h-11 items-center px-1 font-sans text-sm font-semibold text-black underline underline-offset-4 hover:text-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:text-white dark:hover:text-brand-400"
         >
           Classic table
         </button>

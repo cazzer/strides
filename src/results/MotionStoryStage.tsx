@@ -112,7 +112,7 @@ function StoryPicture({
   )
 }
 
-/** Select the result nearest the viewport's reading line. Keyboard focus and guide hashes take
+/** Select the result nearest the viewport's reading line. Keyboard focus and result hashes take
  * precedence when explicitly used, including links to cards inside collapsed disclosures. */
 function useReadingMetric(
   resultsRef: RefObject<HTMLDivElement | null>,

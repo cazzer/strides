@@ -1090,6 +1090,12 @@ vi.mock('./useSessionEvidence', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./useSessionEvidence')>()
   return { ...actual, useSessionEvidence: vi.fn(actual.useSessionEvidence) }
 })
+// Also a PASSTHROUGH, so one case can put a button ahead of the summary's entry control. `afterEach`
+// puts the real component back.
+vi.mock('./summary/ResultsSummary', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./summary/ResultsSummary')>()
+  return { ...actual, ResultsSummary: vi.fn(actual.ResultsSummary) }
+})
 
 describe('MultiClipVideoSession — results view mode', () => {
   let originalHref: string
@@ -1108,7 +1114,43 @@ describe('MultiClipVideoSession — results view mode', () => {
     )
     const hook = vi.mocked((await import('./useSessionEvidence')).useSessionEvidence)
     hook.mockImplementation(actual.useSessionEvidence)
+    const actualSummary = await vi.importActual<typeof import('./summary/ResultsSummary')>(
+      './summary/ResultsSummary',
+    )
+    vi.mocked((await import('./summary/ResultsSummary')).ResultsSummary).mockImplementation(
+      actualSummary.ResultsSummary,
+    )
   })
+
+  /** Makes the session's evidence one settled canvas, and returns it. jsdom decodes no video, so the
+   * real extraction never produces one. */
+  async function settleOneEvidenceCanvas(): Promise<HTMLCanvasElement> {
+    const plan: EvidenceFramePlan = {
+      metric: 'trunkLean',
+      kind: 'footStrike',
+      quality: 0.8,
+      label: 'Torso at the widest lean',
+      side: 'left',
+      base: { timestamp: 0.4, opacity: 1, keypoints: [], outwardSign: null, side: null },
+      ghost: null,
+      crop: { x: 0, y: 0, side: 200 },
+      travelDirection: 1,
+      demotion: null,
+      cropGrowth: null,
+      focusOffset: null,
+    }
+    const canvas = document.createElement('canvas')
+    // One stable object, as the real hook returns between changes — a fresh one per render would
+    // hand every view a new evidence identity on every render.
+    const settled: SessionEvidenceState = {
+      status: 'settled',
+      sections: [{ metric: 'trunkLean', clipIndex: 0, items: [{ plan, canvas }] }],
+    }
+    vi.mocked((await import('./useSessionEvidence')).useSessionEvidence).mockImplementation(
+      () => settled,
+    )
+    return canvas
+  }
 
   /** Every results view's root — classic, or the one guided view inside the tour or summary. */
   function resultsRoots(): Element[] {
@@ -1209,7 +1251,7 @@ describe('MultiClipVideoSession — results view mode', () => {
 
     expect(mountedView()).toBe('classic')
     expect(document.querySelector('.guided-results__group')).toBeNull()
-    const back = screen.getByRole('button', { name: 'Back to summary' })
+    const back = screen.getByRole('button', { name: 'Show summary' })
     expect(screen.getByRole('main')).toContainElement(back)
     expect(screen.getByRole('banner')).not.toContainElement(back)
     // Above the classic layout, which holds both the stage and the results.
@@ -1257,7 +1299,7 @@ describe('MultiClipVideoSession — results view mode', () => {
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Skip to summary' }))
   })
 
-  it('Classic table writes view=classic, and Back to summary removes it again', async () => {
+  it('Classic table writes view=classic, and Show summary removes it again', async () => {
     window.localStorage.setItem('strides.resultsLanding', 'summary')
     window.history.replaceState(null, '', '/strides/?clip=demo#top')
     await loadOneReadyClip()
@@ -1268,19 +1310,115 @@ describe('MultiClipVideoSession — results view mode', () => {
     expect(window.location.search).toBe('?clip=demo&view=classic')
     expect(window.location.hash).toBe('#top')
     expect(window.location.pathname).toBe('/strides/')
-    const back = screen.getByRole('button', { name: 'Back to summary' })
-    expect(document.activeElement).toBe(back)
+    const show = screen.getByRole('button', { name: 'Show summary' })
+    expect(document.activeElement).toBe(show)
 
-    fireEvent.click(back)
+    fireEvent.click(show)
     expect(mountedView()).toBe('summary')
     expect(window.location.search).toBe('?clip=demo')
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Replay tour' }))
   })
 
-  it('does not move focus on the initial mount', async () => {
+  it('focuses the marked entry control, not a button that happens to come first', async () => {
+    const { ResultsSummary: ActualSummary } = await vi.importActual<
+      typeof import('./summary/ResultsSummary')
+    >('./summary/ResultsSummary')
+    vi.mocked((await import('./summary/ResultsSummary')).ResultsSummary).mockImplementation(
+      (props) => (
+        <>
+          {/* A control a later ticket might put in the runner slot, ahead of the entry control. */}
+          <div className="results-runner-slot">
+            <button type="button">Runner control</button>
+          </div>
+          <ActualSummary {...props} />
+        </>
+      ),
+    )
     await loadOneReadyClip()
     expect(mountedView()).toBe('tour')
-    expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Skip to summary' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Skip to summary' }))
+    expect(mountedView()).toBe('summary')
+    expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Runner control' }))
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Replay tour' }))
+  })
+
+  it('does not move focus when the first view mounts', async () => {
+    render(<MultiClipVideoSession detector={makeFakeDetector()} modelLoad={IDLE_MODEL_LOADS} />)
+    fireEvent.click(screen.getByRole('button', { name: /^upload$/i }))
+    await chooseFile(new File(['x'], 'run.mp4', { type: 'video/mp4' }))
+    // Focus is somewhere that survives the picker unmounting; mounting the tour must not move it.
+    const heading = screen.getByRole('heading', { name: 'Strides' })
+    heading.focus()
+    markVideoReady(canonicalVideos()[0])
+    await waitFor(() => expect(screen.getByText(/analysis complete/i)).toBeInTheDocument())
+
+    expect(mountedView()).toBe('tour')
+    expect(document.activeElement).toBe(heading)
+  })
+
+  it('browser Back steps back through the views without leaving the page, and Forward replays them', async () => {
+    const canvas = await settleOneEvidenceCanvas()
+    window.history.replaceState(null, '', '/strides/?clip=demo')
+    await loadOneReadyClip()
+    expect(mountedView()).toBe('tour')
+    // The entry the page loaded on is stamped with the view it opened with.
+    expect(window.history.state).toEqual({ stridesView: 'tour' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Skip to summary' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Classic table' }))
+    expect(mountedView()).toBe('classic')
+    expect(window.location.search).toBe('?clip=demo&view=classic')
+
+    window.history.back()
+    await waitFor(() => expect(mountedView()).toBe('summary'))
+    expect(window.location.search).toBe('?clip=demo')
+    expect(document.querySelector('.results-summary .evidence-image > canvas')).toBe(canvas)
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Replay tour' }))
+
+    // The load entry restores the tour, although the summary is remembered by now.
+    window.history.back()
+    await waitFor(() => expect(mountedView()).toBe('tour'))
+    expect(window.localStorage.getItem('strides.resultsLanding')).toBe('summary')
+    expect(document.querySelector('.runner-tour .evidence-image > canvas')).toBe(canvas)
+
+    window.history.forward()
+    await waitFor(() => expect(mountedView()).toBe('summary'))
+    window.history.forward()
+    await waitFor(() => expect(mountedView()).toBe('classic'))
+    expect(window.location.search).toBe('?clip=demo&view=classic')
+    expect(document.querySelector('.metrics-panel .evidence-image > canvas')).toBe(canvas)
+  })
+
+  it('Back from a replayed tour returns to the summary, though both share one address', async () => {
+    window.localStorage.setItem('strides.resultsLanding', 'summary')
+    await loadOneReadyClip()
+    expect(mountedView()).toBe('summary')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Replay tour' }))
+    expect(mountedView()).toBe('tour')
+    const pushes = vi.spyOn(window.history, 'pushState')
+
+    window.history.back()
+    await waitFor(() => expect(mountedView()).toBe('summary'))
+    // Restoring a view from history adds no entry of its own.
+    expect(pushes).not.toHaveBeenCalled()
+  })
+
+  it('keeps the view on screen for an entry no switch created, such as an in-page # link', async () => {
+    window.localStorage.setItem('strides.resultsLanding', 'summary')
+    await loadOneReadyClip()
+    fireEvent.click(screen.getByRole('button', { name: 'Replay tour' }))
+    expect(mountedView()).toBe('tour')
+
+    // What a fragment navigation leaves behind: an entry with no state. Its address (no `view`,
+    // summary remembered) would re-resolve to the summary, which is exactly what must not happen.
+    window.history.pushState(null, '', '#cadence')
+    act(() => {
+      window.dispatchEvent(new PopStateEvent('popstate', { state: null }))
+    })
+    expect(mountedView()).toBe('tour')
+    expect(window.history.state).toEqual({ stridesView: 'tour' })
   })
 
   it('reads the address once, at mount — a later change to it does not switch the view', async () => {
@@ -1304,31 +1442,7 @@ describe('MultiClipVideoSession — results view mode', () => {
   })
 
   it('moves the SAME evidence canvas through tour → summary → classic → summary, never losing it', async () => {
-    const plan: EvidenceFramePlan = {
-      metric: 'trunkLean',
-      kind: 'footStrike',
-      quality: 0.8,
-      label: 'Torso at the widest lean',
-      side: 'left',
-      base: { timestamp: 0.4, opacity: 1, keypoints: [], outwardSign: null, side: null },
-      ghost: null,
-      crop: { x: 0, y: 0, side: 200 },
-      travelDirection: 1,
-      demotion: null,
-      cropGrowth: null,
-      focusOffset: null,
-    }
-    const canvas = document.createElement('canvas')
-    // One stable object, as the real hook returns between changes — a fresh one per render would
-    // hand every view a new evidence identity on every render.
-    const settled: SessionEvidenceState = {
-      status: 'settled',
-      sections: [{ metric: 'trunkLean', clipIndex: 0, items: [{ plan, canvas }] }],
-    }
-    vi.mocked((await import('./useSessionEvidence')).useSessionEvidence).mockImplementation(
-      () => settled,
-    )
-
+    const canvas = await settleOneEvidenceCanvas()
     await loadOneReadyClip()
 
     expect(mountedView()).toBe('tour')
@@ -1343,7 +1457,7 @@ describe('MultiClipVideoSession — results view mode', () => {
     expect(mountedView()).toBe('classic')
     expect(document.querySelector('.metrics-panel .evidence-image > canvas')).toBe(canvas)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Back to summary' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show summary' }))
     expect(mountedView()).toBe('summary')
     expect(document.querySelector('.results-summary .guided-results .evidence-image > canvas')).toBe(canvas)
   })

@@ -5,8 +5,11 @@ import type { ResultsLanding } from './resultsLanding'
  * with the remembered landing (`resultsLanding.ts`) as the fallback.
  *
  * No router — none is installed and none should be (guided-results-view design.md D7.4). The mode is
- * read once from `location.search` and written back with `history.replaceState`, so a reload keeps
- * an explicit choice and the address can be shared, without adding a history entry per switch.
+ * read once from `location.search` at mount. Each switch the reader makes PUSHES a history entry
+ * stamped with its mode (`{ stridesView: mode }`), so browser Back steps to the previous view instead
+ * of leaving the page and losing the in-memory analysis; `popstate` reads the stamp back. The stamp,
+ * not the address, says which view an entry shows: the tour and the summary share an address, so
+ * only the stamp tells Back-to-the-summary from Back-to-a-replayed-tour.
  *
  * **The tour is the default, and the parse is deliberately strict** (`strides-trn2.2`). Exactly one
  * `view` parameter whose value is exactly `tour`, `summary` or `classic` selects that view, and
@@ -79,18 +82,44 @@ export function searchWithResultsViewMode(search: string, mode: ResultsViewMode)
   return kept.length > 0 ? `?${kept.join('&')}` : ''
 }
 
-/**
- * Writes `mode` into the current address with `history.replaceState`, keeping the path, every other
- * search parameter, the hash, and the existing history state object. Replace rather than push: a
- * view switch is a presentation preference, not a navigation, and Back should leave the page rather
- * than step through every view the reader tried.
- */
-export function writeResultsViewMode(mode: ResultsViewMode): void {
-  const nextSearch = searchWithResultsViewMode(window.location.search, mode)
-  if (nextSearch === window.location.search) return
-  // An absolute URL, not `${pathname}${search}${hash}`: a path beginning `//` would otherwise be
-  // read as a protocol-relative URL pointing at another origin, and replaceState would throw.
+/** The key a history entry's state object carries its view under. */
+export const RESULTS_VIEW_STATE_KEY = 'stridesView'
+
+/** The view a history entry is stamped with, or `null` for an entry this module did not stamp —
+ * one an in-page `#` link created, for instance. */
+export function resultsViewModeFromHistoryState(state: unknown): ResultsViewMode | null {
+  if (typeof state !== 'object' || state === null) return null
+  const value: unknown = (state as Record<string, unknown>)[RESULTS_VIEW_STATE_KEY]
+  return typeof value === 'string' && isExplicitMode(value) ? value : null
+}
+
+/** The current address with `view` rewritten for `mode`, as an absolute URL. Absolute rather than
+ * `${pathname}${search}${hash}`: a path beginning `//` would otherwise be read as a
+ * protocol-relative URL pointing at another origin, and the history call would throw. */
+function addressFor(mode: ResultsViewMode): string {
   const next = new URL(window.location.href)
-  next.search = nextSearch
-  window.history.replaceState(window.history.state, '', next.href)
+  next.search = searchWithResultsViewMode(window.location.search, mode)
+  return next.href
+}
+
+/**
+ * A reader's switch: pushes a new history entry stamped with `mode`, its address rewritten for
+ * `mode` (the path, every other parameter and the hash kept). It always pushes, even when the
+ * address does not change (tour and summary share one), because Back steps through entries, not
+ * addresses.
+ */
+export function pushResultsViewMode(mode: ResultsViewMode): void {
+  window.history.pushState({ [RESULTS_VIEW_STATE_KEY]: mode }, '', addressFor(mode))
+}
+
+/**
+ * Stamps the CURRENT entry with `mode`, keeping its address and whatever else its state object holds,
+ * and adds no entry. Used for the entry the page loaded on, so Back to it restores the view it opened
+ * with rather than re-resolving (the landing may have changed since). Also used for an unstamped
+ * entry that `popstate` lands on.
+ */
+export function stampResultsViewMode(mode: ResultsViewMode): void {
+  const state: unknown = window.history.state
+  const base = typeof state === 'object' && state !== null ? state : {}
+  window.history.replaceState({ ...base, [RESULTS_VIEW_STATE_KEY]: mode }, '', window.location.href)
 }

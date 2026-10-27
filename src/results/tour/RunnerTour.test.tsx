@@ -48,6 +48,8 @@ describe('RunnerTour (stub)', () => {
     expect(skip).toHaveAttribute('type', 'button')
     // The tour's own control comes before the guided view's.
     expect(container.querySelector('button')).toBe(skip)
+    expect(container.querySelectorAll('[data-view-entry]')).toHaveLength(1)
+    expect(skip).toHaveAttribute('data-view-entry')
     fireEvent.click(skip)
     expect(onLeaveTour).toHaveBeenCalledTimes(1)
   })

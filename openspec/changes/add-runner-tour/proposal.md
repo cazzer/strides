@@ -31,7 +31,7 @@ later tickets (`strides-trn2.2`, `.3`, `.5`).
   `?view=guide` maps to the tour. An absent or unrecognised value falls back to a remembered landing
   (`localStorage` `strides.resultsLanding = 'summary'`, written on Skip), else the tour. The
   Guided/Classic toggle is replaced by Skip to summary, Replay tour, a "Classic table" footer link
-  and Back to summary. `src/results/tour/RunnerTour.tsx` and `src/results/summary/ResultsSummary.tsx`
+  and Show summary. Each switch pushes a history entry, so browser Back returns to the previous view. `src/results/tour/RunnerTour.tsx` and `src/results/summary/ResultsSummary.tsx`
   are stubs that wrap the existing guided view; the motion stage renders beside the classic table
   only.
 

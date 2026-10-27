@@ -42,8 +42,13 @@ describe('ResultsSummary (stub)', () => {
     expect(screen.getByRole('status')).toHaveTextContent(/^Analysis complete\./)
     expect(container.querySelector('.results-runner-slot')).toHaveAttribute('aria-hidden', 'true')
 
+    // In the footer, not at the top where the tour's Skip sits, so a double click on Skip cannot
+    // land on it; and the one control marked as the summary's entry point.
     const replay = screen.getByRole('button', { name: 'Replay tour' })
-    expect(container.querySelector('button')).toBe(replay)
+    expect(replay.closest('footer')).not.toBeNull()
+    expect(container.querySelectorAll('[data-view-entry]')).toHaveLength(1)
+    expect(replay).toHaveAttribute('data-view-entry')
+    expect(replay).toHaveClass('min-h-11')
     fireEvent.click(replay)
     expect(onReplayTour).toHaveBeenCalledTimes(1)
 
@@ -51,6 +56,7 @@ describe('ResultsSummary (stub)', () => {
     expect(screen.queryByRole('link', { name: 'Classic table' })).toBeNull()
     const classic = screen.getByRole('button', { name: 'Classic table' })
     expect(classic.closest('footer')).not.toBeNull()
+    expect(classic).toHaveClass('min-h-11')
     fireEvent.click(classic)
     expect(onOpenClassic).toHaveBeenCalledTimes(1)
   })
