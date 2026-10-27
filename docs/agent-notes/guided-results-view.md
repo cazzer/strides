@@ -182,3 +182,25 @@ Two reviews (code + UX) of the above, implemented on the same branch. Full recor
   then `join` works. (`import.meta.url` itself IS a `file:` URL here — an older comment saying
   otherwise was wrong about the reason, right about the symptom.)
 
+
+### Guided-view furniture deleted (2026-10-27, `strides-trn2.7`)
+
+Once the tour and the summary both rendered through `GuidedResultsView`'s `children` slot, the old
+guided body had no production importer, so it is gone: `GuidedMeasurements` (contents list, the
+"Three ways to describe bounce" explainer, the banded/unbanded/not-measured groups), the "Energy
+cost" section (`EconomyHeadlines`, `EconomyHeadline`, `EnergyCostSummary`, `CaveatedPast`,
+`InPageLink`), and `src/results/guidedHeadlines.ts` (`selectHeadlines`, `costlyThreshold`,
+`STORY_SPOKESMEN`). `children` is now required and the shell has no body of its own. The card lost
+its unreachable `'framed'` variant (only the summary renders cards, always divided).
+`NotMeasuredEntries` stays in `GuidedResultsView.tsx`, used by the summary's Not measured row.
+
+Where the behaviour went: cards and not-measured entries now appear only in the summary's
+`FocusAreaRow`/`NotMeasuredRow`. The headline threshold lives on as the cue rule (`pastCostlySide`,
+`feedbackPoints.ts`). `economyConsequence.text`/`url` now render nowhere, but they are kept as the
+record `costlySide` rests on.
+
+Tests: the card suite in `GuidedResultsView.test.tsx` renders the bare cards (`CardsBody`). The two
+word-budget tests render them inside `FocusAreaRow`, with the same measure and the same numbers.
+⚠️ The cadence budget in code is **78**, not the ≤ 70 quoted above (it was raised in `strides-3f6`).
+The spec side is the REMOVED blocks in `add-runner-tour`'s guided-results-view delta.
+Left for later: `.guided-results__scroll-target` in `index.css` now matches nothing.

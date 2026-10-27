@@ -74,7 +74,7 @@ record later gains, and no knees text SHALL suggest lifting the knees.
 A metric SHALL earn a cue only when all of these hold: it is measured at the normal tier; its Try
 line exists and is not withheld by the Try-line withholding rule; it has a renderable cited band;
 and its value lies strictly beyond the band's outermost finite bound on the side its economy
-consequence names as costly — the Energy cost headline's threshold. An area's cue SHALL be the first
+consequence names as costly. An area's cue SHALL be the first
 such metric in the area in the one-thing priority order, headline or supporting. An unbanded metric
 SHALL never earn a cue.
 
