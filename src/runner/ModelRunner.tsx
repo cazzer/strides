@@ -37,7 +37,7 @@ import {
   type AnnotationKind,
   type RunnerAnnotationLabel,
 } from './runnerAnnotations'
-import { flashAnchor, labelBox, placeFlash, type LabelBox } from './introFlash'
+import { flashAlign, flashAnchor, labelBox, placeFlash, pointsBox, type LabelBox } from './introFlash'
 import { runnerParamValues } from './runnerParams'
 import {
   CAMERA_TWEEN_MS,
@@ -150,7 +150,10 @@ export interface ModelRunnerProps {
   label: string
   overrides?: RunnerOverrides
   intro?: RunnerIntroControl
-  /** Called with whether the figure is seen (tab visible and on screen), on mount and on change. */
+  /**
+   * Called with whether the figure is seen (tab visible and on screen): on mount, on every change,
+   * and with false on unmount.
+   */
   onActiveChange?: (active: boolean) => void
   className?: string
 }
@@ -194,7 +197,7 @@ interface DrawTargets {
   paths: { el: SVGPathElement; points: readonly Vec3[]; closed: boolean }[]
   labels: { lines: SVGTSpanElement[]; label: RunnerAnnotationLabel }[]
   ground: SVGLineElement | null
-  flash: { el: SVGTextElement; anchor: Vec3; chars: number } | null
+  flash: { el: SVGTextElement; paramId: RunnerParamId; anchor: Vec3; chars: number } | null
 }
 
 interface Scene {
@@ -299,7 +302,7 @@ type Annotations = ReturnType<typeof planAnnotations>['annotations']
 function collectTargets(
   svg: SVGSVGElement,
   annotations: Annotations,
-  flash: { anchor: Vec3; chars: number } | null,
+  flash: { paramId: RunnerParamId; anchor: Vec3; chars: number } | null,
 ): DrawTargets {
   const segments = Array.from(svg.querySelectorAll<SVGLineElement>('line[data-edge-index]'), (el) => {
     const [a, b] = EDGE_JOINT_INDICES[Number(el.dataset.edgeIndex)]
@@ -429,6 +432,7 @@ export function ModelRunner({
     if (!flash) return null
     const end = valueTween ? mixValues(values, valueTween.from, valueTween.to, 1) : values
     return {
+      paramId: flash.paramId,
       anchor: flashAnchor(flash.paramId, end, heldPhase, target.yawDeg, floor),
       chars: flash.text.length,
     }
@@ -463,17 +467,18 @@ export function ModelRunner({
       ground.setAttribute('y1', groundY)
       ground.setAttribute('y2', groundY)
     }
+    // Boxes the flash keeps clear of: annotation marks and guides here, labels below.
+    const boxes: LabelBox[] = []
     for (const { el, points, closed } of paths) {
-      const d = points
-        .map((point, i) => {
-          const p = projectPoint(point, cam)
-          return `${i === 0 ? 'M' : 'L'}${fmt(p.x)} ${fmt(p.y)}`
-        })
+      const projectedPoints = points.map((point) => projectPoint(point, cam))
+      const d = projectedPoints
+        .map((p, i) => `${i === 0 ? 'M' : 'L'}${fmt(p.x)} ${fmt(p.y)}`)
         .join('')
       el.setAttribute('d', closed ? `${d}Z` : d)
+      const box = closed || !flashTarget ? null : pointsBox(projectedPoints)
+      if (box) boxes.push(box)
     }
     const fontUnits = RUNNER_PX.label * unit
-    const boxes: LabelBox[] = []
     for (const { lines, label: text } of labels) {
       const layout = placeLabel(
         projectPoint(text.anchor, cam),
@@ -487,14 +492,17 @@ export function ModelRunner({
       boxes.push(labelBox(layout.x, labelAlign(text.side), layout.ys, chars, fontUnits))
     }
     if (flashTarget) {
+      const align = flashAlign(flashTarget.paramId, cam)
       const at = placeFlash(
         projectPoint(flashTarget.anchor, cam),
+        align,
         flashTarget.chars,
         fontUnits,
         RUNNER_PX.labelGap * 2 * unit,
         boxes,
       )
       setPoint(flashTarget.el, 'x', 'y', at.x, at.y)
+      flashTarget.el.setAttribute('text-anchor', align)
     }
   })
 
@@ -566,7 +574,8 @@ export function ModelRunner({
     }
   }, [heldPhase, reduced, choice, playing])
 
-  // A Skip button removed while focused would drop focus to the page: move it to Play/Pause.
+  // Report whether the figure is seen, and that it no longer is once unmounted (an unmount-only
+  // cleanup, so a parent holding `active` never keeps a stale true for a runner that is gone).
   const onActiveChangeRef = useRef(onActiveChange)
   useLayoutEffect(() => {
     onActiveChangeRef.current = onActiveChange
@@ -574,7 +583,9 @@ export function ModelRunner({
   useEffect(() => {
     onActiveChangeRef.current?.(active)
   }, [active])
+  useEffect(() => () => onActiveChangeRef.current?.(false), [])
 
+  // A Skip button removed while focused would drop focus to the page: move it to Play/Pause.
   useLayoutEffect(() => {
     if (introRunning || !skipFocusedRef.current) return
     skipFocusedRef.current = false
@@ -772,7 +783,7 @@ export function ModelRunner({
           </g>
           {flash && (
             <text
-              data-flash=""
+              data-flash={flash.paramId}
               dominantBaseline="middle"
               paintOrder="stroke"
               className={LABEL_CLASS}

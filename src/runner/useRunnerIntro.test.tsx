@@ -2,12 +2,13 @@ import { Profiler, StrictMode, useState, type ReactNode } from 'react'
 import { act, fireEvent, render, renderHook, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { makeMetric } from '../results/__fixtures__/metricResult'
-import { bindOnly } from './__fixtures__/boundParams'
+import { bindAll, bindOnly } from './__fixtures__/boundParams'
 import { ModelRunner, type RunnerFocus, type RunnerOverrides } from './ModelRunner'
 import { formatRunnerValue } from './runnerAnnotations'
 import { NEUTRAL_RUNNER_PARAMS, runnerParamValues } from './runnerParams'
 import { RUNNER_PARAM_IDS, mixValues } from './runnerScene'
 import {
+  INTRO_FLASH_MIN_REMAINDER_MS,
   INTRO_FLASH_MS,
   INTRO_HOLD_MS,
   INTRO_MAX_STEP_MS,
@@ -96,7 +97,8 @@ type IntroProps = Partial<UseRunnerIntroOptions> & { resultKey: string }
 
 function renderIntro(initialProps: IntroProps, wrapper?: (props: { children: ReactNode }) => ReactNode) {
   return renderHook(
-    (props: IntroProps) => useRunnerIntro({ bound: BOUND, order: ORDER, active: true, ...props }),
+    (props: IntroProps) =>
+      useRunnerIntro({ bound: BOUND, order: ORDER, camera: 'wholeBodySide', active: true, ...props }),
     { initialProps, wrapper },
   )
 }
@@ -224,12 +226,31 @@ describe('useRunnerIntro sequence', () => {
     expect(result.current.overrides).toBeUndefined()
   })
 
-  it('finishes after the hold when nothing is measured', () => {
-    const onDone = vi.fn()
-    const { result } = renderIntro({ resultKey: nextKey(), bound: bindOnly([]), onDone })
+  it('finishes at once, with no hold, when there is nothing to apply', () => {
+    for (const bound of [bindOnly([]), bindOnly(['stepWidth'])]) {
+      const onDone = vi.fn()
+      const { result } = renderIntro({ resultKey: nextKey(), bound, onDone })
+      expect(result.current.overrides).toBeUndefined()
+      expect(result.current.running).toBe(false)
+      advance(0)
+      expect(onDone).toHaveBeenCalledTimes(1)
+      advance(10_000)
+      expect(onDone).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('keeps a flash up for its whole step when it would clear with under 150 ms left', () => {
+    const bound = bindAll()
+    const plan = planIntro(bound, [], 0)
+    expect(plan.stepMs - INTRO_FLASH_MS).toBeLessThan(INTRO_FLASH_MIN_REMAINDER_MS)
+    const { result } = renderIntro({ resultKey: nextKey(), bound, order: [] })
     advance(INTRO_HOLD_MS)
-    expect(result.current.overrides).toBeUndefined()
-    expect(onDone).toHaveBeenCalledTimes(1)
+    const first = result.current.overrides?.flash
+    expect(first?.paramId).toBe(plan.steps[0])
+    advance(plan.stepMs - 1)
+    expect(result.current.overrides?.flash).toEqual(first)
+    advance(1)
+    expect(result.current.overrides?.flash?.paramId).toBe(plan.steps[1])
   })
 
   it('keeps the plan it started with when `bound` changes mid-intro, and ends on the live bound', () => {
@@ -244,11 +265,17 @@ describe('useRunnerIntro sequence', () => {
     rerender({ resultKey: 'graft', bound: grafted })
     expect(result.current.overrides?.valueTween).toBe(before)
     expect(result.current.overrides?.sources?.armSwing).toBe('neutral')
+    // Everything is drawn at the snapshot until the end, the newly measured arms included.
+    expect(grafted.armSwing.value).not.toBe(BOUND_VALUES.armSwing)
+    const drawnArms = () => [0, 1].map((t) => drawn(grafted, result.current.overrides, t).armSwing)
+    expect(drawnArms()).toEqual([BOUND_VALUES.armSwing, BOUND_VALUES.armSwing])
     advance(STEP_MS)
     expect(result.current.overrides?.valueTween?.key).toBe('2')
     expect(result.current.overrides?.valueTween?.to).toEqual({ cadence: BOUND_VALUES.cadence })
+    expect(drawnArms()).toEqual([BOUND_VALUES.armSwing, BOUND_VALUES.armSwing])
     advance(STEP_MS)
     expect(result.current.overrides?.valueTween?.to).toEqual({ torsoPitch: BOUND_VALUES.torsoPitch })
+    expect(drawnArms()).toEqual([BOUND_VALUES.armSwing, BOUND_VALUES.armSwing])
     advance(STEP_MS)
     expect(result.current.overrides).toBeUndefined()
   })
@@ -440,7 +467,14 @@ function Harness({
   focus?: RunnerFocus
 }) {
   const [active, setActive] = useState(false)
-  const intro = useRunnerIntro({ bound: BOUND, resultKey, order: ORDER, active, onDone })
+  const intro = useRunnerIntro({
+    bound: BOUND,
+    resultKey,
+    order: ORDER,
+    camera: 'wholeBodySide',
+    active,
+    onDone,
+  })
   return (
     <ModelRunner
       params={BOUND}
@@ -486,11 +520,19 @@ describe('useRunnerIntro with ModelRunner', () => {
     expect(document.querySelector('[data-flash]')).toBeNull()
   })
 
-  it('reports whether it is seen', () => {
+  it('reports whether it is seen, and false on unmount', () => {
     const onActiveChange = vi.fn()
-    render(<ModelRunner params={BOUND} camera="wholeBodySide" label="Runner" onActiveChange={onActiveChange} />)
+    const { unmount } = render(
+      <ModelRunner params={BOUND} camera="wholeBodySide" label="Runner" onActiveChange={onActiveChange} />,
+    )
     expect(onActiveChange).toHaveBeenLastCalledWith(true)
     setVisibility('hidden')
+    expect(onActiveChange).toHaveBeenLastCalledWith(false)
+    setVisibility('visible')
+    expect(onActiveChange).toHaveBeenLastCalledWith(true)
+    const calls = onActiveChange.mock.calls.length
+    unmount()
+    expect(onActiveChange).toHaveBeenCalledTimes(calls + 1)
     expect(onActiveChange).toHaveBeenLastCalledWith(false)
   })
 

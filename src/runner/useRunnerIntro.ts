@@ -22,7 +22,9 @@
  *
  * **The plan is a snapshot.** The order, the step length and the bound values are captured when
  * the first step begins, so a `bound` that changes mid-intro (the scale-pass graft) cannot shift
- * step indices. The final state (no overrides) draws the live `bound`.
+ * step indices, and every parameter is drawn at its snapshot value until the end. The final
+ * state (no overrides) draws the live `bound`. A plan with no steps (nothing measured that the
+ * camera can show) finishes at once, with no hold.
  *
  * **Known transient.** Mid-intro the drawn values mix bound values and neutral constants, a
  * combination `realizeParams` never resolved; `poseAt` resolves contact-leg conflicts in its
@@ -56,6 +58,11 @@ export const INTRO_MAX_STEP_MS = 1000
 export const INTRO_FLASH_MS = 500
 /** The fully neutral figure is held this long before the first step. */
 export const INTRO_HOLD_MS = 500
+/**
+ * A flash that would clear with less than this left of its step stays up for the whole step
+ * instead, so it never blinks off just before the next one.
+ */
+export const INTRO_FLASH_MIN_REMAINDER_MS = 150
 /** Below this |sin yaw| a lateral parameter's change cannot be seen, so it gets no step. */
 export const LATERAL_VISIBLE_SIN = 0.5
 const LATERAL_PARAMS: readonly RunnerParamId[] = ['stepWidth', 'swingFootArc']
@@ -138,7 +145,9 @@ export function planIntro(
  * tweens in; later and deferred ones hold their neutral constants and draw neutral.
  */
 export function introOverrides(plan: IntroPlan, step: number): RunnerOverrides {
-  const values: Partial<Record<RunnerParamId, number>> = {}
+  // Every parameter at its snapshot value, so a result updated mid-intro draws nothing new until
+  // the end; then the steps and deferred parameters on top.
+  const values: Partial<Record<RunnerParamId, number>> = { ...plan.values }
   plan.steps.forEach((id, i) => {
     values[id] = i < step ? plan.values[id] : NEUTRAL_RUNNER_PARAMS[id]
   })
@@ -172,8 +181,11 @@ export interface UseRunnerIntroOptions {
   resultKey: string
   /** Focus-area metric ids or parameter ids, applied first and in this order. */
   order?: readonly (MetricId | RunnerParamId)[]
-  /** The camera the intro is seen from (lateral parameters get no step from a side view). */
-  camera?: CameraPreset | CameraState
+  /**
+   * The runner's camera, the same one passed to ModelRunner (lateral parameters get no step from
+   * a side view). Required, so the two can never silently disagree.
+   */
+  camera: CameraPreset | CameraState
   /** Whether the runner is seen (ModelRunner's `onActiveChange`). Nothing starts until it is. */
   active: boolean
   /**
@@ -219,7 +231,7 @@ export function useRunnerIntro({
   bound,
   resultKey,
   order,
-  camera = 'wholeBodySide',
+  camera,
   active,
   onDone,
 }: UseRunnerIntroOptions): RunnerIntro {
@@ -238,7 +250,9 @@ export function useRunnerIntro({
     () => planIntro(bound, orderKey ? (orderKey.split(',') as (MetricId | RunnerParamId)[]) : [], yaw),
     [bound, orderKey, yaw],
   )
-  const finished = state.done || reduced
+  // Nothing to apply (no measured parameter the camera can show): finished at once, no hold.
+  const nothingToPlay = state.step === -1 && livePlan.steps.length === 0
+  const finished = state.done || reduced || nothingToPlay
 
   const onDoneRef = useRef(onDone)
   const livePlanRef = useRef(livePlan)
@@ -266,7 +280,7 @@ export function useRunnerIntro({
     if (done) return
     const key = resultKey
     // Every state change here is deferred to a timer, so none is set inside the effect.
-    if (reduced) {
+    if (reduced || nothingToPlay) {
       const id = setTimeout(() => finish(key), 0)
       return () => clearTimeout(id)
     }
@@ -277,7 +291,8 @@ export function useRunnerIntro({
     const after = (delay: number, run: () => void) =>
       timers.push(setTimeout(run, Math.max(0, delay)))
     const arm = (k: number, steps: IntroPlan, elapsed: number) => {
-      if (INTRO_FLASH_MS < steps.stepMs && elapsed < INTRO_FLASH_MS) {
+      const flashClears = steps.stepMs - INTRO_FLASH_MS >= INTRO_FLASH_MIN_REMAINDER_MS
+      if (flashClears && elapsed < INTRO_FLASH_MS) {
         after(INTRO_FLASH_MS - elapsed, () =>
           setStored((s) => (s.key === key && s.step === k && s.flashOn ? { ...s, flashOn: false } : s)),
         )
@@ -305,7 +320,7 @@ export function useRunnerIntro({
       })
     }
     return () => timers.forEach(clearTimeout)
-  }, [resultKey, reduced, done, holdReady, finish])
+  }, [resultKey, reduced, nothingToPlay, done, holdReady, finish])
 
   const skip = useCallback(() => {
     if (!finished) finish(resultKey)

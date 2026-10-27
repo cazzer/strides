@@ -3,6 +3,7 @@
  * taken from the still-frame pose when its step starts, so it never chases the stride; it is then
  * kept clear of every visible annotation label and inside the frame.
  */
+import { projectPoint } from './camera'
 import { poseAt } from './gaitModel'
 import {
   LABEL_CHAR_WIDTH_EM,
@@ -12,7 +13,7 @@ import {
   type LabelAlign,
 } from './runnerScene'
 import type { KeypointName } from '../pose/types'
-import type { Joint3D, RunnerParamId, RunnerParams, Vec3 } from './types'
+import type { CameraState, Joint3D, RunnerParamId, RunnerParams, Vec3 } from './types'
 
 function at(pose: readonly Joint3D[], name: KeypointName): Vec3 {
   const joint = pose.find((j) => j.name === name)
@@ -28,10 +29,11 @@ function mid(a: Vec3, b: Vec3): Vec3 {
 const HEAD_CLEARANCE = 0.25
 
 /**
- * The world point a parameter's flash sits beside: the feet (contact shank, swing arc), the ground
- * under the hip (landing), the hip (bounce, step width), the torso midpoint (lean), the near
- * shoulder (arms), the near knee (thigh, knee bend), and just above the head (cadence, which has
- * no part of its own). Taken from the pose at `heldPhase`, so it does not move with the stride.
+ * The world point a parameter's flash sits beside: the near ankle (foot strike, swing arc), the
+ * ground under the hip (landing), the hip (bounce, step width), the torso midpoint (lean), the
+ * near shoulder (arms), the near knee (thigh, knee bend), and just above the head (cadence, which
+ * has no part of its own). Taken from the pose at `heldPhase`, so it does not move with the
+ * stride; "near" is the leg a side view shows nearer, as for the held phase.
  */
 export function flashAnchor(
   paramId: RunnerParamId,
@@ -63,11 +65,19 @@ export function flashAnchor(
     case 'landingOffset':
       return { x: hip.x, y: floor, z: hip.z }
     case 'contactShankOffset':
-    case 'swingFootArc': {
-      const feet = mid(at(pose, 'left_ankle'), at(pose, 'right_ankle'))
-      return { ...feet, y: floor }
-    }
+    case 'swingFootArc':
+      return at(pose, `${near}_ankle`)
   }
+}
+
+/**
+ * How the flash aligns to its anchor: the lean flash goes on the torso's back side (text ending
+ * at the anchor) so it never sits on the arms swinging in front; every other flash starts there.
+ */
+export function flashAlign(paramId: RunnerParamId, camera: CameraState): 'start' | 'end' {
+  if (paramId !== 'torsoPitch') return 'start'
+  const ahead = projectPoint({ x: 1, y: 0, z: 0 }, camera).x - projectPoint({ x: 0, y: 0, z: 0 }, camera).x
+  return ahead >= 0 ? 'end' : 'start'
 }
 
 /** A text block's box in viewBox units (y down). */
@@ -95,13 +105,22 @@ function overlaps(a: LabelBox, b: LabelBox): boolean {
   return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
 }
 
+/** The bounding box of projected path points (an annotation mark or guide). */
+export function pointsBox(points: readonly { x: number; y: number }[]): LabelBox | null {
+  if (points.length === 0) return null
+  const xs = points.map((p) => p.x)
+  const ys = points.map((p) => p.y)
+  return { left: Math.min(...xs), right: Math.max(...xs), top: Math.min(...ys), bottom: Math.max(...ys) }
+}
+
 /**
- * The flash's position (start-aligned, vertically centred): `gapUnits` right of the projected
- * anchor, inside the frame, and moved below (or, at the frame's foot, above) any label box it
- * would cover.
+ * The flash's position (vertically centred): `gapUnits` beyond the projected anchor on the side
+ * `align` gives ('start': right of it, 'end': left of it), inside the frame, and moved below (or,
+ * at the frame's foot, above) any box it would cover, with half a line of clearance.
  */
 export function placeFlash(
   point: { x: number; y: number },
+  align: 'start' | 'end',
   chars: number,
   fontUnits: number,
   gapUnits: number,
@@ -110,11 +129,11 @@ export function placeFlash(
   const lineHeight = fontUnits * LABEL_LINE_HEIGHT
   const limit = VIEW_HALF_HEIGHT - lineHeight / 2
   const clampY = (y: number) => Math.min(limit, Math.max(-limit, y))
-  const x = clampLabelX(point.x + gapUnits, 'start', chars, fontUnits)
+  const x = clampLabelX(point.x + (align === 'start' ? gapUnits : -gapUnits), align, chars, fontUnits)
   let y = clampY(point.y)
-  const pad = fontUnits * 0.2
+  const pad = lineHeight / 2
   for (let attempt = 0; attempt <= avoid.length; attempt++) {
-    const box = labelBox(x, 'start', [y], chars, fontUnits)
+    const box = labelBox(x, align, [y], chars, fontUnits)
     const hit = avoid.find((other) => overlaps(box, other))
     if (!hit) break
     const below = hit.bottom + pad + lineHeight / 2
