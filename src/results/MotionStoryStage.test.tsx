@@ -41,7 +41,6 @@ function setup(detected: boolean, evidence: MetricCardEvidence[] = [], samples =
     clipId: String(index), analysis: { robustFrames, scalePass: {} },
   })) as ClipSession[]
   const resultsRef = { current: document.createElement('div') }
-  const headerRef = { current: document.createElement('header') }
   return render(
     <MotionStoryStage
       analysis={analysis}
@@ -49,8 +48,6 @@ function setup(detected: boolean, evidence: MetricCardEvidence[] = [], samples =
       sourceIndices={sourceIndices}
       evidence={evidence}
       resultsRef={resultsRef}
-      headerRef={headerRef}
-      viewMode="classic"
     />,
   )
 }

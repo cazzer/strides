@@ -18,9 +18,9 @@ export interface MotionStoryStageProps {
   clips: ClipSession[]
   sourceIndices: Record<MetricId, number> | null
   evidence: readonly MetricCardEvidence[]
+  /** The classic results view's container — the stage renders beside the classic view only. Its
+   * sticky offset reads `--motion-story-header-height`, which the session sets on `<main>`. */
   resultsRef: RefObject<HTMLDivElement | null>
-  headerRef: RefObject<HTMLElement | null>
-  viewMode: 'classic' | 'guide'
 }
 
 const isMetric = (value: string | undefined): value is MetricId =>
@@ -112,11 +112,10 @@ function StoryPicture({
   )
 }
 
-/** Select the result nearest the viewport's reading line. Keyboard focus and guide hashes take
+/** Select the result nearest the viewport's reading line. Keyboard focus and result hashes take
  * precedence when explicitly used, including links to cards inside collapsed disclosures. */
 function useReadingMetric(
   resultsRef: RefObject<HTMLDivElement | null>,
-  viewMode: 'classic' | 'guide',
   ready: boolean,
   frozen: boolean,
 ): MetricId | null {
@@ -175,35 +174,16 @@ function useReadingMetric(
       root.removeEventListener('focusin', onFocus)
       root.removeEventListener('toggle', schedule, true)
     }
-  }, [ready, frozen, resultsRef, viewMode])
+  }, [ready, frozen, resultsRef])
   return ready ? metric : null
 }
 
 export function MotionStoryStage({
-  analysis, clips, sourceIndices, evidence, resultsRef, headerRef, viewMode,
+  analysis, clips, sourceIndices, evidence, resultsRef,
 }: MotionStoryStageProps) {
-  const stageRef = useRef<HTMLElement>(null)
   const [expanded, setExpanded] = useState(false)
-  useEffect(() => {
-    const header = headerRef.current
-    const stage = stageRef.current
-    if (!header || !stage) return
-    const update = () => {
-      const height = `${Math.ceil(header.getBoundingClientRect().height)}px`
-      stage.style.setProperty('--motion-story-header-height', height)
-      resultsRef.current?.style.setProperty('--motion-story-header-height', height)
-    }
-    update()
-    if (typeof ResizeObserver === 'undefined') {
-      window.addEventListener('resize', update)
-      return () => window.removeEventListener('resize', update)
-    }
-    const observer = new ResizeObserver(update)
-    observer.observe(header)
-    return () => observer.disconnect()
-  }, [headerRef, resultsRef, analysis.phase])
   const ready = analysis.phase === 'ready' && analysis.heuristics !== null
-  const focusedMetric = useReadingMetric(resultsRef, viewMode, ready, expanded)
+  const focusedMetric = useReadingMetric(resultsRef, ready, expanded)
   const metric = focusedMetric ?? (ready
     ? (Object.keys(METRIC_LABELS) as MetricId[]).find((id) =>
         analysis.heuristics?.[id].value !== null && analysis.heuristics?.[id].viewFit !== 'unsuitable') ?? null
@@ -360,7 +340,7 @@ export function MotionStoryStage({
     </button>
   )
   return (
-    <section ref={stageRef} aria-label="Form in motion" className="motion-story sticky z-[8] border-2 border-black bg-white p-2 dark:border-white dark:bg-black lg:p-4">
+    <section aria-label="Form in motion" className="motion-story sticky z-[8] border-2 border-black bg-white p-2 dark:border-white dark:bg-black lg:p-4">
       <div className="flex items-center gap-3 lg:block">
         <StoryPicture measured={measured} ready={ready} item={visibleItem} points={visiblePoints} highlighted={highlighted} className="w-16 lg:w-full" animateSeam={inMotion} seamHidden={inMotion && seamHidden} />
         <div className="min-w-0 flex-1 space-y-0.5 lg:space-y-1 lg:pt-3">

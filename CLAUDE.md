@@ -80,8 +80,10 @@ Unit tests mock the detector, so **verify UI/pipeline changes live** before call
 
   ⚠️ **"Demo 1" anywhere in the notes is the retired Pexels track clip** — its numbers do not
   transfer to `park-side-landscape.mp4`. "Demo 2" is `park-approach.mp4` and its numbers stand.
-- Analysis starts automatically. Wait for `/analysis complete/i` (`role="status"`, both views).
-  Guided view is the default; `?view=classic` for classic.
+- Analysis starts automatically. Wait for `/analysis complete/i` (`role="status"`, exactly one in
+  every view). The runner tour is the default (`strides-trn2.2`), then the summary once a reader has
+  pressed Skip (`localStorage` `strides.resultsLanding`); `?view=classic` for classic. The tour and
+  summary currently wrap the guided view, so `.guided-results` hooks still work there.
 - **Never conceal a clip's `<video>`** (offscreen/`inert`) — costs ~20% of sampled frames on the
   playback path. Visible at 60 CSS px is fine. Clip videos stay mounted while hidden.
 - **Read results from dev-only console lines, not card text** (`import.meta.env.DEV`-gated; absent
