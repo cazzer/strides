@@ -32,7 +32,10 @@ export interface RunnerParamSpec {
   metrics: readonly { metric: RunnerMetricId; scale: number }[]
   /** Illustrative constant used while no candidate is measured. Never a band midpoint. */
   neutral: number
-  /** What the figure can draw. A drawing limit, not a plausibility judgement. */
+  /**
+   * Clamp range for measured values: a drawing limit, not a plausibility judgement. A neutral
+   * adjusted by `realizeParams` to fit a measured partner may fall outside it.
+   */
   range: readonly [min: number, max: number]
 }
 

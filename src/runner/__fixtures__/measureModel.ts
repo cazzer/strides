@@ -5,12 +5,12 @@
  * and hip width are measured off the model, not assumed. The peak metrics run the heuristics' own
  * extrema finder and median (read-only imports), not a cycle maximum.
  */
-import { findLocalExtrema } from '../heuristics/extrema'
-import { median } from '../heuristics/mathUtils'
-import { DEFAULT_HEURISTICS_CONFIG } from '../heuristics/types'
-import type { KeypointName } from '../pose/types'
-import { GAIT_PHASES, cyclesPerSecond, poseAt } from './gaitModel'
-import type { Joint3D, RunnerParamId, RunnerParams, Vec3 } from './types'
+import { findLocalExtrema } from '../../heuristics/extrema'
+import { median } from '../../heuristics/mathUtils'
+import { DEFAULT_HEURISTICS_CONFIG } from '../../heuristics/types'
+import type { KeypointName } from '../../pose/types'
+import { GAIT_PHASES, cyclesPerSecond, poseAt } from '../gaitModel'
+import type { Joint3D, RunnerParamId, RunnerParams, Vec3 } from '../types'
 
 const DEG = 180 / Math.PI
 export const DENSE_PHASES = Array.from({ length: 1000 }, (_, i) => i / 1000)

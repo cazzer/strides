@@ -411,6 +411,10 @@ export function cyclesPerSecond(params: RunnerParams): number {
 /**
  * The model runner at `phase` (any real number; one cycle per unit, so 0 and 1 are the same pose).
  * Returns one joint per `COMMON_KEYPOINT_NAMES` entry, in that order.
+ *
+ * Each metric's formula reads each value back exactly only for `realizeParams` /
+ * `bindRunnerParams` output. Other input (e.g. a mid-tween mix) is drawn with the
+ * default-order contact resolution (landing exact, foot strike gives way), which is continuous.
  */
 export function poseAt(phase: number, params: RunnerParams): Joint3D[] {
   const p = fract(phase)

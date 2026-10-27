@@ -10,7 +10,7 @@ import {
 } from '../results/__fixtures__/metricResult'
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { CONTACT_PARAMS, MODEL_TORSO_LENGTH_CM } from './gaitModel'
-import { MEASURE_PARAM } from './measureModel.testUtils'
+import { MEASURE_PARAM } from './__fixtures__/measureModel'
 import {
   NEUTRAL_RUNNER_PARAMS,
   RUNNER_PARAM_SEGMENTS,

@@ -24,7 +24,7 @@ import {
   measureTrunkLean,
   measureVerticalOscillation,
   torsoLength,
-} from './measureModel.testUtils'
+} from './__fixtures__/measureModel'
 import { NEUTRAL_RUNNER_PARAMS, RUNNER_PARAM_SPECS } from './runnerParams'
 import type { Joint3D, RunnerParamId, RunnerParams } from './types'
 
