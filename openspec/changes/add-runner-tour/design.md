@@ -174,15 +174,26 @@ and `metricTier`. Nothing comes from `src/runner`.
   line at 42% of the viewport (MotionStoryStage's line), rAF-batched on scroll/resize; `focusin`
   selects the focused stop. A `#tour-<id>` fragment goes through `useRevealFragment`, which focuses
   the stop, so focus covers it. The stop sets camera and rate from `FOCUS_AREA_CAMERA`
-  (`NO_FOCUS_CAMERA` for the one thing) and focus from `runnerFocusFor` over the area's measured
-  metrics (memoised on their ids).
+  (`NO_FOCUS_CAMERA` for the one thing) and focus from `runnerFocusFor` over the stop's HEADLINE
+  metric only (memoised on its id), so the figure never labels a number the stop does not state.
+  Landing frames `legsSide` at 0.4×, a stopgap shared with the summary: `footSide`'s 3× zoom kept
+  the foot in frame only around contact. A contact-tracking camera is a runner follow-up. The band
+  legend shows only while the shown stop's headline has a compact bar. The plan and the active stop
+  live in `RunnerTour`, above the shell, because the sticky bar also shows them as progress dots
+  (links to `#tour-<id>`, `aria-current="step"`, "Stop N of M" to assistive technology).
 - **Intro.** `useRunnerIntro` with `order` = every area's metrics in tour order, `camera` =
-  `NO_FOCUS_CAMERA.camera` — the runner's own camera for as long as the intro runs, since no stop
-  is shown then — and `active` from `onActiveChange`. `resultKey` is the session's clip ids plus a
+  `introCamera(coverage)` (`feetFront` for a front-only session, whose lateral parameters need a
+  view that sees sideways movement; `wholeBodySide` otherwise) — the runner's own camera for as long
+  as the intro runs, since no stop is shown then — and `active` = `onActiveChange` AND the rail
+  being ≥ 90% on screen (the tour's own `IntersectionObserver`), so the intro never plays out below
+  the fold. For the same reason the session shows no coverage notice above the tour; the end block
+  carries it, its hint the add-a-clip control itself. Replay tour scrolls the view region to the
+  top, instantly, before focusing the heading. `resultKey` is the session's clip ids plus a
   replay count that "Replay tour" increments, so a replay plays the intro again and the scale-pass
   graft does not. UI reads `running`, never `onDone`. An effect skips the intro once the active stop
   is past the first.
-- **Word budget.** Counted in jsdom per D4 on each `[data-tour-stop]`, removing `.sr-only`,
+- **Word budget.** Counted in jsdom per D4 on each `[data-tour-stop]` over its text nodes joined
+  with spaces (a `TreeWalker`, so adjacent elements never run together), removing `.sr-only`,
   `.runner-tour__value` (name, value, confidence), `.feedback-line__citation` (evidence kind and
   source) and `.runner-tour__end`, which is budgeted separately (≤ 25).
 - **Phones.** The rail, body and stop class strings are exported constants (`TOUR_RAIL_CLASS`,
