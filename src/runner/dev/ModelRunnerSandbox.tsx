@@ -115,15 +115,31 @@ export function ScenarioView({ scenario }: { scenario: Scenario }) {
 
 const INTRO_PARAMS = bind('all')
 const INTRO_FOCUS: RunnerFocus = { metricIds: ['kneeFlexion', 'overstriding'] }
+// The tour's area order: Rhythm & bounce, Arms, Posture, Knees, Landing, Foot path.
+const TOUR_ORDER: readonly MetricId[] = [
+  'cadence',
+  'verticalOscillation',
+  'armSwingAmplitude',
+  'trunkLean',
+  'kneeDrive',
+  'kneeFlexion',
+  'overstriding',
+  'footStrikePattern',
+  'stepWidth',
+  'swingFootLateralExcursion',
+]
 
 /** The intro beat (ps19.3); "Replay intro" makes a new result identity, so it plays again. */
 export function IntroView() {
-  const [resultKey, setResultKey] = useState(() => ({}))
+  const [run, setRun] = useState(() => Date.now())
+  const [active, setActive] = useState(false)
   const [doneCount, setDoneCount] = useState(0)
   const intro = useRunnerIntro({
     bound: INTRO_PARAMS,
-    resultKey,
-    order: INTRO_FOCUS.metricIds,
+    resultKey: `sandbox-${run}`,
+    order: TOUR_ORDER,
+    camera: 'wholeBodySide',
+    active,
     onDone: () => setDoneCount((n) => n + 1),
   })
   return (
@@ -132,7 +148,7 @@ export function IntroView() {
       <div className="flex items-center gap-3">
         <button
           type="button"
-          onClick={() => setResultKey({})}
+          onClick={() => setRun((n) => n + 1)}
           className="min-h-11 border border-black px-2 font-sans text-xs dark:border-white"
         >
           Replay intro
@@ -148,6 +164,7 @@ export function IntroView() {
         label="Model runner: intro"
         overrides={intro.overrides}
         intro={{ running: intro.running, onSkip: intro.skip }}
+        onActiveChange={setActive}
         className="h-[60vh]"
       />
     </section>

@@ -56,7 +56,14 @@
 
 ## 10. Intro beat (ps19.3)
 
-- [x] 10.1 `src/runner/useRunnerIntro.ts`: `introOrder` (focus first via `paramForMetric`, then spec order), `introStepMs` (4000 / n within 300..1000 ms), `introOverrides` per step (`valueTween` neutral → bound, `sources` flip, 500 ms `flash`), `setTimeout` sequencing, once-per-result registry, skip, reduced motion
+- [x] 10.1 `src/runner/useRunnerIntro.ts`: `introOrder` (focus first via `paramForMetric`, then spec order), `introStepMs`, `introOverrides` per step (`valueTween` neutral → bound, `sources` flip, 500 ms `flash`), `setTimeout` sequencing, once-per-result registry, skip, reduced motion
 - [x] 10.2 `ModelRunner` `intro` prop: "Skip" button beside Play/Pause while running (never under reduced motion), focus handed to Play/Pause when it goes away focused
 - [x] 10.3 `useRunnerIntro.test.tsx`: order, exact end, neutrals fixed, continuity across steps, skip, reduced motion (on load and mid-intro), once per result, new result, StrictMode, commits O(steps), Skip button and focus
 - [x] 10.4 Dev sandbox "Replay intro"; gates: lint, `tsc -b`, vitest (runner + full), `openspec validate --strict`, `vite build`
+
+## 11. Intro review round 1
+
+- [x] 11.1 String `resultKey` (run/session id); the hold starts only once the runner is seen (`onActiveChange`, `active`); plan snapshotted at step 0; `onDone`/`running` contract documented
+- [x] 11.2 Pause skips the intro; tweening parameter's annotation hidden; flash at a fixed per-parameter point clear of label boxes (`introFlash.ts`); "Dashed: not applied yet"; 500 ms neutral hold; steps 450..1000 ms over 4.5 s; side-view lateral parameters folded into the final state; landing before foot strike; "Skip intro"
+- [x] 11.3 Steps chained from actual starts in the timer callbacks; reduced-motion flip resumes; test-only registry reset; order memoized by joined ids
+- [x] 11.4 Sandbox uses the tour's area order; re-shot at 390 light (hold, mid, end); gates

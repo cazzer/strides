@@ -284,35 +284,53 @@ your numbers". No text SHALL call the runner a reference, an ideal or the reader
 
 ### Requirement: The runner adopts the reader's gait in a short intro, once per result
 
-When a result is first shown, the runner SHALL start fully neutral (every part dashed grey, every
-measured parameter at its neutral constant) and then apply the measured parameters one at a time,
-the focus-area parameters first in focus order and the rest in parameter order, over about four
-seconds in total. Each parameter SHALL tween from its neutral constant to its bound value, its
-part SHALL turn solid as the tween starts, and its value SHALL flash beside it for about 500 ms.
-Unmeasured parameters SHALL be drawn at their bound values throughout and never change. At the end
-every measured parameter SHALL be drawn at exactly its bound value and an `onDone` callback SHALL
-fire once. The motion SHALL run in the renderer's loop, with no React commit per frame.
+When a result is first shown and the runner is first seen (tab visible and figure on screen), the
+runner SHALL hold fully neutral (every part dashed grey, every measured parameter at its neutral
+constant, legend "Dashed: not applied yet") for about 500 ms, and then apply the measured
+parameters one at a time: the focus-area parameters first in focus order, the rest in parameter
+order, landing always before foot strike. Each step SHALL last 4.5 s divided by the number of
+steps, bounded to 450–1000 ms, so the steps take at most about 4.5 s after the hold. Each
+parameter SHALL tween from its neutral constant to its bound value, its part SHALL turn solid as
+the tween starts, its value SHALL flash for about 500 ms beside a fixed point of its part (not
+following the stride, clear of visible annotation labels), and its own focus annotation SHALL be
+hidden while it tweens. A parameter whose change cannot be seen from the camera (step width and
+swing-foot arc from a side view) SHALL get no step and no flash; it is applied with the final
+state. Unmeasured parameters SHALL be drawn at their bound values throughout and never change. At
+the end every measured parameter SHALL be drawn at exactly its bound value and an `onDone`
+callback SHALL fire once. The motion SHALL run in the renderer's loop, with no React commit per
+frame. The order, values and step length SHALL be fixed when the first step begins, so a result
+updated mid-intro cannot shift the steps; the final state draws the current result.
 
-A visible "Skip" button (at least 44 px) SHALL sit beside the pause control while the intro runs;
-skipping SHALL jump to the final state and fire `onDone` once. When the button goes away while it
-holds focus, focus SHALL move to the pause control. Under reduced motion the intro SHALL NOT start:
-the final state is drawn at once, no Skip button is shown, and `onDone` fires once.
+A visible "Skip intro" button (at least 44 px) SHALL sit beside the pause control while the intro
+runs. Skipping, or pressing Pause, SHALL jump to the final state and fire `onDone` once. When the
+Skip button goes away while it holds focus, focus SHALL move to the pause control. Under reduced
+motion the intro SHALL NOT start: the final state is drawn at once, no Skip button is shown, and
+`onDone` fires once.
 
-The intro SHALL play once per result: a remount with the same result SHALL draw the final state at
-once and SHALL NOT fire `onDone` again; a new result SHALL play it. StrictMode's simulated
-remount SHALL NOT count as a played intro.
+The intro SHALL play once per result, keyed on an analysis-run or session id: a remount with the
+same id SHALL draw the final state at once and SHALL NOT fire `onDone` again; a new id SHALL play
+it. An intro that never started because the runner was never seen SHALL NOT count as played.
+StrictMode's simulated remount SHALL NOT count as played.
 
 #### Scenario: Parameters are applied in focus order
 - **WHEN** cadence, trunk lean, knee flexion and overstriding are measured and knee flexion then overstriding are in focus
-- **THEN** the swing-knee bend, landing offset, cadence and torso pitch are applied in that order, each tween ends at exactly its bound value, and no unmeasured parameter's value or style changes at any step
+- **THEN** after the neutral hold the swing-knee bend, landing offset, cadence and torso pitch are applied in that order, each tween ends at exactly its bound value, and no unmeasured parameter's value or style changes at any step
 
-#### Scenario: Skip
-- **WHEN** the reader presses "Skip" mid-intro
-- **THEN** the runner draws exactly the bound parameters, the Skip button is gone with focus on the pause control, and `onDone` has fired once
+#### Scenario: Lateral parameters from a side view
+- **WHEN** step width is measured and the camera is a side view
+- **THEN** step width gets no step and no flash, stays neutral during the intro, and is drawn at its bound value in the final state
+
+#### Scenario: Skip or Pause
+- **WHEN** the reader presses "Skip intro" or Pause mid-intro
+- **THEN** the runner draws exactly the bound parameters, the Skip button is gone, and `onDone` has fired once; after Skip, focus is on the pause control; after Pause, the figure is still
 
 #### Scenario: Reduced motion
 - **WHEN** the runner mounts with reduced motion preferred
 - **THEN** it draws the bound parameters at once, shows no Skip button, and fires `onDone` once
+
+#### Scenario: Not seen
+- **WHEN** the runner mounts in a hidden tab or off screen
+- **THEN** it holds the neutral start and the intro begins only once it is seen; if it is unmounted before then, a later mount for the same result plays the intro
 
 #### Scenario: Plays once per result
 - **WHEN** the runner remounts for a result whose intro already played
