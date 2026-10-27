@@ -52,7 +52,8 @@ export const MODEL_TORSO_LENGTH_CM = 50
 /**
  * Nominal hip-mid height, for framing: the camera presets aim at it. The drawn height is
  * `pelvisHeight(params)`, solved per parameter set so the contact foot stands on the ground; at the
- * neutral parameters it is within 0.01 of this (pinned by `gaitModel.test.ts`).
+ * neutral parameters it is 0.058 below this (pinned by `gaitModel.test.ts`), which the framing
+ * absorbs, so the presets are unchanged.
  */
 export const PELVIS_HEIGHT = 1.8066
 
@@ -93,11 +94,12 @@ const FOOT_MID_SWING_DEG = -5
 const FOOT_LATE_SWING_DEG = 5
 
 /**
- * How far the hips sit below their flight peak at contact and toe-off, torso lengths (design.md
- * D15). The bounce is shaped so the hips are low through stance and high in flight; this is the
- * stance part of it, capped by the bounce itself. Illustrative.
+ * How far above their lowest the hips sit at contact and toe-off, torso lengths (design.md D15):
+ * the part of the bounce the planted stance leg absorbs. Large enough that a typical bounce mostly
+ * happens in stance (so the flight hop never jumps in one frame) and the mid-stance knee visibly
+ * bends; small enough that the stance knee stays under its cap. Illustrative.
  */
-const STANCE_DROP = 0.04
+const STANCE_DROP = 0.1
 /** The flight peak of the hips, in leg phase: midway between toe-off and the other contact. */
 const FLIGHT_PEAK_PHASE = 0.44
 /**
@@ -336,8 +338,15 @@ function toeDownFootDeg(drop: number): number {
  * flight peak itself when the bounce is no larger than that. Continuous in the bounce.
  */
 function stanceEndsBounceShape(bounce: number): number {
-  return bounce > 0 ? -1 + 2 * Math.min(1, STANCE_DROP / bounce) : 1
+  const stanceLimited = bounce > 0 ? -1 + 2 * Math.min(1, STANCE_DROP / bounce) : 1
+  return Math.min(SINUSOID_STANCE_ENDS_SHAPE, stanceLimited)
 }
+
+/**
+ * Where a sinusoidal bounce (lowest at mid-stance, highest at the flight peak) sits at contact and
+ * toe-off. A small bounce keeps this shape, so it moves no faster than a sinusoid would.
+ */
+const SINUSOID_STANCE_ENDS_SHAPE = -Math.cos(4 * Math.PI * GAIT_PHASES.midStance)
 
 /**
  * The hips' height relative to `pelvisHeight`, as a fraction of half the bounce, in [−1, 1]. It

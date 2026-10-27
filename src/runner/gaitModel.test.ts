@@ -210,9 +210,72 @@ describe('the stance foot stands on the ground', () => {
     }
   })
 
-  it('stands the neutral runner at the nominal framing height', () => {
-    expect(Math.abs(pelvisHeight(NEUTRAL_RUNNER_PARAMS) - PELVIS_HEIGHT)).toBeLessThan(0.01)
+  it('stands the neutral runner near the nominal framing height the camera presets aim at', () => {
+    // The camera presets keep their framing (D15): the neutral hips' mid-height sits 0.058 below.
+    expect(Math.abs(pelvisHeight(NEUTRAL_RUNNER_PARAMS) - PELVIS_HEIGHT)).toBeLessThan(0.06)
   })
+
+  it('bends the neutral stance knee visibly at the mid-stance still frame', () => {
+    expect(kneeFlexionAt(poseAt(GAIT_PHASES.midStance, NEUTRAL_RUNNER_PARAMS), 'left'))
+      .toBeGreaterThan(20)
+  })
+})
+
+/**
+ * The hips drawn at 30 fps from several start phases: the largest change between frames, and the
+ * spread of each step's highest drawn hip over 12 steps (aliasing of the flight peak).
+ */
+function hipAt30Fps(params: RunnerParams): { largestStep: number; peakSpread: number } {
+  const perFrame = cyclesPerSecond(params) / 30
+  let largestStep = 0
+  let peakSpread = 0
+  for (const start of [0, 0.007, 0.013, 0.021, 0.033]) {
+    const phases = Array.from({ length: 30 * 8 }, (_, f) => start + f * perFrame)
+    const hips = phases.map((p) => joint(poseAt(p, params), 'left_hip').y)
+    for (let f = 1; f < hips.length; f += 1) {
+      largestStep = Math.max(largestStep, Math.abs(hips[f] - hips[f - 1]))
+    }
+    // One step runs from one mid-stance (the lowest hips) to the next.
+    const stepOf = (p: number) => Math.floor((p - GAIT_PHASES.midStance) * 2)
+    const peaks = new Map<number, number>()
+    phases.forEach((p, f) => peaks.set(stepOf(p), Math.max(peaks.get(stepOf(p)) ?? -Infinity, hips[f])))
+    const whole = [...peaks.values()].slice(1, 13)
+    peakSpread = Math.max(peakSpread, Math.max(...whole) - Math.min(...whole))
+  }
+  return { largestStep, peakSpread }
+}
+
+/** A sinusoidal bounce's largest change between 30 fps frames: the floor any bounce is held to. */
+function sinusoidFrameStep(params: RunnerParams): number {
+  return params.pelvisBounce * Math.sin(2 * Math.PI * (cyclesPerSecond(params) / 30))
+}
+
+describe('the bounce plays smoothly at 30 fps', () => {
+  const CADENCES = [150, 174, 190]
+
+  it('moves the hips no more than 1.3× a sinusoid per frame, with steady step peaks, up to the neutral bounce', () => {
+    for (const pelvisBounce of [0.03, 0.07, 0.1, 0.14]) {
+      for (const cadence of CADENCES) {
+        const params = withParams({ pelvisBounce, cadence })
+        const { largestStep, peakSpread } = hipAt30Fps(params)
+        const label = `${pelvisBounce} @ ${cadence}`
+        expect(largestStep, label).toBeLessThanOrEqual(1.3 * sinusoidFrameStep(params))
+        expect(peakSpread, label).toBeLessThanOrEqual(0.12 * pelvisBounce)
+      }
+    }
+  }, DOMAIN_SWEEP_TIMEOUT_MS)
+
+  it('holds larger bounces to their measured known limit (design.md D15)', () => {
+    for (const pelvisBounce of [0.17, 0.2, 0.3, 0.5]) {
+      for (const cadence of CADENCES) {
+        const params = withParams({ pelvisBounce, cadence })
+        const { largestStep, peakSpread } = hipAt30Fps(params)
+        const label = `${pelvisBounce} @ ${cadence}`
+        expect(largestStep, label).toBeLessThanOrEqual(2.8 * sinusoidFrameStep(params))
+        expect(peakSpread, label).toBeLessThanOrEqual(0.35 * pelvisBounce)
+      }
+    }
+  }, DOMAIN_SWEEP_TIMEOUT_MS)
 })
 
 describe('poseAt loops seamlessly', () => {
