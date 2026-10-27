@@ -123,6 +123,13 @@ export interface RunnerOverrides {
   valueTween?: RunnerValueTween | null
 }
 
+/** The intro beat's skip control (ps19.3, `useRunnerIntro`). */
+export interface RunnerIntroControl {
+  /** While true (and motion is allowed), a "Skip" button sits beside Play/Pause. */
+  running: boolean
+  onSkip: () => void
+}
+
 export interface ModelRunnerProps {
   params: BoundRunnerParams
   camera: CameraPreset | CameraState
@@ -132,6 +139,7 @@ export interface ModelRunnerProps {
   /** The figure's accessible name. */
   label: string
   overrides?: RunnerOverrides
+  intro?: RunnerIntroControl
   className?: string
 }
 
@@ -161,6 +169,9 @@ const GROUND_CLASS =
   'stroke-neutral-300 dark:stroke-neutral-700 forced-colors:stroke-[color:GrayText]'
 const LABEL_CLASS =
   'fill-neutral-900 stroke-white font-sans font-semibold dark:fill-neutral-100 dark:stroke-black forced-colors:fill-[color:CanvasText] forced-colors:stroke-[color:Canvas]'
+
+const CONTROL_CLASS =
+  'min-h-11 min-w-11 shrink-0 border border-black px-3 py-2 font-sans text-xs font-semibold dark:border-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600'
 
 /** Pixels per viewBox unit before the stage has been measured (and in jsdom). */
 const DEFAULT_PX_PER_UNIT = 100
@@ -319,9 +330,13 @@ export function ModelRunner({
   playbackRate,
   label,
   overrides,
+  intro,
   className = '',
 }: ModelRunnerProps) {
   const figureRef = useRef<HTMLElement>(null)
+  const playButtonRef = useRef<HTMLButtonElement>(null)
+  // Whether the Skip button holds focus, so its removal can hand focus on to Play/Pause.
+  const skipFocusedRef = useRef(false)
   const stageRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
 
@@ -391,6 +406,7 @@ export function ModelRunner({
   )
   const flash = overrides?.flash ?? null
   const valueTween = overrides?.valueTween ?? null
+  const skipShown = intro?.running === true && !reduced
 
   const phaseRef = useRef<number>(heldPhase)
   const heldPhaseRef = useRef(heldPhase)
@@ -523,6 +539,14 @@ export function ModelRunner({
       drawRef.current()
     }
   }, [heldPhase, reduced, choice, playing])
+
+  // A Skip button removed while focused would drop focus to the page: move it to Play/Pause.
+  useLayoutEffect(() => {
+    if (skipShown || !skipFocusedRef.current) return
+    skipFocusedRef.current = false
+    const focused = document.activeElement
+    if (focused === null || focused === document.body) playButtonRef.current?.focus()
+  }, [skipShown])
 
   // Hand the loop the latest play state and start or stop it (every render, after the effects
   // above have set up any tween).
@@ -732,17 +756,36 @@ export function ModelRunner({
         <p aria-hidden="true" className="min-w-0 font-sans text-xs text-neutral-600 dark:text-neutral-400">
           {legend ? 'Dashed: not measured' : ''}
         </p>
-        <button
-          type="button"
-          aria-label={playing ? 'Pause runner' : 'Play runner'}
-          onClick={() => setChoice(playing ? 'pause' : 'play')}
-          className="min-h-11 min-w-11 shrink-0 border border-black px-3 py-2 font-sans text-xs font-semibold dark:border-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
-        >
-          <span aria-hidden="true" className="mr-1.5 inline-block w-3 text-center">
-            {playing ? '❚❚' : '▶'}
-          </span>
-          {playing ? 'Pause' : 'Play'}
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {skipShown && (
+            <button
+              type="button"
+              aria-label="Skip intro"
+              onClick={intro?.onSkip}
+              onFocus={() => {
+                skipFocusedRef.current = true
+              }}
+              onBlur={() => {
+                skipFocusedRef.current = false
+              }}
+              className={CONTROL_CLASS}
+            >
+              Skip
+            </button>
+          )}
+          <button
+            ref={playButtonRef}
+            type="button"
+            aria-label={playing ? 'Pause runner' : 'Play runner'}
+            onClick={() => setChoice(playing ? 'pause' : 'play')}
+            className={CONTROL_CLASS}
+          >
+            <span aria-hidden="true" className="mr-1.5 inline-block w-3 text-center">
+              {playing ? '❚❚' : '▶'}
+            </span>
+            {playing ? 'Pause' : 'Play'}
+          </button>
+        </div>
       </div>
     </figure>
   )
