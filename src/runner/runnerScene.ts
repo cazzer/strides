@@ -52,6 +52,8 @@ export const RUNNER_PX = {
 
 /** Label line pitch, in font sizes. */
 export const LABEL_LINE_HEIGHT = 1.2
+/** Estimated advance of an Inter semibold character, in font sizes (measured ~0.46 in Chromium). */
+export const LABEL_CHAR_WIDTH_EM = 0.5
 
 /**
  * Opacity of measured parts on the far side of the body: dimmed for depth, never so far that a
@@ -304,7 +306,7 @@ export function labelAlign(side: LabelSide): LabelAlign {
  * typical Inter advance), so a long value never runs off a narrow phone frame.
  */
 export function clampLabelX(x: number, align: LabelAlign, chars: number, fontUnits: number): number {
-  const width = chars * fontUnits * 0.56
+  const width = chars * fontUnits * LABEL_CHAR_WIDTH_EM
   const left = align === 'start' ? x : align === 'middle' ? x - width / 2 : x - width
   const pad = fontUnits * 0.4
   const min = -VIEW_HALF_WIDTH + pad

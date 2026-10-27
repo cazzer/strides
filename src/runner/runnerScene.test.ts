@@ -11,6 +11,7 @@ import {
   VIEW_HALF_HEIGHT,
   VIEW_HALF_WIDTH,
   FAR_OPACITY,
+  LABEL_CHAR_WIDTH_EM,
   UNFOCUSED_OPACITY,
   cameraFromKey,
   cameraKey,
@@ -197,7 +198,7 @@ describe('small helpers', () => {
   it('keeps a long label inside the frame', () => {
     const font = 0.1
     const chars = 30
-    const width = chars * font * 0.56
+    const width = chars * font * LABEL_CHAR_WIDTH_EM
     const startX = clampLabelX(1.4, 'start', chars, font)
     expect(startX + width).toBeLessThanOrEqual(VIEW_HALF_WIDTH)
     const endX = clampLabelX(-1.4, 'end', chars, font)

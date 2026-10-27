@@ -330,7 +330,7 @@ const BUILDERS: Readonly<Record<Exclude<RunnerParamId, 'cadence'>, Builder>> = {
   },
   pelvisBounce(value) {
     // Hip-mid's height runs exactly PELVIS_HEIGHT ± bounce / 2 over the cycle.
-    const x = -0.45
+    const x = -0.4
     const low = PELVIS_HEIGHT - value / 2
     const high = PELVIS_HEIGHT + value / 2
     return {
