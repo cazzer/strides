@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import type { FormHeuristicsResult, MetricId } from '../../heuristics/types'
 import { feedbackFor } from '../../guidance/feedbackPoints'
 import { FOCUS_AREAS } from '../../guidance/focusAreas'
@@ -13,7 +13,9 @@ import type { MetricCardEvidence } from '../MetricsPanel'
 import { useRevealFragment } from '../revealFragment'
 import type { ScalePassStatus } from '../types'
 import { FocusAreaRow, NotMeasuredRow } from './FocusAreaRow'
+import { hasCompactBar } from './summaryLabels'
 import { summaryRows } from './summaryRows'
+import { useWideLayout } from './useWideLayout'
 
 export interface ResultsSummaryProps extends GuidedResultsViewProps {
   /** Back into the tour. Leaves the remembered landing alone: replaying is a one-off. */
@@ -23,6 +25,7 @@ export interface ResultsSummaryProps extends GuidedResultsViewProps {
 }
 
 const NO_EVIDENCE: readonly MetricCardEvidence[] = []
+const NO_CLIP_VIEWS: readonly string[] = []
 
 const FOOTER_LINK =
   'inline-flex min-h-11 items-center px-1 font-sans text-sm font-semibold text-black underline underline-offset-4 hover:text-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:text-white dark:hover:text-brand-400'
@@ -57,7 +60,7 @@ export function ResultsSummary({ onReplayTour, onOpenClassic, ...guidedProps }: 
             scalePassStatus={guidedProps.analysis.scalePass.status}
             evidence={guidedProps.evidence ?? NO_EVIDENCE}
             clipCount={guidedProps.clipCount ?? 1}
-            clipViews={guidedProps.clipViews ?? []}
+            clipViews={guidedProps.clipViews ?? NO_CLIP_VIEWS}
             sourceIndices={guidedProps.sourceIndices ?? null}
             onOpenEvidenceVideo={guidedProps.onOpenEvidenceVideo}
           />
@@ -92,8 +95,10 @@ interface SummaryBodyProps {
  * The runner and the rows. The runner is ONE mounted `ModelRunner` for the life of the summary:
  * opening a row changes only its camera, focus and rate, so it tweens rather than remounting.
  *
- * The camera follows the most recently opened row. Closing that row returns it to the whole figure;
- * closing any other row leaves it be. Rows do not close each other (no `name`), so a reader can
+ * At `lg` and up the camera follows the most recently opened row. Closing that row returns it to
+ * the whole figure; closing any other row leaves it be. Below `lg` the runner sits above the rows,
+ * usually scrolled out of view by the time a row opens, so it stays on the whole figure and the tour
+ * carries the camera story on phones. Rows do not close each other (no `name`), so a reader can
  * keep two areas open to compare them.
  */
 function SummaryBody({
@@ -107,11 +112,19 @@ function SummaryBody({
 }: SummaryBodyProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   useRevealFragment(rootRef)
-  const [activeArea, setActiveArea] = useState<FocusAreaId | null>(null)
+  const [openedArea, setOpenedArea] = useState<FocusAreaId | null>(null)
+  const wide = useWideLayout()
+  const activeArea = wide ? openedArea : null
 
-  const rows = useMemo(() => summaryRows(heuristics), [heuristics])
+  const { rows, notMeasured } = useMemo(() => {
+    const { areas, notMeasured } = summaryRows(heuristics)
+    return {
+      rows: areas.map((row) => ({ ...row, feedback: feedbackFor(row.view) })),
+      notMeasured,
+    }
+  }, [heuristics])
   const params = useMemo(() => bindRunnerParams(heuristics), [heuristics])
-  const activeRow = rows.areas.find((row) => row.view.area === activeArea) ?? null
+  const activeRow = rows.find((row) => row.view.area === activeArea) ?? null
   const focus = useMemo(
     () =>
       activeRow === null
@@ -126,16 +139,20 @@ function SummaryBody({
     () => new Map(evidence.map((entry) => [entry.metric, entry])),
     [evidence],
   )
-  const sourceLabelFor = (metric: MetricId): string | undefined =>
-    clipCount > 1 && sourceIndices
-      ? clipSourceLabel(sourceIndices[metric], clipCount, clipViews)
-      : undefined
-  const anyMarker = rows.areas.some(
-    ({ entries: [headline] }) => headline.band !== null && headline.metric.value !== null,
+  const sourceLabelFor = useCallback(
+    (metric: MetricId): string | undefined =>
+      clipCount > 1 && sourceIndices
+        ? clipSourceLabel(sourceIndices[metric], clipCount, clipViews)
+        : undefined,
+    [clipCount, sourceIndices, clipViews],
   )
+  const anyBar = rows.some(({ entries: [headline] }) => hasCompactBar(headline))
 
-  const onRowToggle = (area: FocusAreaId, open: boolean) =>
-    setActiveArea((current) => (open ? area : current === area ? null : current))
+  const onRowToggle = useCallback(
+    (area: FocusAreaId, open: boolean) =>
+      setOpenedArea((current) => (open ? area : current === area ? null : current)),
+    [],
+  )
 
   return (
     <div
@@ -155,7 +172,7 @@ function SummaryBody({
           focus={focus}
           playbackRate={playbackRate}
           label={`Model runner, ${activeRow === null ? 'whole body' : activeRow.view.label.toLowerCase()}`}
-          className="h-56 lg:h-[28rem]"
+          className="h-56 lg:h-[min(28rem,calc(100dvh-14rem))]"
         />
         {playbackRate < 1 && (
           <p className="results-summary__slow-motion mt-2 font-sans text-xs font-semibold uppercase tracking-wide text-neutral-700 dark:text-neutral-300">
@@ -165,28 +182,33 @@ function SummaryBody({
       </div>
 
       <div className="min-w-0 space-y-3">
-        {anyMarker && (
+        {anyBar && (
           <p className="results-summary__legend font-sans text-xs text-neutral-600 dark:text-neutral-400">
-            Bars show where measured groups of runners fell. Observed, not a target.
+            Bars: where other runners measured.{' '}
+            {/* The shading inverts between themes (MetricScale), so each states its own true word;
+                forced colours drop the shading, and the clause with it. */}
+            <span className="dark:hidden forced-colors:hidden">Darker = more runners. </span>
+            <span className="hidden dark:inline forced-colors:hidden">Brighter = more runners. </span>
+            Not a target.
           </p>
         )}
         <div className="results-summary__rows divide-y-2 divide-black border-2 border-black dark:divide-white dark:border-white">
-          {rows.areas.map(({ view, entries }) => (
+          {rows.map(({ view, entries, feedback }) => (
             <FocusAreaRow
               key={view.area}
               area={view.area}
               label={FOCUS_AREAS[view.area].label}
               entries={entries}
-              feedback={feedbackFor(view)}
+              feedback={feedback}
               evidenceByMetric={evidenceByMetric}
               clipCount={clipCount}
               sourceLabelFor={sourceLabelFor}
               onOpenEvidenceVideo={onOpenEvidenceVideo}
-              onToggle={(open) => onRowToggle(view.area, open)}
+              onToggle={onRowToggle}
             />
           ))}
-          {rows.notMeasured.length > 0 && (
-            <NotMeasuredRow entries={rows.notMeasured} scalePassStatus={scalePassStatus} />
+          {notMeasured.length > 0 && (
+            <NotMeasuredRow entries={notMeasured} scalePassStatus={scalePassStatus} />
           )}
         </div>
       </div>

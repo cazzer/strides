@@ -49,15 +49,20 @@ describe('FocusAreaRow', () => {
 
   it('names the area, its headline value and where the value sits, in the summary', () => {
     const { summary, row } = renderRow('rhythm')
-    const parts = guidedHeadlineParts(row.entries[0])
+    // Standalone: the row names its range, since the compact bar prints no numbers.
+    const parts = guidedHeadlineParts(row.entries[0], { standalone: true })
     expect(parts.position).not.toBeNull()
+    expect(parts.position).not.toMatch(/range shown/)
     expect(summary.textContent).toContain('Rhythm')
-    expect(summary.textContent).toContain(parts.value)
+    // The headline metric is named before its value.
+    expect(summary.querySelector('.results-summary__row-headline')!.textContent).toMatch(
+      new RegExp(`^Cadence ${parts.value}`),
+    )
     expect(summary.textContent).toContain(parts.position!)
-    // The other measured metrics, by name, so nothing is findable only by opening the row.
-    for (const entry of row.entries.slice(1)) {
-      expect(summary.textContent).toContain(METRIC_LABELS[entry.metric.metric])
-    }
+    // The other measured metrics, the bounce family collapsed, so nothing is findable only by
+    // opening the row and nothing reads as listed twice.
+    const others = summary.querySelector('.results-summary__row-others')!
+    expect(others.textContent).toBe('Also: bounce (cm, ratio, % torso)')
     // A span, never a heading: a heading inside a summary loses its role.
     expect(summary.querySelector('h1, h2, h3, h4, h5, h6')).toBeNull()
     expect(summary).toHaveClass('min-h-11')
@@ -79,12 +84,24 @@ describe('FocusAreaRow', () => {
   it('reports each open and close', async () => {
     const { details, summary, onToggle } = renderRow('knees')
     fireEvent.click(summary)
-    await waitFor(() => expect(onToggle).toHaveBeenLastCalledWith(true))
+    await waitFor(() => expect(onToggle).toHaveBeenLastCalledWith('knees', true))
     expect(details.open).toBe(true)
     act(() => {
       details.open = false
     })
-    await waitFor(() => expect(onToggle).toHaveBeenLastCalledWith(false))
+    await waitFor(() => expect(onToggle).toHaveBeenLastCalledWith('knees', false))
+  })
+
+  it('ignores a card’s own disclosure opening inside the row', async () => {
+    const { details, onToggle } = renderRow('knees')
+    const inner = details.querySelector<HTMLDetailsElement>('details.guided-results__more')!
+    expect(inner).not.toBeNull()
+    act(() => {
+      inner.open = true
+    })
+    await waitFor(() => expect(inner.open).toBe(true))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(onToggle).not.toHaveBeenCalled()
   })
 
   it('carries the area’s why line with its source, and no cue', () => {
@@ -157,7 +174,7 @@ describe('NotMeasuredRow', () => {
     expect(details.open).toBe(false)
     const summary = details.querySelector('summary')!
     expect(summary.textContent).toContain('Not measured')
-    expect(summary.textContent).toContain(`${notMeasured.length} measurements`)
+    expect(summary.textContent).not.toMatch(/measurements?:/)
     for (const entry of notMeasured) {
       expect(summary.textContent).toContain(METRIC_LABELS[entry.metric.metric])
       expect(details.querySelector(`#guided-results-${entry.metric.metric}`)).not.toBeNull()

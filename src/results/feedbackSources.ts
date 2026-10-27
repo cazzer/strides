@@ -24,5 +24,5 @@ export const FEEDBACK_SOURCE_TITLES: Readonly<Record<string, string>> = {
 export const EVIDENCE_KIND_LABELS: Readonly<Record<EvidenceKind, string>> = {
   association: 'Linked, not tested',
   trial: 'Tested in a trial',
-  mixed: 'A review of trials and comparisons',
+  mixed: 'Reviewed across studies',
 }

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GuidedMeasurements, GuidedResultsView } from './GuidedResultsView'
@@ -348,6 +349,42 @@ describe('The guided view announces completion with the same words the classic v
   it('renders no status line before the analysis is ready', () => {
     renderView(makeAnalysis({ phase: 'sampling' }))
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+})
+
+describe('GuidedResultsView — the body slot', () => {
+  function renderWith(children: ReactNode) {
+    return render(
+      <GuidedResultsView analysis={readyAnalysis()} onTryAgain={vi.fn()} onStartOver={vi.fn()}>
+        {children}
+      </GuidedResultsView>,
+    )
+  }
+
+  it('renders nothing in place of the measurements for a null child, and keeps the shell', () => {
+    const { container } = renderWith(null)
+    expect(container.querySelectorAll('section[aria-label="Analysis results"]')).toHaveLength(1)
+    expect(screen.getByRole('status')).toHaveTextContent(/^Analysis complete\./)
+    expect(container.querySelector('.guided-results__results')).toBeNull()
+    expect(screen.queryByRole('navigation', { name: 'Measurements on this page' })).toBeNull()
+    expect(container.querySelector('article')).toBeNull()
+  })
+
+  it('renders a given body instead of the measurements', () => {
+    const { container } = renderWith(<p data-testid="body">Custom body</p>)
+    expect(screen.getByTestId('body').closest('section[aria-label="Analysis results"]')).not.toBeNull()
+    expect(container.querySelector('.guided-results__results')).toBeNull()
+    expect(screen.queryByRole('navigation', { name: 'Measurements on this page' })).toBeNull()
+    expect(screen.getAllByText(/analysis complete/i)).toHaveLength(1)
+  })
+
+  it('renders no body before the analysis is ready, even when one is given', () => {
+    render(
+      <GuidedResultsView analysis={makeAnalysis()} onTryAgain={vi.fn()} onStartOver={vi.fn()}>
+        <p data-testid="body">Custom body</p>
+      </GuidedResultsView>,
+    )
+    expect(screen.queryByTestId('body')).toBeNull()
   })
 })
 

@@ -19,15 +19,17 @@ the rows. Exactly one runner SHALL be mounted for the life of the summary.
 
 ### Requirement: A summary row names its area, headline value and band position
 
-Each collapsed row SHALL name its focus area, the area's headline value and, where the headline is
-banded, where that value sits in the band's own words. A banded headline SHALL also carry a compact
-band marker, which SHALL be decorative (hidden from assistive technology). The summary SHALL state
-once, above the rows, that the bars are observed ranges and not targets.
+Each collapsed row SHALL name its focus area, the headline metric with its value and, where the
+headline is banded, where that value sits, naming the range itself. A banded headline SHALL also
+carry a compact band marker, which SHALL be decorative (hidden from assistive technology). The
+summary SHALL state once, above the rows and only when some row shows a marker, that the bars are
+where other runners measured and not a target.
 
 #### Scenario: A banded headline
 
 - **WHEN** an area's headline metric has a cited band
-- **THEN** its row names the area, the value and its position, and shows a decorative marker
+- **THEN** its row names the area, the metric, the value and its position against the named range,
+  and shows a decorative marker
 
 #### Scenario: An unbanded headline
 
@@ -52,16 +54,23 @@ one of its metrics is measured.
 
 ### Requirement: Opening a summary row points the runner's camera at that area
 
-Opening a focus-area row SHALL point the runner's camera at that area and focus it on the area's
-metrics. The most recently opened row SHALL set the camera; closing that row SHALL return the
-camera to the whole figure. Opening a row SHALL NOT close another. Where the area plays slowed, the
-summary SHALL say so on screen.
+In the wide layout, opening a focus-area row SHALL point the runner's camera at that area and focus
+it on the area's metrics. The most recently opened row SHALL set the camera; closing that row SHALL
+return the camera to the whole figure. A disclosure inside a card SHALL NOT move the camera. Where
+the area plays slowed, the summary SHALL say so on screen. In the narrow layout, where the runner
+sits above the rows and out of view, the camera SHALL stay on the whole figure at full speed
+whatever row opens. Opening a row SHALL NOT close another in either layout.
 
 #### Scenario: Two rows opened in turn
 
-- **WHEN** the reader opens Posture and then Landing
+- **WHEN** the reader, in the wide layout, opens Posture and then Landing
 - **THEN** the camera frames the foot, the figure plays slowed with a visible "Slow motion" note,
   and Posture stays open
+
+#### Scenario: A row opens on a phone
+
+- **WHEN** the reader, in the narrow layout, opens Landing
+- **THEN** the camera stays on the whole figure at full speed and no "Slow motion" note shows
 
 #### Scenario: Closing the active row
 

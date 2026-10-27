@@ -99,7 +99,28 @@ function wrapper(container: HTMLElement): HTMLElement {
   return container.querySelector<HTMLElement>('.results-summary__runner')!
 }
 
+/** Lays the summary out wide (`lg` and up) or narrow; reduced motion stays off. */
+function setWide(wide: boolean) {
+  window.matchMedia = vi.fn((query: string) => ({
+    matches: query.includes('min-width') ? wide : false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia
+}
+
+const originalMatchMedia = window.matchMedia
+
+afterEach(() => {
+  window.matchMedia = originalMatchMedia
+})
+
 beforeEach(async () => {
+  setWide(true)
   // A fresh module per test is a fresh page session for the fragment handling (`handledHash`).
   vi.resetModules()
   ResultsSummary = (await import('./ResultsSummary')).ResultsSummary
@@ -234,6 +255,55 @@ describe('ResultsSummary', () => {
     // One runner throughout: only its props changed.
     expect(runner.mounts).toBe(1)
     expect(runner.unmounts).toBe(0)
+  })
+
+  it('leaves the camera where it is when a card’s own disclosure opens inside a row', async () => {
+    const { container } = renderSummary()
+    const landing = row(container, 'landing')
+    fireEvent.click(landing.querySelector('summary')!)
+    await waitFor(() => expect(wrapper(container)).toHaveAttribute('data-camera', 'footSide'))
+    // A card's disclosure in ANOTHER, closed row: were its toggle taken for that row's, the camera
+    // would move to it.
+    const inner = row(container, 'knees').querySelector<HTMLDetailsElement>('details.guided-results__more')!
+    act(() => {
+      inner.open = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(wrapper(container)).toHaveAttribute('data-camera', 'footSide')
+    expect(wrapper(container)).toHaveAttribute('data-focus-area', 'landing')
+    // And closing an inner disclosure inside the active row does not read as the row closing.
+    const own = landing.querySelector<HTMLDetailsElement>('details.guided-results__more')!
+    act(() => {
+      own.open = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    act(() => {
+      own.open = false
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(wrapper(container)).toHaveAttribute('data-camera', 'footSide')
+  })
+
+  it('keeps the whole-body camera on a narrow layout, whatever row opens', async () => {
+    setWide(false)
+    const { container } = renderSummary()
+    fireEvent.click(row(container, 'landing').querySelector('summary')!)
+    await waitFor(() => expect(row(container, 'landing').open).toBe(true))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(wrapper(container)).toHaveAttribute('data-camera', 'wholeBodySide')
+    expect(wrapper(container)).toHaveAttribute('data-focus-area', '')
+    const props = await lastRunnerProps()
+    expect(props.focus).toBeUndefined()
+    expect(props.playbackRate).toBe(1)
+    expect(screen.queryByText('Slow motion')).toBeNull()
+  })
+
+  it('states the legend only beside a drawn bar', () => {
+    const { container } = renderSummary()
+    expect(container.querySelector('.metric-scale--compact')).not.toBeNull()
+    expect(container.querySelector('.results-summary__legend')).toHaveTextContent(
+      /^Bars: where other runners measured\. .*Not a target\.$/,
+    )
   })
 
   it('mounts each evidence canvas once, inside its collapsed row', () => {

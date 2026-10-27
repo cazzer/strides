@@ -102,9 +102,8 @@ the other view's imagery with no error raised anywhere — a failure that looks 
 rather than like a bug in view selection.
 
 For the same reason neither the guided view nor the results summary SHALL acquire session evidence
-itself. Each SHALL receive
-evidence as input from the single existing acquisition, so that switching views moves the canvases
-rather than duplicating or re-extracting them.
+itself. Each SHALL receive evidence as input from the single existing acquisition, so that
+switching views moves the canvases rather than duplicating or re-extracting them.
 
 #### Scenario: Only one view is in the document
 

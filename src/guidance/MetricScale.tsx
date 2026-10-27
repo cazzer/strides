@@ -31,20 +31,26 @@ const DOMAIN_MAX_EXTENSION_FRACTION = 1
 /** Space kept between the domain's edge and an unclamped value, in envelope-widths. */
 const VALUE_MARGIN_FRACTION = 0.05
 
-export interface MetricScaleProps {
+interface MetricScaleBase {
   /** The cited band. Every bound is in `value`'s own computed domain (see `ReferenceBand`). */
   band: ReferenceBand
   /** The measured value, in the same domain as the band's bounds — no conversion. */
   value: number
-  /** The metric's display name. Prefixes the caption for assistive technology; not rendered visibly. */
-  label: string
-  /**
-   * The track and its marker only, for a row that already states the value and its position in
-   * words beside it (the results summary). Decorative and `aria-hidden`: no printed number, no scope
-   * line, no legend and no text alternative, because the row's own text is that alternative.
-   */
-  compact?: boolean
 }
+
+/**
+ * The full scale needs `label` for its text alternative. `compact` draws the track and its marker
+ * only, for a row that already states the value and its position in words beside it (the results
+ * summary): decorative and `aria-hidden`, with no printed number, scope line, legend or text
+ * alternative, because the row's own text is that alternative. So it takes no label.
+ */
+export type MetricScaleProps =
+  | (MetricScaleBase & {
+      /** The metric's display name. Prefixes the caption for assistive technology; not rendered visibly. */
+      label: string
+      compact?: false
+    })
+  | (MetricScaleBase & { label?: never; compact: true })
 
 type Side = 'below' | 'above'
 
@@ -248,11 +254,12 @@ function shadeSteps(zones: BandZone[]): number[] | null {
  * seam by its width, its overhang above and below the track, and its ring. The text around the track
  * is left to the browser's own adjustment.
  */
-export function MetricScale({ band, value, label, compact = false }: MetricScaleProps) {
+export function MetricScale(props: MetricScaleProps) {
+  const { band, value } = props
   // A band with no extent to draw (none ships) has no scale; its text still renders.
   const envelope = referenceBandEnvelope(band)
   const domain = envelope !== null ? scaleDomain(envelope, value) : null
-  if (compact) {
+  if (props.compact) {
     return domain === null ? null : (
       <div className="metric-scale metric-scale--compact w-full min-w-0" aria-hidden="true">
         <ScaleTrack band={band} bounds={bandBounds(band)} domain={domain} value={value} compact />
@@ -276,7 +283,7 @@ export function MetricScale({ band, value, label, compact = false }: MetricScale
         reader would meet the identical fact twice, in two wordings, before reaching the picture.
       */}
       <figcaption className="metric-scale__position sr-only">
-        {label}: {sentence}
+        {props.label}: {sentence}
       </figcaption>
 
       <p className="metric-scale__scope text-xs font-semibold leading-4 text-neutral-700 dark:text-neutral-300">

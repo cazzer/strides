@@ -834,7 +834,7 @@ describe('MetricScale — compact', () => {
       const band = bandOf(metric)
       const value = band.zones[0].max ?? band.zones[0].min ?? 0
       const { container, unmount } = render(
-        <MetricScale band={band} value={value} label={`Metric ${metric}`} compact />,
+        <MetricScale band={band} value={value} compact />,
       )
       const root = container.firstElementChild!
       expect(root, metric).toHaveAttribute('aria-hidden', 'true')

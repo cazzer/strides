@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import type { MetricId } from '../../heuristics/types'
 import type { AreaFeedback } from '../../guidance/feedbackPoints'
 import type { FocusAreaId } from '../../guidance/focusAreas'
@@ -10,6 +11,7 @@ import { NotMeasuredEntries } from '../GuidedResultsView'
 import { METRIC_LABELS } from '../metricConfidence'
 import type { MetricCardEvidence } from '../MetricsPanel'
 import type { ScalePassStatus } from '../types'
+import { SHORT_METRIC_LABELS, alsoMeasuredNames, hasCompactBar } from './summaryLabels'
 
 const ROW_FOCUS =
   'focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand-600'
@@ -38,8 +40,12 @@ export interface FocusAreaRowProps {
   clipCount: number
   sourceLabelFor: (metric: MetricId) => string | undefined
   onOpenEvidenceVideo?: (clipIndex: number, timestamp: number, returnFocus: HTMLButtonElement | null) => void
-  /** Fires whenever the row opens or closes, by a click, the keyboard, find-in-page or a link. */
-  onToggle: (open: boolean) => void
+  /**
+   * Fires whenever THIS row opens or closes, by a click, the keyboard, find-in-page or a link. A
+   * card's own disclosure inside the row does not fire it. Stable across renders, with the area
+   * passed back, so a memoised row does not re-render for a new closure.
+   */
+  onToggle: (area: FocusAreaId, open: boolean) => void
 }
 
 /**
@@ -54,7 +60,7 @@ export interface FocusAreaRowProps {
  * The area label is a span, not a heading: inside a `<summary>` a heading's role is flattened into
  * the button, and the cards inside carry the headings.
  */
-export function FocusAreaRow({
+export const FocusAreaRow = memo(function FocusAreaRow({
   area,
   label,
   entries,
@@ -66,15 +72,21 @@ export function FocusAreaRow({
   onToggle,
 }: FocusAreaRowProps) {
   const [headline, ...others] = entries
-  const parts = guidedHeadlineParts(headline)
+  // Standalone: the row names the range itself ("within the 6.0–9.5 cm range"), since the compact
+  // bar beside it prints no numbers to point back to.
+  const parts = guidedHeadlineParts(headline, { standalone: true })
   const { band, metric } = headline
-  const scaled = band !== null && metric.value !== null
+  const shortName = SHORT_METRIC_LABELS[metric.metric]
+  const also = alsoMeasuredNames(others.map((entry) => entry.metric.metric))
 
   return (
     <details
       className="results-summary__row group"
       data-area={area}
-      onToggle={(event) => onToggle(event.currentTarget.open)}
+      onToggle={(event) => {
+        // React delivers a card's inner `<details>` toggle here too; only this row's own counts.
+        if (event.target === event.currentTarget) onToggle(area, event.currentTarget.open)
+      }}
     >
       <summary className={ROW_SUMMARY}>
         <RowChevron />
@@ -83,6 +95,7 @@ export function FocusAreaRow({
             {label}
           </span>
           <span className="results-summary__row-headline block font-sans text-sm text-neutral-800 dark:text-neutral-200">
+            {shortName !== undefined && <span>{shortName} </span>}
             <span className="font-semibold tabular-nums">{parts.value}</span>
             {parts.position !== null && (
               <>
@@ -92,15 +105,15 @@ export function FocusAreaRow({
               </>
             )}
           </span>
-          {others.length > 0 && (
+          {also.length > 0 && (
             <span className="results-summary__row-others block font-sans text-xs text-neutral-600 dark:text-neutral-400">
-              Also measured: {others.map((entry) => METRIC_LABELS[entry.metric.metric]).join(', ')}
+              Also: {also.join(', ')}
             </span>
           )}
         </span>
-        {scaled && (
+        {hasCompactBar(headline) && (
           <span className="results-summary__row-marker w-20 shrink-0 pt-2 sm:w-32">
-            <MetricScale band={band} value={metric.value!} label={METRIC_LABELS[metric.metric]} compact />
+            <MetricScale band={band!} value={metric.value!} compact />
           </span>
         )}
       </summary>
@@ -127,12 +140,8 @@ export function FocusAreaRow({
       </div>
     </details>
   )
-}
+})
 
-/**
- * The summary's final row: every metric not measured on this clip, collapsed, with the guided
- * view's own not-measured entries inside. Opening it moves no camera, so it takes no `onToggle`.
- */
 export function NotMeasuredRow({
   entries,
   scalePassStatus,
@@ -140,7 +149,6 @@ export function NotMeasuredRow({
   entries: readonly GuidedEntry[]
   scalePassStatus: ScalePassStatus
 }) {
-  const count = `${entries.length} ${entries.length === 1 ? 'measurement' : 'measurements'}`
   return (
     <details
       className="results-summary__row results-summary__row--not-measured group"
@@ -154,7 +162,7 @@ export function NotMeasuredRow({
           </span>
           <span className="block font-sans text-sm text-neutral-600 dark:text-neutral-400">
             <span className="sr-only">: </span>
-            {count}: {entries.map((entry) => METRIC_LABELS[entry.metric.metric]).join(', ')}
+            {entries.map((entry) => METRIC_LABELS[entry.metric.metric]).join(', ')}
           </span>
         </span>
       </summary>
