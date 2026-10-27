@@ -28,7 +28,7 @@
 - [x] 4.3 A/B fidelity gate (tour / classic / summary × side-landscape, side-portrait, front-approach, 1 fresh-process trial each, `--evidence --scale-pass`) on base `7a8b9e1e` and branch `4ce2f821`: every field but `elapsedMs` identical, one hash per clip (`docs/agent-notes/runner-tour.md`)
 - [x] 4.4 Live check (real GPU, derived port): each clip uploaded alone at 1280×800 and 390×844, light and dark, reduced motion at 1280 light and 390 dark; tour landing and knees stops pause → plate fades in aligned, Play → out; other stops and park-approach none; summary at 1280 Landing and Knees paused → plate; phone panel legibility; first-appearance pop, hard square edge and baked-in marks judged
 - [x] 4.5 `docs/agent-notes/runner-tour.md`: honesty rule 5, a plate gotcha (copy not adoption, `data-shown` written by the loop, the pause snap), correct "the tour mounts no evidence canvas" (still none; it copies pixels), live findings
-- [ ] 4.6 Follow-up beads: foot-strike plate via a hip from `robustFrames`; a mark-free source if the live check finds the baked-in marks cluttered
+- [x] 4.6 Follow-up beads (strides-rmiv, strides-53ad, strides-hnep): foot-strike plate via a hip from `robustFrames`; a mark-free source if the live check finds the baked-in marks cluttered
 
 ## 5. Review round 1
 
