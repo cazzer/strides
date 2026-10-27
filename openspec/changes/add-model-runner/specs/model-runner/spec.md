@@ -189,7 +189,7 @@ figure SHALL never be raised so that the contact foot floats.
 
 #### Scenario: Undrawable geometry gives way while bound values read back exactly
 - **WHEN** the landing offset is bound to 0.7 torso lengths, at any corner of the other leg parameters
-- **THEN** every bound value reads back exactly, the contact foot is on the ground, and the mid-stance foot is at most 0.13 torso lengths from it
+- **THEN** every bound value reads back exactly, the contact foot is on the ground, and the mid-stance foot is at most 0.19 torso lengths from it
 
 #### Scenario: Still frames show a planted foot
 - **WHEN** the renderer holds a still frame at mid-stance or at any limb parameter's key phase, at the neutral parameters

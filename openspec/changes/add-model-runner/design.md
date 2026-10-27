@@ -378,6 +378,30 @@ knee bend like √q just after contact, since IK from a straight leg is singular
 continuous (worst joint step 0.039 per 1/4000 cycle, at a landing 0.7 corner) but the first
 millisecond after contact moves fast.
 
+**Review round 1 (ps19.4).**
+- `STANCE_DROP` is now 0.10 (was 0.04) and a small bounce keeps a sinusoid's shape (its contact
+  and toe-off value is capped at the sinusoid's, −cos(4π·0.19) = 0.729). Measured at 30 fps, as the
+  largest per-frame hip change over a sinusoid's (b·sin 2πΔp, Δp = cadence/120/30) and the spread of
+  per-step hip peaks over 12 steps: b ≤ 0.10: 1.12–1.13×, spread ≤ 0.055b; b = 0.14 (neutral):
+  0.93–0.98×, spread ≤ 0.115b. Tested ≤ 1.3× and ≤ 0.12b for b ≤ 0.14.
+- **Known limit, b > 0.14.** Stance is 0.38 of the cycle and the knee-flexion prominence rule caps
+  how far the hips can travel with the foot planted, so whatever bounce exceeds `STANCE_DROP` must
+  happen in 0.12 of a cycle of flight. Measured: b = 0.17: 1.24–1.41×, spread 0.13–0.17b; b = 0.2:
+  1.51–1.71×, 0.16–0.20b; b = 0.3: 2.0–2.3×, 0.21–0.27b; b = 0.5: 2.4–2.7×, 0.25–0.32b (regression
+  test ≤ 2.8×, ≤ 0.35b). Fixing it needs a shorter stance (follow-up bead).
+- Neutral mid-stance knee (left leg, phase 0.19, the metric's formula): 39.4° (28.0° before).
+- The neutral pelvis height is now 0.058 below the nominal `PELVIS_HEIGHT`; the camera presets are
+  unchanged.
+- Swing foot: the foot angle is clamped so heel and toe stay above the ground, the swing knee holds
+  80 % of its bend to phase 0.76, and in mid-swing it bends further (never past the bound peak) when
+  the ankle would come within a sole's depth of the ground. Swing lowest point ≥ −0.005 over the
+  declared domain (thigh peak 20 added) and at landing ≤ 0.512 with swing bend ≥ 100 and step width
+  ≥ 0.3; a 50° swing bend, crossed legs (step width −1.5) or landing ≥ 0.6 can still dip to −0.188.
+- Landing 0.7 corners: stance sink 0.181 (was 0.124), swing dip 0.188 (was 0.172).
+- **Open:** at landing 0.35, swing bend 50, step width −1.5, foot strike 0.4 (drawn 0.175), thigh peak
+  10 (drawn 13.5), bounce 0, kneeFlexion reads 11° off its bound. Present on the round-0 model too
+  (af7eee70); found by the per-landing sweep, not yet diagnosed.
+
 ## Risks / Trade-offs
 
 - When two measured contact parameters conflict (D4), the weaker one is drawn away from its
