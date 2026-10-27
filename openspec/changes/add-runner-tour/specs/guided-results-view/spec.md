@@ -91,7 +91,9 @@ Selecting a view SHALL NOT require a routing library.
 
 The runner tour, the results summary and the classic results view SHALL NOT be mounted
 simultaneously. The choice between them SHALL be exclusive. The tour and the summary SHALL each
-render exactly one guided view, never a hidden second copy.
+render exactly one guided results shell, never a hidden second copy, and mount each metric's card
+(and so its evidence) at most once; a collapsed summary row SHALL hide its content without
+unmounting it.
 
 This is forced by the DOM, not chosen for tidiness. Session evidence hands out real canvas elements
 and each is mounted by replacing a host's children with it. **A DOM node has exactly one parent.**
@@ -99,7 +101,8 @@ Mounting two views would silently move every evidence canvas into whichever rend
 the other view's imagery with no error raised anywhere — a failure that looks like missing evidence
 rather than like a bug in view selection.
 
-For the same reason the guided view SHALL NOT acquire session evidence itself. It SHALL receive
+For the same reason neither the guided view nor the results summary SHALL acquire session evidence
+itself. Each SHALL receive
 evidence as input from the single existing acquisition, so that switching views moves the canvases
 rather than duplicating or re-extracting them.
 
@@ -117,9 +120,15 @@ rather than duplicating or re-extracting them.
 
 #### Scenario: The guided view does not acquire evidence itself
 
-- **WHEN** the guided view renders
+- **WHEN** the guided view or the results summary renders
 - **THEN** it renders the evidence it was given as input and starts no evidence acquisition of its
   own
+
+#### Scenario: Collapsed summary rows keep their imagery
+
+- **WHEN** the results summary renders with every row collapsed
+- **THEN** each evidence canvas is already in the document inside its metric's row, exactly once,
+  and opening the row shows that same canvas rather than mounting a new one
 
 ### Requirement: The guided view announces completion with the same words the classic view does
 

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useRef } from 'react'
+import { Fragment, useId, useRef } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
 import type { FormHeuristicsResult, MetricId } from '../heuristics/types'
 import { METRIC_GUIDANCE } from '../guidance/metricGuidance'
@@ -24,6 +24,7 @@ import type { MetricCardEvidence } from './MetricsPanel'
 import type { ResultsViewProps } from './ResultsView'
 import type { ScalePassStatus } from './types'
 import { StartOverControl } from './StartOverControl'
+import { openAncestors, useRevealFragment } from './revealFragment'
 import { clipSourceLabel } from './clipProvenance'
 
 /**
@@ -31,6 +32,16 @@ import { clipSourceLabel } from './clipProvenance'
  * interchangeable at the one call site that chooses between them (design.md D7.1).
  */
 export type GuidedResultsViewProps = ResultsViewProps
+
+export interface GuidedResultsShellProps extends GuidedResultsViewProps {
+  /**
+   * The body shown once the analysis is ready, in place of the guided measurements. The summary and
+   * the tour pass theirs here, so the shell (its controls, the error alert, the one completion line
+   * and the one "Analysis results" section) is never copied. `undefined` renders the guided
+   * measurements; any other value, `null` included, renders exactly that.
+   */
+  children?: ReactNode
+}
 
 /** Stable empty list, so a view rendered without evidence never builds a fresh map identity. */
 const NO_EVIDENCE: readonly MetricCardEvidence[] = []
@@ -76,7 +87,8 @@ export function GuidedResultsView({
   clipViews = [],
   sourceIndices = null,
   onOpenEvidenceVideo,
-}: GuidedResultsViewProps) {
+  children,
+}: GuidedResultsShellProps) {
   const { phase, heuristics, error, start } = analysis
   const scalePassCouldntAdd =
     " A second look at the clip couldn't add the extra metrics."
@@ -138,74 +150,29 @@ export function GuidedResultsView({
         </div>
       )}
 
-      {phase === 'ready' && heuristics && (
-        <GuidedMeasurements
-          heuristics={heuristics}
-          scalePassStatus={analysis.scalePass.status}
-          evidence={evidence}
-          clipCount={clipCount}
-          clipViews={clipViews}
-          sourceIndices={sourceIndices}
-          onOpenEvidenceVideo={onOpenEvidenceVideo}
-        />
-      )}
+      {phase === 'ready' &&
+        heuristics &&
+        (children !== undefined ? (
+          children
+        ) : (
+          <GuidedMeasurements
+            heuristics={heuristics}
+            scalePassStatus={analysis.scalePass.status}
+            evidence={evidence}
+            clipCount={clipCount}
+            clipViews={clipViews}
+            sourceIndices={sourceIndices}
+            onOpenEvidenceVideo={onOpenEvidenceVideo}
+          />
+        ))}
     </section>
   )
-}
-
-/**
- * Opens every closed `<details>` between `target` and the document root. Returns whether any was
- * closed, i.e. whether the target was hidden until now.
- */
-function openAncestors(target: Element): boolean {
-  let opened = false
-  for (
-    let details = target.parentElement?.closest('details');
-    details;
-    details = details.parentElement?.closest('details')
-  ) {
-    if (!details.open) {
-      details.open = true
-      opened = true
-    }
-  }
-  return opened
-}
-
-/**
- * The fragment this page session has already revealed — on a mount or a hash change (a contents-list
- * click causes one, unless it names the fragment already in the address, which is handled already).
- *
- * The guided measurements mount again every time an analysis reaches ready (adding a clip) and every
- * time the view is toggled back from classic, and the toggle keeps the hash. Revealing the hash on
- * each of those mounts would scroll the page back to a card the reader left long ago. So a mount
- * reveals a fragment only the first time the page session sees it, and never moves focus: focus
- * moves only when the reader asks for a card, by a hash change or a contents-list click.
- *
- * Module scope, because the component's own state dies with the very remount this has to survive.
- */
-let handledHash: string | null = null
-
-/** The element a fragment names, if it is inside `root`. */
-function fragmentTarget(
-  root: HTMLElement | null,
-  hash: string,
-): HTMLElement | null {
-  if (root === null || hash.length <= 1) return null
-  let id: string
-  try {
-    id = decodeURIComponent(hash.slice(1))
-  } catch {
-    return null
-  }
-  const target = document.getElementById(id)
-  return target !== null && root.contains(target) ? target : null
 }
 
 function revealMetric(event: MouseEvent<HTMLAnchorElement>, id: string) {
   // Runs before the browser follows the link, so the target is already visible when it scrolls.
   // A click on a link to the CURRENT hash fires no hashchange, which is why this is not left to
-  // the listener in `GuidedMeasurements`. A modified click opens a new tab and leaves this page be.
+  // the listener in `useRevealFragment`. A modified click opens a new tab and leaves this page be.
   if (
     event.button !== 0 ||
     event.metaKey ||
@@ -539,6 +506,55 @@ function EconomyHeadlines({
   )
 }
 
+/**
+ * The not-measured entries, each with what to change next time and why it was not measured. Shared
+ * by every guided body (the measurements' collapsed group, the summary's final row), so the wording
+ * lives in one place.
+ */
+export function NotMeasuredEntries({
+  entries,
+  scalePassStatus,
+}: {
+  entries: readonly GuidedEntry[]
+  scalePassStatus: ScalePassStatus
+}) {
+  return (
+    <ul className="space-y-5">
+      {entries.map((entry) => {
+        const id = guidedEntryId(entry.metric.metric)
+        return (
+          <li
+            key={entry.metric.metric}
+            id={id}
+            tabIndex={-1}
+            className={`guided-results__not-measured-entry space-y-1 border-t border-neutral-300 pt-4 dark:border-neutral-700 ${FOCUS_RING_TARGET}`}
+            data-metric={entry.metric.metric}
+            data-motion-metric={entry.metric.metric}
+          >
+            <h3
+              id={`${id}-heading`}
+              className="font-display text-lg font-bold tracking-tight"
+            >
+              {METRIC_LABELS[entry.metric.metric]}
+            </h3>
+            <p className={`guided-results__capture-hint ${BODY}`}>
+              <span className="font-semibold text-black dark:text-white">
+                To measure this next time:{' '}
+              </span>
+              {captureHintFor(entry)}
+            </p>
+            <p
+              className={`guided-results__not-measured-reason ${MUTED}`}
+            >
+              {notMeasuredReason(entry.metric, scalePassStatus)}
+            </p>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
 export interface GuidedMeasurementsProps {
   heuristics: FormHeuristicsResult
   scalePassStatus: ScalePassStatus
@@ -590,30 +606,7 @@ export function GuidedMeasurements({
     evidence.map((entry) => [entry.metric, entry]),
   )
 
-  useEffect(() => {
-    // On mount: a fragment this page session has not revealed yet — typically a shared link, whose
-    // card did not exist when the browser tried to scroll to it — is opened and scrolled to. Focus
-    // stays where it is: nobody asked for it on this mount, and the reader may be on the toggle.
-    const hash = window.location.hash
-    const target = fragmentTarget(rootRef.current, hash)
-    if (target !== null && hash !== handledHash) {
-      handledHash = hash
-      openAncestors(target)
-      target.scrollIntoView?.({ block: 'start' })
-    }
-    // A hash change is the reader asking for a card. The browser already scrolled to a visible
-    // target; one it could not see needs doing here.
-    const onHashChange = () => {
-      const current = window.location.hash
-      const next = fragmentTarget(rootRef.current, current)
-      if (next === null) return
-      handledHash = current
-      if (openAncestors(next)) next.scrollIntoView?.({ block: 'start' })
-      next.focus({ preventScroll: true })
-    }
-    window.addEventListener('hashchange', onHashChange)
-    return () => window.removeEventListener('hashchange', onHashChange)
-  }, [])
+  useRevealFragment(rootRef)
 
   const cards = (entries: GuidedEntry[], variant: 'framed' | 'divided') => (
     <div className={variant === 'framed' ? 'grid gap-4' : 'space-y-6'}>
@@ -746,39 +739,7 @@ export function GuidedMeasurements({
               {plural(notMeasured.length, 'measurement')}: {names(notMeasured)}
             </summary>
             <div className="space-y-4 px-5 pb-5">
-              <ul className="space-y-5">
-                {notMeasured.map((entry) => {
-                  const id = guidedEntryId(entry.metric.metric)
-                  return (
-                    <li
-                      key={entry.metric.metric}
-                      id={id}
-                      tabIndex={-1}
-                      className={`guided-results__not-measured-entry space-y-1 border-t border-neutral-300 pt-4 dark:border-neutral-700 ${FOCUS_RING_TARGET}`}
-                      data-metric={entry.metric.metric}
-                      data-motion-metric={entry.metric.metric}
-                    >
-                      <h3
-                        id={`${id}-heading`}
-                        className="font-display text-lg font-bold tracking-tight"
-                      >
-                        {METRIC_LABELS[entry.metric.metric]}
-                      </h3>
-                      <p className={`guided-results__capture-hint ${BODY}`}>
-                        <span className="font-semibold text-black dark:text-white">
-                          To measure this next time:{' '}
-                        </span>
-                        {captureHintFor(entry)}
-                      </p>
-                      <p
-                        className={`guided-results__not-measured-reason ${MUTED}`}
-                      >
-                        {notMeasuredReason(entry.metric, scalePassStatus)}
-                      </p>
-                    </li>
-                  )
-                })}
-              </ul>
+              <NotMeasuredEntries entries={notMeasured} scalePassStatus={scalePassStatus} />
             </div>
           </details>
         </section>

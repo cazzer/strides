@@ -827,3 +827,32 @@ describe('MetricScale — legibility of the marks', () => {
     }
   })
 })
+
+describe('MetricScale — compact', () => {
+  it('draws only the track and its marker, hidden from assistive technology, with no text', () => {
+    for (const metric of BANDED) {
+      const band = bandOf(metric)
+      const value = band.zones[0].max ?? band.zones[0].min ?? 0
+      const { container, unmount } = render(
+        <MetricScale band={band} value={value} label={`Metric ${metric}`} compact />,
+      )
+      const root = container.firstElementChild!
+      expect(root, metric).toHaveAttribute('aria-hidden', 'true')
+      expect(root.textContent, metric).toBe('')
+      expect(container.querySelector('figure'), metric).toBeNull()
+      expect(container.querySelector('.metric-scale__track'), metric).not.toBeNull()
+      expect(container.querySelectorAll('.metric-scale__marker'), metric).toHaveLength(1)
+      for (const selector of [
+        '.metric-scale__scope',
+        '.metric-scale__bound-label',
+        '.metric-scale__value-label',
+        '.metric-scale__legend',
+        '.metric-scale__zones',
+        '.sr-only',
+      ]) {
+        expect(container.querySelector(selector), `${metric} ${selector}`).toBeNull()
+      }
+      unmount()
+    }
+  })
+})
