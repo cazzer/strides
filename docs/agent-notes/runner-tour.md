@@ -247,6 +247,72 @@ errors.
   (`|a|` 4.64–4.84 and 4.93). So on the side demo clips today, landing never shows a plate.
 - Screenshots: `zba4-live/r1-*.png`.
 
+## Bounce composite reading (`strides-xki9`)
+
+The rhythm area's three bounce metrics read as ONE reading in the tour and the summary, headlined
+by vertical ratio, with a line citing what it was derived from. Change:
+`openspec/changes/compose-bounce-reading` (design D1–D7). Classic view unchanged.
+
+- **Presentation only:** `src/guidance/compositeReadings.ts` (`COMPOSITE_READINGS.bounce`: VR, VO_cm,
+  VO; `areaReadings`; `bounceDerivation`). `FOCUS_AREAS`, `focusAreaView`'s headline, `feedbackFor`
+  and `selectOneThing` never read it, so the area headline, why line, cue and one thing cannot move.
+  `SummaryArea` gained `readings` and `bounce` beside an unchanged `entries` (the summary's runner
+  focus and the evidence map still read `entries`). The row/stop headline is the FIRST READING's
+  headline, which differs from `view.headline` when cadence is excluded and VO_cm is measured
+  (the stop shows VR; feedback is still VO_cm's area feedback).
+- **The From line** (`formatBounceDerivation`): `From bounce 7.2 cm and stride 6.3 torso lengths
+  (3 strides)`. Bounce = VO_cm, else VO as "% of torso length"; stride = VO / VR, which is exactly
+  `strideLengthPx / torsoLengthPx` because both read the same hip-bounce fit under the default
+  `hipMid` signal (unit-tested on synthetic gait in `compositeReadings.test.ts`); count = VR's
+  `sampleSize` (stride pairs). Each figure only from VR's own clip (`sourceIndices`); never stride in
+  metres (circular). Shown only when VR heads the reading; a VO_cm/VO fallback headline cites nothing.
+- **Summary:** `CompositeReading.tsx` = `section.results-summary__composite[data-composite=bounce]`
+  (aria-label "Bounce"), the headline card with `p.guided-results__derived-from` under its headline
+  (NOT `guided-results__derivation`: that class is the band's "Derived range" in the card's
+  disclosure), then ONE `details.results-summary__composite-more` ("Also: …", closed, cards
+  mounted). Its chevron uses the named group `group/more`: a plain `group-open:` would follow the
+  row. The row's "Also:" names the composite once ("Also: Vertical ratio").
+- **Tour:** the stop headline is the first reading's. With cadence measured, rhythm adds
+  `div.runner-tour__value.runner-tour__value--secondary[data-composite=bounce]` (label, `text-2xl`
+  value, sr-only position, confidence when caveated, `p.runner-tour__derivation`), no bar. It is
+  excluded from the 25-word budget like the value line; a From line is capped at 14 words.
+  Cadence excluded: VR is the stop headline (bar + From line) and the runner focus, which binds no
+  parameter, so no bounce label on the figure (VO_cm was the focus there before).
+
+### Live check, 2026-10-27 (`strides-xki9`, `dc438980`)
+
+Real GPU (ANGLE Metal, M4 Pro), port 5231 (derived, `assertServesThisCheckout`), one browser
+process, fresh context per run, no page or console errors in any run, exactly one "Analysis
+complete." status in tour and summary every time.
+
+| run | tour rhythm stop | summary rhythm row |
+|---|---|---|
+| side-landscape 1280 light/dark, 390 light/dark, 375×667 dark, 1280 reduced motion | Cadence 174 + secondary VR 2.40–2.46%; From line "bounce 15.2–15.4% of torso length …" before the scale pass, "bounce 7.2 cm and stride 6.3 torso lengths (3 strides)" after it; one bar | Cadence headline, "Also: Vertical ratio"; VR card with bar + From line; "Also: Vertical oscillation (cm), Vertical oscillation" closed (44 px at 1280, 56 px at 390), two evidence canvases render when opened; the row stays open |
+| park-approach 1280 light | Cadence 181 (Medium) + secondary "Bounce 10.5 cm" (Low confidence), no From line (VR excluded) | Also: Vertical oscillation (cm); VO_cm card with Malisoux bar, no From line; nested holds VO |
+| side-portrait 1280 light, 390 dark | cadence excluded: VR 3.00% is the stop headline, Medium confidence, bar, From "bounce 17.2% of torso length and stride 5.7 torso lengths (2 strides)" (VO_cm absent on this clip, so it never switches to cm) | VR headline, no Also line; nested holds VO |
+| Demo (3 clips) 1280 light | as side-landscape | every rhythm card "Measured from Clip 1 of 3 · Side view": the VO family and VR share clip 1, so the same-clip guard did not bite live (it is unit-tested) |
+
+- The From line switched from relative to cm in place when the scale pass grafted VO_cm, in every
+  side-landscape run.
+- **Phone panel (open):** the rhythm panel already scrolled inside itself on base at 390×844 (229 px,
+  `role=group`) and 375×667 (164–170 px); the cap is unchanged. On base the why line's first words
+  showed at rest; now the secondary VR block fills that space and the why line is below the fold of
+  the panel at rest (the reader scrolls the panel to reach it). Filed as `strides-3v4t`.
+- VR read 2.46% in the first context and 2.40% in later ones (one shared browser process: the
+  cold/warm mix the harness notes describe). The stride figure is VR's own denominator in torso
+  lengths (6.3 ≈ 3 m at a 0.5 m torso, which is what 7.2 cm ÷ 2.40% implies too).
+- Screenshots: scratchpad `xki9-live/*.png` (base comparisons in `xki9-live/base/`), not committed.
+
+**Fidelity A/B** (`--view-arm` tour/summary/classic × side-landscape, side-portrait, front-approach,
+`--trials 1 --evidence --scale-pass`, fresh process per trial): base `10b3f54c` on its own derived
+port 5258, branch `dc438980` on 5231, both "started by this run, identity verified". Each trial's
+fields minus `elapsedMs` canonicalised (sorted `key\tJSON`, 430/415/415 rows): **one hash per clip
+across both checkouts and all three arms**, the same three hashes as the `strides-zba4` re-run
+(side-landscape `9091751e…16c6`, side-portrait `7d1699a3…677c`, front-approach `6ba8609e…bf91`);
+`md5 -r` plus two-way `cmp -s` through `rtk proxy sh -c` agreed (18 identical, 0 differing; a
+cross-clip control differed). One branch trial (side-portrait / tour) stalled with the
+`strides-qg86` shape (video `readyState` 0, no status); its re-run hashed identically.
+
 ## Gotchas
 
 - **One mounted runner per view, never keyed per stop or row.** A stop or an opened row changes only

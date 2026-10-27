@@ -12,8 +12,8 @@ readings): a single metric's own, or a composite reading's headline metric. When
 reading is the bounce composite headlined by vertical ratio, the value line SHALL also carry the
 bounce reading's "From …" derivation line. When the bounce reading is a later reading (the rhythm
 stop with cadence measured), the stop SHALL add one secondary value block after the headline's:
-the bounce headline's short label, its value in a smaller type, its band position for assistive
-technology only, and its "From …" line when it has one; no second bar and no legend. A stop SHALL
+the bounce headline's short label, its value in a smaller type (with its confidence when that is
+not normal), its band position for assistive technology only, and its "From …" line when it has one; no second bar and no legend. A stop SHALL
 show no other later reading.
 
 The visible words of every stop SHALL be at most 25, counting the heading and the lines' text and

@@ -84,7 +84,8 @@ marks a band's "Derived range" statement inside the card's disclosure (asserted 
 The tour's stop headline is the first reading's headline. With cadence measured, the rhythm stop
 keeps cadence (bar, legend, runner focus) and adds `<div class="runner-tour__value
 runner-tour__value--secondary" data-composite="bounce">`: the short label "Vertical ratio", the
-value at `text-2xl`, its band position sr-only as the headline's is, and
+value at `text-2xl`, its confidence label when caveated (as the headline's), its band position
+sr-only as the headline's is, and
 `<p class="runner-tour__derivation">`. No bar, no legend: one bar per stop. It is excluded from the
 25-word budget like the value line (numbers and names), and the From line is capped at 14 words on
 its own. With cadence excluded, the composite headline is the stop headline: its bar, and the From
@@ -102,7 +103,8 @@ member's position. The old "bounce (cm, ratio, % torso)" collapse is deleted.
 
 - **Card furniture budget (≤ 50).** The From line adds ~11 words to VR's card furniture. Measured in
   `GuidedResultsView.test.tsx` with the line rendered; if it exceeded 50 the change would stop
-  rather than move the measure.
+  rather than move the measure. Measured: verticalRatio 35 (cadence 47, verticalOscillationCm 50,
+  unchanged from base since its card is untouched).
 - **Phone panel height.** The rhythm stop gains ~3 lines. The panel cap and the scrolling-panel
   group already handle a long panel (`strides-xsl3`); checked live at 375×667 and 390×844.
 - **Summary runner labels VO relative while the From line may cite cm.** Pre-existing: the runner
