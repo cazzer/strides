@@ -6,6 +6,7 @@ import type { SessionCoverage } from '../sessionCoverage'
 import {
   BOTH_VIEWS_HINT,
   STEADY_RUNNING_HINT,
+  introCamera,
   stopCamera,
   tourCaptureHint,
   tourPlan,
@@ -67,13 +68,13 @@ describe('tourCaptureHint', () => {
         present: { side: true, front: false },
         needs: [{ view: 'front', metrics: ['armSwingAmplitude', 'stepWidth'] }],
       }),
-    ).toBe('Add a front-view clip.')
+    ).toEqual({ text: 'Add a front-view clip', addsClip: true })
     expect(
       tourCaptureHint(['posture'], {
         present: { side: false, front: true },
         needs: [{ view: 'side', metrics: ['trunkLean'] }],
       }),
-    ).toBe('Add a side-view clip.')
+    ).toEqual({ text: 'Add a side-view clip', addsClip: true })
   })
 
   it('names both views when both cost an unmeasured area', () => {
@@ -85,7 +86,7 @@ describe('tourCaptureHint', () => {
           { view: 'front', metrics: ['armSwingAmplitude'] },
         ],
       }),
-    ).toBe(BOTH_VIEWS_HINT)
+    ).toEqual({ text: BOTH_VIEWS_HINT, addsClip: true })
   })
 
   it('ignores a view need that only touches measured areas', () => {
@@ -94,12 +95,13 @@ describe('tourCaptureHint', () => {
         present: { side: true, front: false },
         needs: [{ view: 'side', metrics: ['trunkLean'] }],
       }),
-    ).toBe(STEADY_RUNNING_HINT)
+    ).toEqual({ text: STEADY_RUNNING_HINT, addsClip: false })
   })
 
   it('asks for steadier footage when no angle is to blame, or coverage is unknown', () => {
-    expect(tourCaptureHint(['knees'], NO_NEEDS)).toBe(STEADY_RUNNING_HINT)
-    expect(tourCaptureHint(['knees'], null)).toBe(STEADY_RUNNING_HINT)
+    const steady = { text: STEADY_RUNNING_HINT, addsClip: false }
+    expect(tourCaptureHint(['knees'], NO_NEEDS)).toEqual(steady)
+    expect(tourCaptureHint(['knees'], null)).toEqual(steady)
   })
 })
 
@@ -107,12 +109,22 @@ describe('stopCamera and tourStopDomId', () => {
   it('maps each area to its preset, and the one-thing stop to the whole figure', () => {
     for (const area of FOCUS_AREA_ORDER) expect(stopCamera(area)).toBe(FOCUS_AREA_CAMERA[area])
     expect(stopCamera('oneThing')).toBe(NO_FOCUS_CAMERA)
-    expect(stopCamera('landing')).toEqual({ camera: 'footSide', playbackRate: 0.4 })
+    expect(stopCamera('landing')).toEqual({ camera: 'legsSide', playbackRate: 0.4 })
     expect(stopCamera('footPath')).toEqual({ camera: 'feetFront', playbackRate: 0.4 })
   })
 
   it('ids a stop as tour-<id>', () => {
     expect(tourStopDomId('knees')).toBe('tour-knees')
     expect(tourStopDomId('oneThing')).toBe('tour-oneThing')
+  })
+})
+
+describe('introCamera', () => {
+  it('introduces a front-only session from the front, every other from the side', () => {
+    expect(introCamera({ present: { side: false, front: true }, needs: [] })).toBe('feetFront')
+    expect(introCamera({ present: { side: true, front: true }, needs: [] })).toBe('wholeBodySide')
+    expect(introCamera({ present: { side: true, front: false }, needs: [] })).toBe('wholeBodySide')
+    expect(introCamera({ present: { side: false, front: false }, needs: [] })).toBe('wholeBodySide')
+    expect(introCamera(null)).toBe('wholeBodySide')
   })
 })

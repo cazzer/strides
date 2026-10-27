@@ -125,7 +125,7 @@ export const NON_POINTS: Partial<Record<MetricId, CitedLine>> = {
 /** Rendered before a cue's text, which starts mid-sentence. */
 export const CUE_PREFIX = 'One studied option:'
 export const ONE_THING_LABEL = 'One thing to try'
-export const NOTHING_TO_CHANGE = 'Nothing here calls for a change.'
+export const NOTHING_TO_CHANGE = 'No studied change to try for these readings.'
 
 /**
  * Areas that never carry a cue, whatever the guidance record gains later. Folland 2017 found more

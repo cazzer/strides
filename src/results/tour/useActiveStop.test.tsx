@@ -97,6 +97,28 @@ describe('useActiveStop', () => {
     expect(seen.at(-1)).toBeNull()
   })
 
+  it('reads the line again when the root resizes (a stop above changed height)', () => {
+    const observers: Array<() => void> = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          observers.push(callback)
+        }
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      },
+    )
+    placeStops({ rhythm: line() + 1 })
+    const seen: Array<TourStopId | null> = []
+    render(<Harness onActive={(id) => seen.push(id)} />)
+    expect(seen.at(-1)).toBeNull()
+    placeStops({ rhythm: line() - 1 })
+    act(() => observers.forEach((callback) => callback()))
+    expect(seen.at(-1)).toBe('rhythm')
+  })
+
   it('stops listening once unmounted', () => {
     placeStops({})
     const remove = vi.spyOn(window, 'removeEventListener')

@@ -102,8 +102,8 @@ Mounting two views would silently move every evidence canvas into whichever rend
 the other view's imagery with no error raised anywhere — a failure that looks like missing evidence
 rather than like a bug in view selection.
 
-For the same reason neither the guided view nor the results summary SHALL acquire session evidence
-itself. Each SHALL receive evidence as input from the single existing acquisition, so that
+For the same reason neither the guided view, the runner tour nor the results summary SHALL acquire
+session evidence itself. Each SHALL receive evidence as input from the single existing acquisition, so that
 switching views moves the canvases rather than duplicating or re-extracting them.
 
 #### Scenario: Only one view is in the document

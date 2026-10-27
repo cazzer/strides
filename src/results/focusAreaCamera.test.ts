@@ -22,7 +22,7 @@ describe('FOCUS_AREA_CAMERA', () => {
       arms: { camera: 'upperFrontQuarter', playbackRate: 1 },
       posture: { camera: 'torsoSide', playbackRate: 1 },
       knees: { camera: 'legsSide', playbackRate: 1 },
-      landing: { camera: 'footSide', playbackRate: 0.4 },
+      landing: { camera: 'legsSide', playbackRate: 0.4 },
       footPath: { camera: 'feetFront', playbackRate: 0.4 },
     })
     expect(NO_FOCUS_CAMERA).toEqual({ camera: 'wholeBodySide', playbackRate: 1 })

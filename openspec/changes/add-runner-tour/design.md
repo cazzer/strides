@@ -143,7 +143,7 @@ to try"), the prefix and the cue. Why lines are ≤ 14 words.
 | landing (if overstriding is ever banded) | Landing + why (5) + prefix (3) + step-rate cue (16) | 25 |
 | foot path | Foot path (2) + step-width non-point (10) | 12 |
 | one thing | One thing to try (4) + prefix (3) + longest cue that can fire (13) | 20 |
-| one thing, nothing to change | One thing to try (4) + "Nothing here calls for a change." (6) | 10 |
+| one thing, nothing to change | One thing to try (4) + "No studied change to try for these readings." (8) | 12 |
 
 ### D5. Layering and imports
 

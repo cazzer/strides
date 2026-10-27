@@ -22,14 +22,23 @@ export interface TourPlan {
   /** The areas with nothing measured, in tour order: skipped, and listed at the end. */
   unmeasured: FocusAreaId[]
   /** One way to measure what is missing, or `null` when nothing is. */
-  captureHint: string | null
+  captureHint: CaptureHint | null
+}
+
+/**
+ * The end of the tour's one capture hint. `addsClip`: the hint is "add a clip from this view", so
+ * the view offers it as the add-a-clip control itself; otherwise it is advice, shown as text.
+ */
+export interface CaptureHint {
+  text: string
+  addsClip: boolean
 }
 
 const VIEW_CLIP_HINT: Readonly<Record<CommittedView, string>> = {
-  side: 'Add a side-view clip.',
-  front: 'Add a front-view clip.',
+  side: 'Add a side-view clip',
+  front: 'Add a front-view clip',
 }
-export const BOTH_VIEWS_HINT = 'Add a side-view and a front-view clip.'
+export const BOTH_VIEWS_HINT = 'Add a side-view and a front-view clip'
 /** For an area missing for some reason other than the camera angle (too little usable running). */
 export const STEADY_RUNNING_HINT = 'Film several seconds of steady running, whole body in frame.'
 
@@ -41,15 +50,26 @@ export const STEADY_RUNNING_HINT = 'Film several seconds of steady running, whol
 export function tourCaptureHint(
   unmeasured: readonly FocusAreaId[],
   coverage: SessionCoverage | null,
-): string | null {
+): CaptureHint | null {
   if (unmeasured.length === 0) return null
   const missing = new Set<MetricId>(unmeasured.flatMap((area) => FOCUS_AREAS[area].metricIds))
   const views = (coverage?.needs ?? [])
     .filter((need) => need.metrics.some((metric) => missing.has(metric)))
     .map((need) => need.view)
-  if (views.length >= 2) return BOTH_VIEWS_HINT
-  if (views.length === 1) return VIEW_CLIP_HINT[views[0]]
-  return STEADY_RUNNING_HINT
+  if (views.length >= 2) return { text: BOTH_VIEWS_HINT, addsClip: true }
+  if (views.length === 1) return { text: VIEW_CLIP_HINT[views[0]], addsClip: true }
+  return { text: STEADY_RUNNING_HINT, addsClip: false }
+}
+
+/**
+ * The intro's camera. A front-only session's measurements include the lateral ones (step width,
+ * the swing foot's arc), which only get a step from a view that sees sideways movement, so it
+ * introduces the feet from the front; every other session sees the whole figure from the side.
+ */
+export function introCamera(coverage: SessionCoverage | null): CameraPreset {
+  return coverage !== null && coverage.present.front && !coverage.present.side
+    ? 'feetFront'
+    : NO_FOCUS_CAMERA.camera
 }
 
 /**

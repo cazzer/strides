@@ -12,6 +12,10 @@ import type { CameraPreset } from '../runner/types'
  * The foot areas play slowed: a contact or a swing-foot arc lasts a fraction of a second at full
  * speed, too brief to read at the zoom these presets frame them at. A view that slows the figure
  * says so on screen.
+ *
+ * Landing frames the legs, not the foot, as a stopgap: `footSide`'s 3× zoom keeps the foot in frame
+ * only around contact, so for most of the cycle it showed a leg mid-swing with the overstride
+ * guides cut off. A contact-tracking camera is a runner follow-up.
  */
 export const FOCUS_AREA_CAMERA: Readonly<
   Record<FocusAreaId, { camera: CameraPreset; playbackRate: number }>
@@ -20,7 +24,7 @@ export const FOCUS_AREA_CAMERA: Readonly<
   arms: { camera: 'upperFrontQuarter', playbackRate: 1 },
   posture: { camera: 'torsoSide', playbackRate: 1 },
   knees: { camera: 'legsSide', playbackRate: 1 },
-  landing: { camera: 'footSide', playbackRate: 0.4 },
+  landing: { camera: 'legsSide', playbackRate: 0.4 },
   footPath: { camera: 'feetFront', playbackRate: 0.4 },
 }
 

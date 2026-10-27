@@ -20,7 +20,10 @@ describe('AreaStop', () => {
     const section = container.querySelector('section')!
     expect(section).toHaveAccessibleName('Rhythm')
     expect(screen.getByRole('heading', { level: 3, name: 'Rhythm' })).toBeInTheDocument()
-    expect(container.querySelector('.runner-tour__value')).toHaveTextContent(/^Cadence \d+ steps\/min/)
+    const value = container.querySelector('.runner-tour__value')!
+    expect(value.firstElementChild).toHaveTextContent(/^Cadence$/)
+    expect(value.children[1]).toHaveTextContent(/^\d+ steps\/min/)
+    expect(value.children[1]).toHaveClass('text-4xl')
   })
 
   it('draws a compact bar only for a banded headline', () => {
@@ -78,7 +81,7 @@ describe('OneThingStop', () => {
     const { rerender, container } = render(
       <OneThingStop oneThing={{ kind: 'nothingToChange' }} unmeasured={[]} captureHint={null} onSeeAll={vi.fn()} />,
     )
-    expect(container).toHaveTextContent('Nothing here calls for a change.')
+    expect(container).toHaveTextContent('No studied change to try for these readings.')
     rerender(
       <OneThingStop
         oneThing={{ kind: 'unclear', reason: 'caveated' }}
@@ -95,21 +98,52 @@ describe('OneThingStop', () => {
     expect(container.querySelector('.runner-tour__cue a')).toHaveAttribute('href', expect.stringMatching(/^https:/))
   })
 
-  it('ends by listing what was skipped, one hint, and See all measurements', () => {
+  it('ends by listing what was skipped, the add-a-clip control, and See all measurements', () => {
     const onSeeAll = vi.fn()
+    const onAddClip = vi.fn()
     const { container } = render(
       <OneThingStop
         oneThing={{ kind: 'nothingToChange' }}
         unmeasured={['arms', 'footPath']}
-        captureHint="Add a front-view clip."
+        captureHint={{ text: 'Add a front-view clip', addsClip: true }}
         onSeeAll={onSeeAll}
+        onAddClip={onAddClip}
+      />,
+    )
+    const end = container.querySelector('.runner-tour__end')!
+    expect(end.querySelector('p')).toHaveTextContent(/^Not measured: Arms and Foot path\.$/)
+    fireEvent.click(screen.getByRole('button', { name: 'Add a front-view clip' }))
+    expect(onAddClip).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'See all measurements' }))
+    expect(onSeeAll).toHaveBeenCalledTimes(1)
+  })
+
+  it('says a hint as text where it adds no clip, or no add-a-clip action is offered', () => {
+    const { container, rerender } = render(
+      <OneThingStop
+        oneThing={{ kind: 'nothingToChange' }}
+        unmeasured={['knees']}
+        captureHint={{ text: 'Film several seconds of steady running, whole body in frame.', addsClip: false }}
+        onSeeAll={vi.fn()}
+        onAddClip={vi.fn()}
       />,
     )
     expect(container.querySelector('.runner-tour__end')).toHaveTextContent(
-      'Not measured: Arms and Foot path. Add a front-view clip.',
+      'Not measured: Knees. Film several seconds of steady running, whole body in frame.',
     )
-    fireEvent.click(screen.getByRole('button', { name: 'See all measurements' }))
-    expect(onSeeAll).toHaveBeenCalledTimes(1)
+    expect(screen.getAllByRole('button')).toHaveLength(1)
+    rerender(
+      <OneThingStop
+        oneThing={{ kind: 'nothingToChange' }}
+        unmeasured={['arms']}
+        captureHint={{ text: 'Add a front-view clip', addsClip: true }}
+        onSeeAll={vi.fn()}
+      />,
+    )
+    expect(container.querySelector('.runner-tour__end')).toHaveTextContent(
+      'Not measured: Arms. Add a front-view clip.',
+    )
+    expect(screen.queryByRole('button', { name: 'Add a front-view clip' })).toBeNull()
   })
 
   it('lists nothing when every area was measured', () => {

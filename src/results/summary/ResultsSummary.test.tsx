@@ -221,7 +221,7 @@ describe('ResultsSummary', () => {
 
     // A second open moves the camera on; the first row stays open (rows do not close each other).
     fireEvent.click(row(container, 'landing').querySelector('summary')!)
-    await waitFor(() => expect(wrapper(container)).toHaveAttribute('data-camera', 'footSide'))
+    await waitFor(() => expect(wrapper(container)).toHaveAttribute('data-camera', 'legsSide'))
     props = await lastRunnerProps()
     expect(props.playbackRate).toBe(0.4)
     expect(props.focus?.metricIds).toContain('overstriding')
@@ -233,7 +233,7 @@ describe('ResultsSummary', () => {
       row(container, 'posture').open = false
     })
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(wrapper(container)).toHaveAttribute('data-camera', 'footSide')
+    expect(wrapper(container)).toHaveAttribute('data-camera', 'legsSide')
 
     // Closing the active row returns to the whole figure, with no focus.
     act(() => {
@@ -261,7 +261,7 @@ describe('ResultsSummary', () => {
     const { container } = renderSummary()
     const landing = row(container, 'landing')
     fireEvent.click(landing.querySelector('summary')!)
-    await waitFor(() => expect(wrapper(container)).toHaveAttribute('data-camera', 'footSide'))
+    await waitFor(() => expect(wrapper(container)).toHaveAttribute('data-camera', 'legsSide'))
     // A card's disclosure in ANOTHER, closed row: were its toggle taken for that row's, the camera
     // would move to it.
     const inner = row(container, 'knees').querySelector<HTMLDetailsElement>('details.guided-results__more')!
@@ -269,7 +269,7 @@ describe('ResultsSummary', () => {
       inner.open = true
     })
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(wrapper(container)).toHaveAttribute('data-camera', 'footSide')
+    expect(wrapper(container)).toHaveAttribute('data-camera', 'legsSide')
     expect(wrapper(container)).toHaveAttribute('data-focus-area', 'landing')
     // And closing an inner disclosure inside the active row does not read as the row closing.
     const own = landing.querySelector<HTMLDetailsElement>('details.guided-results__more')!
@@ -281,7 +281,7 @@ describe('ResultsSummary', () => {
       own.open = false
     })
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(wrapper(container)).toHaveAttribute('data-camera', 'footSide')
+    expect(wrapper(container)).toHaveAttribute('data-camera', 'legsSide')
   })
 
   it('keeps the whole-body camera on a narrow layout, whatever row opens', async () => {
@@ -336,7 +336,7 @@ describe('ResultsSummary', () => {
     expect(landing.open).toBe(true)
     expect(document.activeElement).toBe(container.querySelector(`#${guidedEntryId('overstriding')}`))
     // The open is a toggle like any other, so the camera follows it.
-    await waitFor(() => expect(wrapper(container)).toHaveAttribute('data-camera', 'footSide'))
+    await waitFor(() => expect(wrapper(container)).toHaveAttribute('data-camera', 'legsSide'))
   })
 
   it('opens the row holding the card in the address on mount, without moving focus', () => {

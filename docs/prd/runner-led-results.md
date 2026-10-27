@@ -166,7 +166,7 @@ This is the load-bearing decision, so it gets a section.
 | Neutral constants | Fixed, documented, drawn dashed, never a target | Avoids `strides-v2d`'s "reads as target posture" failure |
 | Stop order | Whole body first, then head to toe, then the one thing | The user's brief; also matches how attention moves down a body |
 | What counts as feedback | Existing `tryLineApplies` rule; non-points where evidence says "don't change" | Keeps the no-grading rule; research shows foot strike and preferred step width are not things to change |
-| "One thing" | The applicable cue with the strongest evidence. Order: cadence (RCTs: Willy 2016, Heiderscheit 2011) > landing/overstride (Lieberman 2015, via step rate) > bounce > others. None applicable gives "Nothing here calls for a change." | Coaching convention: one cue at a time, external focus (Schücker 2009). Every trial found changed one variable |
+| "One thing" | The applicable cue with the strongest evidence. Order: cadence (RCTs: Willy 2016, Heiderscheit 2011) > landing/overstride (Lieberman 2015, via step rate) > bounce > others. None applicable gives "No studied change to try for these readings." | Coaching convention: one cue at a time, external focus (Schücker 2009). Every trial found changed one variable |
 | Knee drive | Never cued "lift your knees". Described only | Folland 2017: more swing hip flexion correlated with *worse* economy |
 | Tempo | True tempo at Rhythm & bounce; labelled slow motion at Landing and Foot path | Feeling the cadence *is* the cadence feedback; contact is too fast to read at 1× |
 | Default view | Tour on first analysis; summary once the reader has skipped | Low friction for returning users. Reversible |

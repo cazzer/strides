@@ -6,7 +6,9 @@ import { INTRO_HOLD_MS, INTRO_MAX_STEP_MS, INTRO_TOTAL_MS, __resetIntroRegistryF
 import { makeHeuristics, makeMetric, makeVerticalOscillationCm } from '../__fixtures__/metricResult'
 import type { SessionCoverage } from '../sessionCoverage'
 import type { ScalePassStatus, VideoAnalysisState } from '../types'
+import { hasCompactBar } from '../summary/summaryLabels'
 import { RunnerTour } from './RunnerTour'
+import { tourPlan } from './tourPlan'
 
 // The real runner draws SVG on a rAF loop; what this file checks is which camera, focus, rate and
 // intro the tour hands it, and that it is mounted once for the tour's whole life. It reports itself
@@ -122,17 +124,21 @@ function setReducedMotion(reduced: boolean) {
 /** Visible words a stop's prose carries (design.md D4): the value line, sr-only text, citations
  * and the end block are excluded; the end block is budgeted on its own. */
 function proseWords(section: Element): number {
-  const clone = section.cloneNode(true) as Element
-  clone
-    .querySelectorAll('.sr-only, .runner-tour__value, .feedback-line__citation, .runner-tour__end')
-    .forEach((element) => element.remove())
-  return (clone.textContent ?? '').trim().split(/\s+/).filter(Boolean).length
+  return words(section, '.sr-only, .runner-tour__value, .feedback-line__citation, .runner-tour__end')
 }
 
-function words(element: Element): number {
+/**
+ * Words over the element's text NODES, joined with spaces: adjacent elements with no whitespace
+ * between them (a heading and a paragraph) are separate words to a reader, and `textContent` would
+ * run them together.
+ */
+function words(element: Element, excluded = '.sr-only'): number {
   const clone = element.cloneNode(true) as Element
-  clone.querySelectorAll('.sr-only').forEach((sr) => sr.remove())
-  return (clone.textContent ?? '').trim().split(/\s+/).filter(Boolean).length
+  clone.querySelectorAll(excluded).forEach((node) => node.remove())
+  const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT)
+  const texts: string[] = []
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) texts.push(node.nodeValue ?? '')
+  return texts.join(' ').trim().split(/\s+/).filter(Boolean).length
 }
 
 const SIDE_ONLY = makeHeuristics({
@@ -184,7 +190,7 @@ describe('RunnerTour — shell', () => {
     expect(screen.getAllByText(/analysis complete/i)).toHaveLength(1)
     expect(screen.getByRole('status')).toHaveTextContent(/^Analysis complete\./)
 
-    const heading = screen.getByRole('heading', { level: 2, name: 'Your runner' })
+    const heading = screen.getByRole('heading', { level: 2, name: 'Your runner model' })
     const skip = screen.getByRole('button', { name: 'Skip to summary' })
     const entries = container.querySelectorAll('[data-view-entry]')
     expect(entries).toHaveLength(1)
@@ -194,7 +200,7 @@ describe('RunnerTour — shell', () => {
     // The tour's own controls come before the shell's.
     expect(container.querySelector('button')).toBe(skip)
     // Sticky, so Skip stays in view for the whole tour.
-    expect(skip.parentElement).toHaveClass('sticky')
+    expect(skip.closest('.runner-tour__header')).toHaveClass('sticky')
     expect(skip).not.toHaveAttribute('data-view-entry')
     fireEvent.click(skip)
     expect(onLeaveTour).toHaveBeenCalledTimes(1)
@@ -253,6 +259,47 @@ describe('RunnerTour — shell', () => {
       'Not measured: Arms and Foot path. Add a front-view clip.',
     )
   })
+
+  it('offers the session’s add-a-clip action as the end’s capture hint', () => {
+    const onAddClip = vi.fn()
+    render(
+      <RunnerTour
+        analysis={readyAnalysis(SIDE_ONLY)}
+        onTryAgain={vi.fn()}
+        onStartOver={vi.fn()}
+        onLeaveTour={vi.fn()}
+        resultKey="k"
+        coverage={SIDE_ONLY_COVERAGE}
+        onAddClip={onAddClip}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Add a front-view clip' }))
+    expect(onAddClip).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows where the reader is: one dot link per stop, the active one current', async () => {
+    const { container } = renderTour({ resultKey: nextKey() })
+    await skipIntro()
+    const nav = screen.getByRole('navigation', { name: 'Tour stops' })
+    // In the sticky bar, before Skip.
+    expect(nav.closest('.runner-tour__header')).not.toBeNull()
+    const links = [...nav.querySelectorAll('a')]
+    expect(links.map((link) => link.getAttribute('href'))).toEqual([
+      '#tour-rhythm',
+      '#tour-arms',
+      '#tour-posture',
+      '#tour-knees',
+      '#tour-landing',
+      '#tour-footPath',
+      '#tour-oneThing',
+    ])
+    expect(links[3]).toHaveAccessibleName('Stop 4 of 7: Knees')
+    expect(links[6]).toHaveAccessibleName('Stop 7 of 7: One thing to try')
+    expect(nav.querySelector('[aria-current]')).toBeNull()
+    act(() => stop(container, 'knees').focus())
+    expect(links[3]).toHaveAttribute('aria-current', 'step')
+    expect(nav.querySelectorAll('[aria-current]')).toHaveLength(1)
+  })
 })
 
 describe('RunnerTour — the runner follows the active stop', () => {
@@ -263,13 +310,14 @@ describe('RunnerTour — the runner follows the active stop', () => {
 
     const citation = stop(container, 'landing').querySelector('a')!
     act(() => citation.focus())
-    expect(rail(container)).toHaveAttribute('data-camera', 'footSide')
+    expect(rail(container)).toHaveAttribute('data-camera', 'legsSide')
     expect(rail(container)).toHaveAttribute('data-active-stop', 'landing')
     expect(container.querySelector('.runner-tour__slow-motion')).toHaveTextContent('Slow motion')
     const props = await lastRunnerProps()
-    expect(props.camera).toBe('footSide')
+    expect(props.camera).toBe('legsSide')
     expect(props.playbackRate).toBe(0.4)
-    expect(props.focus?.metricIds).toEqual(['overstriding', 'footStrikePattern'])
+    // The headline metric only: the stop states its value, and the figure labels nothing else.
+    expect(props.focus?.metricIds).toEqual(['overstriding'])
 
     act(() => stop(container, 'posture').focus())
     expect(rail(container)).toHaveAttribute('data-camera', 'torsoSide')
@@ -280,6 +328,84 @@ describe('RunnerTour — the runner follows the active stop', () => {
     // One runner for the whole tour, never remounted by a stop.
     expect(runner.mounts).toBe(1)
     expect(runner.unmounts).toBe(0)
+  })
+
+  it('focuses the rhythm stop on cadence alone, and shows the legend only for a banded headline', async () => {
+    const { container } = renderTour({ resultKey: nextKey() })
+    await skipIntro()
+    expect(container.querySelector('.runner-tour__legend')).toBeNull()
+    act(() => stop(container, 'rhythm').focus())
+    expect((await lastRunnerProps()).focus?.metricIds).toEqual(['cadence'])
+    const plan = tourPlan(makeHeuristics(), 'done', null)
+    for (const area of plan.areaStops) {
+      act(() => stop(container, area.view.area).focus())
+      expect(container.querySelector('.runner-tour__legend') !== null, area.view.area).toBe(
+        hasCompactBar(area.entries[0]),
+      )
+    }
+    act(() => stop(container, 'oneThing').focus())
+    expect(container.querySelector('.runner-tour__legend')).toBeNull()
+  })
+
+  it('introduces a front-only session from the front, on the camera the runner gets', async () => {
+    vi.useFakeTimers()
+    renderTour({
+      resultKey: nextKey(),
+      coverage: { present: { side: false, front: true }, needs: [] },
+    })
+    act(() => vi.advanceTimersByTime(INTRO_HOLD_MS + 100))
+    const props = await lastRunnerProps()
+    expect(props.intro?.running).toBe(true)
+    expect(props.camera).toBe('feetFront')
+  })
+
+  it('holds the intro until 90% of the rail is on screen', async () => {
+    vi.useFakeTimers()
+    const observers: Array<{ callback: IntersectionObserverCallback; target: Element | null }> = []
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        record: { callback: IntersectionObserverCallback; target: Element | null }
+        constructor(callback: IntersectionObserverCallback) {
+          this.record = { callback, target: null }
+          observers.push(this.record)
+        }
+        observe(target: Element) {
+          this.record.target = target
+        }
+        disconnect() {}
+        unobserve() {}
+        takeRecords() {
+          return []
+        }
+      },
+    )
+    const report = (ratio: number) =>
+      act(() => {
+        for (const { callback, target } of observers) {
+          callback(
+            [
+              {
+                intersectionRatio: ratio,
+                intersectionRect: { height: 100 * ratio },
+                rootBounds: { height: 800 },
+                target,
+              } as unknown as IntersectionObserverEntry,
+            ],
+            {} as IntersectionObserver,
+          )
+        }
+      })
+    const { container } = renderTour({ resultKey: nextKey() })
+    expect(observers.some(({ target }) => target === rail(container))).toBe(true)
+    report(0.5)
+    act(() => vi.advanceTimersByTime(INTRO_HOLD_MS * 4))
+    // Still the neutral hold: no step has begun.
+    expect((await lastRunnerProps()).overrides?.valueTween ?? null).toBeNull()
+    report(0.95)
+    act(() => vi.advanceTimersByTime(INTRO_HOLD_MS + 10))
+    expect((await lastRunnerProps()).overrides?.valueTween).not.toBeNull()
+    vi.unstubAllGlobals()
   })
 
   it('selects a stop from its #tour-<id> fragment', async () => {
@@ -343,7 +469,7 @@ describe('RunnerTour — the runner follows the active stop', () => {
     await act(async () => {})
     expect((await lastRunnerProps()).intro?.running).toBe(false)
     act(() => stop(container, 'landing').focus())
-    expect(rail(container)).toHaveAttribute('data-camera', 'footSide')
+    expect(rail(container)).toHaveAttribute('data-camera', 'legsSide')
     expect(container.querySelector('.runner-tour__slow-motion')).toBeNull()
   })
 })

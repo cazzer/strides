@@ -309,9 +309,9 @@ function assertKnownValues(enums, value, where) {
 }
 
 /**
- * Parses one `<label>=<json>` arm on either override plane. `flag` and `schema` are what differ;
- * everything else — the label split, the JSON parse, the object check, the recursive key check —
- * is shared, so the two planes cannot drift into validating to different standards.
+ * Parses one `<label>=<json>` arm on any of the three planes. `flag`, `schema` and `enums` are what
+ * differ; everything else — the label split, the JSON parse, the object check, the recursive key
+ * check — is shared, so the planes cannot drift into validating to different standards.
  */
 function parseArmOnPlane(flag, schema, enums, value) {
   const split = value.indexOf('=')
@@ -441,10 +441,10 @@ function parseArgs(argv) {
     )
   }
 
-  // Arms are joined by LABEL across the two planes, so one arm can carry a sampling override, a
-  // backend override, or both, and an arm named on only one plane gets `{}` on the other. Order is
-  // first appearance, sampling plane first, so a report's column order is a property of the
-  // command line rather than of which plane happened to be parsed first.
+  // Arms are joined by LABEL across the three planes (sampling, backend, view), so one arm can carry
+  // any combination of them, and an arm not named on a plane gets `{}` there. Order is first
+  // appearance, sampling plane first, then backend, then view, so a report's column order is a
+  // property of the command line rather than of which plane happened to be parsed first.
   const byLabel = new Map()
   for (const [plane, parsed] of [
     ['override', options.arms],
@@ -616,7 +616,8 @@ async function runTrial(
 ) {
   const context = await browser.newContext()
   try {
-    // Both planes go in via `addInitScript`, never `evaluate`: auto-analyze can start before an
+    // Both override planes go in via `addInitScript`, never `evaluate` (the view plane is the
+    // address `goto` opens, below): auto-analyze can start before an
     // `evaluate()` after `goto()` lands, and the backend override is read once per detector
     // creation — earlier still than the sampling one.
     await context.addInitScript((value) => {

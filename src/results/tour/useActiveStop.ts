@@ -11,7 +11,7 @@ export const READING_LINE_FRACTION = 0.42
  * a stop selects that stop at once (a fragment link focuses its stop too, through
  * `useRevealFragment`); the next scroll reads the line again.
  *
- * Scroll and resize are batched to one read per animation frame. `stopIds` is what the stops are,
+ * Scroll, window resize and the root's own resize are batched to one read per animation frame. `stopIds` is what the stops are,
  * so the listeners are re-read whenever the set of stops changes.
  */
 export function useActiveStop(
@@ -49,6 +49,10 @@ export function useActiveStop(
       const id = idOf(target.closest('[data-tour-stop]'))
       if (id !== null) setActive(id)
     }
+    // A stop changing height (the scale-pass graft, a font load, a wrap) moves every stop below it
+    // without a scroll, so the line is re-read when the root resizes too.
+    const resizes = typeof ResizeObserver === 'function' ? new ResizeObserver(schedule) : null
+    resizes?.observe(root)
     window.addEventListener('scroll', schedule, { passive: true })
     window.addEventListener('resize', schedule)
     root.addEventListener('toggle', schedule, true)
@@ -56,6 +60,7 @@ export function useActiveStop(
     schedule()
     return () => {
       if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf)
+      resizes?.disconnect()
       window.removeEventListener('scroll', schedule)
       window.removeEventListener('resize', schedule)
       root.removeEventListener('toggle', schedule, true)

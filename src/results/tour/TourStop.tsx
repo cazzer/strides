@@ -17,7 +17,7 @@ import { joinList } from '../guidedGroups'
 import { ExternalLink } from '../GuidedMetricCard'
 import { confidenceLabel } from '../metricConfidence'
 import { SHORT_METRIC_LABELS, hasCompactBar } from '../summary/summaryLabels'
-import type { TourAreaStop } from './tourPlan'
+import type { CaptureHint, TourAreaStop } from './tourPlan'
 import { tourStopDomId } from './tourPlan'
 
 /**
@@ -28,8 +28,9 @@ import { tourStopDomId } from './tourPlan'
 export const TOUR_STOP_CLASS =
   'runner-tour__stop flex min-h-[calc(100dvh_-_var(--motion-story-header-height,88px)_-_3.5rem)] scroll-mt-[calc(var(--motion-story-header-height,88px)_+_3.5rem)] flex-col justify-center gap-3 border-t-2 border-black py-10 focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand-600 dark:border-white'
 const STOP_HEADING = 'font-display text-2xl font-bold tracking-tight'
-const VALUE_LINE =
-  'runner-tour__value font-sans text-base text-neutral-800 dark:text-neutral-200'
+const VALUE_LABEL =
+  'font-sans text-xs font-semibold uppercase tracking-wide text-neutral-600 dark:text-neutral-400'
+const VALUE = 'font-display text-4xl font-bold tabular-nums leading-tight'
 const CITATION = 'feedback-line__citation font-sans text-xs text-neutral-600 dark:text-neutral-400'
 const BUTTON =
   'inline-flex min-h-11 items-center justify-center border-2 border-black px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black transition-colors hover:bg-black hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:border-white dark:text-white dark:hover:bg-white dark:hover:text-black'
@@ -93,20 +94,22 @@ export function AreaStop({ stop }: { stop: TourAreaStop }) {
   const tier = view.headline?.tier
   return (
     <StopSection id={view.area} heading={FOCUS_AREAS[view.area].label}>
-      <p className={VALUE_LINE}>
-        {shortName !== undefined && <span>{shortName} </span>}
-        <span className="font-semibold tabular-nums">{parts.value}</span>
+      {/* The value on its own line, named by a small label above it. Excluded from the word budget
+          with its label and confidence: numbers and names, not prose. */}
+      <div className="runner-tour__value space-y-1">
+        {shortName !== undefined && <p className={VALUE_LABEL}>{shortName}</p>}
+        <p className={VALUE}>
+          {parts.value}
+          {parts.position !== null && <span className="sr-only">, {parts.position}</span>}
+        </p>
         {tier === 'caveated' && (
-          <>
-            <span aria-hidden="true">{' · '}</span>
-            <span className="sr-only">, </span>
+          <p className="font-sans text-sm text-neutral-700 dark:text-neutral-300">
             {confidenceLabel(headline.metric)}
-          </>
+          </p>
         )}
-        {parts.position !== null && <span className="sr-only">, {parts.position}</span>}
-      </p>
+      </div>
       {hasCompactBar(headline) && (
-        <div className="runner-tour__scale w-full max-w-xs">
+        <div className="runner-tour__scale w-full max-w-sm">
           <MetricScale band={headline.band!} value={headline.metric.value!} compact />
         </div>
       )}
@@ -125,9 +128,11 @@ export function AreaStop({ stop }: { stop: TourAreaStop }) {
 export interface OneThingStopProps {
   oneThing: OneThing
   unmeasured: readonly FocusAreaId[]
-  captureHint: string | null
+  captureHint: CaptureHint | null
   /** "See all measurements": the tour is finished. */
   onSeeAll: () => void
+  /** Opens the header's add-a-clip panel; a hint that adds a clip renders as this control. */
+  onAddClip?: () => void
 }
 
 /**
@@ -135,7 +140,8 @@ export interface OneThingStopProps {
  * it cannot say and why. Then the end of the tour, which names the areas it skipped, one way to
  * measure them, and the way on to every measurement.
  */
-export function OneThingStop({ oneThing, unmeasured, captureHint, onSeeAll }: OneThingStopProps) {
+export function OneThingStop({ oneThing, unmeasured, captureHint, onSeeAll, onAddClip }: OneThingStopProps) {
+  const hintButton = captureHint !== null && captureHint.addsClip && onAddClip !== undefined
   return (
     <StopSection id="oneThing" heading={ONE_THING_LABEL}>
       {oneThing.kind === 'cue' ? (
@@ -148,13 +154,22 @@ export function OneThingStop({ oneThing, unmeasured, captureHint, onSeeAll }: On
       <div className="runner-tour__end mt-6 space-y-3 border-t-2 border-neutral-300 pt-4 dark:border-neutral-700">
         {unmeasured.length > 0 && (
           <p className="font-sans text-sm text-neutral-700 dark:text-neutral-300">
-            Not measured: {joinList(unmeasured.map((area) => FOCUS_AREAS[area].label))}.
-            {captureHint !== null && <> {captureHint}</>}
+            {`Not measured: ${joinList(unmeasured.map((area) => FOCUS_AREAS[area].label))}.`}
+            {captureHint !== null && !hintButton && (
+              <> {captureHint.addsClip ? `${captureHint.text}.` : captureHint.text}</>
+            )}
           </p>
         )}
-        <button type="button" onClick={onSeeAll} className={BUTTON}>
-          See all measurements
-        </button>
+        <div className="flex flex-wrap gap-3">
+          {hintButton && (
+            <button type="button" onClick={onAddClip} className={BUTTON}>
+              {captureHint.text}
+            </button>
+          )}
+          <button type="button" onClick={onSeeAll} className={BUTTON}>
+            See all measurements
+          </button>
+        </div>
       </div>
     </StopSection>
   )

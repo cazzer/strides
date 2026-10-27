@@ -1298,7 +1298,40 @@ describe('MultiClipVideoSession — results view mode', () => {
     expect(mountedView()).toBe('tour')
     expect(window.localStorage.getItem('strides.resultsLanding')).toBe('summary')
     expect(window.location.search).toBe('')
-    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Your runner' }))
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Your runner model' }))
+  })
+
+  it('Replay tour opens the tour at its top with the intro running again', async () => {
+    // jsdom lays nothing out, so every stop would read as above the reading line and end the intro
+    // at once; place them below it, as a fresh tour at the top of the page has them.
+    const originalRect = HTMLElement.prototype.getBoundingClientRect
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      if (this.dataset.tourStop !== undefined) {
+        return { top: 10_000, bottom: 10_500, left: 0, right: 0, width: 0, height: 500, x: 0, y: 10_000, toJSON: () => ({}) }
+      }
+      return originalRect.call(this)
+    }
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+    try {
+      await loadOneReadyClip()
+      expect(mountedView()).toBe('tour')
+      // The tour shows no coverage notice above it: its last stop carries that.
+      expect(document.querySelector('.session-coverage')).toBeNull()
+      fireEvent.click(await screen.findByRole('button', { name: 'Skip intro' }))
+      expect(screen.queryByRole('button', { name: 'Skip intro' })).toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Skip to summary' }))
+      expect(mountedView()).toBe('summary')
+      expect(scrollTo).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: 'Replay tour' }))
+      expect(mountedView()).toBe('tour')
+      expect(scrollTo).toHaveBeenCalledWith({ top: expect.any(Number), behavior: 'instant' })
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Your runner model' }))
+      // A replay is a new intro key: it plays again.
+      expect(screen.getByRole('button', { name: 'Skip intro' })).toBeInTheDocument()
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = originalRect
+    }
   })
 
   it('Classic table writes view=classic, and Show summary removes it again', async () => {
