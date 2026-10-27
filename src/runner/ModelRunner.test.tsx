@@ -6,9 +6,9 @@ import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { bindAll, bindOnly } from './__fixtures__/boundParams'
 import { CAMERA_PRESETS, projectPoint, projectPose } from './camera'
-import { GAIT_PHASES, poseAt } from './gaitModel'
+import { GAIT_PHASES, GROUND_Y, poseAt } from './gaitModel'
 import { ModelRunner, RUNNER_CAPTION, type ModelRunnerProps } from './ModelRunner'
-import { footFloor, phaseForLeg } from './runnerAnnotations'
+import { phaseForLeg } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
 import { FAR_OPACITY, RUNNER_PARAM_IDS, UNFOCUSED_OPACITY, edgeKey } from './runnerScene'
 import type { CameraPreset, CameraState, RunnerParams } from './types'
@@ -277,11 +277,11 @@ describe('ModelRunner drawing', () => {
     expect(container.querySelector('[data-flash]')).toBeNull()
   })
 
-  it('stands the figure on the lowest foot point over the cycle', () => {
+  it('draws the ground at y = 0, where the stance foot stands', () => {
     const { container } = setup()
     const y = Number(container.querySelector('[data-ground]')?.getAttribute('y1'))
     const expected = projectPoint(
-      { x: CAMERA_PRESETS.wholeBodySide.target.x, y: footFloor(VALUES), z: 0 },
+      { x: CAMERA_PRESETS.wholeBodySide.target.x, y: GROUND_Y, z: 0 },
       'wholeBodySide',
     ).y
     expect(y).toBeCloseTo(expected, 3)
@@ -427,6 +427,29 @@ describe('ModelRunner value tween (the intro seam)', () => {
     expectPose(GAIT_PHASES.midStance, 'wholeBodySide', { ...VALUES, torsoPitch: 20 })
     rerender(tree())
     expectPose(GAIT_PHASES.midStance, 'wholeBodySide')
+  })
+
+  it('keeps figure marks on the figure while a leg tween changes its standing height', () => {
+    const { rerenderWith } = setup({ focus: { metricIds: ['trunkLean'] } })
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    rerenderWith({
+      overrides: {
+        valueTween: { from: { stepWidth: -1.5 }, to: { stepWidth: VALUES.stepWidth }, durationMs: 1000, key: 'lift' },
+      },
+    })
+    const hipMidY = () => (joint('left_hip').cy + joint('right_hip').cy) / 2
+    const arcCentreY = () => {
+      const fill = document.querySelector('[data-annotation="torsoPitch"] path[data-role="fill"]')
+      return pathEnds(fill?.getAttribute('d') ?? null)[0].y
+    }
+    const before = hipMidY()
+    advance(400)
+    // The step-width tween moves the hips (the figure stands taller or shorter) and the lean arc,
+    // hung from hip-mid, moves with them.
+    expect(Math.abs(hipMidY() - before)).toBeGreaterThan(0.01)
+    expect(arcCentreY()).toBeCloseTo(hipMidY(), 2)
+    advance(800)
+    expect(arcCentreY()).toBeCloseTo(hipMidY(), 2)
   })
 
   it('jumps to the end under reduced motion', () => {

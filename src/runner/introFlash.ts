@@ -4,7 +4,7 @@
  * kept clear of every visible annotation label and inside the frame.
  */
 import { projectPoint } from './camera'
-import { poseAt } from './gaitModel'
+import { GROUND_Y, poseAt } from './gaitModel'
 import {
   LABEL_CHAR_WIDTH_EM,
   LABEL_LINE_HEIGHT,
@@ -40,7 +40,6 @@ export function flashAnchor(
   values: RunnerParams,
   heldPhase: number,
   cameraYawDeg: number,
-  floor: number,
 ): Vec3 {
   const pose = poseAt(heldPhase, values)
   const near = Math.cos((cameraYawDeg * Math.PI) / 180) >= 0 ? 'right' : 'left'
@@ -63,7 +62,7 @@ export function flashAnchor(
     case 'peakSwingKneeBend':
       return at(pose, `${near}_knee`)
     case 'landingOffset':
-      return { x: hip.x, y: floor, z: hip.z }
+      return { x: hip.x, y: GROUND_Y, z: hip.z }
     case 'contactShankOffset':
     case 'swingFootArc':
       return at(pose, `${near}_ankle`)

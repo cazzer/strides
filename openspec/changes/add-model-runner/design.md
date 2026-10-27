@@ -147,7 +147,7 @@ round, lerps pitch and target, and interpolates zoom geometrically. Frames are s
 | footSide | 0 | 0 | 3 | (0.25, 0.25, 0) |
 | feetFront | 90 | 0 | 2.4 | (0, 0.35, 0) |
 
-### D9. No inverse kinematics; feet and proportions are illustrative
+### D9. No inverse kinematics; feet and proportions are illustrative (superseded by D15)
 
 Curves are periodic cosine-eased keyframes (exact at keys, C1, no overshoot). The stance foot is
 not pinned: it lifts about 0.12 torso lengths over stance. `PELVIS_HEIGHT` (H0 = 1.8066) is tuned
@@ -320,6 +320,112 @@ still figure is the final one. The button reads "Skip intro".
 applied foot strike or thigh peak can draw slightly off its label until the stronger contact
 parameters on its leg are applied. Landing before foot strike removes the foot-strike case when
 both are measured; the thigh-peak case remains. The end state is exact.
+
+### D15. The stance foot is pinned to the ground (ps19.4)
+
+Supersedes D9's unpinned foot. Measured on the old code: the neutral foot was 0.079 up at contact,
+0.081 at mid-stance and 0.120 at toe-off.
+
+**Hybrid design.** The figure's height is solved per parameter set, `pelvisHeight(params)`, so the
+contact foot's lowest point is exactly on y = 0. The bounce keeps its exact peak-to-peak but changes
+shape: a half-cycle-periodic cosine-eased curve keyed at the half-cycle phase (so keys are hit
+exactly), lowest at mid-stance (0.19), highest at the flight peak (0.44), and `STANCE_DROP` = 0.04
+torso lengths above its lowest at contact and toe-off (or at the flight peak when the bounce is
+smaller). The stance leg (0, 0.38] is two-segment IK: the ankle slides back linearly from its
+contact x to a toe-off x (where a knee of `KNEE_TOE_OFF_DEG` = 28 reaches the ground with the foot at
+its toe-off key), at the height that puts the foot's lowest point on y = 0. Where the leg cannot
+reach down, the heel lifts onto the toe. The swing is the old forward-kinematic curves, starting
+from the stance solve's toe-off angles. Contact (q = 0) is drawn from the contact geometry itself,
+so the contact-instant bindings stay exact to 1e-9.
+
+**The bindings outrank the pin**, through three clamps: the stance knee is capped at
+min(peak swing bend − 5°, max(toe-off, contact bend) + 18°), so stance never forms a second
+prominent knee-flexion maximum (prominence 20°); the leg cannot over-extend; and the stance thigh is
+capped at min(max(thigh peak, contact thigh), contact thigh + 5°), so stance never forms a second
+prominent thigh maximum (prominence 10°). Where a clamp engages, the mid-stance foot sinks; the
+contact foot never floats. Each clamp is a min/max of continuous functions, so the pose stays
+continuous in the parameters.
+
+**Rejected.** (a) Stance IK alone with the old cosine bounce: the hips are at their highest at
+contact, so the stance knee has to bend 45° more to reach down; the stance knee becomes a prominent
+peak, kneeFlexion is off by 45°, and 959 of 1023 corners fail. (b) Hip height derived from the
+stance leg: vertical oscillation is no longer exact on the 1/1000 sampling grid, and a bounce
+smaller than the leg's own stance range cannot be drawn.
+
+**Measured** (left foot's lowest point, (0, 0.38] at 1/1000; `realizeParams` defaults):
+- neutral: 7.6e-16; contact at every one of the 1024 range corners and 64 leg corners: < 3e-16;
+- declared domain, 2700 sets (bounce 0–0.3, landing −0.1–0.3, foot strike −0.2–0.3, thigh peak
+  15–85, knee bend 60–150, step width −1–1.5): worst 0.0047 (landing 0.3, thigh peak 15, step
+  width −1); swing foot never lower than −0.0031;
+- the 32 landing −0.3 corners: worst 8e-9; swing foot −0.004;
+- the 32 landing 0.7 corners (fallback): stance worst 0.124, swing foot −0.172, every binding exact
+  (kneeDrive within 0.031, kneeFlexion 3e-14, VO 2e-16);
+- neutral pelvisHeight 1.80903 vs the nominal `PELVIS_HEIGHT` 1.8066 the camera presets frame on.
+
+**Deviations from the ps19.4 plan.**
+1. The plan's thigh clamp max(thigh peak, contact thigh) let 8 of the 64 leg corners (landing 0.7,
+   foot strike 0.4, thigh peak 85) grow a second prominent thigh maximum in stance (the thigh rose
+   11° above contact), taking kneeDrive's median to 62° against a bound 85°. Added the
+   contact + 5° cap (`STANCE_THIGH_RISE_MAX_DEG`); every corner's kneeDrive is now within 0.031.
+2. The plan's domain was landing ≤ 0.35; at 0.35 with a 15° thigh peak (which gives way to the
+   contact thigh, so the thigh clamp leaves the stance thigh no room) the pin misses by up to 0.0123.
+   The declared domain is landing ≤ 0.3, the values the planner's grid actually covered.
+3. `STANCE_DROP` stays 0.04 (the plan's first choice): the stills and playing shots read as a run,
+   with a planted stance foot, so the 0.07 fallback was not needed.
+
+**Known limit.** A straight contact knee (landing exact, foot strike given way) makes the stance
+knee bend like √q just after contact, since IK from a straight leg is singular there. The pose is
+continuous (worst joint step 0.039 per 1/4000 cycle, at a landing 0.7 corner) but the first
+millisecond after contact moves fast.
+
+**Review round 1 (ps19.4).**
+- `STANCE_DROP` is now 0.10 (was 0.04) and a small bounce keeps a sinusoid's shape (its contact
+  and toe-off value is capped at the sinusoid's, −cos(4π·0.19) = 0.729). Measured at 30 fps, as the
+  largest per-frame hip change over a sinusoid's (b·sin 2πΔp, Δp = cadence/120/30) and the spread of
+  per-step hip peaks over 12 steps: b ≤ 0.10: 1.12–1.13×, spread ≤ 0.055b; b = 0.14 (neutral):
+  0.93–0.98×, spread ≤ 0.115b. Tested ≤ 1.3× and ≤ 0.12b for b ≤ 0.14.
+- **Known limit, b > 0.14.** Stance is 0.38 of the cycle and the knee-flexion prominence rule caps
+  how far the hips can travel with the foot planted, so whatever bounce exceeds `STANCE_DROP` must
+  happen in 0.12 of a cycle of flight. Measured: b = 0.17: 1.24–1.41×, spread 0.13–0.17b; b = 0.2:
+  1.51–1.71×, 0.16–0.20b; b = 0.3: 2.0–2.3×, 0.21–0.27b; b = 0.5: 2.4–2.7×, 0.25–0.32b (regression
+  test ≤ 2.8×, ≤ 0.35b). Fixing it needs a shorter stance (follow-up bead).
+- Neutral mid-stance knee (left leg, phase 0.19, the metric's formula): 39.4° (28.0° before).
+- The neutral pelvis height is now 0.058 below the nominal `PELVIS_HEIGHT`; the camera presets are
+  unchanged.
+- Swing foot: the foot angle is clamped so heel and toe stay above the ground, the swing knee holds
+  80 % of its bend to phase 0.76, and in mid-swing it bends further (never past the bound peak) when
+  the ankle would come within a sole's depth of the ground. Swing lowest point ≥ −0.005 over the
+  declared domain (thigh peak 20 added) and at landing ≤ 0.512 with swing bend ≥ 100 and step width
+  ≥ 0.3; a 50° swing bend, crossed legs (step width −1.5) or landing ≥ 0.6 can still dip to −0.188.
+- Landing 0.7 corners: stance sink 0.181 (was 0.124), swing dip 0.188 (was 0.172).
+
+**Review round 2 (ps19.4).**
+- **kneeFlexion regression, fixed.** At landing 0.35, swing bend 50, step width −1.5, foot strike
+  0.4, thigh peak 10, bounce 0 (all measured) kneeFlexion read 39° against 50; main's model reads
+  it exactly. Traced: the stance knee rose from a straight contact (0°) to 21° at phase 0.08, then
+  straightened to 0° at mid-stance (the leg at full reach), and the metric's zig-zag extrema finder
+  (rise ≥ 20 from the last minimum, then fall ≥ 20) counted 21° as a second maximum. The stance
+  solve now samples its own knee over stance (64 steps, in `legFrame`, memoized on the parameter
+  values) and caps the reach so the knee never straightens more than 18° (20 less a 2° margin for
+  the 3-sample smoothing) below its running maximum. Where that binds the foot floats slightly.
+  A seeded random check (500 interior sets over the full ranges, random measured subsets) now holds
+  every MEASURE_PARAM binding, and so does the per-landing sweep below.
+- **The declared domain stops at landing 0.3, the neutral overstride.** Past it, per landing over
+  the 32 corners of the other leg parameters (every binding exact, contact exact), worst stance
+  sink / swing dip: 0.35: 0.056 / −0.060; 0.4: 0.077 / −0.083; 0.45: 0.089 / −0.096; 0.512 (the
+  demo clip): 0.108 / −0.115; 0.6: 0.138 / −0.146; 0.7: 0.181 / −0.188. No foot rotation was added
+  to absorb the miss.
+- Annotation marks hung off the figure (all but landing and step width, which hang off the ground)
+  follow `pelvisHeight(drawn) − pelvisHeight(values)` during a value tween.
+
+**Known limits, accepted.**
+- Bounce smoothness holds (≤ 1.3× a sinusoid per frame, step-peak spread ≤ 0.12b) only up to
+  b = 0.14; larger bounces are measured above (strides-ps19.7).
+- The heel-lift branch still snaps the foot from heel-down to toe-down where the lift begins on a
+  heel-strike foot, or where the foot's key passes flat at mid-stance with the leg at full reach.
+  With the ankle higher than a flat sole reaches, no foot angle is both continuous and on the
+  ground; both continuous variants tried floated the foot up to 0.04 inside the domain.
+- The swing foot can dip to −0.188 with a 50° swing bend, step width −1.5 or landing ≥ 0.6.
 
 ## Risks / Trade-offs
 

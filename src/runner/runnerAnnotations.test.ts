@@ -3,13 +3,12 @@ import { makeMetric } from '../results/__fixtures__/metricResult'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { bindAll, bindOnly } from './__fixtures__/boundParams'
 import { projectPoint } from './camera'
-import { GAIT_PHASES, MODEL_PROPORTIONS, PELVIS_HEIGHT, poseAt } from './gaitModel'
+import { GAIT_PHASES, GROUND_Y, MODEL_PROPORTIONS, pelvisHeight, poseAt } from './gaitModel'
 import {
   CLAMPED_LABEL_SUFFIX,
   KEY_LEG_PHASE,
   PARAM_ANNOTATION_KIND,
   RUNNER_METRIC_UNITS,
-  footFloor,
   formatRunnerValue,
   labelLines,
   phaseForLeg,
@@ -38,7 +37,6 @@ function plan(
     sources: effectiveSources(bound),
     focusParams,
     cameraYawDeg: 0,
-    floor: footFloor(values),
     ...extra,
   })
 }
@@ -279,7 +277,7 @@ describe('the marks are the drawn values and lie on the live figure', () => {
     expect(Math.min(span[0].y, span[1].y)).toBeCloseTo(range.min, 6)
     expect(Math.max(span[0].y, span[1].y)).toBeCloseTo(range.max, 6)
     expect(screenLength(span[0], span[1], SIDE)).toBeCloseTo(values.pelvisBounce, 12)
-    expect((span[0].y + span[1].y) / 2).toBe(PELVIS_HEIGHT)
+    expect((span[0].y + span[1].y) / 2).toBe(pelvisHeight(values))
   })
 
   it('arm swing: the bracket spans the wrist’s travel below the shoulder', () => {
@@ -297,7 +295,7 @@ describe('the marks are the drawn values and lie on the live figure', () => {
     expect(start.x).toBeCloseTo(hipMid(phase, bound).x, 12)
     expect(end.x).toBeCloseTo(liveJoint(phase, bound, 'right_ankle').x, 12)
     expect(screenLength(start, end, SIDE)).toBeCloseTo(values.landingOffset, 9)
-    expect(start.y).toBeLessThan(footFloor(values))
+    expect(start.y).toBeLessThan(GROUND_Y)
   })
 
   it('foot strike: the offset runs from the live knee to the live ankle at contact', () => {
@@ -342,15 +340,5 @@ describe('the marks are the drawn values and lie on the live figure', () => {
   it('puts side-view limb marks on the near side', () => {
     expect(only(bound, 'landingOffset').marks[0][0].z).toBeGreaterThan(0)
     expect(only(bound, 'landingOffset', 180).marks[0][0].z).toBeLessThan(0)
-  })
-})
-
-describe('footFloor', () => {
-  it('is the lowest foot point over the cycle, near the ground for the neutral runner', () => {
-    const values = runnerParamValues(bindOnly([]))
-    const floor = footFloor(values)
-    expect(Math.abs(floor)).toBeLessThan(0.02)
-    const range = sampleCycle((p) => liveJoint(p, bindOnly([]), 'left_heel').y, 120)
-    expect(floor).toBeLessThanOrEqual(range.min)
   })
 })
