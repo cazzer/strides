@@ -29,7 +29,7 @@ import {
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 import { interpolateCamera, projectPoint, projectPose } from './camera'
-import { GROUND_Y, cyclesPerSecond, poseAt } from './gaitModel'
+import { GROUND_Y, cyclesPerSecond, pelvisHeight, poseAt } from './gaitModel'
 import {
   planAnnotations,
   shownWhileStill,
@@ -193,8 +193,9 @@ const DEFAULT_PX_PER_UNIT = 100
 interface DrawTargets {
   segments: { el: SVGLineElement; a: number; b: number }[]
   joints: { el: SVGCircleElement; j: number }[]
-  paths: { el: SVGPathElement; points: readonly Vec3[]; closed: boolean }[]
-  labels: { lines: SVGTSpanElement[]; label: RunnerAnnotationLabel }[]
+  /** `lifts`: the mark hangs off the figure, not the ground, so it rides the figure's height. */
+  paths: { el: SVGPathElement; points: readonly Vec3[]; closed: boolean; lifts: boolean }[]
+  labels: { lines: SVGTSpanElement[]; label: RunnerAnnotationLabel; lifts: boolean }[]
   ground: SVGLineElement | null
   flash: { el: SVGTextElement; paramId: RunnerParamId; anchor: Vec3; chars: number } | null
 }
@@ -297,6 +298,18 @@ function useSvgPixelScale(ref: RefObject<Element | null>): number {
 
 type Annotations = ReturnType<typeof planAnnotations>['annotations']
 
+/** Marks that hang off the ground plane (landing, step width) stay put when the figure's height changes. */
+const GROUND_MARKS: ReadonlySet<RunnerParamId> = new Set(['landingOffset', 'stepWidth'])
+
+function liftsWithFigure(annotation: Annotations[number]): boolean {
+  return !GROUND_MARKS.has(annotation.paramId)
+}
+
+/** The point raised by `dy`: a mark built at the static values, moved with a tweening figure. */
+function lifted(point: Vec3, dy: number): Vec3 {
+  return dy === 0 ? point : { x: point.x, y: point.y + dy, z: point.z }
+}
+
 function collectTargets(
   svg: SVGSVGElement,
   annotations: Annotations,
@@ -314,12 +327,12 @@ function collectTargets(
     const [annotation, role, index] = (el.dataset.path ?? '').split(':')
     const source = annotations[Number(annotation)]
     const list = role === 'm' ? source.marks : role === 'f' ? source.fills : source.guides
-    return { el, points: list[Number(index)], closed: role === 'f' }
+    return { el, points: list[Number(index)], closed: role === 'f', lifts: liftsWithFigure(source) }
   })
-  const labels = Array.from(svg.querySelectorAll<SVGTextElement>('text[data-label-index]'), (el) => ({
-    lines: Array.from(el.querySelectorAll('tspan')),
-    label: annotations[Number(el.dataset.labelIndex)].label,
-  }))
+  const labels = Array.from(svg.querySelectorAll<SVGTextElement>('text[data-label-index]'), (el) => {
+    const source = annotations[Number(el.dataset.labelIndex)]
+    return { lines: Array.from(el.querySelectorAll('tspan')), label: source.label, lifts: liftsWithFigure(source) }
+  })
   const flashEl = svg.querySelector<SVGTextElement>('text[data-flash]')
   return {
     segments,
@@ -465,8 +478,12 @@ export function ModelRunner({
     }
     // Boxes the flash keeps clear of: annotation marks and guides here, labels below.
     const boxes: LabelBox[] = []
-    for (const { el, points, closed } of paths) {
-      const projectedPoints = points.map((point) => projectPoint(point, cam))
+    // Annotations are built at the static values; a value tween (the intro) can change the
+    // figure's standing height, so marks that hang off the figure follow it.
+    const figureDy = drawn === scene.values ? 0 : pelvisHeight(drawn) - pelvisHeight(scene.values)
+    for (const { el, points, closed, lifts } of paths) {
+      const dy = lifts ? figureDy : 0
+      const projectedPoints = points.map((point) => projectPoint(lifted(point, dy), cam))
       const d = projectedPoints
         .map((p, i) => `${i === 0 ? 'M' : 'L'}${fmt(p.x)} ${fmt(p.y)}`)
         .join('')
@@ -475,9 +492,9 @@ export function ModelRunner({
       if (box) boxes.push(box)
     }
     const fontUnits = RUNNER_PX.label * unit
-    for (const { lines, label: text } of labels) {
+    for (const { lines, label: text, lifts } of labels) {
       const layout = placeLabel(
-        projectPoint(text.anchor, cam),
+        projectPoint(lifted(text.anchor, lifts ? figureDy : 0), cam),
         text.side,
         text.lines,
         fontUnits,

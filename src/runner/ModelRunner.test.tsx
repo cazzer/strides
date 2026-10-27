@@ -429,6 +429,29 @@ describe('ModelRunner value tween (the intro seam)', () => {
     expectPose(GAIT_PHASES.midStance, 'wholeBodySide')
   })
 
+  it('keeps figure marks on the figure while a leg tween changes its standing height', () => {
+    const { rerenderWith } = setup({ focus: { metricIds: ['trunkLean'] } })
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    rerenderWith({
+      overrides: {
+        valueTween: { from: { stepWidth: -1.5 }, to: { stepWidth: VALUES.stepWidth }, durationMs: 1000, key: 'lift' },
+      },
+    })
+    const hipMidY = () => (joint('left_hip').cy + joint('right_hip').cy) / 2
+    const arcCentreY = () => {
+      const fill = document.querySelector('[data-annotation="torsoPitch"] path[data-role="fill"]')
+      return pathEnds(fill?.getAttribute('d') ?? null)[0].y
+    }
+    const before = hipMidY()
+    advance(400)
+    // The step-width tween moves the hips (the figure stands taller or shorter) and the lean arc,
+    // hung from hip-mid, moves with them.
+    expect(Math.abs(hipMidY() - before)).toBeGreaterThan(0.01)
+    expect(arcCentreY()).toBeCloseTo(hipMidY(), 2)
+    advance(800)
+    expect(arcCentreY()).toBeCloseTo(hipMidY(), 2)
+  })
+
   it('jumps to the end under reduced motion', () => {
     mockReducedMotion(true)
     setup({
