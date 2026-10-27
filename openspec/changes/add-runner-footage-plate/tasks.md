@@ -29,3 +29,17 @@
 - [x] 4.4 Live check (real GPU, derived port): each clip uploaded alone at 1280×800 and 390×844, light and dark, reduced motion at 1280 light and 390 dark; tour landing and knees stops pause → plate fades in aligned, Play → out; other stops and park-approach none; summary at 1280 Landing and Knees paused → plate; phone panel legibility; first-appearance pop, hard square edge and baked-in marks judged
 - [x] 4.5 `docs/agent-notes/runner-tour.md`: honesty rule 5, a plate gotcha (copy not adoption, `data-shown` written by the loop, the pause snap), correct "the tour mounts no evidence canvas" (still none; it copies pixels), live findings
 - [ ] 4.6 Follow-up beads: foot-strike plate via a hip from `robustFrames`; a mark-free source if the live check finds the baked-in marks cluttered
+
+## 5. Review round 1
+
+- [x] 5.1 Honesty about the ghosted pair: the plate stays the evidence image with its fainter second moment; design decision 7, spec deltas, PRD rule 5, `runner-tour.md`, the note and the legend say so
+- [x] 5.2 Visible legend line while on offer ("Faint photo: your clip, not a target", " · flipped"); fuller text-alternative note (metric, evidence image, second moment, flip, "Your footage, not a target.")
+- [x] 5.3 Greyscale plate (`grayscale`; computed `grayscale(1)` on the SVG `<image>` live)
+- [x] 5.4 Clutter cap `MAX_PLATE_SIDE_IN_FRAME_WIDTHS = 2.5` (`placeFootagePlate`), measured 1.55–1.64 readable vs 4.18 cluttered (design D10)
+- [x] 5.5 Fade on first appearance (`starting:opacity-0!`), verified live; reduced motion still instant
+- [x] 5.6 Words only when placed (render-time placement), never under forced colours (`useForcedColors`); adapter needs a knee or ankle besides the hip
+- [x] 5.7 `clipViewKinds` indexed like `clips`
+- [x] 5.8 Wiring tests: `RunnerTour` (knees stop, side clip, front clip, intro) and `ResultsSummary` (lg, below lg)
+- [x] 5.9 Side-swap fit test builds left-named footage from the right leg's drawn positions
+- [x] 5.10 design.md: pause snap also reaches the Foot path stop; accepted thigh-angle offset, square edge, discoverability, summary copy latency
+- [x] 5.11 Gates (vitest, `tsc -b`, lint, build, `openspec validate --strict`) and a live re-check (`r1-*` screenshots)

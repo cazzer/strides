@@ -42,9 +42,10 @@ From the PRD, enforced by `model-runner` spec requirements and tests:
    (`strides-v2d` context); guides are short reference rays and ticks only.
 4. **One fixed setting per measurement:** no left/right asymmetry, no stride-to-stride variability.
 5. **The footage is one tap away**: the summary row's inline evidence frame. On a still beat of a
-   side stop (knees, landing), the headline's evidence frame also sits faintly (0.26) behind the
-   figure, placed by a similarity transform only, never reshaped and never a target ("Footage
-   plate" below).
+   side stop (knees, landing), the headline's evidence IMAGE (the measured moment, with the card's
+   fainter second moment ghosted over it where it has one) also sits faintly (0.26, greyscale)
+   behind the figure, placed by a similarity transform only, never reshaped, labelled "Faint photo:
+   your clip, not a target", never a target ("Footage plate" below).
 6. Caption "Model built from your numbers", never "your body". The intro's legend reads "Dashed:
    not applied yet" while it runs, "Dashed: not measured" after.
 
@@ -132,37 +133,55 @@ worktree; `md5 -r` on the files plus two-way `cmp` stood in.)
 
 ## Footage plate (`strides-zba4`)
 
-A faint copy of the shown stop's (or opened row's) headline evidence frame, behind a still runner.
-Change: `openspec/changes/add-runner-footage-plate` (design D1–D7 and the six resolved decisions).
+A faint copy of the shown stop's (or opened row's) headline evidence image, behind a still runner.
+It is the card's picture as it is: the measured moment and, for a paired metric, a fainter second
+moment ghosted over it (kept deliberately: the plate brings the evidence ghosting to the runner).
+Never call it "the measured instant": the fit reads the measured (base) moment's joints, the
+picture holds both. Change: `openspec/changes/add-runner-footage-plate` (design decisions 1–7,
+D1–D12).
 
 - **Gating, in `runnerFootageFor` (`src/results/runnerFootagePlate.ts`, pure):** a focus; the
   first focus metric whose evidence from its winning clip (`sourceIndices`) has arrived is the
   headline and must be overstriding, foot strike, knee flexion or knee drive (never skips to the
   next one); camera `landingSide` or `legsSide`; the winning clip's raw `View` (`clipViewKinds`,
-  not the `clipViews` label) is `'side'`; `travelDirection` ≠ 0 (−1 mirrors); the base instant has
-  a hip; the measured side resolves (`plan.base.side`, else the one side all sided non-hip joints
+  not the `clipViews` label, and indexed like `clips`, as `sourceIndices` is) is `'side'`;
+  `travelDirection` ≠ 0 (−1 mirrors); the measured moment has a hip AND a knee or ankle; the
+  measured side resolves (`plan.base.side`, else the one side all sided non-hip joints
   share). Foot strike never qualifies (no hip in its frame). The tour passes none while the intro
   runs; the summary has none below `lg` (no focus there).
 - **Still-beat rule, in `ModelRunner`:** shown only when React-level `!playing` (paused, or
   reduced motion before play; the landing loop's 300/150 ms holds do NOT count), the phase is the
   held phase, no camera tween and no value tween, AND the footage metric's key leg phase on the
   near leg equals the held phase. Pausing with any limb-keyed (non-beat) focus now snaps to the
-  held phase (it used to only on `landingSide`); cadence pauses where it is.
+  held phase (it used to only on `landingSide`; this reaches the front Foot path stop too);
+  cadence pauses where it is. Forced colours: no plate and no words.
 - **Fit (`src/runner/footagePlate.ts`, pure):** hip-mid onto drawn hip-mid; scale = Σ drawn /
   Σ footage over hip-mid → knee → ankle (hip-mid → ankle without a knee; feet excluded); mirror for
   a right-to-left clip; `matrix(a 0 0 d e f)`, `|a| = d`. Never least squares (it would turn an
   angle difference into scale and hide it). Written by `drawRef` every still draw from the pose as
   drawn (lift, live camera); while hidden the transform is left alone, so it fades out in place.
+  **Clutter cap** (`placeFootagePlate`, `MAX_PLATE_SIDE_IN_FRAME_WIDTHS = 2.5`): no plate when the
+  placed image is wider than 2.5 drawing widths (`|a| / 3`). Measured: knee-flexion images 1.55–1.64
+  (readable), side-portrait's far-apart overstride pair 4.18 (cluttered); design D10.
 - **Pixels:** the evidence canvas is COPIED (`toBlob` → blob URL), only while still, once per source
   canvas, revoked on source change and unmount; never adopted (the summary's card owns it, and the
-  tour still mounts no evidence canvas). The baked evidence marks come with it (accepted, decision 5).
+  tour still mounts no evidence canvas). The baked evidence marks come with it (accepted, decision
+  5), greyscale (`grayscale`) so they never read as a second cyan limb.
+- **Words, only while on offer** (`plateShown`: the same placement run at render, so the cap and
+  the fit gate the words too): the legend row's `[data-plate-legend]` line "Faint photo: your clip,
+  not a target" (+ " · flipped" when mirrored), and the `p.sr-only` ending "Faint behind the still
+  model: your clip's <metric> evidence image, the measured moment[, with a fainter second moment
+  over it][, flipped to face the way the model runs], scaled to fit. Your footage, not a target."
 - **Driving it:** `image[data-footage-plate]` is the runner svg's first child; `[data-shown]` while
-  shown (opacity 0.26 via `data-[shown]:opacity-[0.26]`, 240 ms fade, none under reduced motion,
-  `display: none` under forced colours). Tour: `.runner-tour__rail image[data-footage-plate][data-shown]`;
-  summary: `.results-summary__runner image[…]`. While offered the runner's `p.sr-only` ends with
-  "Faint behind the model: your clip's <metric> evidence frame, scaled to fit. Footage, not a target."
-  Wait for `[data-shown]` rather than a fixed delay: the copy took up to ~1.8 s after Pause in the
-  summary live (a fixed 1.2 s read missed it once).
+  shown (opacity 0.26 via `data-[shown]:opacity-[0.26]`, 240 ms fade, also on first appearance via
+  `starting:opacity-0!`, none under reduced motion, `display: none` under forced colours). Tour:
+  `.runner-tour__rail image[data-footage-plate][data-shown]`; summary:
+  `.results-summary__runner image[…]`. Wait for `[data-shown]` rather than a fixed delay: the copy
+  took ~0.8–1.8 s after Pause in the summary live (accepted latency; a fixed 1.2 s read missed it
+  once), a few ms in the tour.
+- **Accepted, by recorded decision (design.md):** the thigh-angle offset at the knee-flexion
+  moment (an honest one-stride vs one-setting difference the fit keeps visible); the hard square
+  edge; discoverability (only paused or under reduced motion); the summary's copy latency.
 
 ### Live check, 2026-10-27 (`strides-zba4`, `4ce2f821`)
 
@@ -182,9 +201,10 @@ Pause, Play, closed.
 - **Landing's headline is overstriding** (the stop's first entry; tour focus is that metric only).
   On side-landscape it has no evidence (`no-candidates`, as recorded in `evidence.md`), so the tour
   landing stop has no plate; in the summary the landing headline falls to foot strike, which has no
-  hip, so none there either. side-portrait's overstriding frame exists, so landing shows there.
-- **First appearance pops** in every case: computed opacity goes from no element to 0.26 in one
-  frame (the copy mounts the `<image>` already marked shown). Later toggles fade as designed: Play
+  hip, so none there either. side-portrait's overstriding frame exists, so landing showed there
+  (withheld since review round 1 by the clutter cap, below).
+- **First appearance popped** in every case (fixed in round 1): computed opacity went from no
+  element to 0.26 in one frame (the copy mounts the `<image>` already marked shown). Later toggles fade as designed: Play
   0.26 → 0 and Pause 0 → 0.26 over ~240 ms, ease-in-out; reduced motion cuts.
 - **Alignment.** side-landscape knees (the clip runs right to left, so the plate is mirrored and
   the photo faces the model's way): hips meet, thigh lengths agree within ~4%, the folded swing leg
@@ -208,6 +228,24 @@ Pause, Play, closed.
   against base live; the fresh-process A/B above, the regime that is deterministic, is bit-identical
   between base and branch, so the plate does not move a measurement.
 - Screenshots: `zba4-live/*.png` in the zba4 session scratchpad (not committed).
+
+### Live re-check after review round 1, 2026-10-27 (`d6c3c013`)
+
+Same harness; side-landscape at 1280×800 light, 390×844 dark and 375×667 dark (a short phone);
+side-portrait at 1280×800 light, 390×844 dark and 1280 light reduced motion. No page or console
+errors.
+
+- **Greyscale applied:** computed `filter: grayscale(1)` on the SVG `<image>` in every run; the
+  baked marks read as grey, no longer as a second cyan limb.
+- **First appearance fades:** opacity from 0 rising over the frames after the copy lands (e.g.
+  0.000 0.001 0.003 0.007 0.014 0.024 0.038 … 0.26); reduced motion at 0.26 at once.
+- **Legend line fits:** one line at 1280 (240 px); inside the note chip at 390×844; two lines
+  inside the 14rem chip on the 375×667 short phone; no overflow anywhere. "· flipped" on
+  side-landscape (right-to-left clip), absent on side-portrait.
+- **Clutter cap:** side-portrait landing now shows no plate, no legend line and no note, in the
+  tour and the summary (the copy exists; the placement is refused). Both knee plates unchanged
+  (`|a|` 4.64–4.84 and 4.93). So on the side demo clips today, landing never shows a plate.
+- Screenshots: `zba4-live/r1-*.png`.
 
 ## Gotchas
 

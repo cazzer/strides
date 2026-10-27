@@ -6,15 +6,16 @@ and in the summary it sits in a card, away from the figure. A reader comparing "
 draws" with "my knee" has to hold one picture in mind while looking at the other (bead
 `strides-zba4`).
 
-When the figure is still on a side stop, it stands at exactly the instant a leg metric was measured
-at (its key leg phase). The evidence frame is a photograph of that same instant. Laid faintly
-behind the figure, scaled to it, the two can be read together without either pretending to be the
-other.
+When the figure is still on a side stop, it stands at exactly the point of the stride a leg metric
+was measured at (its key leg phase). The metric's evidence image is a photograph of that measured
+moment (with, for a paired metric, a fainter second moment ghosted over it, as on the card). Laid
+faintly behind the figure, scaled to it, the two can be read together without either pretending to
+be the other.
 
 ## What Changes
 
-- A faint (0.26 opacity) copy of the headline metric's evidence frame sits under the model runner's
-  figure, as the drawing's first SVG element, for the landing and knees stops whose winning clip is
+- A faint (0.26 opacity), greyscale copy of the headline metric's evidence image (ghosting
+  included) sits under the model runner's figure, as the drawing's first SVG element, for the landing and knees stops whose winning clip is
   classified a side view, in both the tour and the summary.
 - It is placed by a similarity transform only (uniform scale, translation, a horizontal mirror for a
   right-to-left clip), anchored at hip-mid and scaled from summed thigh and shank lengths, written
@@ -26,7 +27,10 @@ other.
   under forced colours.
 - The canvas's pixels are copied to a blob URL (never moved out of the card that owns it), only
   while the figure is still, and revoked when the source changes or the runner unmounts.
-- The text alternative names the plate while it is offered.
+- The legend row says "Faint photo: your clip, not a target" (" · flipped" when mirrored) and the
+  text alternative names the evidence image, its fainter second moment and the flip, only while the
+  plate is on offer. A placement magnifying the image past 2.5 drawing widths is withheld (review
+  round 1).
 - Pausing with a limb focus (any non-beat focus with a key leg phase) stands the figure at its key
   phase, as the landing camera already did. A cadence focus pauses where it is.
 - `ResultsViewProps` gains `clipViewKinds` (each clip's raw `View`, beside the `clipViews` labels),
@@ -43,9 +47,9 @@ other.
 
 ### Modified Capabilities
 
-- `model-runner`: ADDED requirements only. A still figure can show its measured instant's footage
-  behind it, faintly; pausing with a limb focus stands the figure at its key phase; the text
-  alternative names the plate when it shows.
+- `model-runner`: ADDED requirements only. A still figure can show its measured moment's evidence
+  image behind it, faintly (within a clutter cap); pausing with a limb focus stands the figure at
+  its key phase; the legend and the text alternative name the plate while it is on offer.
 - `runner-tour`: ADDED. A side stop's still beat shows its headline's evidence footage.
 - `results-summary`: ADDED. An opened side row's still runner shows its headline's evidence footage.
 

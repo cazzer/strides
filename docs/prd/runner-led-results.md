@@ -113,8 +113,9 @@ This is the load-bearing decision, so it gets a section.
 4. The model shows each measurement as one fixed setting. Strides has no per-side values and no
    per-stride spread, so the model never draws left/right asymmetry or variability.
 5. The real footage is one tap away in the summary, as the evidence frame; on a still beat of a
-   side stop, the measured instant's evidence frame also sits faintly behind the model, scaled
-   (not reshaped) to it, never as a target (`strides-zba4`).
+   side stop, that evidence image (the measured moment, with a fainter second moment where the card
+   ghosts one) also sits faintly behind the model, greyscale, scaled (not reshaped) to it, labelled
+   as the reader's clip and never as a target (`strides-zba4`).
 
 ## Success criteria
 
