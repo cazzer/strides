@@ -67,3 +67,9 @@
 - [x] 11.2 Pause skips the intro; tweening parameter's annotation hidden; flash at a fixed per-parameter point clear of label boxes (`introFlash.ts`); "Dashed: not applied yet"; 500 ms neutral hold; steps 450..1000 ms over 4.5 s; side-view lateral parameters folded into the final state; landing before foot strike; "Skip intro"
 - [x] 11.3 Steps chained from actual starts in the timer callbacks; reduced-motion flip resumes; test-only registry reset; order memoized by joined ids
 - [x] 11.4 Sandbox uses the tour's area order; re-shot at 390 light (hold, mid, end); gates
+
+## 12. Intro review round 2
+
+- [x] 12.1 Overrides hold every parameter at its snapshot value; `onActiveChange(false)` on unmount; `camera` required; no steps finishes at once
+- [x] 12.2 Foot-strike and swing-arc flashes on the near ankle; lean flash end-aligned on the torso's back side; half-line clearance from labels, marks and guides; no flash blink under 150 ms
+- [x] 12.3 D14 records the ~5 s total; re-shot at the foot-strike and torso steps; gates

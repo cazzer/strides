@@ -273,19 +273,27 @@ cannot show (step width and swing-foot arc when |sin yaw| < 0.5); those are held
 arrive with the final state. Step length is 4500 / n within 450..1000 ms (the floor is 450, not
 500, so a front view's ten steps still fit 4.5 s). The plan (steps, bound values, flash texts,
 step length) is snapshotted when step 0 begins, so the scale-pass graft changing `bound`
-mid-intro cannot shift step indices; the final state (`overrides` undefined) draws the live
-`bound`.
+mid-intro cannot shift step indices: every parameter is drawn at its snapshot value (a newly
+measured one included) until the end, and the final state (`overrides` undefined) draws the live
+`bound`. A plan with no steps finishes at once, with no hold. `camera` is a required input, the
+same one ModelRunner gets, so the plan and the drawing can never disagree about the view.
 
-**Sequence.** A 500 ms fully neutral hold, then step i: every not-yet-applied measured parameter
-held at its neutral constant in `overrides.values` (applied ones at their snapshot values), its
+**Length (deliberate).** About 5 s in all: the 500 ms neutral hold, then at most 4.5 s of
+steps. The hold lets the reader see the neutral figure before anything changes; the 4.5 s keeps
+each step at or above 450 ms with all ten parameters visible.
+
+**Sequence.** A 500 ms fully neutral hold, then step i: `overrides.values` holds every parameter
+at its snapshot value, and every not-yet-applied measured parameter at its neutral constant, its
 own `sources` entry flipped to measured, and `valueTween = { from: neutral, to: value, durationMs,
 key: String(i) }`, which the loop moves on wall-clock time. Each step is armed from the previous
 step's actual start inside the timer callbacks (progress kept in a ref), never waiting on a React
-commit; a re-armed effect (a reduced-motion flip) resumes the current step where it is. About
-2n + 1 commits per run.
+commit; a re-armed effect (a reduced-motion flip) resumes the current step where it is. A flash
+clears after 500 ms unless that would leave under 150 ms of its step, in which case it stays the
+whole step (no blink). About 2n + 1 commits per run.
 
 **Seen first.** The hold starts only once `active` (tab visible and figure on screen, from
-`onActiveChange`); leaving during the hold restarts it. Once step 0 has begun the timers keep
+`onActiveChange`, which also reports false on unmount from an unmount-only cleanup); leaving
+during the hold restarts it. Once step 0 has begun the timers keep
 running while unseen, which matches the renderer's wall-clock tween.
 
 **Once per result.** `resultKey` is a string (an analysis-run or session id): the fused result
@@ -297,10 +305,13 @@ motion never starts the intro; it marks the key and fires `onDone` once.
 
 **Legibility.** While a parameter tweens, its focus annotation is hidden and only its flash shows
 (no duplicate label, no arc drawn at the neutral geometry being left). The flash anchors on a
-fixed world point per parameter from the still-frame pose (`introFlash.ts`: feet for contact
-shank and swing arc, ground under the hip for landing, hip for bounce and step width, torso
+fixed world point per parameter from the still-frame pose (`introFlash.ts`: near ankle for foot
+strike and swing arc, ground under the hip for landing, hip for bounce and step width, torso
 midpoint for lean, near shoulder for arms, near knee for thigh and knee bend, above the head for
-cadence) and is moved below, or at the frame's foot above, any visible annotation label box. The
+cadence). It starts a gap after its anchor, except the lean flash, which ends a gap before it on
+the torso's back side (opposite the projected direction of travel) so it never sits on the arms.
+It is moved below, or at the frame's foot above, any visible annotation label, mark or guide box,
+with half a line of clearance. The
 legend reads "Dashed: not applied yet" while the intro runs. Pause mid-intro skips it, so the
 still figure is the final one. The button reads "Skip intro".
 

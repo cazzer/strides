@@ -289,17 +289,20 @@ runner SHALL hold fully neutral (every part dashed grey, every measured paramete
 constant, legend "Dashed: not applied yet") for about 500 ms, and then apply the measured
 parameters one at a time: the focus-area parameters first in focus order, the rest in parameter
 order, landing always before foot strike. Each step SHALL last 4.5 s divided by the number of
-steps, bounded to 450–1000 ms, so the steps take at most about 4.5 s after the hold. Each
+steps, bounded to 450–1000 ms, so the steps take at most about 4.5 s after the hold (about 5 s
+in all, deliberately). Each
 parameter SHALL tween from its neutral constant to its bound value, its part SHALL turn solid as
-the tween starts, its value SHALL flash for about 500 ms beside a fixed point of its part (not
-following the stride, clear of visible annotation labels), and its own focus annotation SHALL be
+the tween starts, its value SHALL flash for about 500 ms (the whole step when under 150 ms of it would remain)
+beside a fixed point of its part (not following the stride, clear of visible annotation labels,
+marks and guides, the lean value on the torso's back side), and its own focus annotation SHALL be
 hidden while it tweens. A parameter whose change cannot be seen from the camera (step width and
 swing-foot arc from a side view) SHALL get no step and no flash; it is applied with the final
 state. Unmeasured parameters SHALL be drawn at their bound values throughout and never change. At
 the end every measured parameter SHALL be drawn at exactly its bound value and an `onDone`
 callback SHALL fire once. The motion SHALL run in the renderer's loop, with no React commit per
 frame. The order, values and step length SHALL be fixed when the first step begins, so a result
-updated mid-intro cannot shift the steps; the final state draws the current result.
+updated mid-intro cannot shift the steps or change any drawn value; the final state draws the
+current result. With nothing to apply, the intro SHALL finish at once, with no hold.
 
 A visible "Skip intro" button (at least 44 px) SHALL sit beside the pause control while the intro
 runs. Skipping, or pressing Pause, SHALL jump to the final state and fire `onDone` once. When the
