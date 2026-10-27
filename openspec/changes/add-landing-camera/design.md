@@ -26,8 +26,8 @@ ModelRunner's props.
 - **Framing.** Height: from `LANDING_FRAME_ABOVE_HIP` (0.15) above hip-mid at contact to
   `LANDING_FRAME_BELOW_GROUND` (0.4) below the ground, which fills the frame (zoom ≈ 1.7 at
   neutral). Width: see the deviation below.
-- **Phase window.** `LANDING_PHASE_WINDOW = { start: 0.35, length: 0.3 }` is ±0.15 of the right
-  leg's own phase around its contact (cycle 0.5). `advancePhase(phase, delta, window)` loops
+- **Phase window.** `LANDING_PHASE_WINDOW = { start: 0.35, length: 0.25 }` runs from 0.15 of the
+  right leg's own phase before its contact (cycle 0.5) to 0.10 after it (see the sink below). `advancePhase(phase, delta, window)` loops
   inside the window. From outside, it plays on until it reaches the window (Q5: enter by playing
   on), with a 1e-9 tolerance so rounding at the window's end never drops the phase out. There is
   no hold at contact (Q4); the UX review judges whether the 0.53 s loop at 0.4× reads well.
@@ -72,10 +72,12 @@ ModelRunner's props.
 
 ## Risks / Trade-offs
 
-- **The ps19.4 sink inside the window.** Past D15's domain the mid-stance foot gives way. At the
-  demo's overstride of 0.512, the near foot's lowest point is −0.028 at cycle 0.60 and −0.063 at
-  0.65. The screenshots check whether this is visible (see tasks.md). The remedy is narrowing the
-  window's after-contact side, never changing `gaitModel`.
+- **The ps19.4 sink inside the window (resolved by narrowing).** Past D15's domain the mid-stance
+  foot gives way. At the demo's overstride of 0.512, the near foot's lowest point is −0.028 at
+  cycle 0.60 and −0.063 at 0.65. With the planned ±0.15 window, the 1280 px sandbox frames showed
+  the heel about 10 px under the drawn ground at the window's end. The after-contact side was
+  narrowed to 0.10 (window 0.35..0.60), as the decisions record. At 0.60 the residual is −0.028
+  torso lengths, about 4 to 5 px at 1280. `gaitModel` is unchanged.
 - **The hip plumb does not follow a value tween.** Overstride is a ground mark, so it does not
   lift with the figure's height during the intro tween. The tour shows no focus while the intro
   runs, so this is not seen there.

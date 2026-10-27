@@ -10,8 +10,8 @@ reduced-motion still had the foot off the ground. The tour fell back to `legsSid
 
 - A new camera preset `landingSide`: a side view framed per parameter set on hip-mid and the near
   leg's landing (`landingCamera(values)`). The renderer reframes it on the values it draws.
-- While the camera is `landingSide`, playback loops a window of ±0.15 leg phase around the near
-  leg's contact, at the area's 0.4× rate. Entering plays on into the window; leaving lets the
+- While the camera is `landingSide`, playback loops a window of the near leg's phase from 0.15
+  before its contact to 0.10 after it, at the area's 0.4× rate. Entering plays on into the window; leaving lets the
   phase run the whole cycle again.
 - The still frame on `landingSide` with no keyed focus is the near leg's contact, so the
   reduced-motion still shows the foot on the ground.

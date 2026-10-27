@@ -101,7 +101,7 @@ describe('presets', () => {
     legsSide: { joints: /hip|knee|ankle|heel|foot_index/, phases: [0, 0.2, 0.4, 0.6, 0.8] },
     footSide: { joints: /^left_(ankle|heel|foot_index)$/, phases: [GAIT_PHASES.leftContact] },
     feetFront: { joints: /^left_(ankle|heel|foot_index)$/, phases: [GAIT_PHASES.leftContact] },
-    landingSide: { joints: /hip|^right_(knee|ankle|heel|foot_index)$/, phases: [0.35, 0.5, 0.65] },
+    landingSide: { joints: /hip|^right_(knee|ankle|heel|foot_index)$/, phases: [0.35, 0.5, 0.6] },
   }
 
   function corner(end: 0 | 1): RunnerParams {

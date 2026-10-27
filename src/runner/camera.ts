@@ -40,10 +40,12 @@ export interface PhaseWindow {
 }
 
 /**
- * The landing camera's window: ±0.15 of the near (right) leg's own phase around its contact,
- * which is cycle phase 0.5. Late swing into early stance, so the reader sees the foot come down.
+ * The landing camera's window: from 0.15 before the near (right) leg's contact (cycle phase 0.5)
+ * to 0.10 after it. Late swing into early stance, so the reader sees the foot come down. The
+ * after-contact side stops short of where a large overstride's stance foot gives way below the
+ * ground (gaitModel D15: at 0.512, −0.063 torso lengths by 0.15 after contact, visible at 1280 px).
  */
-export const LANDING_PHASE_WINDOW: PhaseWindow = Object.freeze({ start: 0.35, length: 0.3 })
+export const LANDING_PHASE_WINDOW: PhaseWindow = Object.freeze({ start: 0.35, length: 0.25 })
 
 /** The landing frame's top, above hip-mid at contact, torso lengths. */
 export const LANDING_FRAME_ABOVE_HIP = 0.15
