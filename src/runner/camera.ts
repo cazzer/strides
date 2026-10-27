@@ -78,8 +78,11 @@ export const LANDING_PHASE_WINDOW: PhaseWindow = Object.freeze({
   ]),
 })
 
-/** The landing frame's top, above hip-mid's highest point in the window, torso lengths. */
-export const LANDING_FRAME_ABOVE_HIP = 0.15
+/**
+ * The landing frame's top, above hip-mid's highest point in the window, torso lengths. Enough that
+ * the phone tour's "Slow motion" note at the drawing's top-left clears the hip and thighs.
+ */
+export const LANDING_FRAME_ABOVE_HIP = 0.25
 /** The landing frame's bottom, below the ground: room for the ground-lane labels. */
 export const LANDING_FRAME_BELOW_GROUND = 0.4
 /** Horizontal room kept beyond the framed joints, torso lengths. */
