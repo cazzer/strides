@@ -152,6 +152,18 @@ const PIN_DOMAIN = grid({
   stepWidth: [-1, 0.3, 1.5],
 }).map((params) => realizeParams(params))
 
+/** Per landing offset past the declared domain: the worst stance sink and swing dip allowed. */
+const FALLBACK_BOUNDS: readonly (readonly [number, { stance: number; swing: number }])[] = [
+  // Measured worst (stance / swing): 0.056 / −0.060, 0.077 / −0.083, 0.089 / −0.096,
+  // 0.108 / −0.115, 0.138 / −0.146, 0.181 / −0.188.
+  [0.35, { stance: 0.06, swing: -0.065 }],
+  [0.4, { stance: 0.08, swing: -0.09 }],
+  [0.45, { stance: 0.095, swing: -0.1 }],
+  [0.512, { stance: 0.11, swing: -0.12 }],
+  [0.6, { stance: 0.14, swing: -0.15 }],
+  [0.7, { stance: 0.185, swing: -0.19 }],
+]
+
 /** The domain sweeps sample thousands of poses; under a loaded full-suite run they need longer. */
 const DOMAIN_SWEEP_TIMEOUT_MS = 60_000
 
@@ -201,17 +213,29 @@ describe('the stance foot stands on the ground', () => {
   }, DOMAIN_SWEEP_TIMEOUT_MS)
 
   it('lets the foot give way, by a bounded amount, where the bindings cannot keep it down', () => {
-    // The 0.7 landing corners: pinning them needs a stance knee bend that would break kneeFlexion.
-    const farLanding = LEG_CORNERS.filter((params) => params.landingOffset > 0.5)
-    expect(farLanding).toHaveLength(32)
-    for (const params of farLanding) {
-      const label = JSON.stringify(params)
-      expect(Math.abs(lowestLeftFoot(params, 0)), label).toBeLessThan(1e-12)
-      expect(stancePinError(params), label).toBeLessThan(0.19)
-      expect(swingClearance(params), label).toBeGreaterThan(-0.2)
-      for (const id of PARAM_IDS) {
-        const { measure, tolerance } = MEASURE_PARAM[id]
-        expect(Math.abs(measure(params) - params[id]), `${id} ${label}`).toBeLessThanOrEqual(tolerance)
+    // Past the declared domain (landing 0.3), pinning needs a stance knee bend that would break
+    // kneeFlexion, so the mid-stance foot gives way. Bounds measured per landing (design.md D15),
+    // over every corner of the other leg parameters; the demo clip's landing is 0.512.
+    const others = Object.fromEntries(
+      (['pelvisBounce', 'contactShankOffset', 'peakThighAngle', 'peakSwingKneeBend', 'stepWidth'] as const)
+        .map((id) => [id, RUNNER_PARAM_SPECS[id].range]),
+    )
+    for (const [landingOffset, bound] of FALLBACK_BOUNDS) {
+      const sets = grid({ landingOffset: [landingOffset], ...others }).map((params) =>
+        realizeParams(params, new Set(CONTACT_PARAMS)),
+      )
+      expect(sets).toHaveLength(32)
+      for (const params of sets) {
+        const label = JSON.stringify(params)
+        expect(Math.abs(lowestLeftFoot(params, 0)), label).toBeLessThan(1e-12)
+        const stance = stancePinError(params)
+        const swing = swingClearance(params)
+        expect(stance, label).toBeLessThan(bound.stance)
+        expect(swing, label).toBeGreaterThan(bound.swing)
+        for (const id of PARAM_IDS) {
+          const { measure, tolerance } = MEASURE_PARAM[id]
+          expect(Math.abs(measure(params) - params[id]), `${id} ${label}`).toBeLessThanOrEqual(tolerance)
+        }
       }
     }
   }, DOMAIN_SWEEP_TIMEOUT_MS)
@@ -500,6 +524,39 @@ const CONTACT_GRID: RunnerParams[] = [-0.3, -0.1, 0, 0.05, 0.1, 0.3, 0.7].flatMa
     ),
   ),
 )
+
+/** Deterministic PRNG (mulberry32), so a failing interior set can be reproduced. */
+function seededRandom(seed: number): () => number {
+  let state = seed >>> 0
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0
+    let t = state
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+describe('every bound value reads back exactly inside the ranges, not only at their corners', () => {
+  it('holds every MEASURE_PARAM binding on 500 seeded random interior parameter sets', () => {
+    const random = seededRandom(19_4)
+    for (let n = 0; n < 500; n += 1) {
+      const raw = Object.fromEntries(
+        PARAM_IDS.map((id) => {
+          const [lo, hi] = RUNNER_PARAM_SPECS[id].range
+          return [id, lo + (hi - lo) * random()]
+        }),
+      ) as RunnerParams
+      const measured = MEASURED_SUBSETS[Math.floor(random() * MEASURED_SUBSETS.length)]
+      const params = realizeParams(raw, measured)
+      for (const id of PARAM_IDS) {
+        const { measure, tolerance } = MEASURE_PARAM[id]
+        expect(Math.abs(measure(params) - params[id]), `${id} ${JSON.stringify(params)}`)
+          .toBeLessThanOrEqual(tolerance)
+      }
+    }
+  }, DOMAIN_SWEEP_TIMEOUT_MS)
+})
 
 describe('realizeParams: what the model draws for the contact leg', () => {
   it('measuring the model drawn from realized parameters returns every realized value', () => {

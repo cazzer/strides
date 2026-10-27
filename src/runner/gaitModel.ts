@@ -429,6 +429,28 @@ interface StanceFrame {
   /** The hip-to-ankle distance at the stance knee's largest allowed bend. */
   minStanceReach: number
   maxStanceThighDeg: number
+  /**
+   * The stance knee's running maximum (contact included) at `STANCE_KNEE_SAMPLES` + 1 even steps
+   * over [0, stanceEnd], from the unfloored solve; null while it is being sampled.
+   */
+  kneeRunningMax: readonly number[] | null
+}
+
+/**
+ * The most the stance knee may straighten below its running maximum. The knee-flexion metric's
+ * extrema finder (`src/heuristics/extrema.ts`) is a zig-zag scan: a maximum counts once the series
+ * has risen `kneeFlexionMinProminenceDegrees` (20) from the last minimum and then fallen 20 from
+ * it. Holding every fall in stance under 20, less a margin for its 3-sample smoothing, means no
+ * stance maximum can count, whatever came before it; the swing peak stays the only one.
+ */
+const STANCE_KNEE_FALL_MAX_DEG = 18
+const STANCE_KNEE_SAMPLES = 64
+
+/** Linear interpolation of the sampled stance running maximum at leg phase q. */
+function stanceKneeRunningMax(q: number, samples: readonly number[]): number {
+  const u = clamp(q / GAIT_PHASES.stanceEnd, 0, 1) * STANCE_KNEE_SAMPLES
+  const i = Math.min(Math.floor(u), STANCE_KNEE_SAMPLES - 1)
+  return samples[i] + (samples[i + 1] - samples[i]) * (u - i)
 }
 
 interface LegFrame extends StanceFrame {
@@ -480,7 +502,17 @@ function stanceAngles(q: number, hipY: number, frame: StanceFrame): LegAngles {
     footDeg = Math.min(footDeg, toeDownFootDeg(ankleY))
   }
   const v = ankleY - hipY
-  const d = clamp(Math.hypot(x, v), frame.minStanceReach, reach)
+  // The knee never straightens more than STANCE_KNEE_FALL_MAX_DEG below its running maximum: a cap
+  // on the reach. Where it binds the foot floats a little rather than form a second knee peak.
+  const kneeFloorDeg =
+    frame.kneeRunningMax === null
+      ? 0
+      : Math.max(0, stanceKneeRunningMax(q, frame.kneeRunningMax) - STANCE_KNEE_FALL_MAX_DEG)
+  const d = clamp(
+    Math.hypot(x, v),
+    frame.minStanceReach,
+    Math.min(reach, legReach(kneeFloorDeg * DEG, frame.legs)),
+  )
   const thighRad =
     Math.atan2(x, -v) +
     Math.acos(clamp((thigh * thigh + d * d - shank * shank) / (2 * thigh * d), -1, 1))
@@ -493,7 +525,23 @@ function stanceAngles(q: number, hipY: number, frame: StanceFrame): LegAngles {
   }
 }
 
+/** The last frame built, reused while the parameters are unchanged (one figure, many phases). */
+let lastFrame: { params: RunnerParams; frame: LegFrame } | null = null
+
 function legFrame(params: RunnerParams): LegFrame {
+  const cached = lastFrame
+  if (
+    cached !== null &&
+    (Object.keys(params) as (keyof RunnerParams)[]).every((id) => cached.params[id] === params[id])
+  ) {
+    return cached.frame
+  }
+  const frame = buildLegFrame(params)
+  lastFrame = { params: { ...params }, frame }
+  return frame
+}
+
+function buildLegFrame(params: RunnerParams): LegFrame {
   const { hipWidth, shank } = MODEL_PROPORTIONS
   const contact = solveContact(params)
   const legs = sagittalLegLengths(params.stepWidth)
@@ -517,7 +565,15 @@ function legFrame(params: RunnerParams): LegFrame {
       Math.max(params.peakThighAngle, contact.thighDeg),
       contact.thighDeg + STANCE_THIGH_RISE_MAX_DEG,
     ),
+    kneeRunningMax: null,
   }
+  const kneeRunningMax: number[] = [contact.kneeDeg]
+  for (let i = 1; i <= STANCE_KNEE_SAMPLES; i += 1) {
+    const q = (GAIT_PHASES.stanceEnd * i) / STANCE_KNEE_SAMPLES
+    const hipY = height + (params.pelvisBounce / 2) * bounceShape(q, params.pelvisBounce)
+    kneeRunningMax.push(Math.max(kneeRunningMax[i - 1], stanceAngles(q, hipY, stance).kneeDeg))
+  }
+  stance.kneeRunningMax = kneeRunningMax
   return {
     ...stance,
     sinTilt: legTiltSin(params.stepWidth),
