@@ -57,16 +57,22 @@ export const MODEL_TORSO_LENGTH_CM = 50
  */
 export const PELVIS_HEIGHT = 1.8066
 
-/** Key instants of the cycle, in LEFT-leg phase. The right leg runs half a cycle later. */
+/**
+ * Key instants of the cycle, in LEFT-leg phase. The right leg runs half a cycle later. Stance is
+ * 0.30 of a cycle, so each step has a flight of 0.20 (both feet off the ground): long enough that
+ * the part of a large bounce the planted leg cannot absorb (`STANCE_DROP`) is spread over several
+ * 30 fps frames instead of hopping through two or three.
+ */
 export const GAIT_PHASES = {
   leftContact: 0,
   rightContact: 0.5,
-  /** Lowest hip, the stance knee's loading bend. */
-  midStance: 0.19,
+  /** Lowest hip, the stance knee's loading bend: halfway through stance. */
+  midStance: 0.15,
   /** Toe-off: the thigh's most trailing angle. */
-  stanceEnd: 0.38,
+  stanceEnd: 0.3,
   peakSwingKneeBend: 0.62,
-  peakThigh: 0.85,
+  /** Late swing, while the other leg is in stance, so a still frame here has a foot down. */
+  peakThigh: 0.78,
   /** The swing-foot arc runs from the other foot's contact to the end of early-to-mid swing. */
   swingArcStart: 0.5,
   swingArcEnd: 5 / 6,
@@ -104,12 +110,19 @@ const FOOT_LATE_SWING_DEG = 5
 /**
  * How far above their lowest the hips sit at contact and toe-off, torso lengths (design.md D15):
  * the part of the bounce the planted stance leg absorbs. Large enough that a typical bounce mostly
- * happens in stance (so the flight hop never jumps in one frame) and the mid-stance knee visibly
- * bends; small enough that the stance knee stays under its cap. Illustrative.
+ * happens in stance and the mid-stance knee visibly bends; small enough that the stance knee stays
+ * under its cap and the foot stays pinned over the declared domain. The bounce beyond it happens in
+ * flight, which is why flight is long (`GAIT_PHASES`). Illustrative.
  */
 const STANCE_DROP = 0.1
-/** The flight peak of the hips, in leg phase: midway between toe-off and the other contact. */
-const FLIGHT_PEAK_PHASE = 0.44
+/**
+ * The flight peak of the hips, in leg phase: midway between toe-off and the other contact, a
+ * quarter cycle after mid-stance. A small bounce is lowest at mid-stance, highest a quarter cycle
+ * later, and at contact and toe-off sits where a sinusoid would (`SINUSOID_STANCE_ENDS_SHAPE`); the
+ * eased keys between are close to a sinusoid, not one, and are held to its per-frame speed by the
+ * 30 fps bounds in `gaitModel.test.ts`.
+ */
+const FLIGHT_PEAK_PHASE = (GAIT_PHASES.stanceEnd + GAIT_PHASES.rightContact) / 2
 /**
  * The stance knee's largest bend, above the larger of its contact and toe-off bends. Kept under
  * `kneeFlexionMinProminenceDegrees` (20) so stance never forms a second prominent knee-flexion
@@ -124,6 +137,14 @@ const STANCE_KNEE_BELOW_SWING_DEG = 5
  * Illustrative.
  */
 const STANCE_THIGH_RISE_MAX_DEG = 5
+/**
+ * An early-swing thigh key, at the other leg's mid-stance: the thigh has come this fraction of the
+ * way from toe-off to its peak. With the shorter stance the thigh has further to travel to its
+ * peak; this key brings it forward early so the swing foot clears the ground under the lowest hips.
+ * The thigh passes through it moving (`monotoneHermite`), never stopping. Illustrative.
+ */
+const SWING_THIGH_MID_PHASE = GAIT_PHASES.rightContact + GAIT_PHASES.midStance
+const SWING_THIGH_MID_FRACTION = 0.6
 
 /**
  * P80 − P20 of a raised cosine sampled uniformly over one full period, as a fraction of its peak:
@@ -150,6 +171,31 @@ function periodicEase(keys: readonly Keyframe[], q: number): number {
     }
   }
   return keys[0][1]
+}
+
+/**
+ * A monotone cubic Hermite curve through three keys (Fritsch–Carlson): at rest at the first and
+ * last key, and through the middle key at the weighted harmonic mean of the two secants, so it
+ * moves through it without stopping, never overshoots, and its ends are its extremes. q must lie
+ * in [first key, last key].
+ */
+function monotoneHermite(keys: readonly [Keyframe, Keyframe, Keyframe], q: number): number {
+  const [[q0, v0], [q1, v1], [q2, v2]] = keys
+  const h0 = q1 - q0
+  const h1 = q2 - q1
+  const d0 = (v1 - v0) / h0
+  const d1 = (v2 - v1) / h1
+  const slope = d0 * d1 > 0 ? (3 * (h0 + h1)) / ((2 * h1 + h0) / d0 + (h1 + 2 * h0) / d1) : 0
+  const segment = (a: number, va: number, ma: number, b: number, vb: number, mb: number) => {
+    const h = b - a
+    const t = (q - a) / h
+    const t2 = t * t
+    const t3 = t2 * t
+    return (
+      (2 * t3 - 3 * t2 + 1) * va + (t3 - 2 * t2 + t) * h * ma + (-2 * t3 + 3 * t2) * vb + (t3 - t2) * h * mb
+    )
+  }
+  return q < q1 ? segment(q0, v0, 0, q1, v1, slope) : segment(q1, v1, slope, q2, v2, 0)
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -375,7 +421,8 @@ function stanceEndsBounceShape(bounce: number): number {
 
 /**
  * Where a sinusoidal bounce (lowest at mid-stance, highest at the flight peak) sits at contact and
- * toe-off. A small bounce keeps this shape, so it moves no faster than a sinusoid would.
+ * toe-off. A small bounce sits there too; between those keys it is cosine-eased, close to a
+ * sinusoid but not one.
  */
 const SINUSOID_STANCE_ENDS_SHAPE = -Math.cos(4 * Math.PI * GAIT_PHASES.midStance)
 
@@ -587,15 +634,30 @@ function buildLegFrame(params: RunnerParams): LegFrame {
 /** Swing, toe-off → contact: forward-kinematic keyframe curves from the stance solve's toe-off. */
 function swingAngles(q: number, frame: LegFrame, params: RunnerParams): LegAngles {
   const { contact, toeOff } = frame
+  // Toe-off → peak through the early-swing key without stopping; peak → contact eased.
+  const thighDeg =
+    q <= GAIT_PHASES.peakThigh
+      ? monotoneHermite(
+          [
+            [GAIT_PHASES.stanceEnd, toeOff.thighDeg],
+            [
+              SWING_THIGH_MID_PHASE,
+              toeOff.thighDeg + SWING_THIGH_MID_FRACTION * (params.peakThighAngle - toeOff.thighDeg),
+            ],
+            [GAIT_PHASES.peakThigh, params.peakThighAngle],
+          ],
+          q,
+        )
+      : periodicEase(
+          [
+            [GAIT_PHASES.leftContact, contact.thighDeg],
+            [GAIT_PHASES.stanceEnd, toeOff.thighDeg],
+            [GAIT_PHASES.peakThigh, params.peakThighAngle],
+          ],
+          q,
+        )
   return {
-    thighDeg: periodicEase(
-      [
-        [GAIT_PHASES.leftContact, contact.thighDeg],
-        [GAIT_PHASES.stanceEnd, toeOff.thighDeg],
-        [GAIT_PHASES.peakThigh, params.peakThighAngle],
-      ],
-      q,
-    ),
+    thighDeg,
     kneeDeg: periodicEase(
       [
         [GAIT_PHASES.leftContact, contact.kneeDeg],

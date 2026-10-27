@@ -5,7 +5,7 @@
 import { StrictMode, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import '../../index.css'
-import { makeMetric } from '../../results/__fixtures__/metricResult'
+import { makeMetric, makeVerticalOscillation } from '../../results/__fixtures__/metricResult'
 import type { FormHeuristicsResult, MetricId } from '../../heuristics/types'
 import { bindAll, bindOnly } from '../__fixtures__/boundParams'
 import { CAMERA_PRESETS } from '../camera'
@@ -94,6 +94,19 @@ const SCENARIOS: readonly Scenario[] = [
     camera: 'wholeBodySide',
     focus: { metricIds: ['verticalOscillation', 'armSwingAmplitude'] },
   },
+  ...[0.14, 0.3].map(
+    (value): Scenario => ({
+      // Only the bounce bound, so its own hip path is the one played (the flight-phase smoothness
+      // check, ps19.7): 0.14 is the neutral bounce, 0.3 a large one past STANCE_DROP.
+      id: `bounce-${value}`,
+      title: `Vertical oscillation ${value} alone`,
+      params: bind(['verticalOscillation'], {
+        verticalOscillation: makeVerticalOscillation({ value }),
+      }),
+      camera: 'wholeBodySide',
+      focus: { metricIds: ['verticalOscillation'] },
+    }),
+  ),
   {
     // Past the pin's declared domain (design.md D15): the bindings outrank the pin, so through
     // stance the foot may dip a little below the ground. The still frame holds contact. 0.512 is
