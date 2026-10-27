@@ -21,6 +21,11 @@
  * the window plays on into it; leaving the camera lets the phase run round the whole cycle again
  * from where it is. Paused on the landing camera, the figure stands at the held phase too.
  *
+ * **Cadence beats at the footfalls.** A cadence focus is labelled above the head with ground ticks
+ * under the feet; while the figure plays (and motion is allowed) a ring flashes at each foot
+ * as it lands, written by the loop from the live phase, so the rings beat at cadence × rate per
+ * minute while the label keeps the real cadence. Still or under reduced motion there is no ring.
+ *
  * Size it through `className`: the figure fills its box, and the drawing fills what the caption
  * and controls leave.
  */
@@ -45,6 +50,7 @@ import {
 } from './camera'
 import { GAIT_PHASES, GROUND_Y, cyclesPerSecond, pelvisHeight, poseAt } from './gaitModel'
 import {
+  beatEnvelope,
   planAnnotations,
   shownWhileStill,
   type AnnotationKind,
@@ -196,6 +202,8 @@ const GUIDE_CLASS =
   'stroke-neutral-500 dark:stroke-neutral-400 forced-colors:stroke-[color:CanvasText]'
 const GROUND_CLASS =
   'stroke-neutral-300 dark:stroke-neutral-700 forced-colors:stroke-[color:GrayText]'
+// The footfall ring: the focus accent, never a saturated red (WCAG 2.3.1, design D4).
+const PULSE_CLASS = 'stroke-cyan-700 dark:stroke-cyan-300 forced-colors:stroke-[color:Highlight]'
 const LABEL_CLASS =
   'fill-neutral-900 stroke-white font-sans font-semibold dark:fill-neutral-100 dark:stroke-black forced-colors:fill-[color:CanvasText] forced-colors:stroke-[color:Canvas]'
 
@@ -211,6 +219,14 @@ interface DrawTargets {
   /** `lifts`: the mark hangs off the figure, not the ground, so it rides the figure's height. */
   paths: { el: SVGPathElement; points: readonly Vec3[]; closed: boolean; lifts: boolean }[]
   labels: { lines: SVGTSpanElement[]; label: RunnerAnnotationLabel; lifts: boolean }[]
+  /** Footfall rings: on the ground, so they never lift. */
+  pulses: {
+    el: SVGCircleElement
+    tick: SVGPathElement | null
+    tickPoints: readonly Vec3[]
+    centre: Vec3
+    phase: number
+  }[]
   ground: SVGLineElement | null
   flash: { el: SVGTextElement; paramId: RunnerParamId; anchor: Vec3; chars: number } | null
 }
@@ -311,11 +327,20 @@ function useSvgPixelScale(ref: RefObject<Element | null>): number {
 
 type Annotations = ReturnType<typeof planAnnotations>['annotations']
 
-/** Marks that hang off the ground plane (landing, step width) stay put when the figure's height changes. */
-const GROUND_MARKS: ReadonlySet<RunnerParamId> = new Set(['landingOffset', 'stepWidth'])
+/**
+ * Paths that hang off the ground plane (landing, step width, the cadence ticks) stay put when the
+ * figure's height changes; the others ride it.
+ */
+const GROUND_PATHS: ReadonlySet<RunnerParamId> = new Set(['landingOffset', 'stepWidth', 'cadence'])
+/** Labels that hang off the ground plane. The cadence label hangs off the head, so it rides. */
+const GROUND_LABELS: ReadonlySet<RunnerParamId> = new Set(['landingOffset', 'stepWidth'])
 
-function liftsWithFigure(annotation: Annotations[number]): boolean {
-  return !GROUND_MARKS.has(annotation.paramId)
+function pathLiftsWithFigure(annotation: Annotations[number]): boolean {
+  return !GROUND_PATHS.has(annotation.paramId)
+}
+
+function labelLiftsWithFigure(annotation: Annotations[number]): boolean {
+  return !GROUND_LABELS.has(annotation.paramId)
 }
 
 /** The point raised by `dy`: a mark built at the static values, moved with a tweening figure. */
@@ -340,11 +365,27 @@ function collectTargets(
     const [annotation, role, index] = (el.dataset.path ?? '').split(':')
     const source = annotations[Number(annotation)]
     const list = role === 'm' ? source.marks : role === 'f' ? source.fills : source.guides
-    return { el, points: list[Number(index)], closed: role === 'f', lifts: liftsWithFigure(source) }
+    return { el, points: list[Number(index)], closed: role === 'f', lifts: pathLiftsWithFigure(source) }
   })
   const labels = Array.from(svg.querySelectorAll<SVGTextElement>('text[data-label-index]'), (el) => {
     const source = annotations[Number(el.dataset.labelIndex)]
-    return { lines: Array.from(el.querySelectorAll('tspan')), label: source.label, lifts: liftsWithFigure(source) }
+    return {
+      lines: Array.from(el.querySelectorAll('tspan')),
+      label: source.label,
+      lifts: labelLiftsWithFigure(source),
+    }
+  })
+  const pulses = Array.from(svg.querySelectorAll<SVGCircleElement>('circle[data-pulse]'), (el) => {
+    const [annotation, index] = (el.dataset.pulse ?? '').split(':').map(Number)
+    const source = annotations[annotation]
+    const pulse = (source.pulses ?? [])[index]
+    return {
+      el,
+      tick: svg.querySelector<SVGPathElement>(`path[data-pulse-tick="${annotation}:${index}"]`),
+      tickPoints: source.guides[index] ?? [],
+      centre: pulse.centre,
+      phase: pulse.phase,
+    }
   })
   const flashEl = svg.querySelector<SVGTextElement>('text[data-flash]')
   return {
@@ -352,6 +393,7 @@ function collectTargets(
     joints,
     paths,
     labels,
+    pulses,
     ground: svg.querySelector<SVGLineElement>('line[data-ground]'),
     flash: flashEl && flash ? { el: flashEl, ...flash } : null,
   }
@@ -456,6 +498,9 @@ export function ModelRunner({
     () => neutralEdgeInFrame(edgeStyles, values, heldPhase, target),
     [edgeStyles, values, heldPhase, target],
   )
+  // Footfall rings move, so only a playing figure with motion allowed draws them; the landing
+  // window's contact hold would freeze one at full strength, so not there either.
+  const showPulses = playing && !reduced && phaseWindow === null
   const flash = overrides?.flash ?? null
   const introRunning = intro?.running === true && !reduced
   // The flash's world point, taken once per flash from the values its tween ends at.
@@ -489,7 +534,7 @@ export function ModelRunner({
     const unit = 1 / scene.pxPerUnit
     const drawn = drawnValues(scene.values, valueTweenRef.current, performance.now())
     const projected = projectPose(poseAt(phaseRef.current, drawn), cam)
-    const { segments, joints, paths, labels, ground, flash: flashTarget } = scene.targets
+    const { segments, joints, paths, labels, pulses, ground, flash: flashTarget } = scene.targets
     for (const { el, a, b } of segments) {
       setPoint(el, 'x1', 'y1', projected[a].x, projected[a].y)
       setPoint(el, 'x2', 'y2', projected[b].x, projected[b].y)
@@ -528,6 +573,24 @@ export function ModelRunner({
       lines.forEach((line, i) => setPoint(line, 'x', 'y', layout.x, layout.ys[i]))
       const chars = Math.max(0, ...text.lines.map((line) => line.length))
       boxes.push(labelBox(layout.x, labelAlign(text.side), layout.ys, chars, fontUnits))
+    }
+    for (const pulse of pulses) {
+      const strength = beatEnvelope(phaseRef.current, pulse.phase)
+      const at = projectPoint(pulse.centre, cam)
+      const px = RUNNER_PX.beatRingMin + (RUNNER_PX.beatRingMax - RUNNER_PX.beatRingMin) * strength
+      setPoint(pulse.el, 'cx', 'cy', at.x, at.y)
+      pulse.el.setAttribute('r', fmt(px * unit))
+      pulse.el.setAttribute('opacity', fmt(strength))
+      if (pulse.tick) {
+        const d = pulse.tickPoints
+          .map((point, i) => {
+            const p = projectPoint(point, cam)
+            return `${i === 0 ? 'M' : 'L'}${fmt(p.x)} ${fmt(p.y)}`
+          })
+          .join('')
+        pulse.tick.setAttribute('d', d)
+        pulse.tick.setAttribute('opacity', fmt(strength))
+      }
     }
     if (flashTarget) {
       const align = flashAlign(flashTarget.paramId, cam)
@@ -824,6 +887,26 @@ export function ModelRunner({
                     <tspan key={i}>{line}</tspan>
                   ))}
                 </text>
+                {showPulses &&
+                  (annotation.pulses ?? []).map((_, i) => (
+                    <g key={`pulse-${i}`}>
+                      <path
+                        data-pulse-tick={`${a}:${i}`}
+                        fill="none"
+                        className={PULSE_CLASS}
+                        strokeWidth={RUNNER_PX.markStroke * unit}
+                        strokeLinecap="round"
+                        opacity={0}
+                      />
+                      <circle
+                        data-pulse={`${a}:${i}`}
+                        fill="none"
+                        className={PULSE_CLASS}
+                        strokeWidth={RUNNER_PX.beatRingStroke * unit}
+                        opacity={0}
+                      />
+                    </g>
+                  ))}
               </g>
             ))}
           </g>

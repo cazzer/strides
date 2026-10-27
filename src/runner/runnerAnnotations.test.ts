@@ -2,25 +2,36 @@ import { describe, expect, it } from 'vitest'
 import { makeMetric } from '../results/__fixtures__/metricResult'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { bindAll, bindOnly } from './__fixtures__/boundParams'
-import { projectPoint } from './camera'
-import { GAIT_PHASES, GROUND_Y, MODEL_PROPORTIONS, pelvisHeight, poseAt } from './gaitModel'
+import { CAMERA_PRESETS, projectPoint, resolveCamera } from './camera'
+import { GAIT_PHASES, GROUND_Y, MODEL_PROPORTIONS, cyclesPerSecond, pelvisHeight, poseAt } from './gaitModel'
+import { flashAnchor } from './introFlash'
 import {
+  BEAT_DECAY_CYCLES,
   CLAMPED_LABEL_SUFFIX,
   KEY_LEG_PHASE,
   PARAM_ANNOTATION_KIND,
   RUNNER_METRIC_UNITS,
+  beatEnvelope,
   formatRunnerValue,
   labelLines,
   phaseForLeg,
   planAnnotations,
+  STACK_GAP_LINES,
   shownWhileStill,
   type AnnotationInput,
   type AnnotationPlan,
   type RunnerAnnotation,
 } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
-import { RUNNER_PARAM_IDS, effectiveSources } from './runnerScene'
-import type { BoundRunnerParams, CameraState, RunnerMetricId, RunnerParamId, Vec3 } from './types'
+import { RUNNER_PARAM_IDS, RUNNER_PX, effectiveSources, stepPlayback } from './runnerScene'
+import type {
+  BoundRunnerParams,
+  CameraState,
+  RunnerMetricId,
+  RunnerParamId,
+  RunnerParams,
+  Vec3,
+} from './types'
 
 const SIDE: CameraState = { yawDeg: 0, pitchDeg: 0, zoom: 1.7, target: { x: 0.1, y: 1, z: 0 } }
 const FRONT: CameraState = { yawDeg: 90, pitchDeg: 0, zoom: 2.4, target: { x: 0, y: 0.3, z: 0 } }
@@ -105,7 +116,15 @@ describe('units and labels', () => {
     expect(formatRunnerValue('verticalOscillationCm', 7.5)).toBe('7.5 cm')
     expect(formatRunnerValue('stepWidth', 0.05)).toBe('5.0%')
     expect(formatRunnerValue('overstriding', 0.08)).toBe('8.0% of torso length')
-    expect(formatRunnerValue('footStrikePattern', 0.1)).toBe('Heel strike (proxy)')
+    expect(formatRunnerValue('footStrikePattern', 0.1)).toBe('Heel first (estimate)')
+  })
+
+  it('names the foot strike by the part that lands first, classed as the cards class it', () => {
+    // The same inputs `formatGuidedValue.test.ts` classes (midfoot band 0.05, strict both sides).
+    expect(formatRunnerValue('footStrikePattern', 0.02)).toBe('Midfoot first (estimate)')
+    expect(formatRunnerValue('footStrikePattern', 0.05)).toBe('Midfoot first (estimate)')
+    expect(formatRunnerValue('footStrikePattern', 0.2)).toBe('Heel first (estimate)')
+    expect(formatRunnerValue('footStrikePattern', -0.2)).toBe('Forefoot first (estimate)')
   })
 
   it('labels the metric’s own value, never the drawn one', () => {
@@ -126,8 +145,8 @@ describe('units and labels', () => {
     const [landing, strike] = annotate(bound, ['landingOffset', 'contactShankOffset'])
     expect(landing.label.text).toBe('5.0% of torso length')
     expect(landing.clamped).toBe(false)
-    expect(strike.label.text).toBe(`Heel strike (proxy)${CLAMPED_LABEL_SUFFIX}`)
-    expect(strike.label.lines).toEqual(['Heel strike (proxy)', 'shown approximately'])
+    expect(strike.label.text).toBe(`Heel first (estimate)${CLAMPED_LABEL_SUFFIX}`)
+    expect(strike.label.lines).toEqual(['Heel first (estimate)', 'shown approximately'])
     expect(landing.label.lines).toEqual(['5.0%', 'of torso length'])
     expect(strike.clamped).toBe(true)
   })
@@ -153,13 +172,13 @@ describe('which annotations are drawn', () => {
       ['stepWidth', 'offset'],
     ])
     for (const id of RUNNER_PARAM_IDS) {
-      if (id === 'cadence') continue
       expect(only(bindAll(), id).kind).toBe(PARAM_ANNOTATION_KIND[id])
     }
+    expect(PARAM_ANNOTATION_KIND.cadence).toBe('beat')
   })
 
-  it('never annotates cadence, a neutral focus parameter, or one shown neutral by an override', () => {
-    expect(annotate(bindAll(), ['cadence'])).toEqual([])
+  it('never annotates a neutral focus parameter, or one shown neutral by an override', () => {
+    expect(annotate(bindOnly(['trunkLean']), ['cadence'])).toEqual([])
     expect(annotate(bindOnly(['cadence']), ['torsoPitch'])).toEqual([])
     const bound = bindAll()
     expect(
@@ -179,7 +198,6 @@ describe('which annotations are drawn', () => {
 
   it('draws no limb-shaped guide: every guide is a two-point line, short unless a plumb', () => {
     for (const id of RUNNER_PARAM_IDS) {
-      if (id === 'cadence') continue
       for (const yaw of [0, 90]) {
         for (const guide of only(bindAll(), id, yaw).guides) {
           expect(guide).toHaveLength(2)
@@ -369,7 +387,8 @@ describe('the marks are the drawn values and lie on the live figure', () => {
       expect(first.anchor.x).toBe(own)
       expect(second.anchor.x).toBe(own)
       expect(first.offsetLines).toBe(0)
-      expect(second.offsetLines).toBe(first.lines.length)
+      expect(second.offsetLines).toBe(first.lines.length + STACK_GAP_LINES)
+      expect(STACK_GAP_LINES).toBe(0.5)
     }
     // Labels off the ground lane are left alone.
     const [lean] = annotate(bound, ['torsoPitch', 'landingOffset', 'contactShankOffset'])
@@ -411,4 +430,162 @@ describe('the marks are the drawn values and lie on the live figure', () => {
     expect(only(bound, 'landingOffset').marks[0][0].z).toBeGreaterThan(0)
     expect(only(bound, 'landingOffset', 180).marks[0][0].z).toBeLessThan(0)
   })
+})
+
+describe('the cadence footfall beat', () => {
+  const bound = bindAll()
+  const values = runnerParamValues(bound)
+
+  it('labels the measured cadence above the head, where its intro flash goes', () => {
+    const { heldPhase, annotations } = plan(bound, ['cadence'])
+    expect(annotations).toHaveLength(1)
+    const [beat] = annotations
+    expect(beat.kind).toBe('beat')
+    expect(beat.keyPhase).toBe(heldPhase)
+    expect(beat.marks).toEqual([])
+    expect(beat.fills).toEqual([])
+    if (bound.cadence.source !== 'measured') throw new Error('cadence should be measured')
+    const text = formatRunnerValue('cadence', bound.cadence.metricValue)
+    expect(text).toMatch(/^\d+ steps\/min$/)
+    expect(beat.label.lines).toEqual([text])
+    expect(beat.label.side).toBe('above')
+    expect(beat.label.anchor).toEqual(flashAnchor('cadence', values, heldPhase, 0))
+    // Cadence is keyed on a footfall: the still frame holds the near foot's contact.
+    expect(KEY_LEG_PHASE.cadence).toBe(GAIT_PHASES.leftContact)
+    expect(heldPhase).toBe(phaseForLeg('right', GAIT_PHASES.leftContact))
+    // Behind an earlier keyed focus it keeps that focus's held phase.
+    expect(plan(bound, ['peakThighAngle', 'cadence']).heldPhase).toBe(
+      plan(bound, ['peakThighAngle']).heldPhase,
+    )
+  })
+
+  it('holds a side-view still frame with the near foot planted on the ticks', () => {
+    for (const yaw of [0, 180]) {
+      const camera = { ...SIDE, yawDeg: yaw }
+      const { heldPhase, annotations } = plan(bound, ['cadence'], { cameraYawDeg: yaw })
+      const near = yaw === 0 ? 'right' : 'left'
+      const heel = liveJoint(heldPhase, bound, `${near}_heel`)
+      const toe = liveJoint(heldPhase, bound, `${near}_foot_index`)
+      const planted = toe.y < heel.y ? toe : heel
+      expect(planted.y).toBeCloseTo(GROUND_Y, 9)
+      for (const [top] of annotations[0].guides) {
+        expect(projectPoint(top, camera).x).toBeCloseTo(projectPoint(planted, camera).x, 9)
+        expect(top.y).toBe(GROUND_Y)
+      }
+    }
+  })
+
+  it('pulses once per footfall, from each foot’s contact point on the ground', () => {
+    const [beat] = annotate(bound, ['cadence'])
+    expect(beat.pulses?.map((p) => p.phase)).toEqual([GAIT_PHASES.leftContact, GAIT_PHASES.rightContact])
+    for (const [i, side] of (['left', 'right'] as const).entries()) {
+      const pulse = (beat.pulses ?? [])[i]
+      const heel = liveJoint(pulse.phase, bound, `${side}_heel`)
+      const toe = liveJoint(pulse.phase, bound, `${side}_foot_index`)
+      const first = toe.y < heel.y ? toe : heel
+      expect(pulse.centre).toEqual({ x: first.x, y: GROUND_Y, z: first.z })
+      // The stance foot is pinned: the contact point is the live foot point, on the ground.
+      expect(first.y).toBeCloseTo(GROUND_Y, 9)
+      // Its still tick drops from the contact point below the ground.
+      expect(beat.guides[i]).toEqual([pulse.centre, { ...pulse.centre, y: GROUND_Y - 0.08 }])
+    }
+  })
+
+  it('beats as a ring that is full at contact and gone a quarter cycle later, every cycle', () => {
+    expect(BEAT_DECAY_CYCLES).toBe(0.25)
+    expect(beatEnvelope(0.5, 0.5)).toBe(1)
+    expect(beatEnvelope(0.75, 0.5)).toBe(0)
+    expect(beatEnvelope(0.9, 0.5)).toBe(0)
+    expect(beatEnvelope(0.49, 0.5)).toBe(0)
+    // Wraps: a contact at 0 is the same as one at 1.
+    expect(beatEnvelope(1.1, 0)).toBeCloseTo(beatEnvelope(0.1, 0), 12)
+    expect(beatEnvelope(0.05, 0.9)).toBeCloseTo(beatEnvelope(0.15, 0), 12)
+    let previous = Infinity
+    for (let i = 0; i <= 100; i += 1) {
+      const e = beatEnvelope((i / 100) * BEAT_DECAY_CYCLES, 0)
+      expect(e).toBeLessThanOrEqual(previous)
+      expect(e).toBeGreaterThanOrEqual(0)
+      previous = e
+    }
+  })
+
+  /** Ring onsets (a strength that rises) over `seconds` of 30 fps playback. */
+  function countOnsets(drawn: RunnerParams, rate: number, seconds: number): number {
+    const [beat] = annotate(bound, ['cadence'], { values: drawn })
+    const pulses = beat.pulses ?? []
+    let state = { phase: 0.3, holdLeftMs: 0 }
+    let previous = pulses.map((p) => beatEnvelope(state.phase, p.phase))
+    let onsets = 0
+    for (let frame = 0; frame < seconds * 30; frame += 1) {
+      state = stepPlayback(state, 1000 / 30, cyclesPerSecond(drawn) * rate, null)
+      const now = pulses.map((p) => beatEnvelope(state.phase, p.phase))
+      onsets += now.filter((e, i) => e > previous[i]).length
+      previous = now
+    }
+    return onsets
+  }
+
+  it('beats at the drawn cadence times the playback rate', () => {
+    for (const cadence of [150, 180, 190]) {
+      for (const rate of [1, 0.4]) {
+        const expected = (cadence * rate * 10) / 60
+        const onsets = countOnsets({ ...values, cadence }, rate, 10)
+        expect(Math.abs(onsets - expected)).toBeLessThanOrEqual(1)
+      }
+    }
+  })
+
+  it('keeps the measured cadence in its label whatever the playback rate', () => {
+    const slow = bindAll({ cadence: makeMetric('cadence', { value: 180 }) })
+    expect(only(slow, 'cadence').label.text).toBe('180 steps/min')
+  })
+
+  it('stays well below the WCAG 2.3.1 flash-area threshold, in the focus accent', () => {
+    expect(RUNNER_PX.beatRingMin).toBeLessThan(RUNNER_PX.beatRingMax)
+    expect(RUNNER_PX.beatRingMax).toBeLessThanOrEqual(16)
+  })
+})
+
+describe('the step-width guides meet both feet in the front view', () => {
+  const bound = bindAll()
+  const FEET_FRONT = resolveCamera(CAMERA_PRESETS.feetFront)
+
+  for (const stepWidth of [0.15, 0.3, -0.2]) {
+    for (const swingFootArc of [0.15, 0.6]) {
+      it(`step width ${stepWidth}, swing arc ${swingFootArc}`, () => {
+        const values = { ...runnerParamValues(bound), stepWidth, swingFootArc }
+        const { annotations } = plan(bound, ['stepWidth'], { values, cameraYawDeg: FEET_FRONT.yawDeg })
+        const [step] = annotations
+        const [[start, end]] = step.marks
+        expect(Math.abs(end.z - start.z)).toBeCloseTo(Math.abs(stepWidth) * MODEL_PROPORTIONS.hipWidth, 12)
+        const [midline, ...ticks] = step.guides
+        expect(ticks).toHaveLength(2)
+        // The midline rises from hip-mid.
+        const hipAtKey = (() => {
+          const pose = poseAt(step.keyPhase as number, values)
+          const l = pose[COMMON_KEYPOINT_NAMES.indexOf('left_hip')]
+          const r = pose[COMMON_KEYPOINT_NAMES.indexOf('right_hip')]
+          return { x: (l.x + r.x) / 2, y: (l.y + r.y) / 2, z: (l.z + r.z) / 2 }
+        })()
+        const top = projectPoint(midline[0], FEET_FRONT)
+        const hip = projectPoint(hipAtKey, FEET_FRONT)
+        expect(top.x).toBeCloseTo(hip.x, 9)
+        expect(top.y).toBeCloseTo(hip.y, 9)
+        // A plumb: both ends straight under hip-mid.
+        expect(midline[0]).toEqual({ x: hipAtKey.x, y: hipAtKey.y, z: 0 })
+        expect(midline[1].x).toBe(hipAtKey.x)
+        for (const tick of ticks) expect(tick[0].y).toBe(GROUND_Y)
+        const tickXs = ticks.map((tick) => projectPoint(tick[0], FEET_FRONT).x)
+        // Every stance ankle, either foot, stands right above a tick.
+        for (const side of ['left', 'right'] as const) {
+          for (let i = 0; i < 50; i += 1) {
+            const phase = phaseForLeg(side, i / 100)
+            const ankle = poseAt(phase, values)[COMMON_KEYPOINT_NAMES.indexOf(`${side}_ankle`)]
+            const x = projectPoint(ankle, FEET_FRONT).x
+            expect(Math.min(...tickXs.map((t) => Math.abs(t - x)))).toBeLessThan(1e-9)
+          }
+        }
+      })
+    }
+  }
 })
