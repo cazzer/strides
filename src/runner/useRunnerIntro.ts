@@ -120,7 +120,11 @@ export function introOverrides(
 
 export interface UseRunnerIntroOptions {
   bound: BoundRunnerParams
-  /** The fused result identity. A new key plays the intro; a key already played does not. */
+  /**
+   * The fused result identity. A new key plays the intro; a key already played does not. An
+   * object key must be stable across renders (the result object itself, not a fresh literal):
+   * every new identity is a new result and restarts the intro.
+   */
   resultKey: RunnerIntroKey
   /** Focus-area metric ids or parameter ids, applied first and in this order. */
   order?: readonly (MetricId | RunnerParamId)[]
