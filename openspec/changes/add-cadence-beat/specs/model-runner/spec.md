@@ -26,7 +26,8 @@ offset, and the foot-strike offset SHALL run at ankle height from under the knee
 knee) to the contact ankle. When it is the ground lane's only label, the foot-strike label SHALL hang
 under the contact keypoint: the heel when the foot lands heel-down, the toe on a forefoot strike. Labels hanging below the ground (the
 ground lane) SHALL NOT overlap: two or more SHALL share the lane's lowest anchor height and stack in
-focus order as one block, centred on the first label's anchor.
+focus order as one block, centred on the first label's anchor, with half a line of extra space
+between consecutive labels so a stacked label never reads as the previous one's continuation.
 
 The step-width offset SHALL run below the ground from the midline to the contact ankle's lateral
 position, and its guides SHALL meet both feet: a midline plumb from hip-mid down past the offset,
@@ -63,7 +64,7 @@ foot, while planted, stands exactly above its tick.
 
 #### Scenario: Overstride and foot-strike labels stack
 - **WHEN** overstriding and foot strike are both in focus
-- **THEN** both labels share one centre and lane height, the second's first line at least a line pitch below the first's last line
+- **THEN** both labels share one centre and lane height, the second's first line one and a half line pitches below the first's last line
 
 #### Scenario: The step-width guides meet both feet
 - **WHEN** step width is in focus on the `feetFront` camera, at any step width and swing-foot arc
@@ -78,13 +79,16 @@ foot, while planted, stands exactly above its tick.
 ### Requirement: Cadence is drawn as a footfall beat at the drawn cadence
 
 A measured cadence in focus SHALL be labelled with its reported steps per minute just above the
-head, with a short tick under each foot's contact point on the ground. While the figure plays and
-reduced motion is not preferred, a ring SHALL pulse out from each foot's contact point at that
-foot's contact phase: strongest at contact, fading as it grows, gone within a quarter of a cycle,
-so the rings beat once per drawn footfall, at the drawn cadence times the playback rate per
-minute. The label SHALL always state the measured cadence, never the playback-scaled one. Paused,
-or whenever reduced motion is preferred (even after the reader presses play), no ring SHALL be
-drawn; the label and ticks remain. The ring SHALL be written by the animation loop without a React
+head, with a short tick under each foot's contact point on the ground. Cadence is keyed on a
+footfall: when it is the first keyed focus, the still frame SHALL hold the near foot's contact, so
+that foot stands planted on its tick. While the figure plays, reduced motion is not preferred and
+the camera plays the whole cycle (not the landing window, whose contact hold would freeze a ring),
+a ring SHALL flash at each foot's contact point at that foot's contact phase: largest and opaque
+at contact, shrinking as it fades, gone within a quarter of a cycle, with that foot's tick flashing
+in the accent at the same strength, so the rings beat once per drawn footfall, at the drawn cadence
+times the playback rate per minute. The label SHALL always state the measured cadence, never the
+playback-scaled one. Paused, or whenever reduced motion is preferred (even after the reader presses
+play), no ring SHALL be drawn; the label and ticks remain. The ring SHALL be written by the animation loop without a React
 commit per frame, SHALL use the focus accent (never a saturated red; the system highlight colour in
 forced-colours mode), and SHALL stay far below the WCAG 2.3.1 general-flash area threshold at every
 runner size. The cadence ticks stay on the ground, and its label follows the figure's height, while
@@ -100,8 +104,12 @@ an intro tween changes the figure's standing height.
 
 #### Scenario: Reduced motion beat
 - **WHEN** cadence is in focus with reduced motion preferred
-- **THEN** the label and both ticks are drawn, no ring is drawn even after the reader presses play, and no animation frame is pending while still
+- **THEN** the near foot stands planted on the ticks, the label and both ticks are drawn, no ring is drawn even after the reader presses play, and no animation frame is pending while still
 
 #### Scenario: Paused beat
 - **WHEN** the reader pauses a runner with cadence in focus
 - **THEN** the rings disappear and the label and ticks stay; pressing play brings the rings back
+
+#### Scenario: No beat on the landing camera
+- **WHEN** cadence is in focus and the camera is `landingSide`, playing
+- **THEN** the label and ticks are drawn and no ring is drawn

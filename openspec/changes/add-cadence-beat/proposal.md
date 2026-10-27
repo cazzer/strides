@@ -11,8 +11,10 @@ inside the foot, the other foot had no guide, and the midline was a stub standin
 
 - Cadence gets an annotation kind, `'beat'`: its "N steps/min" label just above the head (the
   point its intro flash already used, now `headTopAnchor`), a short tick under each foot's contact
-  point, and, while the figure plays with motion allowed, a small accent ring that pulses out from
-  each foot as it lands. Two footfalls a cycle at cadence / 120 cycles a second make the rings beat
+  point, and, while the figure plays with motion allowed (and not on the landing camera), an
+  accent ring that flashes at each foot as it lands, largest at contact and shrinking as it fades,
+  with that foot's tick flashing in the accent. Cadence is keyed on a footfall, so a still Rhythm
+  frame holds the near foot planted on its ticks. Two footfalls a cycle at cadence / 120 cycles a second make the rings beat
   at cadence × playback rate per minute; the label keeps the measured cadence. Paused or under
   reduced motion, no ring is drawn.
 - The runner's foot-strike label names the first contact as an estimate: "Heel first (estimate)",
@@ -22,7 +24,8 @@ inside the foot, the other foot had no guide, and the midline was a stub standin
   replacing the ankle drop. The offset mark itself is unchanged.
 - ModelRunner's API is additive only: no prop changes. New exports: `beatEnvelope`,
   `BEAT_DECAY_CYCLES`, `headTopAnchor`, `BeatPulse`; `AnnotationKind` gains `'beat'`;
-  `RunnerAnnotation` gains an optional `pulses`; `RUNNER_PX` gains `beatRingMin`/`beatRingMax`.
+  `RunnerAnnotation` gains an optional `pulses`; `RUNNER_PX` gains `beatRingMin`, `beatRingMax`
+  and `beatRingStroke`; `STACK_GAP_LINES` puts half a line between stacked ground-lane labels.
 
 ## Capabilities
 
