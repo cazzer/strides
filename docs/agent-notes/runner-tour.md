@@ -21,7 +21,8 @@
 Both the tour and the summary render inside `GuidedResultsView`'s children slot, so the
 `Analysis complete.` status line and Start over exist once, and the `.guided-results` class hooks
 still apply. The tour mounts no metric card and therefore no evidence canvas; the summary is the
-first view to mount them (when a row opens).
+first view to mount them (when a row opens). The runner's footage plate (`strides-zba4`, below)
+does not change that: it COPIES a canvas's pixels to a blob URL and never mounts the canvas.
 
 ## The model runner's honesty rules
 
@@ -40,7 +41,10 @@ From the PRD, enforced by `model-runner` spec requirements and tests:
    The limb-shaped guides of the first renderer read as a target pose and were removed
    (`strides-v2d` context); guides are short reference rays and ticks only.
 4. **One fixed setting per measurement:** no left/right asymmetry, no stride-to-stride variability.
-5. **The footage is one tap away**: the summary row's inline evidence frame.
+5. **The footage is one tap away**: the summary row's inline evidence frame. On a still beat of a
+   side stop (knees, landing), the headline's evidence frame also sits faintly (0.26) behind the
+   figure, placed by a similarity transform only, never reshaped and never a target ("Footage
+   plate" below).
 6. Caption "Model built from your numbers", never "your body". The intro's legend reads "Dashed:
    not applied yet" while it runs, "Dashed: not measured" after.
 
@@ -112,6 +116,98 @@ rare stall has two shapes (primary never completes; background scale pass never 
 cause is not established, and it is filed as `strides-qg86`. Tally across `strides-trn2.3` and
 `trn2.6`: classic 2 stalls, tour 1, summary 0. A stalled trial now records a page snapshot in
 its `# FAILED` row; the scale-pass shape still only warns on stderr.
+
+**Re-run for the footage plate, 2026-10-27 (`strides-zba4`, branch `4ce2f821` vs base `7a8b9e1e`).**
+Same three arms and clips, `--trials 1` (fresh process per trial), `--evidence --scale-pass`, each
+checkout's own derived port (5302 branch, 5241 base, both "started by this run, identity verified"),
+ANGLE Metal on M4 Pro. Canonicalised as above (all fields but `elapsedMs`; 429 / 415 / 415 rows):
+**one hash per clip across both checkouts and all three arms** (18 trials). `md5 -r`:
+side-landscape `9091751e…16c6`, side-portrait `7d1699a3…677c`, front-approach `6ba8609e…bf91`;
+`cmp -s` in both directions against each clip's base/tour file through `rtk proxy sh -c` agreed.
+Scale-pass anchors unchanged (side-landscape VO_cm 7.19338, stepWidthCm −14.2397). One branch trial
+(side-landscape / tour) never started analysing: the MoveNet weights fetch from kaggle.com failed
+(`net::ERR_FAILED`, CORS on the redirect), a network flake; its re-run hashed identically. (A
+`… | md5` pipeline through `rtk proxy sh -c` is refused by the worktree-isolation guard in an agent
+worktree; `md5 -r` on the files plus two-way `cmp` stood in.)
+
+## Footage plate (`strides-zba4`)
+
+A faint copy of the shown stop's (or opened row's) headline evidence frame, behind a still runner.
+Change: `openspec/changes/add-runner-footage-plate` (design D1–D7 and the six resolved decisions).
+
+- **Gating, in `runnerFootageFor` (`src/results/runnerFootagePlate.ts`, pure):** a focus; the
+  first focus metric whose evidence from its winning clip (`sourceIndices`) has arrived is the
+  headline and must be overstriding, foot strike, knee flexion or knee drive (never skips to the
+  next one); camera `landingSide` or `legsSide`; the winning clip's raw `View` (`clipViewKinds`,
+  not the `clipViews` label) is `'side'`; `travelDirection` ≠ 0 (−1 mirrors); the base instant has
+  a hip; the measured side resolves (`plan.base.side`, else the one side all sided non-hip joints
+  share). Foot strike never qualifies (no hip in its frame). The tour passes none while the intro
+  runs; the summary has none below `lg` (no focus there).
+- **Still-beat rule, in `ModelRunner`:** shown only when React-level `!playing` (paused, or
+  reduced motion before play; the landing loop's 300/150 ms holds do NOT count), the phase is the
+  held phase, no camera tween and no value tween, AND the footage metric's key leg phase on the
+  near leg equals the held phase. Pausing with any limb-keyed (non-beat) focus now snaps to the
+  held phase (it used to only on `landingSide`); cadence pauses where it is.
+- **Fit (`src/runner/footagePlate.ts`, pure):** hip-mid onto drawn hip-mid; scale = Σ drawn /
+  Σ footage over hip-mid → knee → ankle (hip-mid → ankle without a knee; feet excluded); mirror for
+  a right-to-left clip; `matrix(a 0 0 d e f)`, `|a| = d`. Never least squares (it would turn an
+  angle difference into scale and hide it). Written by `drawRef` every still draw from the pose as
+  drawn (lift, live camera); while hidden the transform is left alone, so it fades out in place.
+- **Pixels:** the evidence canvas is COPIED (`toBlob` → blob URL), only while still, once per source
+  canvas, revoked on source change and unmount; never adopted (the summary's card owns it, and the
+  tour still mounts no evidence canvas). The baked evidence marks come with it (accepted, decision 5).
+- **Driving it:** `image[data-footage-plate]` is the runner svg's first child; `[data-shown]` while
+  shown (opacity 0.26 via `data-[shown]:opacity-[0.26]`, 240 ms fade, none under reduced motion,
+  `display: none` under forced colours). Tour: `.runner-tour__rail image[data-footage-plate][data-shown]`;
+  summary: `.results-summary__runner image[…]`. While offered the runner's `p.sr-only` ends with
+  "Faint behind the model: your clip's <metric> evidence frame, scaled to fit. Footage, not a target."
+  Wait for `[data-shown]` rather than a fixed delay: the copy took up to ~1.8 s after Pause in the
+  summary live (a fixed 1.2 s read missed it once).
+
+### Live check, 2026-10-27 (`strides-zba4`, `4ce2f821`)
+
+Real GPU (ANGLE Metal, M4 Pro), port 5302 (derived, identity-checked). Each of park-side-landscape,
+park-side-portrait, park-approach uploaded alone; 1280×800 and 390×844, light and dark, plus reduced
+motion at 1280 light and 390 dark (18 runs, one browser process, a fresh context each). Tour: every
+stop scrolled to, Pause, wait for `[data-shown]` (≤ 6 s), Play. Summary: Knees then Landing opened,
+Pause, Play, closed.
+
+| clip | tour knees | tour landing | other stops | summary 1280 knees / landing | summary 390 |
+|---|---|---|---|---|---|
+| side-landscape | shown, all 6 runs | **none** (overstriding `no-candidates`) | none | shown / none | none |
+| side-portrait | shown, all 6 | shown, all 6 (overstriding frame) | none | shown / shown | none |
+| approach | (no stop) | (no stop) | none (rhythm, arms, foot path, one thing) | no rows | no rows |
+
+- Play removed `data-shown` and the note every time; no page or console errors in any run.
+- **Landing's headline is overstriding** (the stop's first entry; tour focus is that metric only).
+  On side-landscape it has no evidence (`no-candidates`, as recorded in `evidence.md`), so the tour
+  landing stop has no plate; in the summary the landing headline falls to foot strike, which has no
+  hip, so none there either. side-portrait's overstriding frame exists, so landing shows there.
+- **First appearance pops** in every case: computed opacity goes from no element to 0.26 in one
+  frame (the copy mounts the `<image>` already marked shown). Later toggles fade as designed: Play
+  0.26 → 0 and Pause 0 → 0.26 over ~240 ms, ease-in-out; reduced motion cuts.
+- **Alignment.** side-landscape knees (the clip runs right to left, so the plate is mirrored and
+  the photo faces the model's way): hips meet, thigh lengths agree within ~4%, the folded swing leg
+  has the same shape; the photo's thigh sits ~20° further forward, so the shins do not overlap. Reads
+  as the same pose a little ahead, not as a wrong model. side-portrait knees: same scale agreement,
+  but the photo's thigh is ~30–40° ahead of the model's at that instant (the model's thigh at its
+  peak-knee-bend phase is its own curve, not the footage's): the legs visibly part, which could read
+  as "the model's leg is behind". side-portrait landing: hip, knee and ankle marks fall on the
+  model's leg almost exactly, but the far-apart overstride crop is a small subject, so the fit
+  magnifies it ~4–5×: the photo blurs and the baked marks become fat blobs and a thick dashed plumb
+  line that dominate the drawing, clearly cluttered (worst at 390 dark).
+- **Phone:** at 390×844 the plate shows above the stop panel at both stops; its hard square edge is
+  visible (a vertical edge inside the drawing on side-landscape knees). Dark mode dims the photo,
+  baked yellow marks read more strongly there.
+- **One unexplained run:** side-landscape 1280 dark, mid-walk, `[data-tour-stop="knees"]` was not
+  found for 30 s after rhythm and posture had been visited. Re-run twice (the matrix cell and a
+  separate walk): all five stops present, plate as above. Not reproduced; cause not established.
+- Displayed knee flexion differed between these runs, which are outside the A/B's regime (one shared
+  browser process, different viewports, DPR and starting view): side-landscape 102.9° (1280) vs
+  104.4° (390); side-portrait 114.7° (a separate 2× DPR run) vs 115.7° (1280 matrix). Not checked
+  against base live; the fresh-process A/B above, the regime that is deterministic, is bit-identical
+  between base and branch, so the plate does not move a measurement.
+- Screenshots: `zba4-live/*.png` in the zba4 session scratchpad (not committed).
 
 ## Gotchas
 
