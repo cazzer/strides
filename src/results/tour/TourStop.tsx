@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import type { MetricId } from '../../heuristics/types'
 import {
   CUE_PREFIX,
@@ -75,12 +76,37 @@ interface StopSectionProps {
   children: ReactNode
 }
 
+const SCROLLING_PANEL_FOCUS =
+  'focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600'
+
+/**
+ * Whether the element's content is taller than its box (it scrolls inside itself), re-read when
+ * it or its content resizes. False where `ResizeObserver` is unavailable, and at `lg`, where the
+ * panel has no box (`contents`) and measures 0.
+ */
+function useOverflowing(ref: RefObject<HTMLElement | null>): boolean {
+  const [overflowing, setOverflowing] = useState(false)
+  useEffect(() => {
+    const element = ref.current
+    if (!element || typeof ResizeObserver === 'undefined') return
+    const read = () => setOverflowing(element.scrollHeight > element.clientHeight)
+    read()
+    const observer = new ResizeObserver(read)
+    observer.observe(element)
+    for (const child of element.children) observer.observe(child)
+    return () => observer.disconnect()
+  }, [ref])
+  return overflowing
+}
+
 /**
  * The shared frame: a labelled section the reading line, focus and `#tour-<id>` all select by its
  * `data-tour-stop`. Focusable by script only (`tabIndex -1`), so a fragment link can land on it.
  */
 function StopSection({ id, heading, children }: StopSectionProps) {
   const domId = tourStopDomId(id)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const scrolls = useOverflowing(panelRef)
   return (
     <section
       id={domId}
@@ -89,7 +115,15 @@ function StopSection({ id, heading, children }: StopSectionProps) {
       aria-labelledby={`${domId}-heading`}
       className={TOUR_STOP_CLASS}
     >
-      <div className={TOUR_PANEL_CLASS}>
+      {/* A panel that scrolls inside itself (a short phone's cap) is a named, focusable group, so
+          the keyboard can scroll it too. */}
+      <div
+        ref={panelRef}
+        className={scrolls ? `${TOUR_PANEL_CLASS} ${SCROLLING_PANEL_FOCUS}` : TOUR_PANEL_CLASS}
+        tabIndex={scrolls ? 0 : undefined}
+        role={scrolls ? 'group' : undefined}
+        aria-labelledby={scrolls ? `${domId}-heading` : undefined}
+      >
         <h3 id={`${domId}-heading`} className={STOP_HEADING}>
           {heading}
         </h3>

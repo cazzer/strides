@@ -1,7 +1,7 @@
 import { act, render } from '@testing-library/react'
 import { useRef } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MOSTLY_VISIBLE_MIN_HEIGHT, useMostlyVisible } from './useMostlyVisible'
+import { MOSTLY_VISIBLE_MIN_HEIGHT, mostlyVisibleMinHeight, useMostlyVisible } from './useMostlyVisible'
 
 interface Observed {
   callback: IntersectionObserverCallback
@@ -123,7 +123,25 @@ describe('useMostlyVisible', () => {
     report(observed, 1, MOSTLY_VISIBLE_MIN_HEIGHT, 800, MOSTLY_VISIBLE_MIN_HEIGHT)
     expect(seen.at(-1)).toBe(true)
     // The floor applies to the fill-the-viewport rule too.
-    report(observed, 1, 100, 100, 100)
+    report(observed, 0.5, 760, 800, 100)
+    expect(seen.at(-1)).toBe(false)
+  })
+
+  it('lowers the floor to a quarter of a short viewport, so a landscape phone still plays the intro', () => {
+    expect(mostlyVisibleMinHeight(800)).toBe(MOSTLY_VISIBLE_MIN_HEIGHT)
+    expect(mostlyVisibleMinHeight(375)).toBe(93.75)
+    expect(mostlyVisibleMinHeight(undefined)).toBe(MOSTLY_VISIBLE_MIN_HEIGHT)
+    expect(mostlyVisibleMinHeight(0)).toBe(MOSTLY_VISIBLE_MIN_HEIGHT)
+    const observed = stubObserver()
+    const seen: boolean[] = []
+    render(<Harness selector="figure svg" onVisible={(v) => seen.push(v)} />)
+    // 667×375: the drawing gets 117 px (its floor is the whole stage there).
+    report(observed, 1, 117, 375, 117)
+    expect(seen.at(-1)).toBe(true)
+    report(observed, 1, 93, 375, 93)
+    expect(seen.at(-1)).toBe(false)
+    // Never zero.
+    report(observed, 1, 0, 375, 0)
     expect(seen.at(-1)).toBe(false)
   })
 

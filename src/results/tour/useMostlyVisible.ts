@@ -9,9 +9,23 @@ export const MOSTLY_VISIBLE_THRESHOLD = 0.9
  * to nothing counted as on screen and the intro played out unseen (`strides-xsl3`).
  */
 export const MOSTLY_VISIBLE_MIN_HEIGHT = 120
+/**
+ * The floor's share of the viewport on a short screen: `min(120 px, 25% of the viewport)`, so on a
+ * landscape phone (375 px tall, a drawing of ~117 px) the floor is ~94 px and the intro still
+ * plays. Always above 0, so a zero-height figure never counts.
+ */
+export const MOSTLY_VISIBLE_MIN_VIEWPORT_FRACTION = 0.25
+
+/** The height floor for a root `viewport` px tall (120 px where the root is unknown). */
+export function mostlyVisibleMinHeight(viewport: number | undefined): number {
+  return viewport === undefined || !(viewport > 0)
+    ? MOSTLY_VISIBLE_MIN_HEIGHT
+    : Math.min(MOSTLY_VISIBLE_MIN_HEIGHT, viewport * MOSTLY_VISIBLE_MIN_VIEWPORT_FRACTION)
+}
 
 /**
- * Whether at least 90% of an element is on screen and it is at least 120 px tall: the first match
+ * Whether at least 90% of an element is on screen and it is at least `mostlyVisibleMinHeight` tall
+ * (120 px, or a quarter of a shorter viewport): the first match
  * of `selector` inside `ref`'s element, or that element itself when nothing matches. The tour gates
  * the runner's intro on its FIGURE (the drawing, not the caption, controls or legend around it), on
  * top of the runner's own "seen" signal (any part on screen), so the intro never plays out with the
@@ -39,7 +53,7 @@ export function useMostlyVisible(ref: RefObject<Element | null>, selector?: stri
         const onScreen =
           entry.intersectionRatio >= MOSTLY_VISIBLE_THRESHOLD ||
           entry.intersectionRect.height >= viewport * MOSTLY_VISIBLE_THRESHOLD
-        setVisible(onScreen && entry.boundingClientRect.height >= MOSTLY_VISIBLE_MIN_HEIGHT)
+        setVisible(onScreen && entry.boundingClientRect.height >= mostlyVisibleMinHeight(entry.rootBounds?.height))
       },
       { threshold: [0, 0.25, 0.5, 0.75, MOSTLY_VISIBLE_THRESHOLD, 1] },
     )

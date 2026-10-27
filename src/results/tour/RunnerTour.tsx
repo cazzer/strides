@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import type { FormHeuristicsResult, MetricId } from '../../heuristics/types'
 import { FOCUS_AREAS, FOCUS_AREA_ORDER } from '../../guidance/focusAreas'
@@ -217,6 +217,7 @@ export function RunnerTour({ onLeaveTour, resultKey, coverage, onAddClip, ...gui
   // On a short phone the dots and Skip share the runner's control row, in the body (only once
   // there is one: until then they stay here).
   const actionsInBody = shortPhone && hasBody
+  useActionFocusAcrossMoves(rootRef, actionsInBody)
   const actions = (
     <TourBarActions stopIds={stopIds} active={active} onLeaveTour={onLeaveTour} compact={actionsInBody} />
   )
@@ -378,6 +379,47 @@ function useRowHeightProperty(
   }, [rowRef, rootRef, hasRow])
 }
 
+/** The `data-tour-action` of the dot or Skip an event target is in, if any. */
+function actionKey(target: EventTarget | null): string | null {
+  return target instanceof Element ? (target.closest('[data-tour-action]')?.getAttribute('data-tour-action') ?? null) : null
+}
+
+/**
+ * Keeps keyboard focus on the dot or Skip the reader was on when they move between the tour's bar
+ * and a short phone's shared row (`moved` flips: the phone turned, the window resized). The move
+ * remounts them, which would drop focus to the page; the matching control in its new place takes it
+ * instead, as `ModelRunner` hands a removed Skip intro's focus on to Play/Pause.
+ */
+function useActionFocusAcrossMoves(rootRef: RefObject<HTMLElement | null>, moved: boolean): void {
+  const focusedRef = useRef<string | null>(null)
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const onFocusIn = (event: FocusEvent) => {
+      focusedRef.current = actionKey(event.target)
+    }
+    const onFocusOut = (event: FocusEvent) => {
+      // A control removed by the move keeps its key (focus goes nowhere, and it is detached);
+      // focus moving anywhere else, or the reader blurring it, drops the key.
+      const removed = event.relatedTarget === null && event.target instanceof Node && !event.target.isConnected
+      if (!removed) focusedRef.current = actionKey(event.relatedTarget)
+    }
+    root.addEventListener('focusin', onFocusIn)
+    root.addEventListener('focusout', onFocusOut)
+    return () => {
+      root.removeEventListener('focusin', onFocusIn)
+      root.removeEventListener('focusout', onFocusOut)
+    }
+  }, [rootRef])
+  useLayoutEffect(() => {
+    const key = focusedRef.current
+    if (key === null) return
+    const focused = document.activeElement
+    if (focused !== null && focused !== document.body) return
+    rootRef.current?.querySelector<HTMLElement>(`[data-tour-action="${key}"]`)?.focus()
+  }, [moved, rootRef])
+}
+
 interface TourBarActionsProps {
   stopIds: readonly TourStopId[]
   active: TourStopId | null
@@ -393,7 +435,7 @@ function TourBarActions({ stopIds, active, onLeaveTour, compact }: TourBarAction
   return (
     <div className={compact ? TOUR_BAR_ROW_ACTIONS_CLASS : TOUR_BAR_ACTIONS_CLASS}>
       {stopIds.length > 0 && <TourProgress stopIds={stopIds} active={active} compact={compact} />}
-      <button type="button" onClick={onLeaveTour} className={SKIP_CLASS}>
+      <button type="button" onClick={onLeaveTour} className={SKIP_CLASS} data-tour-action="skip">
         {compact ? (
           <>
             <span className="sr-only">Skip to</span> summary
@@ -428,7 +470,12 @@ function TourProgress({
       <ol className={compact ? 'flex flex-wrap items-center' : 'flex items-center'}>
         {stopIds.map((id, index) => (
           <li key={id}>
-            <a href={`#${tourStopDomId(id)}`} aria-current={id === active ? 'step' : undefined} className={DOT_LINK}>
+            <a
+              href={`#${tourStopDomId(id)}`}
+              aria-current={id === active ? 'step' : undefined}
+              className={DOT_LINK}
+              data-tour-action={`dot:${id}`}
+            >
               <span aria-hidden="true" className={`${DOT} ${id === active ? DOT_ACTIVE : ''}`} />
               <span className="sr-only">
                 Stop {index + 1} of {stopIds.length}: {id === 'oneThing' ? ONE_THING_LABEL : FOCUS_AREAS[id].label}
@@ -533,11 +580,6 @@ function TourBody({
 
   return (
     <div ref={rootRef} className={TOUR_BODY_CLASS}>
-      {barRow !== null && (
-        <div ref={rowRef} className={TOUR_BAR_ROW_CLASS}>
-          {barRow}
-        </div>
-      )}
       <div ref={railRef} className={TOUR_RAIL_CLASS} data-camera={camera} data-active-stop={shown ?? ''}>
         <ModelRunner
           params={params}
@@ -561,6 +603,13 @@ function TourBody({
           {showLegend && <BandLegend className="runner-tour__legend mt-2 max-lg:hidden" />}
         </div>
       </div>
+      {/* After the rail, so the tab order follows the row left to right: the runner's controls
+          (laid over its start), then the dots and Skip. Its grid cell places it, not its order. */}
+      {barRow !== null && (
+        <div ref={rowRef} className={TOUR_BAR_ROW_CLASS}>
+          {barRow}
+        </div>
+      )}
       <div className="runner-tour__stops min-w-0 max-lg:relative max-lg:z-[1] max-lg:col-start-1 max-lg:row-start-1">
         {plan.areaStops.map((stop) => (
           <AreaStop key={stop.view.area} stop={stop} />
