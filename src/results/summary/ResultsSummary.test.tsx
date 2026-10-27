@@ -342,4 +342,50 @@ describe('ResultsSummary', () => {
     expect(document.activeElement).toBe(toggle)
     toggle.remove()
   })
+
+  it('does not scroll or take focus again when the view remounts with a fragment it already revealed', () => {
+    const scrollIntoView = vi.mocked(HTMLElement.prototype.scrollIntoView)
+    window.history.replaceState(null, '', `#${guidedEntryId('kneeFlexion')}`)
+    const onReplayTour = vi.fn()
+    const onOpenClassic = vi.fn()
+    const view = (analysis: VideoAnalysisState) => (
+      <ResultsSummary
+        analysis={analysis}
+        onTryAgain={vi.fn()}
+        onStartOver={vi.fn()}
+        onReplayTour={onReplayTour}
+        onOpenClassic={onOpenClassic}
+      />
+    )
+    const { rerender, unmount } = render(view(readyAnalysis()))
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+
+    // An added clip: the analysis leaves ready and comes back, remounting the body.
+    rerender(view({ ...readyAnalysis(), phase: 'processing', heuristics: null }))
+    rerender(view(readyAnalysis()))
+    // Back from the classic view: a whole new mount, with the hash the switch kept.
+    unmount()
+    renderSummary()
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    expect(focus).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(document.body)
+    focus.mockRestore()
+  })
+
+  it('ignores a fragment that names nothing in the view', () => {
+    const toggle = document.body.appendChild(document.createElement('button'))
+    toggle.focus()
+    window.history.replaceState(null, '', '#somewhere-else')
+    const { container } = renderSummary({
+      heuristics: makeHeuristics({ kneeDrive: makeMetric('kneeDrive', { value: null, confidence: 0 }) }),
+    })
+    for (const details of container.querySelectorAll('details')) {
+      expect(details.open, details.getAttribute('data-area') ?? 'card').toBe(false)
+    }
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(toggle)
+    toggle.remove()
+  })
 })

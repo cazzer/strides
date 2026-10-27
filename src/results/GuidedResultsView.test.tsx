@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { GuidedResultsView, NotMeasuredEntries } from './GuidedResultsView'
 import { GuidedMetricCard } from './GuidedMetricCard'
@@ -23,7 +23,7 @@ import { METRIC_DESCRIPTIONS } from './metricDescriptions'
 import type { ScalePassStatus, VideoAnalysisState } from './types'
 import type { ExtractedEvidenceFrame } from '../video/extractFrames'
 import type { FormHeuristicsResult, MetricId } from '../heuristics/types'
-import { feedbackFor } from '../guidance/feedbackPoints'
+import { NON_POINTS, WHY_LINES, feedbackFor } from '../guidance/feedbackPoints'
 import {
   METRIC_GUIDANCE,
   guidanceInDisplayOrder,
@@ -41,7 +41,9 @@ import {
   makeMetric,
   makeVerticalOscillationCm,
 } from './__fixtures__/metricResult'
+import { FEEDBACK_VERIFIED_URLS } from '../guidance/__fixtures__/feedbackVerifiedUrls'
 import { FocusAreaRow } from './summary/FocusAreaRow'
+import { ResultsSummary } from './summary/ResultsSummary'
 import { summaryRows } from './summary/summaryRows'
 
 // The guided view must render the evidence it is handed and start no acquisition of its own. If
@@ -49,6 +51,13 @@ import { summaryRows } from './summary/summaryRows'
 const useSessionEvidenceSpy = vi.hoisted(() => vi.fn())
 vi.mock('./useSessionEvidence', () => ({
   useSessionEvidence: useSessionEvidenceSpy,
+}))
+
+// The page-wide checks render the shipped summary; its runner draws SVG on a rAF loop and carries
+// no copy or links of its own that these checks are about.
+vi.mock('../runner/ModelRunner', () => ({
+  RUNNER_CAPTION: 'Model built from your numbers',
+  ModelRunner: () => null,
 }))
 
 // ---------------------------------------------------------------------------------------------
@@ -148,6 +157,37 @@ function renderView(
     </GuidedResultsView>,
   )
   return { ...utils, onTryAgain, onStartOver }
+}
+
+/**
+ * The shipped summary for one analysis, with every row open: the real text a reader can reach —
+ * row summaries, why lines, non-points, every card and the Not measured row — for the page-wide
+ * link and no-grading checks.
+ */
+function renderOpenSummary(
+  analysis: VideoAnalysisState,
+  extra: { evidence?: readonly MetricCardEvidence[]; clipCount?: number } = {},
+) {
+  const utils = render(
+    <ResultsSummary
+      analysis={analysis}
+      onTryAgain={vi.fn()}
+      onStartOver={vi.fn()}
+      onReplayTour={vi.fn()}
+      onOpenClassic={vi.fn()}
+      {...extra}
+    />,
+  )
+  const rows = utils.container.querySelectorAll<HTMLDetailsElement>(
+    'details.results-summary__row',
+  )
+  expect(rows.length).toBeGreaterThan(1)
+  act(() => {
+    rows.forEach((row) => {
+      row.open = true
+    })
+  })
+  return utils
 }
 
 /** Every summary row for one result, as `ResultsSummary` lays them out, without its runner. */
@@ -1839,9 +1879,9 @@ describe('A metric not measured on this clip collapses with a reason and a captu
 // ---------------------------------------------------------------------------------------------
 
 describe('Every outbound reference is from a verified set and opens safely', () => {
-  it('Links are https, safely targeted, and from the pinned set', () => {
-    const allowed = guidanceUrls()
-    const { container } = renderView(
+  it('Links are https, safely targeted, and from the pinned set — on the shipped summary', () => {
+    const allowed = new Set([...guidanceUrls(), ...FEEDBACK_VERIFIED_URLS])
+    const { container } = renderOpenSummary(
       readyAnalysis(withUnmeasured(['kneeDrive'])),
     )
     const anchors = Array.from(container.querySelectorAll('a'))
@@ -2021,9 +2061,12 @@ describe('A band states where the runner sits, never where they should be', () =
   const GRADING_WORD =
     /\b(good|bad|poor|better|worse|best|worst|optimal|ideal|excessive|healthy|unhealthy|target|goal|should|correct|incorrect|normal|abnormal|recommended)\b/i
 
-  /** A page that exercises every branch: all three groups, caveats, evidence, hints. */
+  /**
+   * The shipped summary, every row open, exercising every branch: banded, unbanded and not-measured
+   * entries, caveats, evidence, hints, why lines and non-points.
+   */
   function renderEverything() {
-    return renderView(
+    return renderOpenSummary(
       readyAnalysis(
         makeHeuristics({
           trunkLean: makeMetric('trunkLean', { confidence: 0.3 }),
@@ -2089,7 +2132,15 @@ describe('A band states where the runner sits, never where they should be', () =
         return [first, rest, noteLead(first)]
       }),
     )
-    const strip = [...vetted, ...halves]
+    // The why lines and non-points are the feedback layer's own vetted copy: `feedbackPoints.test.ts`
+    // scans them with its own word list. ⚠️ That list omits "recommended", which this one has, and a
+    // non-point says "switching isn't recommended" — a source's finding, negated, not a grade.
+    const feedback = [...Object.values(WHY_LINES), ...Object.values(NON_POINTS)].map(
+      (line) => line!.text,
+    )
+    // The band legend's disclaimer, which the spec requires ("observed, not a target").
+    const disclaimers = ['Not a target.']
+    const strip = [...vetted, ...halves, ...feedback, ...disclaimers]
       .filter(Boolean)
       .sort((a, b) => b.length - a.length)
     const authored = texts.map((text) =>

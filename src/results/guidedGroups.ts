@@ -23,18 +23,18 @@ export { renderableBand, sourceHasProvenance, tryLineApplies }
 export type { GuidedEntry }
 
 /**
- * How the guided results view partitions and orders the thirteen metrics.
+ * How the guided views partition and order the thirteen metrics.
  *
- * Pure, so the page's structure is decided somewhere a test can read it without rendering. Three
- * groups, by what can honestly be said about each metric on this clip (guided-results-view spec,
- * "The guided view ranks metrics into three groups"):
+ * Pure, so the partition is decided somewhere a test can read it without rendering. Three
+ * groups, by what can honestly be said about each metric on this clip. The summary and the tour
+ * arrange them by focus area (`summaryRows`, `tourPlan`); this decides only what each entry is:
  *
  * 1. **`banded`** — measured, and its guidance carries a reference band that can be rendered WITH
- *    its provenance. Shown expanded, each against its scale.
- * 2. **`unbanded`** — measured, with no renderable band. Shown collapsed, with its value, its notes,
- *    its links and the reason there is no band. Only the SCALE is withheld (design.md D7.6).
+ *    its provenance. Its card shows a scale.
+ * 2. **`unbanded`** — measured, with no renderable band. Its card shows its value, its notes, its
+ *    links and the reason there is no band. Only the SCALE is withheld (design.md D7.6).
  * 3. **`notMeasured`** — `metricTier(metric) === 'excluded'`: nothing measured, or the camera
- *    geometry cannot support the measurement. Shown collapsed, with why and a capture hint.
+ *    geometry cannot support the measurement. It gets an entry with why and a capture hint.
  *
  * **Order within every group is `displayRank` and nothing else** — a fixed property of the guidance
  * data, never of the runner's value or of the result's confidence. Ranking by the runner's own
@@ -139,8 +139,8 @@ export function captureHintFor(entry: GuidedEntry): string {
 }
 
 /**
- * The element id a card or not-measured entry carries, and the fragment the contents list links
- * to. Plain and deterministic rather than `useId`, so a `#guided-results-cadence` link can be
+ * The element id a card or not-measured entry carries, and the fragment a shared link names
+ * (`useRevealFragment` opens it). Plain and deterministic rather than `useId`, so a `#guided-results-cadence` link can be
  * shared. Only one results view is ever mounted, so the ids cannot collide with a sibling view.
  */
 export function guidedEntryId(metric: MetricId): string {
