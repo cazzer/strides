@@ -161,8 +161,8 @@ const PIN_DOMAIN = grid({
 
 /** Per landing offset past the declared domain: the worst stance sink and swing dip allowed. */
 const FALLBACK_BOUNDS: readonly (readonly [number, { stance: number; swing: number }])[] = [
-  // Measured worst (stance / swing), 0.30 stance: 0.056 / −0.027, 0.077 / −0.050, 0.089 / −0.066,
-  // 0.108 / −0.087, 0.138 / −0.121, 0.181 / −0.169. The bounds are the 0.38 stance's, kept.
+  // Measured worst (stance / swing), 0.30 stance: 0.056 / −0.045, 0.077 / −0.066, 0.089 / −0.077,
+  // 0.108 / −0.097, 0.138 / −0.131, 0.181 / −0.177. The bounds are the 0.38 stance's, kept.
   [0.35, { stance: 0.06, swing: -0.065 }],
   [0.4, { stance: 0.08, swing: -0.09 }],
   [0.45, { stance: 0.095, swing: -0.1 }],
@@ -190,6 +190,10 @@ describe('the stance foot stands on the ground', () => {
     const backLanding = LEG_CORNERS.filter((params) => params.landingOffset < 0)
     expect(backLanding).toHaveLength(32)
     for (const params of PIN_DOMAIN) {
+      // Measured worst 0.00997 (ps19.7, unchanged from before it), at landing 0.15, bounce 0,
+      // foot strike -0.2, thigh peak 20, swing knee 60, step width 0.3 (raw). Not a maximum of
+      // the domain: off this grid (landing 0.2-0.22, step width 0.4-0.5) the pin reaches 0.0115,
+      // identically before and after ps19.7. A known limit of the grid, not of this change.
       expect(stancePinError(params, DOMAIN_STEPS), JSON.stringify(params)).toBeLessThan(0.01)
     }
     for (const params of backLanding) {
@@ -331,6 +335,49 @@ describe('the bounce plays smoothly at 30 fps', () => {
     expectSmooth([0.25, 0.3], 1.6, 0.12)
     expectSmooth([0.4, 0.5], 1.9, 0.13)
   }, DOMAIN_SWEEP_TIMEOUT_MS)
+})
+
+describe('the swing thigh', () => {
+  /** The left thigh's side-view angle forward of vertical, degrees (the stance tilt cancels). */
+  function thighAt(q: number, params: RunnerParams): number {
+    const pose = poseAt(q, params)
+    const hip = joint(pose, 'left_hip')
+    const knee = joint(pose, 'left_knee')
+    return (Math.atan2(knee.x - hip.x, hip.y - knee.y) * 180) / Math.PI
+  }
+
+  it('keeps moving from toe-off to its peak, never stalling at the early-swing key', () => {
+    const { stanceEnd, peakThigh } = GAIT_PHASES
+    const n = 400
+    const dq = (peakThigh - stanceEnd) / n
+    for (const peakThighAngle of [15, NEUTRAL_RUNNER_PARAMS.peakThighAngle, 85]) {
+      const params = withParams({ peakThighAngle })
+      const mean = (thighAt(peakThigh, params) - thighAt(stanceEnd, params)) / (peakThigh - stanceEnd)
+      // The curve rests at toe-off and at the peak (so the peak stays the maximum the knee-drive
+      // reading takes); between, over 10%..90% of the span, it never slows below a quarter of its
+      // mean speed. Measured at the neutral thigh peak: 0.347 of the mean (0.007 with an eased key).
+      for (let i = Math.floor(0.1 * n); i < Math.ceil(0.9 * n); i += 1) {
+        const q = stanceEnd + i * dq
+        const speed = (thighAt(q + dq, params) - thighAt(q, params)) / dq
+        expect(speed / mean, `${peakThighAngle} at ${q.toFixed(3)}`).toBeGreaterThan(0.25)
+      }
+    }
+  })
+
+  it('moves the thigh no further per 30 fps frame at 190 steps/min than before ps19.7, plus 10%', () => {
+    // Before ps19.7 (stance 0.38, eased swing): 13.11 degrees per frame at the neutral parameters.
+    const PRE_PS19_7_MAX_STEP_DEG = 13.11
+    const params = withParams({ cadence: 190 })
+    const perFrame = cyclesPerSecond(params) / 30
+    let largest = 0
+    for (const start of [0, 0.007, 0.013, 0.021, 0.033]) {
+      for (let f = 0; f < 200; f += 1) {
+        const step = thighAt(start + (f + 1) * perFrame, params) - thighAt(start + f * perFrame, params)
+        largest = Math.max(largest, Math.abs(step))
+      }
+    }
+    expect(largest).toBeLessThanOrEqual(1.1 * PRE_PS19_7_MAX_STEP_DEG)
+  })
 })
 
 describe('the gait phases', () => {

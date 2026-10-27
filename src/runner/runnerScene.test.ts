@@ -334,8 +334,8 @@ describe('render helpers', () => {
     const styles = SKELETON_EDGES.map((edge) =>
       segmentStyle(edge, effectiveSources(bindAll()), []),
     )
-    expect(neutralEdgeInFrame(styles, values, 0.19, 'wholeBodySide')).toBe(true)
-    expect(neutralEdgeInFrame(styles, values, 0.19, 'feetFront')).toBe(false)
+    expect(neutralEdgeInFrame(styles, values, GAIT_PHASES.midStance, 'wholeBodySide')).toBe(true)
+    expect(neutralEdgeInFrame(styles, values, GAIT_PHASES.midStance, 'feetFront')).toBe(false)
   })
 })
 

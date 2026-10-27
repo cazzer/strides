@@ -1096,3 +1096,70 @@ describe('ModelRunner cadence beat', () => {
     expect(labelY() - labelBefore).toBeCloseTo(drop, 3)
   })
 })
+
+describe('ModelRunner still figure stands on the ground', () => {
+  // The park-side-landscape demo's overstride: past the pin's declared domain, so mid-stance the
+  // stance foot gives way below the ground (gaitModel D15).
+  const BIG = bindAll({ overstriding: makeMetric('overstriding', { value: 0.512 }) })
+  const BIG_VALUES = runnerParamValues(BIG)
+  const FEET: KeypointName[] = COMMON_KEYPOINT_NAMES.filter((name) => /ankle|heel|foot_index/.test(name))
+  const lowestFootCy = () => Math.max(...FEET.map((name) => joint(name).cy))
+  const groundY = () => Number(document.querySelector('[data-ground]')?.getAttribute('y1'))
+
+  it('lifts the held knee-flexion frame onto the ground, the knee mark with it, and drops the lift on play', () => {
+    mockReducedMotion(true)
+    const held = phaseForLeg('right', GAIT_PHASES.peakSwingKneeBend)
+    const pose = poseAt(held, BIG_VALUES)
+    const sink = GROUND_Y - Math.min(...FEET.map((name) => pose[COMMON_KEYPOINT_NAMES.indexOf(name)].y))
+    expect(sink).toBeGreaterThan(0.03)
+    setup({ params: BIG, camera: 'legsSide', focus: { metricIds: ['kneeFlexion'] } })
+    expect(lowestFootCy()).toBeCloseTo(groundY(), 3)
+    const lifted = projectPose(pose.map((j) => ({ ...j, y: j.y + sink })), 'legsSide')
+    for (const [j, name] of COMMON_KEYPOINT_NAMES.entries()) {
+      expect(joint(name).cx).toBeCloseTo(lifted[j].x, 3)
+      expect(joint(name).cy).toBeCloseTo(lifted[j].y, 3)
+    }
+    const label = () => Number(document.querySelector('[data-annotation="peakSwingKneeBend"] tspan')?.getAttribute('y'))
+    const labelStill = label()
+    const kneeStill = joint('right_knee').cy
+    // Playing again draws the same phase unlifted, a snap down; the knee mark rides the figure.
+    fireEvent.click(screen.getByRole('button', { name: 'Play runner' }))
+    expectPose(held, 'legsSide', BIG_VALUES)
+    const drop = joint('right_knee').cy - kneeStill
+    expect(drop).toBeGreaterThan(0)
+    expect(label() - labelStill).toBeCloseTo(drop, 3)
+  })
+
+  it('lifts a figure paused mid-stance while its ground ticks stay on the ground', () => {
+    // A wide frame, so the head label is never held at the frame's top edge.
+    const camera: CameraState = { yawDeg: 0, pitchDeg: 0, zoom: 0.8, target: { x: 0, y: 1.8, z: 0 } }
+    setup({ params: BIG, camera, focus: { metricIds: ['cadence'] } })
+    const scale = projectPoint({ x: 0, y: 0, z: 0 }, camera).y - projectPoint({ x: 0, y: 1, z: 0 }, camera).y
+    let sunk = 0
+    for (let i = 0; i < 200 && sunk < 0.03 * scale; i += 1) {
+      advance(16)
+      sunk = lowestFootCy() - groundY()
+    }
+    expect(sunk).toBeGreaterThan(0.03 * scale)
+    const ticks = () =>
+      Array.from(document.querySelectorAll('[data-annotation="cadence"] [data-role="guide"]'), (el) =>
+        el.getAttribute('d'),
+      )
+    const ticksPlaying = ticks()
+    const label = () => Number(document.querySelector('[data-annotation="cadence"] tspan')?.getAttribute('y'))
+    const labelPlaying = label()
+    const playing = COMMON_KEYPOINT_NAMES.map(joint)
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    expect(lowestFootCy()).toBeCloseTo(groundY(), 3)
+    // One rigid lift: every joint rises by the same amount and none moves sideways.
+    const rise = joint('right_knee').cy - playing[COMMON_KEYPOINT_NAMES.indexOf('right_knee')].cy
+    expect(rise).toBeLessThan(-0.02 * scale)
+    COMMON_KEYPOINT_NAMES.forEach((name, j) => {
+      expect(joint(name).cx).toBeCloseTo(playing[j].cx, 3)
+      expect(joint(name).cy - playing[j].cy).toBeCloseTo(rise, 3)
+    })
+    expect(ticks()).toEqual(ticksPlaying)
+    // The cadence label hangs off the head, so it rides the lift.
+    expect(label() - labelPlaying).toBeCloseTo(rise, 3)
+  })
+})

@@ -17,3 +17,12 @@
 - [x] 3.1 Sandbox scenarios binding only vertical oscillation at 0.14 and 0.3
 - [x] 3.2 Gates: lint, `tsc -b`, vitest (runner, results, full), `vite build`, `openspec validate --strict`
 - [x] 3.3 Screenshots: sandbox hip trace at 0.14 and 0.3; real app reduced-motion stops and the landing end hold
+
+## 4. Review round 1
+
+- [x] 4.1 Swing thigh toe-off → mid → peak as a monotone cubic Hermite (Fritsch–Carlson); tests: speed over 10–90% of the span ≥ 0.25 of its mean, 30 fps step at 190 steps/min ≤ 1.1 × 13.11°
+- [x] 4.2 Bounce wording: lowest at mid-stance, highest a quarter cycle later, a sinusoid's height at contact and toe-off (spec, gaitModel.ts, design.md)
+- [x] 4.3 Pin assertion records its measured worst; dense sample off the grid recorded in design.md (0.0115, pre-existing)
+- [x] 4.4 ModelRunner lifts a still figure onto the ground; tests on the 0.512 knee-flexion hold and a pause mid-stance
+- [x] 4.5 Knee wedge crossing the stance shin, narrow flight peak and landing end-hold sink recorded as accepted limits
+- [x] 4.6 runnerScene.test.ts uses `GAIT_PHASES.midStance`

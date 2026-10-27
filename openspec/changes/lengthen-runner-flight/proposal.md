@@ -17,11 +17,13 @@ strides-ps19.7, from the ps19.4 review).
 - The thigh peak's key phase moves from 0.85 to 0.78, so a still frame held on it still has the
   other foot planted.
 - One illustrative swing-thigh key is added at the other leg's mid-stance (0.65), 0.6 of the way
-  from the toe-off angle to the peak, so the swing foot clears the ground under the lowest hips and
-  the thigh curve stays monotone from toe-off to its peak.
+  from the toe-off angle to the peak, so the swing foot clears the ground under the lowest hips.
+  Toe-off → peak is a monotone cubic Hermite through it, so the thigh never stalls there.
+- A still figure (reduced motion, paused) is lifted so its lowest foot stands on the ground: past
+  the pin's domain a held mid-stance frame would otherwise show the foot below it.
 - Unchanged: `STANCE_DROP`, every bound parameter and its measure tolerance, the knee and foot key
   values, the swing-arc window, the pin's declared domain and the fallback bounds past it, the
-  landing camera's phase window, and ModelRunner's API.
+  landing camera's phase window, and ModelRunner's props (the lift is internal).
 
 ## Capabilities
 
@@ -32,7 +34,8 @@ strides-ps19.7, from the ps19.4 review).
 ### Modified Capabilities
 
 - `model-runner`: ADDED requirements only. The runner's bounce is held to a per-frame smoothness
-  bound at 30 fps, and every limb key phase falls while the other foot is planted.
+  bound at 30 fps, every limb key phase falls while the other foot is planted, the swing thigh
+  moves steadily to its peak, and a still figure stands on the ground.
 
 ## Impact
 

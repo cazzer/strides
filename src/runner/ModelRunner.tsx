@@ -343,6 +343,22 @@ function labelLiftsWithFigure(annotation: Annotations[number]): boolean {
   return !GROUND_LABELS.has(annotation.paramId)
 }
 
+/** Foot joints, whose lowest point a still figure stands on. */
+const FOOT_JOINT_INDICES = COMMON_KEYPOINT_NAMES.flatMap((name, i) =>
+  /ankle|heel|foot_index/.test(name) ? [i] : [],
+)
+
+/**
+ * How far a still pose must rise so its lowest foot point stands on the ground. Past the pin's
+ * declared domain (a large overstride) the stance foot gives way below the ground mid-stance; a
+ * moving figure passes through that in a few frames, but a held one would show it. No metric reads
+ * absolute height, so the lift moves no bound value. Sub-nanometre sinks are left alone.
+ */
+function stillLift(pose: readonly Vec3[]): number {
+  const sink = GROUND_Y - Math.min(...FOOT_JOINT_INDICES.map((i) => pose[i].y))
+  return sink > 1e-9 ? sink : 0
+}
+
 /** The point raised by `dy`: a mark built at the static values, moved with a tweening figure. */
 function lifted(point: Vec3, dy: number): Vec3 {
   return dy === 0 ? point : { x: point.x, y: point.y + dy, z: point.z }
@@ -525,6 +541,8 @@ export function ModelRunner({
   const valueTweenRef = useRef<ValueTweenState | null>(null)
   const sceneRef = useRef<Scene | null>(null)
   const liveRef = useRef<Live>({ active, playing, rate, window: phaseWindow })
+  // Whether the figure is still (reduced motion, paused): a still figure stands on the ground.
+  const stillRef = useRef(!playing)
   const kickRef = useRef<() => void>(() => {})
 
   const drawRef = useRef(() => {
@@ -533,7 +551,14 @@ export function ModelRunner({
     const cam = cameraNowRef.current
     const unit = 1 / scene.pxPerUnit
     const drawn = drawnValues(scene.values, valueTweenRef.current, performance.now())
-    const projected = projectPose(poseAt(phaseRef.current, drawn), cam)
+    const pose = poseAt(phaseRef.current, drawn)
+    // A still figure is lifted onto the ground; marks that ride the figure lift with it, ground
+    // marks stay. Playing again drops the lift.
+    const lift = stillRef.current ? stillLift(pose) : 0
+    const projected = projectPose(
+      lift === 0 ? pose : pose.map((j) => ({ ...j, y: j.y + lift })),
+      cam,
+    )
     const { segments, joints, paths, labels, pulses, ground, flash: flashTarget } = scene.targets
     for (const { el, a, b } of segments) {
       setPoint(el, 'x1', 'y1', projected[a].x, projected[a].y)
@@ -549,7 +574,8 @@ export function ModelRunner({
     const boxes: LabelBox[] = []
     // Annotations are built at the static values; a value tween (the intro) can change the
     // figure's standing height, so marks that hang off the figure follow it.
-    const figureDy = drawn === scene.values ? 0 : pelvisHeight(drawn) - pelvisHeight(scene.values)
+    const figureDy =
+      (drawn === scene.values ? 0 : pelvisHeight(drawn) - pelvisHeight(scene.values)) + lift
     for (const { el, points, closed, lifts } of paths) {
       const dy = lifts ? figureDy : 0
       const projectedPoints = points.map((point) => projectPoint(lifted(point, dy), cam))
@@ -595,7 +621,7 @@ export function ModelRunner({
     if (flashTarget) {
       const align = flashAlign(flashTarget.paramId, cam)
       const at = placeFlash(
-        projectPoint(flashTarget.anchor, cam),
+        projectPoint(lifted(flashTarget.anchor, lift), cam),
         align,
         flashTarget.chars,
         fontUnits,
@@ -612,6 +638,7 @@ export function ModelRunner({
   useLayoutEffect(() => {
     const svg = svgRef.current
     if (!svg) return
+    stillRef.current = !playing
     sceneRef.current = {
       values,
       pxPerUnit,
