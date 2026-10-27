@@ -317,6 +317,46 @@ export function advancePhase(phase: number, delta: number, window: PhaseWindow |
   return fract(window.start + (next > window.length ? (next - window.length) % window.length : next))
 }
 
+/** Where playback stands: its phase, and how much of a hold it still has to rest. */
+export interface PlaybackState {
+  phase: number
+  holdLeftMs: number
+}
+
+/**
+ * Playback `stepMs` of wall-clock time on, at `cyclesPerSecond` (cadence × rate). Outside a window,
+ * or with none, this is `advancePhase`. Inside one, a step that would carry the phase past one of
+ * the window's holds stops exactly on it and rests there for the hold's `ms` (wall-clock time, so
+ * the rate does not stretch it), then plays on; a hold is taken once per pass because a phase
+ * resting on it is no longer before it. Playback only ever moves forward.
+ */
+export function stepPlayback(
+  state: PlaybackState,
+  stepMs: number,
+  cyclesPerSecond: number,
+  window: PhaseWindow | null,
+): PlaybackState {
+  let ms = stepMs
+  if (state.holdLeftMs > 0) {
+    if (ms <= state.holdLeftMs) return { phase: state.phase, holdLeftMs: state.holdLeftMs - ms }
+    ms -= state.holdLeftMs
+  }
+  const delta = (ms / 1000) * cyclesPerSecond
+  if (window) {
+    const offset = fract(state.phase - window.start)
+    if (offset <= window.length + PHASE_WINDOW_TOLERANCE) {
+      let first: { offset: number; hold: { phase: number; ms: number } } | null = null
+      for (const hold of window.holds ?? []) {
+        const at = fract(hold.phase - window.start)
+        const ahead = at - PHASE_WINDOW_TOLERANCE > offset && at - PHASE_WINDOW_TOLERANCE <= offset + delta
+        if (ahead && (first === null || at < first.offset)) first = { offset: at, hold }
+      }
+      if (first) return { phase: first.hold.phase, holdLeftMs: first.hold.ms }
+    }
+  }
+  return { phase: advancePhase(state.phase, delta, window), holdLeftMs: 0 }
+}
+
 /** The playback rate the loop uses: non-finite or non-positive input plays at 1×. */
 export function sanitizeRate(rate: number | undefined): number {
   return rate !== undefined && Number.isFinite(rate) && rate > 0 ? rate : 1

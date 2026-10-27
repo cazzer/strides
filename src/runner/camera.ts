@@ -23,7 +23,10 @@ import type {
 
 /** Projected half-height every preset is framed for. */
 export const CAMERA_FRAME_HALF_HEIGHT = 2
-/** Projected half-width of the renderer's frame (its narrowest, phone-width case). */
+/**
+ * Projected half-width of the renderer's viewBox. The drawing is fitted with `meet`, so this much
+ * is always visible; a stage wider than the viewBox's 3:4 shows more at the sides.
+ */
 export const CAMERA_FRAME_HALF_WIDTH = 1.5
 
 const SHOULDER_HEIGHT = PELVIS_HEIGHT + 1
@@ -33,21 +36,49 @@ function preset(yawDeg: number, pitchDeg: number, zoom: number, target: Vec3): C
   return Object.freeze({ yawDeg, pitchDeg, zoom, target: Object.freeze({ ...target }) })
 }
 
+/** A wall-clock pause, each time playback inside a window reaches `phase`. */
+export interface PhaseHold {
+  phase: number
+  ms: number
+}
+
 /** A span of the gait cycle the loop plays round and round: `start` .. `start + length`, wrapping. */
 export interface PhaseWindow {
   start: number
   length: number
+  /** Pauses inside the window, each taken once per pass. Absent: none. */
+  holds?: readonly PhaseHold[]
 }
+
+/** How long each landing loop rests on the contact frame, wall-clock ms. */
+export const LANDING_CONTACT_HOLD_MS = 300
+/**
+ * How long each landing loop rests on its last frame before starting again, wall-clock ms. The
+ * restart from early stance back to late swing cannot be made small by moving the window (see
+ * design.md D16): resting first makes it read as a replay, not a twitch.
+ */
+export const LANDING_END_HOLD_MS = 150
+
+const LANDING_WINDOW_START = 0.35
+const LANDING_WINDOW_LENGTH = 0.25
 
 /**
  * The landing camera's window: from 0.15 before the near (right) leg's contact (cycle phase 0.5)
  * to 0.10 after it. Late swing into early stance, so the reader sees the foot come down. The
  * after-contact side stops short of where a large overstride's stance foot gives way below the
  * ground (gaitModel D15: at 0.512, −0.063 torso lengths by 0.15 after contact, visible at 1280 px).
+ * Each pass rests on the contact frame, and briefly on its last frame.
  */
-export const LANDING_PHASE_WINDOW: PhaseWindow = Object.freeze({ start: 0.35, length: 0.25 })
+export const LANDING_PHASE_WINDOW: PhaseWindow = Object.freeze({
+  start: LANDING_WINDOW_START,
+  length: LANDING_WINDOW_LENGTH,
+  holds: Object.freeze([
+    Object.freeze({ phase: GAIT_PHASES.rightContact, ms: LANDING_CONTACT_HOLD_MS }),
+    Object.freeze({ phase: LANDING_WINDOW_START + LANDING_WINDOW_LENGTH, ms: LANDING_END_HOLD_MS }),
+  ]),
+})
 
-/** The landing frame's top, above hip-mid at contact, torso lengths. */
+/** The landing frame's top, above hip-mid's highest point in the window, torso lengths. */
 export const LANDING_FRAME_ABOVE_HIP = 0.15
 /** The landing frame's bottom, below the ground: room for the ground-lane labels. */
 export const LANDING_FRAME_BELOW_GROUND = 0.4
@@ -72,17 +103,15 @@ function jointAt(pose: readonly Joint3D[], name: KeypointName): Joint3D {
  * model is a treadmill (hip-mid stays at x = 0), so the contact point is world-fixed for a
  * parameter set and the camera needs no per-frame tracking.
  *
- * Height: the span from just above hip-mid at contact to `LANDING_FRAME_BELOW_GROUND` under the
- * ground (the ground-lane labels' room) fills the frame. Width: centred on the horizontal reach of
+ * Height: the span from just above hip-mid's highest point over the window (a big bounce lifts it
+ * above its contact height) to `LANDING_FRAME_BELOW_GROUND` under the ground (the ground-lane
+ * labels' room) fills the frame. Width: centred on the horizontal reach of
  * hip-mid and the near leg over `LANDING_PHASE_WINDOW`, zoomed out further only if that reach
  * would not fit; the late-swing toe reaches well past the contact ankle, so centring on hip-mid
  * and the ankle alone would cut it off at phone width.
  */
 export function landingCamera(values: RunnerParams): CameraState {
-  const contact = poseAt(GAIT_PHASES.rightContact, values)
-  const hipY = (jointAt(contact, 'left_hip').y + jointAt(contact, 'right_hip').y) / 2
-  const top = hipY + LANDING_FRAME_ABOVE_HIP
-  const bottom = GROUND_Y - LANDING_FRAME_BELOW_GROUND
+  let hipTop = -Infinity
   let left = Infinity
   let right = -Infinity
   for (let i = 0; i <= LANDING_SAMPLES; i += 1) {
@@ -90,11 +119,14 @@ export function landingCamera(values: RunnerParams): CameraState {
       LANDING_PHASE_WINDOW.start + (LANDING_PHASE_WINDOW.length * i) / LANDING_SAMPLES,
       values,
     )
+    hipTop = Math.max(hipTop, (jointAt(pose, 'left_hip').y + jointAt(pose, 'right_hip').y) / 2)
     for (const name of LANDING_JOINTS) {
       left = Math.min(left, jointAt(pose, name).x)
       right = Math.max(right, jointAt(pose, name).x)
     }
   }
+  const top = hipTop + LANDING_FRAME_ABOVE_HIP
+  const bottom = GROUND_Y - LANDING_FRAME_BELOW_GROUND
   const halfReach = (right - left) / 2 + LANDING_FRAME_SIDE_PAD
   const zoom = Math.min(
     (2 * CAMERA_FRAME_HALF_HEIGHT) / (top - bottom),

@@ -17,8 +17,9 @@
  * **The landing camera follows the values, not a fixed point.** For `camera="landingSide"` the
  * renderer frames `landingCamera(values)` on the static values it draws (a bound change retargets
  * it, tweened like any camera change), holds the near leg's contact when still, and while playing
- * loops `LANDING_PHASE_WINDOW` around that contact. Entering the window plays on into it; leaving
- * the camera lets the phase run round the whole cycle again from where it is.
+ * loops `LANDING_PHASE_WINDOW` around that contact, resting on its holds (`stepPlayback`). Entering
+ * the window plays on into it; leaving the camera lets the phase run round the whole cycle again
+ * from where it is. Paused on the landing camera, the figure stands at the held phase too.
  *
  * Size it through `className`: the figure fills its box, and the drawing fills what the caption
  * and controls leave.
@@ -61,7 +62,6 @@ import {
   RUNNER_PX,
   VIEW_HALF_HEIGHT,
   VIEW_HALF_WIDTH,
-  advancePhase,
   cameraFromKey,
   cameraKey,
   describeRunner,
@@ -78,6 +78,7 @@ import {
   placeLabel,
   sanitizeRate,
   segmentStyle,
+  stepPlayback,
   valueTweenProgress,
   type RunnerSource,
   type SegmentStyle,
@@ -469,6 +470,8 @@ export function ModelRunner({
   }, [flash, valueTween, values, heldPhase, target.yawDeg])
 
   const phaseRef = useRef<number>(heldPhase)
+  // Wall-clock ms still to rest on a landing hold (`stepPlayback`).
+  const holdLeftRef = useRef(0)
   const heldPhaseRef = useRef(heldPhase)
   const reducedRef = useRef(reduced)
   const cameraNowRef = useRef<CameraState>(target)
@@ -596,17 +599,20 @@ export function ModelRunner({
   }, [valueTween, reduced])
 
   // The still frame: a new held phase (focus change) moves a still figure to it, and so does
-  // reduced motion switching on while the reader has not chosen to play.
+  // reduced motion switching on while the reader has not chosen to play. On the landing camera
+  // every still state (pausing included) shows the held phase, so the marks meet the drawn leg.
   useLayoutEffect(() => {
     const heldChanged = heldPhaseRef.current !== heldPhase
     const reducedStarted = reduced && !reducedRef.current && choice === null
     heldPhaseRef.current = heldPhase
     reducedRef.current = reduced
-    if ((heldChanged && !playing) || reducedStarted) {
+    if (!playing) holdLeftRef.current = 0
+    const landingStill = tracksContact && !playing && phaseRef.current !== heldPhase
+    if ((heldChanged && !playing) || reducedStarted || landingStill) {
       phaseRef.current = heldPhase
       drawRef.current()
     }
-  }, [heldPhase, reduced, choice, playing])
+  }, [heldPhase, reduced, choice, playing, tracksContact])
 
   // Report whether the figure is seen, and that it no longer is once unmounted (an unmount-only
   // cleanup, so a parent holding `active` never keeps a stale true for a runner that is gone).
@@ -680,11 +686,14 @@ export function ModelRunner({
       const scene = sceneRef.current
       if (live.playing && scene) {
         const drawn = drawnValues(scene.values, valueTweenRef.current, performance.now())
-        phaseRef.current = advancePhase(
-          phaseRef.current,
-          (stepMs / 1000) * cyclesPerSecond(drawn) * live.rate,
+        const next = stepPlayback(
+          { phase: phaseRef.current, holdLeftMs: live.window ? holdLeftRef.current : 0 },
+          stepMs,
+          cyclesPerSecond(drawn) * live.rate,
           live.window,
         )
+        phaseRef.current = next.phase
+        holdLeftRef.current = next.holdLeftMs
       }
       const cameraTween = cameraTweenRef.current
       if (cameraTween) {

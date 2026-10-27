@@ -146,17 +146,27 @@ describe('presets', () => {
   describe('landingCamera', () => {
     const withLanding = (landingOffset: number): RunnerParams => ({ ...NEUTRAL_RUNNER_PARAMS, landingOffset })
     const index = (name: KeypointName) => COMMON_KEYPOINT_NAMES.indexOf(name)
-    const cases = [NEUTRAL_RUNNER_PARAMS, ...[-0.3, 0.3, 0.512, 0.7].map(withLanding)]
+    const withBounce = (pelvisBounce: number): RunnerParams => ({ ...NEUTRAL_RUNNER_PARAMS, pelvisBounce })
+    const cases = [
+      NEUTRAL_RUNNER_PARAMS,
+      ...[-0.3, 0.3, 0.512, 0.7].map(withLanding),
+      // The bounce's range end, and halfway: hip-mid rises well above its contact height.
+      ...[RUNNER_PARAM_SPECS.pelvisBounce.range[1], RUNNER_PARAM_SPECS.pelvisBounce.range[1] / 2].map(withBounce),
+    ]
+    const windowPhases = Array.from(
+      { length: 61 },
+      (_, i) => LANDING_PHASE_WINDOW.start + (LANDING_PHASE_WINDOW.length * i) / 60,
+    )
+    const hipMidY = (pose: ReturnType<typeof poseAt>) =>
+      (pose[index('left_hip')].y + pose[index('right_hip')].y) / 2
 
-    it('frames hip-mid and the near leg through the landing window, at every landing offset', () => {
-      const { start, length } = LANDING_PHASE_WINDOW
-      const phases = Array.from({ length: 61 }, (_, i) => start + (length * i) / 60)
+    it('frames hip-mid and the near leg through the landing window, at every landing offset and bounce', () => {
       for (const values of cases) {
         const camera = landingCamera(values)
-        for (const phase of phases) {
+        for (const phase of windowPhases) {
           for (const j of projectPose(poseAt(phase, values), camera)) {
             if (!/hip|^right_(knee|ankle|heel|foot_index)$/.test(j.name)) continue
-            const where = `${j.name} at ${phase}, landing ${values.landingOffset}`
+            const where = `${j.name} at ${phase}, landing ${values.landingOffset}, bounce ${values.pelvisBounce}`
             expect(Math.abs(j.x), where).toBeLessThanOrEqual(VIEW_HALF_WIDTH)
             expect(Math.abs(j.y), where).toBeLessThanOrEqual(CAMERA_FRAME_HALF_HEIGHT)
           }
@@ -173,12 +183,17 @@ describe('presets', () => {
         expect(Math.abs(ankle.x)).toBeLessThan(VIEW_HALF_WIDTH)
         expect(camera.yawDeg).toBe(0)
         expect(camera.pitchDeg).toBe(0)
-        // From just above hip-mid to below the ground fits the frame's height, centred; it fills
-        // it unless the window's horizontal reach needs the camera further out.
-        const hipY = (pose[index('left_hip')].y + pose[index('right_hip')].y) / 2
+        // From just above hip-mid's highest point in the window to below the ground fits the
+        // frame's height, centred; it fills it unless the window's reach needs the camera further out.
+        const hipY = Math.max(...windowPhases.map((phase) => hipMidY(poseAt(phase, values))))
+        if (values.pelvisBounce === RUNNER_PARAM_SPECS.pelvisBounce.range[1]) {
+          expect(hipY - hipMidY(pose)).toBeGreaterThan(0.1)
+        }
         const top = projectPoint({ x: 0, y: hipY + LANDING_FRAME_ABOVE_HIP, z: 0 }, camera).y
         const bottom = projectPoint({ x: 0, y: GROUND_Y - LANDING_FRAME_BELOW_GROUND, z: 0 }, camera).y
-        expect(top + bottom).toBeCloseTo(0, 12)
+        // Sampled more finely than the camera's own 31 samples: the peak can sit between them.
+        expect(top).toBeGreaterThanOrEqual(-CAMERA_FRAME_HALF_HEIGHT - 1e-3)
+        expect(top + bottom).toBeCloseTo(0, 2)
         expect(bottom).toBeLessThanOrEqual(CAMERA_FRAME_HALF_HEIGHT + 1e-12)
         fills.push(Math.abs(bottom - CAMERA_FRAME_HALF_HEIGHT) < 1e-12)
       }

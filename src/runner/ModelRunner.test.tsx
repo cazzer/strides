@@ -7,6 +7,7 @@ import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { bindAll, bindOnly } from './__fixtures__/boundParams'
 import {
   CAMERA_PRESETS,
+  LANDING_CONTACT_HOLD_MS,
   LANDING_PHASE_WINDOW,
   landingCamera,
   projectPoint,
@@ -18,6 +19,7 @@ import { phaseForLeg } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
 import {
   FAR_OPACITY,
+  FRAME_MS,
   RUNNER_PARAM_IDS,
   RUNNER_PX,
   UNFOCUSED_OPACITY,
@@ -685,6 +687,93 @@ describe('ModelRunner landing camera', () => {
     for (const phase of seen) expect(inWindow(phase), String(phase)).toBe(true)
     expect(Math.min(...seen)).toBeLessThan(0.45)
     expect(Math.max(...seen)).toBeGreaterThan(0.55)
+  })
+
+  /** Whether every drawn joint is the contact pose's, through the landing camera. */
+  function atContact(camera: CameraState): boolean {
+    const projected = projectPose(poseAt(GAIT_PHASES.rightContact, VALUES), camera)
+    return COMMON_KEYPOINT_NAMES.every(
+      (name, j) =>
+        Math.abs(joint(name).cx - projected[j].x) < 1e-3 && Math.abs(joint(name).cy - projected[j].y) < 1e-3,
+    )
+  }
+
+  it('rests on the exact contact frame for the hold once per loop, within the thirty-frame cap', () => {
+    setup({ camera: 'landingSide', focus: LANDING_FOCUS, playbackRate: 0.4 })
+    const camera = landingCamera(VALUES)
+    // Leave the mount's contact frame first, so every stretch counted below is a hold.
+    advance(200)
+    expect(atContact(camera)).toBe(false)
+    const stretches: number[] = []
+    let run = 0
+    let previous = joint('right_ankle')
+    let draws = 0
+    for (let t = 0; t < 4000; t += 16) {
+      advance(16)
+      const now = joint('right_ankle')
+      if (now.cx !== previous.cx || now.cy !== previous.cy) draws += 1
+      previous = now
+      if (atContact(camera)) run += 16
+      else if (run > 0) {
+        stretches.push(run)
+        run = 0
+      }
+    }
+    // About one loop a second (0.25 of a cycle at 0.4× plus both holds): one contact rest each.
+    expect(stretches.length).toBeGreaterThanOrEqual(3)
+    expect(stretches.length).toBeLessThanOrEqual(5)
+    for (const ms of stretches) {
+      expect(ms).toBeGreaterThanOrEqual(LANDING_CONTACT_HOLD_MS - 2 * FRAME_MS)
+      expect(ms).toBeLessThanOrEqual(LANDING_CONTACT_HOLD_MS + 2 * FRAME_MS)
+    }
+    expect(draws).toBeLessThanOrEqual(4 * 30)
+  })
+
+  it('pausing on the landing camera stands the figure at the contact, so the marks meet it', () => {
+    const { container } = setup({ camera: 'landingSide', focus: LANDING_FOCUS, playbackRate: 0.4 })
+    const camera = landingCamera(VALUES)
+    let phase = drawnPhase(camera)
+    for (let i = 0; i < 120 && !(phase > 0.38 && phase < 0.43); i += 1) {
+      advance(16)
+      phase = drawnPhase(camera)
+    }
+    expect(phase).toBeGreaterThan(0.38)
+    expect(phase).toBeLessThan(0.43)
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    expect(vi.getTimerCount()).toBe(0)
+    expectPose(GAIT_PHASES.rightContact, camera)
+    const guides = container.querySelectorAll('[data-annotation="landingOffset"] [data-role="guide"]')
+    const [ankleTop] = pathEnds(guides[1].getAttribute('d'))
+    expect(ankleTop.x).toBeCloseTo(joint('right_ankle').cx, 3)
+    expect(ankleTop.y).toBeCloseTo(joint('right_ankle').cy, 3)
+    // Playing again starts from the contact.
+    fireEvent.click(screen.getByRole('button', { name: 'Play runner' }))
+    advance(100)
+    expect(inWindow(drawnPhase(camera))).toBe(true)
+  })
+
+  it('enters the window from outside by playing on: every frame steps forward a little', () => {
+    // A knee-flexion focus holds its own key phase (0.12), outside the landing window.
+    setup({ camera: 'landingSide', focus: { metricIds: ['kneeFlexion'] }, playbackRate: 0.4 })
+    const camera = landingCamera(VALUES)
+    // The loop's first frame only sets its clock.
+    advance(FRAME_MS + 1)
+    let previous = drawnPhase(camera)
+    expect(inWindow(previous)).toBe(false)
+    const seen = [previous]
+    for (let i = 0; i < 30; i += 1) {
+      advance(FRAME_MS + 1)
+      const phase = drawnPhase(camera)
+      const step = (phase - previous + 1) % 1
+      expect(step, `${previous} → ${phase}`).toBeGreaterThan(0)
+      expect(step, `${previous} → ${phase}`).toBeLessThan(0.03)
+      seen.push(phase)
+      previous = phase
+      // Up to the contact hold, which is the next thing that stops it.
+      if (phase > GAIT_PHASES.rightContact - 0.05) break
+    }
+    expect(Math.min(...seen)).toBeLessThan(LANDING_PHASE_WINDOW.start)
+    expect(Math.max(...seen)).toBeGreaterThan(LANDING_PHASE_WINDOW.start)
   })
 
   it('enters the window by playing on, and leaving it runs the whole cycle again without a jump', () => {
