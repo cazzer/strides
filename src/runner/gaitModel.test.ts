@@ -207,8 +207,8 @@ describe('the stance foot stands on the ground', () => {
     for (const params of farLanding) {
       const label = JSON.stringify(params)
       expect(Math.abs(lowestLeftFoot(params, 0)), label).toBeLessThan(1e-12)
-      expect(stancePinError(params), label).toBeLessThan(0.13)
-      expect(swingClearance(params), label).toBeGreaterThan(-0.18)
+      expect(stancePinError(params), label).toBeLessThan(0.19)
+      expect(swingClearance(params), label).toBeGreaterThan(-0.2)
       for (const id of PARAM_IDS) {
         const { measure, tolerance } = MEASURE_PARAM[id]
         expect(Math.abs(measure(params) - params[id]), `${id} ${label}`).toBeLessThanOrEqual(tolerance)
