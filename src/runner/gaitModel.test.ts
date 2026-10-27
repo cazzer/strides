@@ -33,6 +33,10 @@ import type { Joint3D, RunnerParamId, RunnerParams } from './types'
 
 const PARAM_IDS = Object.keys(RUNNER_PARAM_SPECS) as RunnerParamId[]
 
+function fract(value: number): number {
+  return value - Math.floor(value)
+}
+
 function withParams(overrides: Partial<Record<RunnerParamId, number>>): RunnerParams {
   return { ...NEUTRAL_RUNNER_PARAMS, ...overrides }
 }
@@ -157,8 +161,8 @@ const PIN_DOMAIN = grid({
 
 /** Per landing offset past the declared domain: the worst stance sink and swing dip allowed. */
 const FALLBACK_BOUNDS: readonly (readonly [number, { stance: number; swing: number }])[] = [
-  // Measured worst (stance / swing): 0.056 / −0.060, 0.077 / −0.083, 0.089 / −0.096,
-  // 0.108 / −0.115, 0.138 / −0.146, 0.181 / −0.188.
+  // Measured worst (stance / swing), 0.30 stance: 0.056 / −0.045, 0.077 / −0.066, 0.089 / −0.077,
+  // 0.108 / −0.097, 0.138 / −0.131, 0.181 / −0.177. The bounds are the 0.38 stance's, kept.
   [0.35, { stance: 0.06, swing: -0.065 }],
   [0.4, { stance: 0.08, swing: -0.09 }],
   [0.45, { stance: 0.095, swing: -0.1 }],
@@ -186,6 +190,10 @@ describe('the stance foot stands on the ground', () => {
     const backLanding = LEG_CORNERS.filter((params) => params.landingOffset < 0)
     expect(backLanding).toHaveLength(32)
     for (const params of PIN_DOMAIN) {
+      // Measured worst 0.00997 (ps19.7, unchanged from before it), at landing 0.15, bounce 0,
+      // foot strike -0.2, thigh peak 20, swing knee 60, step width 0.3 (raw). Not a maximum of
+      // the domain: off this grid (landing 0.2-0.22, step width 0.4-0.5) the pin reaches 0.0115,
+      // identically before and after ps19.7. A known limit of the grid, not of this change.
       expect(stancePinError(params, DOMAIN_STEPS), JSON.stringify(params)).toBeLessThan(0.01)
     }
     for (const params of backLanding) {
@@ -302,29 +310,104 @@ function sinusoidFrameStep(params: RunnerParams): number {
 describe('the bounce plays smoothly at 30 fps', () => {
   const CADENCES = [150, 174, 190]
 
-  it('moves the hips no more than 1.3× a sinusoid per frame, with steady step peaks, up to the neutral bounce', () => {
-    for (const pelvisBounce of [0.03, 0.07, 0.1, 0.14]) {
+  /** Every bounce at every cadence: the per-frame hip change and step-peak spread it is held to. */
+  function expectSmooth(bounces: readonly number[], frameRatio: number, spreadFraction: number) {
+    for (const pelvisBounce of bounces) {
       for (const cadence of CADENCES) {
         const params = withParams({ pelvisBounce, cadence })
         const { largestStep, peakSpread } = hipAt30Fps(params)
         const label = `${pelvisBounce} @ ${cadence}`
-        expect(largestStep, label).toBeLessThanOrEqual(1.3 * sinusoidFrameStep(params))
-        expect(peakSpread, label).toBeLessThanOrEqual(0.12 * pelvisBounce)
+        expect(largestStep, label).toBeLessThanOrEqual(frameRatio * sinusoidFrameStep(params))
+        expect(peakSpread, label).toBeLessThanOrEqual(spreadFraction * pelvisBounce)
       }
     }
+  }
+
+  it('moves the hips no more than 1.3× a sinusoid per frame, with steady step peaks, up to a 0.22 bounce', () => {
+    // Measured worst over the cadences: 1.069× up to 0.17, 1.176× at 0.2, 1.283× at 0.22.
+    expectSmooth([0.03, 0.07, 0.1, 0.14, 0.17, 0.2, 0.22], 1.3, 0.12)
   }, DOMAIN_SWEEP_TIMEOUT_MS)
 
   it('holds larger bounces to their measured known limit (design.md D15)', () => {
-    for (const pelvisBounce of [0.17, 0.2, 0.3, 0.5]) {
-      for (const cadence of CADENCES) {
-        const params = withParams({ pelvisBounce, cadence })
-        const { largestStep, peakSpread } = hipAt30Fps(params)
-        const label = `${pelvisBounce} @ ${cadence}`
-        expect(largestStep, label).toBeLessThanOrEqual(2.8 * sinusoidFrameStep(params))
-        expect(peakSpread, label).toBeLessThanOrEqual(0.35 * pelvisBounce)
+    // The planted leg absorbs only STANCE_DROP; the rest of the bounce happens in the 0.20 flight.
+    // Measured worst: 1.411× / 0.096 at 0.25, 1.568× / 0.107 at 0.3, 1.764× / 0.120 at 0.4,
+    // 1.881× / 0.128 at 0.5 (frame ratio / spread over the bounce).
+    expectSmooth([0.25, 0.3], 1.6, 0.12)
+    expectSmooth([0.4, 0.5], 1.9, 0.13)
+  }, DOMAIN_SWEEP_TIMEOUT_MS)
+})
+
+describe('the swing thigh', () => {
+  /** The left thigh's side-view angle forward of vertical, degrees (the stance tilt cancels). */
+  function thighAt(q: number, params: RunnerParams): number {
+    const pose = poseAt(q, params)
+    const hip = joint(pose, 'left_hip')
+    const knee = joint(pose, 'left_knee')
+    return (Math.atan2(knee.x - hip.x, hip.y - knee.y) * 180) / Math.PI
+  }
+
+  it('keeps moving from toe-off to its peak, never stalling at the early-swing key', () => {
+    const { stanceEnd, peakThigh } = GAIT_PHASES
+    const n = 400
+    const dq = (peakThigh - stanceEnd) / n
+    for (const peakThighAngle of [15, NEUTRAL_RUNNER_PARAMS.peakThighAngle, 85]) {
+      const params = withParams({ peakThighAngle })
+      const mean = (thighAt(peakThigh, params) - thighAt(stanceEnd, params)) / (peakThigh - stanceEnd)
+      // The curve rests at toe-off and at the peak (so the peak stays the maximum the knee-drive
+      // reading takes); between, over 10%..90% of the span, it never slows below a quarter of its
+      // mean speed. Measured at the neutral thigh peak: 0.347 of the mean (0.007 with an eased key).
+      for (let i = Math.floor(0.1 * n); i < Math.ceil(0.9 * n); i += 1) {
+        const q = stanceEnd + i * dq
+        const speed = (thighAt(q + dq, params) - thighAt(q, params)) / dq
+        expect(speed / mean, `${peakThighAngle} at ${q.toFixed(3)}`).toBeGreaterThan(0.25)
       }
     }
-  }, DOMAIN_SWEEP_TIMEOUT_MS)
+  })
+
+  it('moves the thigh no further per 30 fps frame at 190 steps/min than before ps19.7, plus 10%', () => {
+    // Before ps19.7 (stance 0.38, eased swing): 13.11 degrees per frame at the neutral parameters.
+    const PRE_PS19_7_MAX_STEP_DEG = 13.11
+    const params = withParams({ cadence: 190 })
+    const perFrame = cyclesPerSecond(params) / 30
+    let largest = 0
+    for (const start of [0, 0.007, 0.013, 0.021, 0.033]) {
+      for (let f = 0; f < 200; f += 1) {
+        const step = thighAt(start + (f + 1) * perFrame, params) - thighAt(start + f * perFrame, params)
+        largest = Math.max(largest, Math.abs(step))
+      }
+    }
+    expect(largest).toBeLessThanOrEqual(1.1 * PRE_PS19_7_MAX_STEP_DEG)
+  })
+})
+
+describe('the gait phases', () => {
+  it('puts mid-stance halfway through stance and the flight peak midway through flight', () => {
+    const { leftContact, rightContact, midStance, stanceEnd } = GAIT_PHASES
+    expect(Math.abs(midStance - (leftContact + stanceEnd) / 2)).toBeLessThan(1e-12)
+    // The hips peak midway from toe-off to the other contact, a quarter cycle after mid-stance, so
+    // a small bounce is a true sinusoid. The peak shows up as the hips' highest sample.
+    const flightPeak = (stanceEnd + rightContact) / 2
+    expect(Math.abs(flightPeak - midStance - 0.25)).toBeLessThan(1e-12)
+    const hip = (p: number) => joint(poseAt(p, NEUTRAL_RUNNER_PARAMS), 'left_hip').y
+    const samples = Array.from({ length: 1000 }, (_, i) => i / 2000)
+    const highest = samples.reduce((best, p) => (hip(p) > hip(best) ? p : best), 0)
+    expect(Math.abs(highest - flightPeak)).toBeLessThan(1e-9)
+  })
+
+  it('keeps the bounce keys on the 1/1000 sampling grid, so their extremes are sampled exactly', () => {
+    for (const key of [2 * GAIT_PHASES.midStance, 2 * GAIT_PHASES.stanceEnd, GAIT_PHASES.stanceEnd + 0.5]) {
+      expect(Math.abs(key * 1000 - Math.round(key * 1000))).toBeLessThan(1e-9)
+    }
+  })
+
+  it('holds every swing key phase while the other leg is in stance, and starts the swing arc after toe-off', () => {
+    const otherLegInStance = (q: number) => fract(q + 0.5) < GAIT_PHASES.stanceEnd
+    const arcMid = (GAIT_PHASES.swingArcStart + GAIT_PHASES.swingArcEnd) / 2
+    for (const q of [GAIT_PHASES.peakThigh, GAIT_PHASES.peakSwingKneeBend, arcMid]) {
+      expect(otherLegInStance(q), `${q}`).toBe(true)
+    }
+    expect(GAIT_PHASES.swingArcStart).toBeGreaterThanOrEqual(GAIT_PHASES.stanceEnd)
+  })
 })
 
 describe('poseAt loops seamlessly', () => {

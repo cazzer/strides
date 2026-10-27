@@ -11,11 +11,16 @@
  * **Annotations hang off the live figure, never a second one.** Each limb parameter is annotated
  * on the pose its metric reads (its key phase), and the renderer's still frame holds the first
  * annotated parameter's key phase, so that limb lies exactly on its mark. No limb-shaped guide is
- * drawn: a ghost leg beside the runner would read as a target pose. Guides are short reference
- * rays and extension ticks only. Pure: no React, no DOM.
+ * drawn: a ghost leg beside the runner would read as a target pose. Guides are reference rays,
+ * plumb lines from the joints a metric reads, and extension ticks only. Pure: no React, no DOM.
+ *
+ * **Cadence moves no geometry, so it is drawn as time: a footfall beat.** Its label sits above the
+ * head and a ring pulses out from each foot's contact point at that foot's contact phase, so the
+ * rings beat exactly as often as the figure's feet land (`beatEnvelope`).
  */
+import { classifyFootStrike, type FootStrikeClass } from '../heuristics/footStrikePattern'
 import { formatGuidedValue } from '../results/formatGuidedValue'
-import type { MetricResult } from '../heuristics/types'
+import { DEFAULT_HEURISTICS_CONFIG, type MetricResult } from '../heuristics/types'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { GAIT_PHASES, GROUND_Y, MODEL_PROPORTIONS, pelvisHeight, poseAt } from './gaitModel'
 import type { RunnerSources } from './runnerScene'
@@ -28,11 +33,11 @@ import type {
   Vec3,
 } from './types'
 
-export type AnnotationKind = 'angleArc' | 'bracket' | 'offset'
+export type AnnotationKind = 'angleArc' | 'bracket' | 'offset' | 'beat'
 
-/** Each parameter's natural annotation. Cadence moves no geometry, so it has none. */
+/** Each parameter's natural annotation. Cadence moves no geometry: it beats at the footfalls. */
 export const PARAM_ANNOTATION_KIND: Readonly<Record<RunnerParamId, AnnotationKind | null>> = {
-  cadence: null,
+  cadence: 'beat',
   pelvisBounce: 'bracket',
   torsoPitch: 'angleArc',
   armSwing: 'bracket',
@@ -50,7 +55,8 @@ export const PARAM_ANNOTATION_KIND: Readonly<Record<RunnerParamId, AnnotationKin
  * held phase.
  */
 export const KEY_LEG_PHASE: Readonly<Record<RunnerParamId, number | null>> = {
-  cadence: null,
+  /** A footfall: a still figure holds the near foot planted on its beat tick. */
+  cadence: GAIT_PHASES.leftContact,
   pelvisBounce: null,
   torsoPitch: null,
   armSwing: null,
@@ -78,8 +84,26 @@ export const RUNNER_METRIC_UNITS: Readonly<Record<RunnerMetricId, MetricResult['
   swingFootLateralExcursion: 'percent',
 }
 
-/** A metric's value as the guided cards print it (foot strike as its class). */
+/**
+ * The runner's foot-strike wording: which part of the foot touches first, as an estimate (the
+ * metric is a 2D proxy). The cards keep their own wording (`formatGuidedValue`); the class is the
+ * same, from the same call.
+ */
+const FOOT_STRIKE_RUNNER_LABELS: Readonly<Record<FootStrikeClass, string>> = {
+  heel: 'Heel first',
+  midfoot: 'Midfoot first',
+  forefoot: 'Forefoot first',
+}
+
+/**
+ * A metric's value as the guided cards print it, except foot strike, which names its class as
+ * the part of the foot that lands first ("Heel first (estimate)").
+ */
 export function formatRunnerValue(metricId: RunnerMetricId, metricValue: number): string {
+  if (metricId === 'footStrikePattern') {
+    const cls = classifyFootStrike(metricValue, DEFAULT_HEURISTICS_CONFIG.footStrikeMidfootBandRatio)
+    return `${FOOT_STRIKE_RUNNER_LABELS[cls]} (estimate)`
+  }
   return formatGuidedValue({ metric: metricId, value: metricValue, unit: RUNNER_METRIC_UNITS[metricId] })
 }
 
@@ -109,9 +133,22 @@ export interface RunnerAnnotationLabel {
   /** World point the label hangs off. */
   anchor: Vec3
   side: LabelSide
+  /**
+   * Line pitches the block sits further out on `side`: a label stacked under the earlier labels
+   * of the ground lane (`planAnnotations`). Absent: not stacked.
+   */
+  offsetLines?: number
 }
 
 type LabelPlacement = Pick<RunnerAnnotationLabel, 'anchor' | 'side'>
+
+/** One footfall of the cadence beat: a ring that pulses out from `centre` at cycle phase `phase`. */
+export interface BeatPulse {
+  /** The cycle phase at which this foot lands. */
+  phase: number
+  /** The foot's contact point on the ground (world space). */
+  centre: Vec3
+}
 
 export interface RunnerAnnotation {
   paramId: RunnerParamId
@@ -131,6 +168,11 @@ export interface RunnerAnnotation {
    * at any phase (torso, bounce, arms). A still figure shows a limb mark only at this phase.
    */
   keyPhase: number | null
+  /**
+   * A beat's footfalls, one per foot (cadence only). The renderer pulses them only while the
+   * figure plays and motion is allowed; still, the beat is its label and ground ticks.
+   */
+  pulses?: readonly BeatPulse[]
 }
 
 export type RunnerSide = 'left' | 'right'
@@ -145,6 +187,11 @@ export interface AnnotationInput {
   kind?: AnnotationKind
   /** The target camera's yaw: picks the near limb in a side view, the stance leg in a front one. */
   cameraYawDeg: number
+  /**
+   * The still frame without a keyed focus. Absent: mid-stance. The landing camera passes the near
+   * leg's contact, so its still frame shows the landing whatever the focus.
+   */
+  heldPhaseWithoutKey?: number
 }
 
 export interface AnnotationPlan {
@@ -246,6 +293,43 @@ interface Built {
   fills: Vec3[][]
   guides: Vec3[][]
   label: LabelPlacement
+  pulses?: BeatPulse[]
+}
+
+/** Above the head, clear of the figure's top. */
+const HEAD_CLEARANCE = 0.25
+
+/** Just above the head of `pose`: where cadence, which has no part of its own, is labelled. */
+export function headTopAnchor(pose: readonly Joint3D[]): Vec3 {
+  const nose = joint(pose, 'nose')
+  const top = Math.max(nose.y, joint(pose, 'left_ear').y, joint(pose, 'right_ear').y)
+  return { x: nose.x, y: top + HEAD_CLEARANCE, z: nose.z }
+}
+
+/** The ground point under `side`'s first contact: the lower of its heel and toe, at that foot's contact. */
+function contactPoint(values: RunnerParams, side: RunnerSide): Vec3 {
+  const pose = poseAt(phaseForLeg(side, GAIT_PHASES.leftContact), values)
+  const heel = sideJoint(pose, side, 'heel')
+  const toe = sideJoint(pose, side, 'foot_index')
+  const first = toe.y < heel.y ? toe : heel
+  return { x: first.x, y: GROUND_Y, z: first.z }
+}
+
+/** How far below the ground a footfall's tick reaches. Each tick is its pulse's guide, in order. */
+const BEAT_TICK_DEPTH = 0.08
+
+/** How much of a cycle a footfall's ring takes to fade out. */
+export const BEAT_DECAY_CYCLES = 0.25
+
+/**
+ * A footfall ring's strength at cycle `phase` for a foot landing at `pulsePhase`: 1 at the
+ * contact, easing to 0 over `BEAT_DECAY_CYCLES` (quadratically), and 0 until the next contact.
+ * The renderer draws the ring largest and opaque at contact, shrinking as it fades, and flashes
+ * the foot's tick in the accent at the same strength.
+ */
+export function beatEnvelope(phase: number, pulsePhase: number): number {
+  const u = fract(phase - pulsePhase) / BEAT_DECAY_CYCLES
+  return u >= 1 ? 0 : (1 - u) ** 2
 }
 
 interface BuildContext {
@@ -268,7 +352,21 @@ function angleArc(centre: Vec3, fromDeg: number, toDeg: number, radius: number) 
   }
 }
 
-const BUILDERS: Readonly<Record<Exclude<RunnerParamId, 'cadence'>, Builder>> = {
+const BUILDERS: Readonly<Record<RunnerParamId, Builder>> = {
+  cadence(_value, values, { phase }) {
+    // One pulse per footfall: two per cycle, so the rings beat at the drawn cadence exactly.
+    const pulses = (['left', 'right'] as const).map((side) => ({
+      phase: phaseForLeg(side, GAIT_PHASES.leftContact),
+      centre: contactPoint(values, side),
+    }))
+    return {
+      marks: [],
+      fills: [],
+      guides: pulses.map(({ centre }) => [centre, { ...centre, y: GROUND_Y - BEAT_TICK_DEPTH }]),
+      label: { anchor: headTopAnchor(poseAt(phase, values)), side: 'above' },
+      pulses,
+    }
+  },
   torsoPitch(value, values, { phase }) {
     const pose = poseAt(phase, values)
     const hip = midpoint(joint(pose, 'left_hip'), joint(pose, 'right_hip'))
@@ -348,10 +446,11 @@ const BUILDERS: Readonly<Record<Exclude<RunnerParamId, 'cadence'>, Builder>> = {
       marks: [[start, end]],
       fills: [],
       guides: [
-        // Short extension lines: up from the mark under hip-mid, and down from the ankle.
+        // The metric's two points, dropped to the mark: a plumb from hip-mid, and one from the
+        // contact ankle (the metric reads the ankle, not the heel).
         [
+          { x: hip.x, y: hip.y, z },
           { x: hip.x, y: y - EXTENSION_OVERHANG, z },
-          { x: hip.x, y: GROUND_Y + 0.25, z },
         ],
         [
           { x: ankle.x, y: ankle.y, z },
@@ -365,32 +464,48 @@ const BUILDERS: Readonly<Record<Exclude<RunnerParamId, 'cadence'>, Builder>> = {
     const pose = poseAt(phase, values)
     const knee = sideJoint(pose, side, 'knee')
     const ankle = sideJoint(pose, side, 'ankle')
-    const y = (knee.y + ankle.y) / 2
+    const heel = sideJoint(pose, side, 'heel')
+    const toe = sideJoint(pose, side, 'foot_index')
+    // The metric reads ankle.x − knee.x: the mark runs at ankle height from under the knee (a
+    // plumb drops to it) to the ankle itself.
+    const y = ankle.y
     const z = ankle.z
     const start = { x: knee.x, y, z }
     const end = { x: ankle.x, y, z }
     return {
       marks: [[start, end]],
       fills: [],
-      guides: [verticalTick(knee.x, y, z, 0.06), verticalTick(ankle.x, y, z, 0.06)],
-      label: { anchor: { x: Math.max(knee.x, ankle.x), y, z }, side: 'right' },
+      guides: [
+        [knee, { x: knee.x, y: y - EXTENSION_OVERHANG, z: knee.z }],
+        verticalTick(ankle.x, y, z, 0.06),
+      ],
+      // Under the point the foot lands on: the heel heel-down, the toe on a forefoot strike.
+      label: { anchor: toe.y < heel.y ? toe : heel, side: 'below' },
     }
   },
   stepWidth(_value, values, { side, phase }) {
-    const ankle = sideJoint(poseAt(phase, values), side, 'ankle')
+    const pose = poseAt(phase, values)
+    const ankle = sideJoint(pose, side, 'ankle')
+    const hip = midpoint(joint(pose, 'left_hip'), joint(pose, 'right_hip'))
     const y = GROUND_Y - 0.06
     const start = { x: ankle.x, y, z: 0 }
     const end = { x: ankle.x, y, z: ankle.z }
+    const bottom = y - EXTENSION_OVERHANG
     return {
       marks: [[start, end]],
       fills: [],
       guides: [
-        // The midline, short, and a drop from the contact ankle.
+        // The midline, a plumb from hip-mid down past the mark.
         [
-          { x: ankle.x, y: y - EXTENSION_OVERHANG, z: 0 },
-          { x: ankle.x, y: GROUND_Y + 0.3, z: 0 },
+          { x: hip.x, y: hip.y, z: 0 },
+          { x: hip.x, y: bottom, z: 0 },
         ],
-        [ankle, { x: ankle.x, y: y - EXTENSION_OVERHANG, z: ankle.z }],
+        // A tick from the ground under each foot. The model is symmetric, so the other foot
+        // plants at the mirror of this one; a planted ankle stands right above its tick.
+        ...([1, -1] as const).map((s) => [
+          { x: ankle.x, y: GROUND_Y, z: s * ankle.z },
+          { x: ankle.x, y: bottom, z: s * ankle.z },
+        ]),
       ],
       label: { anchor: midpoint(start, end), side: 'below' },
     }
@@ -433,8 +548,8 @@ export function shownWhileStill(annotation: RunnerAnnotation, heldPhase: number)
 
 /**
  * The held phase and the annotations for the measured focus parameters, in focus order. A
- * neutral focus parameter gets none (there is no measurement to annotate), nor does cadence, nor
- * does a parameter whose kind the `kind` filter excludes.
+ * neutral focus parameter gets none (there is no measurement to annotate), nor does a parameter
+ * whose kind the `kind` filter excludes.
  *
  * The held phase is always taken on the leg a side view would call near (cos yaw >= 0: right),
  * front views included, so a camera change never moves the held phase by half a stride. Side
@@ -448,6 +563,7 @@ export function planAnnotations({
   focusParams,
   kind,
   cameraYawDeg,
+  heldPhaseWithoutKey,
 }: AnnotationInput): AnnotationPlan {
   const eligible = focusParams.filter((paramId) => {
     const natural = PARAM_ANNOTATION_KIND[paramId]
@@ -464,7 +580,7 @@ export function planAnnotations({
   const keyed = eligible.find((paramId) => KEY_LEG_PHASE[paramId] !== null)
   const heldPhase =
     keyed === undefined
-      ? GAIT_PHASES.midStance
+      ? (heldPhaseWithoutKey ?? GAIT_PHASES.midStance)
       : phaseForLeg(near, KEY_LEG_PHASE[keyed] as number)
   const sideFor = (paramId: RunnerParamId): RunnerSide => {
     if (!frontal) return near
@@ -482,10 +598,7 @@ export function planAnnotations({
     const side = sideFor(paramId)
     const q = KEY_LEG_PHASE[paramId]
     const phase = q === null ? heldPhase : phaseForLeg(side, q)
-    const built = BUILDERS[paramId as Exclude<RunnerParamId, 'cadence'>](values[paramId], values, {
-      side,
-      phase,
-    })
+    const built = BUILDERS[paramId](values[paramId], values, { side, phase })
     const value = formatRunnerValue(param.metricId, param.metricValue)
     const annotation: RunnerAnnotation = {
       paramId,
@@ -501,8 +614,40 @@ export function planAnnotations({
       clamped: param.clamped,
       side,
       keyPhase: q === null ? null : phase,
+      ...(built.pulses ? { pulses: built.pulses } : {}),
     }
     return [annotation]
   })
-  return { heldPhase, annotations }
+  return { heldPhase, annotations: stackGroundLane(annotations) }
+}
+
+/** A label hanging below a point on or under the ground sits in the ground lane. */
+function inGroundLane(label: RunnerAnnotationLabel): boolean {
+  return label.side === 'below' && label.anchor.y <= GROUND_Y + GROUND_LANE_TOLERANCE
+}
+
+const GROUND_LANE_TOLERANCE = 1e-9
+
+/**
+ * Two or more ground-lane labels (overstride under its mark, foot strike under the heel) would
+ * print over each other: they stack in focus order as one block, centred under the first one's
+ * anchor at the lane's lowest anchor height, each below the lines of the ones before it and half a
+ * line clear of them. A lone
+ * ground-lane label keeps its own anchor.
+ */
+/** Extra gap between stacked labels, in lines, so the second never reads as the first's tail. */
+export const STACK_GAP_LINES = 0.5
+
+function stackGroundLane(annotations: RunnerAnnotation[]): RunnerAnnotation[] {
+  const lane = annotations.filter((a) => inGroundLane(a.label))
+  if (lane.length < 2) return annotations
+  const laneX = lane[0].label.anchor.x
+  const laneY = Math.min(...lane.map((a) => a.label.anchor.y))
+  let offsetLines = 0
+  return annotations.map((a) => {
+    if (!inGroundLane(a.label)) return a
+    const label = { ...a.label, anchor: { ...a.label.anchor, x: laneX, y: laneY }, offsetLines }
+    offsetLines += a.label.lines.length + STACK_GAP_LINES
+    return { ...a, label }
+  })
 }

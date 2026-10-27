@@ -98,6 +98,11 @@ export type CameraPreset =
   | 'legsSide'
   | 'footSide'
   | 'feetFront'
+  /**
+   * The near foot's landing, from the side: framed per parameter set on hip-mid and the near
+   * ankle at contact (`landingCamera`), and played over a window of the cycle around that contact.
+   */
+  | 'landingSide'
 
 /** Orthographic camera. Yaw 0 = viewed from the runner's right side; yaw 90 = from the front. */
 export interface CameraState {

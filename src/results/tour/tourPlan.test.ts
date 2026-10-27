@@ -109,7 +109,7 @@ describe('stopCamera and tourStopDomId', () => {
   it('maps each area to its preset, and the one-thing stop to the whole figure', () => {
     for (const area of FOCUS_AREA_ORDER) expect(stopCamera(area)).toBe(FOCUS_AREA_CAMERA[area])
     expect(stopCamera('oneThing')).toBe(NO_FOCUS_CAMERA)
-    expect(stopCamera('landing')).toEqual({ camera: 'legsSide', playbackRate: 0.4 })
+    expect(stopCamera('landing')).toEqual({ camera: 'landingSide', playbackRate: 0.4 })
     expect(stopCamera('footPath')).toEqual({ camera: 'feetFront', playbackRate: 0.4 })
   })
 

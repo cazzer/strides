@@ -14,6 +14,18 @@
  * frame, the figure stands at the first annotated focus parameter's key phase (`planAnnotations`),
  * so the annotated limb lies exactly on its mark; mid-stance without a keyed focus.
  *
+ * **The landing camera follows the values, not a fixed point.** For `camera="landingSide"` the
+ * renderer frames `landingCamera(values)` on the static values it draws (a bound change retargets
+ * it, tweened like any camera change), holds the near leg's contact when still, and while playing
+ * loops `LANDING_PHASE_WINDOW` around that contact, resting on its holds (`stepPlayback`). Entering
+ * the window plays on into it; leaving the camera lets the phase run round the whole cycle again
+ * from where it is. Paused on the landing camera, the figure stands at the held phase too.
+ *
+ * **Cadence beats at the footfalls.** A cadence focus is labelled above the head with ground ticks
+ * under the feet; while the figure plays (and motion is allowed) a ring flashes at each foot
+ * as it lands, written by the loop from the live phase, so the rings beat at cadence × rate per
+ * minute while the label keeps the real cadence. Still or under reduced motion there is no ring.
+ *
  * Size it through `className`: the figure fills its box, and the drawing fills what the caption
  * and controls leave.
  */
@@ -28,9 +40,17 @@ import {
 } from 'react'
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
-import { interpolateCamera, projectPoint, projectPose } from './camera'
-import { GROUND_Y, cyclesPerSecond, pelvisHeight, poseAt } from './gaitModel'
 import {
+  LANDING_PHASE_WINDOW,
+  interpolateCamera,
+  landingCamera,
+  projectPoint,
+  projectPose,
+  type PhaseWindow,
+} from './camera'
+import { GAIT_PHASES, GROUND_Y, cyclesPerSecond, pelvisHeight, poseAt } from './gaitModel'
+import {
+  beatEnvelope,
   planAnnotations,
   shownWhileStill,
   type AnnotationKind,
@@ -64,6 +84,7 @@ import {
   placeLabel,
   sanitizeRate,
   segmentStyle,
+  stepPlayback,
   valueTweenProgress,
   type RunnerSource,
   type SegmentStyle,
@@ -181,6 +202,8 @@ const GUIDE_CLASS =
   'stroke-neutral-500 dark:stroke-neutral-400 forced-colors:stroke-[color:CanvasText]'
 const GROUND_CLASS =
   'stroke-neutral-300 dark:stroke-neutral-700 forced-colors:stroke-[color:GrayText]'
+// The footfall ring: the focus accent, never a saturated red (WCAG 2.3.1, design D4).
+const PULSE_CLASS = 'stroke-cyan-700 dark:stroke-cyan-300 forced-colors:stroke-[color:Highlight]'
 const LABEL_CLASS =
   'fill-neutral-900 stroke-white font-sans font-semibold dark:fill-neutral-100 dark:stroke-black forced-colors:fill-[color:CanvasText] forced-colors:stroke-[color:Canvas]'
 
@@ -196,6 +219,14 @@ interface DrawTargets {
   /** `lifts`: the mark hangs off the figure, not the ground, so it rides the figure's height. */
   paths: { el: SVGPathElement; points: readonly Vec3[]; closed: boolean; lifts: boolean }[]
   labels: { lines: SVGTSpanElement[]; label: RunnerAnnotationLabel; lifts: boolean }[]
+  /** Footfall rings: on the ground, so they never lift. */
+  pulses: {
+    el: SVGCircleElement
+    tick: SVGPathElement | null
+    tickPoints: readonly Vec3[]
+    centre: Vec3
+    phase: number
+  }[]
   ground: SVGLineElement | null
   flash: { el: SVGTextElement; paramId: RunnerParamId; anchor: Vec3; chars: number } | null
 }
@@ -226,10 +257,8 @@ interface Live {
   active: boolean
   playing: boolean
   rate: number
-}
-
-function fract(value: number): number {
-  return value - Math.floor(value)
+  /** The span of the cycle playback loops over; null: the whole cycle. */
+  window: PhaseWindow | null
 }
 
 function fmt(value: number): string {
@@ -298,11 +327,36 @@ function useSvgPixelScale(ref: RefObject<Element | null>): number {
 
 type Annotations = ReturnType<typeof planAnnotations>['annotations']
 
-/** Marks that hang off the ground plane (landing, step width) stay put when the figure's height changes. */
-const GROUND_MARKS: ReadonlySet<RunnerParamId> = new Set(['landingOffset', 'stepWidth'])
+/**
+ * Paths that hang off the ground plane (landing, step width, the cadence ticks) stay put when the
+ * figure's height changes; the others ride it.
+ */
+const GROUND_PATHS: ReadonlySet<RunnerParamId> = new Set(['landingOffset', 'stepWidth', 'cadence'])
+/** Labels that hang off the ground plane. The cadence label hangs off the head, so it rides. */
+const GROUND_LABELS: ReadonlySet<RunnerParamId> = new Set(['landingOffset', 'stepWidth'])
 
-function liftsWithFigure(annotation: Annotations[number]): boolean {
-  return !GROUND_MARKS.has(annotation.paramId)
+function pathLiftsWithFigure(annotation: Annotations[number]): boolean {
+  return !GROUND_PATHS.has(annotation.paramId)
+}
+
+function labelLiftsWithFigure(annotation: Annotations[number]): boolean {
+  return !GROUND_LABELS.has(annotation.paramId)
+}
+
+/** Foot joints, whose lowest point a still figure stands on. */
+const FOOT_JOINT_INDICES = COMMON_KEYPOINT_NAMES.flatMap((name, i) =>
+  /ankle|heel|foot_index/.test(name) ? [i] : [],
+)
+
+/**
+ * How far a still pose must rise so its lowest foot point stands on the ground. Past the pin's
+ * declared domain (a large overstride) the stance foot gives way below the ground mid-stance; a
+ * moving figure passes through that in a few frames, but a held one would show it. No metric reads
+ * absolute height, so the lift moves no bound value. Sub-nanometre sinks are left alone.
+ */
+function stillLift(pose: readonly Vec3[]): number {
+  const sink = GROUND_Y - Math.min(...FOOT_JOINT_INDICES.map((i) => pose[i].y))
+  return sink > 1e-9 ? sink : 0
 }
 
 /** The point raised by `dy`: a mark built at the static values, moved with a tweening figure. */
@@ -327,11 +381,27 @@ function collectTargets(
     const [annotation, role, index] = (el.dataset.path ?? '').split(':')
     const source = annotations[Number(annotation)]
     const list = role === 'm' ? source.marks : role === 'f' ? source.fills : source.guides
-    return { el, points: list[Number(index)], closed: role === 'f', lifts: liftsWithFigure(source) }
+    return { el, points: list[Number(index)], closed: role === 'f', lifts: pathLiftsWithFigure(source) }
   })
   const labels = Array.from(svg.querySelectorAll<SVGTextElement>('text[data-label-index]'), (el) => {
     const source = annotations[Number(el.dataset.labelIndex)]
-    return { lines: Array.from(el.querySelectorAll('tspan')), label: source.label, lifts: liftsWithFigure(source) }
+    return {
+      lines: Array.from(el.querySelectorAll('tspan')),
+      label: source.label,
+      lifts: labelLiftsWithFigure(source),
+    }
+  })
+  const pulses = Array.from(svg.querySelectorAll<SVGCircleElement>('circle[data-pulse]'), (el) => {
+    const [annotation, index] = (el.dataset.pulse ?? '').split(':').map(Number)
+    const source = annotations[annotation]
+    const pulse = (source.pulses ?? [])[index]
+    return {
+      el,
+      tick: svg.querySelector<SVGPathElement>(`path[data-pulse-tick="${annotation}:${index}"]`),
+      tickPoints: source.guides[index] ?? [],
+      centre: pulse.centre,
+      phase: pulse.phase,
+    }
   })
   const flashEl = svg.querySelector<SVGTextElement>('text[data-flash]')
   return {
@@ -339,6 +409,7 @@ function collectTargets(
     joints,
     paths,
     labels,
+    pulses,
     ground: svg.querySelector<SVGLineElement>('line[data-ground]'),
     flash: flashEl && flash ? { el: flashEl, ...flash } : null,
   }
@@ -377,9 +448,6 @@ export function ModelRunner({
   const active = visible && onScreen
   const rate = sanitizeRate(playbackRate)
 
-  const targetKey = cameraKey(camera)
-  const target = useMemo(() => cameraFromKey(targetKey), [targetKey])
-
   const overrideValues = overrides?.values
   const values = useMemo<RunnerParams>(() => {
     const base = runnerParamValues(params)
@@ -391,6 +459,17 @@ export function ModelRunner({
       }),
     ) as Record<RunnerParamId, number>
   }, [params, overrideValues])
+
+  // The landing camera is framed on the static values, so its key changes only when they do.
+  const tracksContact = camera === 'landingSide'
+  const presetKey = cameraKey(camera)
+  const landingKey = useMemo(
+    () => (tracksContact ? cameraKey(landingCamera(values)) : null),
+    [tracksContact, values],
+  )
+  const targetKey = landingKey ?? presetKey
+  const target = useMemo(() => cameraFromKey(targetKey), [targetKey])
+  const phaseWindow = tracksContact ? LANDING_PHASE_WINDOW : null
   const overrideSources = overrides?.sources
   const sources = useMemo(
     () => effectiveSources(params, overrideSources),
@@ -408,8 +487,9 @@ export function ModelRunner({
         focusParams,
         kind: annotationKind,
         cameraYawDeg: target.yawDeg,
+        heldPhaseWithoutKey: tracksContact ? GAIT_PHASES.rightContact : undefined,
       }),
-    [params, values, sources, focusParams, annotationKind, target.yawDeg],
+    [params, values, sources, focusParams, annotationKind, target.yawDeg, tracksContact],
   )
   // A still figure shows a limb mark only at its key phase; a playing one shows every mark.
   const valueTween = overrides?.valueTween ?? null
@@ -434,6 +514,9 @@ export function ModelRunner({
     () => neutralEdgeInFrame(edgeStyles, values, heldPhase, target),
     [edgeStyles, values, heldPhase, target],
   )
+  // Footfall rings move, so only a playing figure with motion allowed draws them; the landing
+  // window's contact hold would freeze one at full strength, so not there either.
+  const showPulses = playing && !reduced && phaseWindow === null
   const flash = overrides?.flash ?? null
   const introRunning = intro?.running === true && !reduced
   // The flash's world point, taken once per flash from the values its tween ends at.
@@ -448,6 +531,8 @@ export function ModelRunner({
   }, [flash, valueTween, values, heldPhase, target.yawDeg])
 
   const phaseRef = useRef<number>(heldPhase)
+  // Wall-clock ms still to rest on a landing hold (`stepPlayback`).
+  const holdLeftRef = useRef(0)
   const heldPhaseRef = useRef(heldPhase)
   const reducedRef = useRef(reduced)
   const cameraNowRef = useRef<CameraState>(target)
@@ -455,7 +540,9 @@ export function ModelRunner({
   const cameraTweenRef = useRef<CameraTween | null>(null)
   const valueTweenRef = useRef<ValueTweenState | null>(null)
   const sceneRef = useRef<Scene | null>(null)
-  const liveRef = useRef<Live>({ active, playing, rate })
+  const liveRef = useRef<Live>({ active, playing, rate, window: phaseWindow })
+  // Whether the figure is still (reduced motion, paused): a still figure stands on the ground.
+  const stillRef = useRef(!playing)
   const kickRef = useRef<() => void>(() => {})
 
   const drawRef = useRef(() => {
@@ -464,8 +551,15 @@ export function ModelRunner({
     const cam = cameraNowRef.current
     const unit = 1 / scene.pxPerUnit
     const drawn = drawnValues(scene.values, valueTweenRef.current, performance.now())
-    const projected = projectPose(poseAt(phaseRef.current, drawn), cam)
-    const { segments, joints, paths, labels, ground, flash: flashTarget } = scene.targets
+    const pose = poseAt(phaseRef.current, drawn)
+    // A still figure is lifted onto the ground; marks that ride the figure lift with it, ground
+    // marks stay. Playing again drops the lift.
+    const lift = stillRef.current ? stillLift(pose) : 0
+    const projected = projectPose(
+      lift === 0 ? pose : pose.map((j) => ({ ...j, y: j.y + lift })),
+      cam,
+    )
+    const { segments, joints, paths, labels, pulses, ground, flash: flashTarget } = scene.targets
     for (const { el, a, b } of segments) {
       setPoint(el, 'x1', 'y1', projected[a].x, projected[a].y)
       setPoint(el, 'x2', 'y2', projected[b].x, projected[b].y)
@@ -480,7 +574,8 @@ export function ModelRunner({
     const boxes: LabelBox[] = []
     // Annotations are built at the static values; a value tween (the intro) can change the
     // figure's standing height, so marks that hang off the figure follow it.
-    const figureDy = drawn === scene.values ? 0 : pelvisHeight(drawn) - pelvisHeight(scene.values)
+    const figureDy =
+      (drawn === scene.values ? 0 : pelvisHeight(drawn) - pelvisHeight(scene.values)) + lift
     for (const { el, points, closed, lifts } of paths) {
       const dy = lifts ? figureDy : 0
       const projectedPoints = points.map((point) => projectPoint(lifted(point, dy), cam))
@@ -499,15 +594,34 @@ export function ModelRunner({
         text.lines,
         fontUnits,
         (text.side === 'left' ? RUNNER_PX.labelGapLeft : RUNNER_PX.labelGap) * unit,
+        text.offsetLines,
       )
       lines.forEach((line, i) => setPoint(line, 'x', 'y', layout.x, layout.ys[i]))
       const chars = Math.max(0, ...text.lines.map((line) => line.length))
       boxes.push(labelBox(layout.x, labelAlign(text.side), layout.ys, chars, fontUnits))
     }
+    for (const pulse of pulses) {
+      const strength = beatEnvelope(phaseRef.current, pulse.phase)
+      const at = projectPoint(pulse.centre, cam)
+      const px = RUNNER_PX.beatRingMin + (RUNNER_PX.beatRingMax - RUNNER_PX.beatRingMin) * strength
+      setPoint(pulse.el, 'cx', 'cy', at.x, at.y)
+      pulse.el.setAttribute('r', fmt(px * unit))
+      pulse.el.setAttribute('opacity', fmt(strength))
+      if (pulse.tick) {
+        const d = pulse.tickPoints
+          .map((point, i) => {
+            const p = projectPoint(point, cam)
+            return `${i === 0 ? 'M' : 'L'}${fmt(p.x)} ${fmt(p.y)}`
+          })
+          .join('')
+        pulse.tick.setAttribute('d', d)
+        pulse.tick.setAttribute('opacity', fmt(strength))
+      }
+    }
     if (flashTarget) {
       const align = flashAlign(flashTarget.paramId, cam)
       const at = placeFlash(
-        projectPoint(flashTarget.anchor, cam),
+        projectPoint(lifted(flashTarget.anchor, lift), cam),
         align,
         flashTarget.chars,
         fontUnits,
@@ -524,6 +638,7 @@ export function ModelRunner({
   useLayoutEffect(() => {
     const svg = svgRef.current
     if (!svg) return
+    stillRef.current = !playing
     sceneRef.current = {
       values,
       pxPerUnit,
@@ -574,17 +689,20 @@ export function ModelRunner({
   }, [valueTween, reduced])
 
   // The still frame: a new held phase (focus change) moves a still figure to it, and so does
-  // reduced motion switching on while the reader has not chosen to play.
+  // reduced motion switching on while the reader has not chosen to play. On the landing camera
+  // every still state (pausing included) shows the held phase, so the marks meet the drawn leg.
   useLayoutEffect(() => {
     const heldChanged = heldPhaseRef.current !== heldPhase
     const reducedStarted = reduced && !reducedRef.current && choice === null
     heldPhaseRef.current = heldPhase
     reducedRef.current = reduced
-    if ((heldChanged && !playing) || reducedStarted) {
+    if (!playing) holdLeftRef.current = 0
+    const landingStill = tracksContact && !playing && phaseRef.current !== heldPhase
+    if ((heldChanged && !playing) || reducedStarted || landingStill) {
       phaseRef.current = heldPhase
       drawRef.current()
     }
-  }, [heldPhase, reduced, choice, playing])
+  }, [heldPhase, reduced, choice, playing, tracksContact])
 
   // Report whether the figure is seen, and that it no longer is once unmounted (an unmount-only
   // cleanup, so a parent holding `active` never keeps a stale true for a runner that is gone).
@@ -608,7 +726,7 @@ export function ModelRunner({
   // Hand the loop the latest play state and start or stop it (every render, after the effects
   // above have set up any tween).
   useLayoutEffect(() => {
-    liveRef.current = { active, playing, rate }
+    liveRef.current = { active, playing, rate, window: phaseWindow }
     kickRef.current()
   })
 
@@ -658,9 +776,14 @@ export function ModelRunner({
       const scene = sceneRef.current
       if (live.playing && scene) {
         const drawn = drawnValues(scene.values, valueTweenRef.current, performance.now())
-        phaseRef.current = fract(
-          phaseRef.current + (stepMs / 1000) * cyclesPerSecond(drawn) * live.rate,
+        const next = stepPlayback(
+          { phase: phaseRef.current, holdLeftMs: live.window ? holdLeftRef.current : 0 },
+          stepMs,
+          cyclesPerSecond(drawn) * live.rate,
+          live.window,
         )
+        phaseRef.current = next.phase
+        holdLeftRef.current = next.holdLeftMs
       }
       const cameraTween = cameraTweenRef.current
       if (cameraTween) {
@@ -791,6 +914,26 @@ export function ModelRunner({
                     <tspan key={i}>{line}</tspan>
                   ))}
                 </text>
+                {showPulses &&
+                  (annotation.pulses ?? []).map((_, i) => (
+                    <g key={`pulse-${i}`}>
+                      <path
+                        data-pulse-tick={`${a}:${i}`}
+                        fill="none"
+                        className={PULSE_CLASS}
+                        strokeWidth={RUNNER_PX.markStroke * unit}
+                        strokeLinecap="round"
+                        opacity={0}
+                      />
+                      <circle
+                        data-pulse={`${a}:${i}`}
+                        fill="none"
+                        className={PULSE_CLASS}
+                        strokeWidth={RUNNER_PX.beatRingStroke * unit}
+                        opacity={0}
+                      />
+                    </g>
+                  ))}
               </g>
             ))}
           </g>

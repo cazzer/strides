@@ -4,9 +4,19 @@ import { METRIC_LABELS } from '../results/metricConfidence'
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 import { bindAll, bindOnly } from './__fixtures__/boundParams'
-import { CAMERA_PRESETS } from './camera'
-import { runnerParamValues, segmentSource } from './runnerParams'
 import {
+  CAMERA_PRESETS,
+  LANDING_CONTACT_HOLD_MS,
+  LANDING_END_HOLD_MS,
+  LANDING_PHASE_WINDOW,
+  type PhaseWindow,
+} from './camera'
+import { GAIT_PHASES, cyclesPerSecond } from './gaitModel'
+import { NEUTRAL_RUNNER_PARAMS, runnerParamValues, segmentSource } from './runnerParams'
+import {
+  FRAME_MS,
+  advancePhase,
+  stepPlayback,
   RUNNER_PARAM_IDS,
   VIEW_HALF_HEIGHT,
   VIEW_HALF_WIDTH,
@@ -29,6 +39,7 @@ import {
   placeLabel,
   sanitizeRate,
   segmentStyle,
+  type PlaybackState,
 } from './runnerScene'
 import type { BoundRunnerParams } from './types'
 
@@ -158,8 +169,13 @@ describe('describeRunner', () => {
     })
     expect(bound.contactShankOffset.source === 'measured' && bound.contactShankOffset.clamped).toBe(true)
     const text = describeRunner(bound, ['torsoPitch', 'contactShankOffset'])
-    expect(text).toContain('Shown: Trunk lean 5.0°; Foot strike pattern Heel strike (proxy), drawn at a limit of the figure, not at the measured value.')
+    expect(text).toContain('Shown: Trunk lean 5.0°; Foot strike pattern Heel first (estimate), drawn at a limit of the figure, not at the measured value.')
     expect(describeRunner(bindOnly(['cadence']), ['torsoPitch'])).not.toContain('Shown:')
+  })
+
+  it('states a cadence focus as its steps per minute', () => {
+    const bound = bindAll({ cadence: makeMetric('cadence', { value: 180 }) })
+    expect(describeRunner(bound, ['cadence'])).toContain('Shown: Cadence 180 steps/min.')
   })
 
   it('never frames the figure as a reference, an ideal or the reader’s body', () => {
@@ -223,6 +239,66 @@ describe('small helpers', () => {
     expect(labelAlign('left')).toBe('end')
     expect(labelAlign('above')).toBe('middle')
   })
+
+  it('stacks a label block offsetLines line pitches further out, before keeping it in frame', () => {
+    const font = 0.1
+    const lines = ['Heel strike']
+    const plain = placeLabel({ x: 0, y: 0 }, 'below', lines, font, 0.05)
+    const stacked = placeLabel({ x: 0, y: 0 }, 'below', lines, font, 0.05, 2)
+    expect(stacked.ys[0] - plain.ys[0]).toBeCloseTo(2 * font * 1.2, 12)
+    const up = placeLabel({ x: 0, y: 0 }, 'above', lines, font, 0.05, 1)
+    expect(up.ys[0] - placeLabel({ x: 0, y: 0 }, 'above', lines, font, 0.05).ys[0]).toBeCloseTo(
+      -font * 1.2,
+      12,
+    )
+    const clamped = placeLabel({ x: 0, y: VIEW_HALF_HEIGHT - 0.1 }, 'below', lines, font, 0.05, 3)
+    expect(clamped.ys[0] + font * 0.6).toBeLessThanOrEqual(VIEW_HALF_HEIGHT + 1e-12)
+  })
+})
+
+describe('advancePhase', () => {
+  const window: PhaseWindow = LANDING_PHASE_WINDOW
+  const end = window.start + window.length
+  const inside = (phase: number) =>
+    phase >= window.start - 1e-9 && phase <= end + 1e-9
+
+  it('runs round the whole cycle without a window', () => {
+    expect(advancePhase(0.9, 0.2, null)).toBeCloseTo(0.1, 12)
+    expect(advancePhase(0.2, 0.05, null)).toBeCloseTo(0.25, 12)
+  })
+
+  it('loops inside the window: past its end it starts again from its start', () => {
+    expect(advancePhase(0.5, 0.05, window)).toBeCloseTo(0.55, 12)
+    expect(advancePhase(end - 0.01, 0.03, window)).toBeCloseTo(window.start + 0.02, 12)
+    expect(advancePhase(end, 0, window)).toBeCloseTo(end, 12)
+  })
+
+  it('a window wrapping past the cycle end loops across it', () => {
+    const wrapping: PhaseWindow = { start: 0.9, length: 0.2 }
+    expect(advancePhase(0.95, 0.1, wrapping)).toBeCloseTo(0.05, 12)
+    expect(advancePhase(0.08, 0.04, wrapping)).toBeCloseTo(0.92, 12)
+  })
+
+  it('plays on from outside the window into it, without a jump', () => {
+    expect(advancePhase(0.1, 0.05, window)).toBeCloseTo(0.15, 12)
+    const entered = advancePhase(window.start - 0.01, 0.03, window)
+    expect(entered).toBeCloseTo(window.start + 0.02, 12)
+    expect(advancePhase(entered, 0.03, window)).toBeCloseTo(window.start + 0.05, 12)
+  })
+
+  it('once inside, never leaves over ten seconds of 30 fps at cadence 170 and 0.4×', () => {
+    const delta = (FRAME_MS / 1000) * cyclesPerSecond({ ...NEUTRAL_RUNNER_PARAMS, cadence: 170 }) * 0.4
+    let phase = 0.5
+    let passedContact = 0
+    for (let i = 0; i < 300; i += 1) {
+      const next = advancePhase(phase, delta, window)
+      expect(inside(next), `frame ${i}: ${next}`).toBe(true)
+      if (phase < 0.5 && next >= 0.5) passedContact += 1
+      phase = next
+    }
+    // The window holds contact, and the loop keeps passing through it.
+    expect(passedContact).toBeGreaterThan(2)
+  })
 })
 
 describe('render helpers', () => {
@@ -258,7 +334,71 @@ describe('render helpers', () => {
     const styles = SKELETON_EDGES.map((edge) =>
       segmentStyle(edge, effectiveSources(bindAll()), []),
     )
-    expect(neutralEdgeInFrame(styles, values, 0.19, 'wholeBodySide')).toBe(true)
-    expect(neutralEdgeInFrame(styles, values, 0.19, 'feetFront')).toBe(false)
+    expect(neutralEdgeInFrame(styles, values, GAIT_PHASES.midStance, 'wholeBodySide')).toBe(true)
+    expect(neutralEdgeInFrame(styles, values, GAIT_PHASES.midStance, 'feetFront')).toBe(false)
+  })
+})
+
+describe('stepPlayback', () => {
+  const window = LANDING_PHASE_WINDOW
+  const end = window.start + window.length
+  const cps = cyclesPerSecond({ ...NEUTRAL_RUNNER_PARAMS, cadence: 170 }) * 0.4
+
+  it('without a window, or outside one, is advancePhase with no hold', () => {
+    expect(stepPlayback({ phase: 0.49, holdLeftMs: 0 }, 100, 1, null)).toEqual({
+      phase: advancePhase(0.49, 0.1, null),
+      holdLeftMs: 0,
+    })
+    expect(stepPlayback({ phase: 0.1, holdLeftMs: 0 }, 100, 1, window)).toEqual({
+      phase: advancePhase(0.1, 0.1, window),
+      holdLeftMs: 0,
+    })
+  })
+
+  it('stops exactly on the contact and rests there for the hold, in wall-clock time, then plays on', () => {
+    let state = stepPlayback({ phase: 0.49, holdLeftMs: 0 }, 100, 1, window)
+    expect(state).toEqual({ phase: GAIT_PHASES.rightContact, holdLeftMs: LANDING_CONTACT_HOLD_MS })
+    // The rate does not stretch the hold.
+    state = stepPlayback(state, 200, 50, window)
+    expect(state).toEqual({ phase: GAIT_PHASES.rightContact, holdLeftMs: LANDING_CONTACT_HOLD_MS - 200 })
+    // The rest of a step that outlasts the hold plays on from the contact.
+    state = stepPlayback(state, LANDING_CONTACT_HOLD_MS - 200 + 10, 1, window)
+    expect(state.holdLeftMs).toBe(0)
+    expect(state.phase).toBeCloseTo(GAIT_PHASES.rightContact + 0.01, 12)
+  })
+
+  it('rests briefly on the window’s last frame before starting again, never playing backwards', () => {
+    let state = stepPlayback({ phase: end - 0.005, holdLeftMs: 0 }, 100, 1, window)
+    expect(state).toEqual({ phase: end, holdLeftMs: LANDING_END_HOLD_MS })
+    state = stepPlayback(state, LANDING_END_HOLD_MS, 1, window)
+    expect(state).toEqual({ phase: end, holdLeftMs: 0 })
+    state = stepPlayback(state, 20, 1, window)
+    expect(state.phase).toBeCloseTo(window.start + 0.02, 12)
+    expect(state.holdLeftMs).toBe(0)
+  })
+
+  it('holds once per loop at the contact and once at the end, over ten seconds at 30 fps', () => {
+    let state: PlaybackState = { phase: window.start, holdLeftMs: 0 }
+    let contactHolds = 0
+    let endHolds = 0
+    let restarts = 0
+    let contactFrames = 0
+    for (let i = 0; i < 300; i += 1) {
+      const next = stepPlayback(state, FRAME_MS, cps, window)
+      if (next.holdLeftMs > 0 && state.holdLeftMs === 0) {
+        if (next.phase === GAIT_PHASES.rightContact) contactHolds += 1
+        else if (next.phase === end) endHolds += 1
+        else throw new Error(`unexpected hold at ${next.phase}`)
+      }
+      if (next.phase === GAIT_PHASES.rightContact) contactFrames += 1
+      if (next.phase < state.phase) restarts += 1
+      state = next
+    }
+    expect(contactHolds).toBeGreaterThan(3)
+    // One contact hold and one end hold per restart (give or take the pass in progress).
+    expect(Math.abs(contactHolds - restarts)).toBeLessThanOrEqual(1)
+    expect(Math.abs(endHolds - restarts)).toBeLessThanOrEqual(1)
+    // Each contact hold shows the exact contact frame for about the hold's length.
+    expect(contactFrames / contactHolds).toBeGreaterThanOrEqual(Math.floor(LANDING_CONTACT_HOLD_MS / FRAME_MS))
   })
 })

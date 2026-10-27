@@ -5,6 +5,7 @@
  */
 import { projectPoint } from './camera'
 import { GROUND_Y, poseAt } from './gaitModel'
+import { headTopAnchor } from './runnerAnnotations'
 import {
   LABEL_CHAR_WIDTH_EM,
   LABEL_LINE_HEIGHT,
@@ -25,9 +26,6 @@ function mid(a: Vec3, b: Vec3): Vec3 {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 }
 }
 
-/** Above the head, clear of the figure's top. */
-const HEAD_CLEARANCE = 0.25
-
 /**
  * The world point a parameter's flash sits beside: the near ankle (foot strike, swing arc), the
  * ground under the hip (landing), the hip (bounce, step width), the torso midpoint (lean), the
@@ -46,11 +44,8 @@ export function flashAnchor(
   const hip = mid(at(pose, 'left_hip'), at(pose, 'right_hip'))
   const shoulder = mid(at(pose, 'left_shoulder'), at(pose, 'right_shoulder'))
   switch (paramId) {
-    case 'cadence': {
-      const nose = at(pose, 'nose')
-      const top = Math.max(nose.y, at(pose, 'left_ear').y, at(pose, 'right_ear').y)
-      return { x: nose.x, y: top + HEAD_CLEARANCE, z: nose.z }
-    }
+    case 'cadence':
+      return headTopAnchor(pose)
     case 'pelvisBounce':
     case 'stepWidth':
       return hip
