@@ -46,3 +46,16 @@
 - [x] 6.7 Spec: extend the single-mount MODIFIED block in place; add `specs/results-summary/spec.md`.
 - [x] 6.8 Tests: summaryRows, focusAreaCamera, feedbackSources, compact MetricScale, FocusAreaRow, ResultsSummary.
 - [x] 6.9 Verify live on "Demo (3 clips)" at 1280 and 390 px, light and dark; e2e suite.
+
+## 7. Runner tour, desktop (`strides-trn2.3`)
+
+- [x] 7.1 `summaryRows` returns all six `views`; `ONE_THING_UNCLEAR` copy; `FeedbackLine` citation class; `BandLegend` shared by summary and tour.
+- [x] 7.2 `tour/tourPlan.ts`: stops, one thing, unmeasured areas, capture hint, `stopCamera`, `tourStopDomId`.
+- [x] 7.3 `tour/useActiveStop.ts`: reading line, focus, rAF batching.
+- [x] 7.4 `tour/TourStop.tsx`: `AreaStop` and `OneThingStop` with the end of the tour.
+- [x] 7.5 `tour/RunnerTour.tsx`: sticky bar (heading + Skip), one runner rail, intro, stops; `MultiClipVideoSession` passes `resultKey` (with the replay count) and `coverage`.
+- [x] 7.6 Spec: `specs/runner-tour/spec.md`; edit the single-mount MODIFIED block in place.
+- [x] 7.7 Tests: tourPlan, useActiveStop, TourStop, RunnerTour (camera, hash, intro, replay, reduced motion, word budget), session canvas test.
+- [x] 7.8 A/B fidelity gate (`--view-arm`): tour vs classic bit-identical but `elapsedMs`.
+- [x] 7.9 Verify live at 1280 px on `park-side-landscape.mp4` and "Demo (3 clips)"; lint, `tsc -b`, `vitest run`, e2e, `openspec validate --strict`.
+- [x] 7.10 Review round 1: landing → `legsSide` (summary too); headline-only focus; intro gated on a 90%-visible rail, intro camera from coverage; no coverage notice above the tour, hint as the add-a-clip control; wider rail, taller runner, value on its own line; "Your runner model"; NOTHING_TO_CHANGE reworded; progress dots; Replay scrolls to the top; TreeWalker word count; legend per active stop; ResizeObserver re-read.

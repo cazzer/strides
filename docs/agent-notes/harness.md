@@ -283,6 +283,20 @@ node scripts/ab-person-selection.mjs \
   **including one level down**, because the app ignores keys it doesn't recognise: a typo like
   `{personSelection:{enable:true}}` would otherwise merge into nothing and yield an arm identical
   to baseline, reading in the report as a real "no effect".
+- **`--view-arm <label>=<json>`** (`strides-trn2.3`) opens the trial on a results view,
+  `{"view":"tour"|"summary"|"classic"}` → `?view=<value>`; `{}` is the bare address (the tour, in a
+  fresh context with no remembered landing). Joined to the other planes by label; key AND value
+  validated, since an unknown view silently resolves to the default. It exists for view-fidelity
+  gates: on 2026-10-27, tour vs classic over side-landscape, side-portrait and front-approach, three
+  fresh trials each with `--evidence`, was bit-identical in all 1968 rows but `elapsedMs` — the
+  tour's animating runner does not perturb the scale pass. Two re-runs on the final commit agreed
+  row for row with the first. One of them lost its very FIRST trial (side-landscape, tour arm) to
+  the 300 s "never reached Analysis complete" timeout; 17 later tour trials, including a
+  side-landscape-only re-run, all completed, and the cause is not established.
+  After review round 1 (headline-only focus, intro gated on a 90%-visible rail, no coverage notice
+  above the tour) a side-landscape re-run, 3 trials per arm, was still identical to the first. ⚠️ The primary `[analysis-diagnostics]`
+  line predates the graft (VO_cm/stepWidthCm read `null` there); only the `[evidence-coverage]` rows
+  carry scale-pass output.
 - **Clips**: `side-landscape`, `side-portrait`, `front-approach` (the three bundled demo clips —
   see the table above) and `multiperson` (`e2e/fixtures/multiperson-track.mp4`). Default: all
   four. **Every one goes through the Upload tab**, including the demo clips: the demo button now

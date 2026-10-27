@@ -5,6 +5,7 @@ import { FOCUS_AREAS } from '../../guidance/focusAreas'
 import type { FocusAreaId } from '../../guidance/focusAreas'
 import { ModelRunner } from '../../runner/ModelRunner'
 import { bindRunnerParams } from '../../runner/runnerParams'
+import { BandLegend } from '../BandLegend'
 import { clipSourceLabel } from '../clipProvenance'
 import { FOCUS_AREA_CAMERA, NO_FOCUS_CAMERA, runnerFocusFor } from '../focusAreaCamera'
 import { GuidedResultsView } from '../GuidedResultsView'
@@ -182,16 +183,7 @@ function SummaryBody({
       </div>
 
       <div className="min-w-0 space-y-3">
-        {anyBar && (
-          <p className="results-summary__legend font-sans text-xs text-neutral-600 dark:text-neutral-400">
-            Bars: where other runners measured.{' '}
-            {/* The shading inverts between themes (MetricScale), so each states its own true word;
-                forced colours drop the shading, and the clause with it. */}
-            <span className="dark:hidden forced-colors:hidden">Darker = more runners. </span>
-            <span className="hidden dark:inline forced-colors:hidden">Brighter = more runners. </span>
-            Not a target.
-          </p>
-        )}
+        {anyBar && <BandLegend className="results-summary__legend" />}
         <div className="results-summary__rows divide-y-2 divide-black border-2 border-black dark:divide-white dark:border-white">
           {rows.map(({ view, entries, feedback }) => (
             <FocusAreaRow

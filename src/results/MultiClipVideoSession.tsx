@@ -270,13 +270,33 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
     writeResultsLanding()
     showView('summary')
   }, [showView])
-  const replayTour = useCallback(() => showView('tour'), [showView])
+  // How many times the reader has replayed the tour. Folded into the tour's result key, so each
+  // replay plays the runner's intro again; leaving and re-entering any other way does not.
+  const [tourReplays, setTourReplays] = useState(0)
+  // Set by Replay tour only: the summary's footer is far down the page, and a tour mounted at that
+  // scroll would open past its first stops, which ends the intro the replay is for.
+  const scrollToViewTopRef = useRef(false)
+  const replayTour = useCallback(() => {
+    setTourReplays((n) => n + 1)
+    scrollToViewTopRef.current = true
+    showView('tour')
+  }, [showView])
   const showSummary = useCallback(() => showView('summary'), [showView])
   const showClassic = useCallback(() => showView('classic'), [showView])
   useEffect(() => {
     if (!focusViewAfterSwitchRef.current) return
     focusViewAfterSwitchRef.current = false
-    // Each view marks its one entry point explicitly: the "Your runner" heading in the tour, the
+    const region = viewRegionRef.current
+    if (scrollToViewTopRef.current && region) {
+      scrollToViewTopRef.current = false
+      // Instant, not smooth: the reader asked to start over, and the intro reads the scroll position.
+      const headerHeight = headerRef.current?.offsetHeight ?? 0
+      const top = Math.max(0, window.scrollY + region.getBoundingClientRect().top - headerHeight)
+      window.scrollTo({ top, behavior: 'instant' })
+      region.querySelector<HTMLElement>('[data-view-entry]')?.focus({ preventScroll: true })
+      return
+    }
+    // Each view marks its one entry point explicitly: the "Your runner model" heading in the tour, the
     // "Summary" heading in the summary, Show summary above the classic table. A marker rather than "the first button",
     // so a control a later ticket puts in the runner slot cannot take focus by position.
     viewRegionRef.current?.querySelector<HTMLElement>('[data-view-entry]')?.focus()
@@ -660,7 +680,11 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
           Above BOTH views, rendered once here rather than copied into each: what the session is
           missing is a session fact, not a property of how the results are laid out.
         */}
-        {coverage && <SessionCoverageNotice coverage={coverage} onAddClip={requestAddClip} />}
+        {/* Not in the tour, whose last stop names what is missing and offers the same add-a-clip
+            control: above the tour it would push the runner below the fold before the intro. */}
+        {coverage && resultsViewMode !== 'tour' && (
+          <SessionCoverageNotice coverage={coverage} onAddClip={requestAddClip} />
+        )}
 
         {/*
           ONE view, chosen by a conditional — never two mounted with one hidden. The evidence
@@ -676,7 +700,15 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
         */}
         {anyClipVideoReady && (
           <div ref={viewRegionRef} className="space-y-8">
-            {resultsViewMode === 'tour' && <RunnerTour {...resultsViewProps} onLeaveTour={leaveTour} />}
+            {resultsViewMode === 'tour' && (
+              <RunnerTour
+                {...resultsViewProps}
+                onLeaveTour={leaveTour}
+                resultKey={`${clipIds.join(' ')}#${tourReplays}`}
+                coverage={coverage}
+                onAddClip={requestAddClip}
+              />
+            )}
             {resultsViewMode === 'summary' && (
               <ResultsSummary
                 {...resultsViewProps}

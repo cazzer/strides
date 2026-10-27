@@ -125,7 +125,7 @@ export const NON_POINTS: Partial<Record<MetricId, CitedLine>> = {
 /** Rendered before a cue's text, which starts mid-sentence. */
 export const CUE_PREFIX = 'One studied option:'
 export const ONE_THING_LABEL = 'One thing to try'
-export const NOTHING_TO_CHANGE = 'Nothing here calls for a change.'
+export const NOTHING_TO_CHANGE = 'No studied change to try for these readings.'
 
 /**
  * Areas that never carry a cue, whatever the guidance record gains later. Folland 2017 found more
@@ -229,6 +229,16 @@ export function feedbackFor(
 
 /** Why the one-thing stop cannot say either "this one" or "nothing here calls for a change". */
 export type OneThingUnclearReason = 'caveated' | 'pending' | 'unmeasured'
+
+/**
+ * What the one-thing stop says when it can say neither "this one" nor "nothing here calls for a
+ * change": that it cannot say, and why, without naming a value or grading one.
+ */
+export const ONE_THING_UNCLEAR: Readonly<Record<OneThingUnclearReason, string>> = {
+  caveated: "Can't say: a reading that could matter was measured with lower confidence.",
+  pending: "Can't say yet: bounce in centimetres is still being measured.",
+  unmeasured: "Can't say: a reading that could call for a change wasn't measured.",
+}
 
 export type OneThing =
   | {

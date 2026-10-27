@@ -18,6 +18,11 @@ export interface SummaryRows {
   areas: SummaryArea[]
   /** Every excluded metric, in the guided view's own order: the summary's final row. */
   notMeasured: GuidedEntry[]
+  /**
+   * All six areas' views, measured or not, in tour order: what `selectOneThing` reads, so the tour
+   * and the summary pick their one thing from the same views.
+   */
+  views: FocusAreaView[]
 }
 
 /**
@@ -44,7 +49,8 @@ export function summaryRows(
     ]),
   ) as Record<MetricId, MetricTier>
 
-  const areas = FOCUS_AREA_ORDER.map((area) => focusAreaView(area, heuristics, tiers))
+  const views = FOCUS_AREA_ORDER.map((area) => focusAreaView(area, heuristics, tiers))
+  const areas = views
     .filter((view) => view.measured)
     .map((view) => ({
       view,
@@ -57,5 +63,5 @@ export function summaryRows(
         return entry
       }),
     }))
-  return { areas, notMeasured }
+  return { areas, notMeasured, views }
 }

@@ -1215,8 +1215,10 @@ describe('MultiClipVideoSession — results view mode', () => {
     await loadOneReadyClip()
 
     expect(mountedView()).toBe('tour')
-    expect(document.querySelector('.guided-results__group')).not.toBeNull()
-    expect(document.querySelector('.runner-tour .results-runner-slot')).toHaveAttribute('aria-hidden', 'true')
+    // The tour's body, not the guided measurements: the runner's rail beside the stops.
+    expect(document.querySelector('.guided-results__group')).toBeNull()
+    expect(document.querySelector('.runner-tour .runner-tour__rail')).not.toBeNull()
+    expect(document.querySelector('.runner-tour [data-tour-stop="oneThing"]')).not.toBeNull()
     expect(window.location.search).toBe('?clip=demo')
     expect(window.location.hash).toBe('#top')
   })
@@ -1296,7 +1298,40 @@ describe('MultiClipVideoSession — results view mode', () => {
     expect(mountedView()).toBe('tour')
     expect(window.localStorage.getItem('strides.resultsLanding')).toBe('summary')
     expect(window.location.search).toBe('')
-    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Your runner' }))
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Your runner model' }))
+  })
+
+  it('Replay tour opens the tour at its top with the intro running again', async () => {
+    // jsdom lays nothing out, so every stop would read as above the reading line and end the intro
+    // at once; place them below it, as a fresh tour at the top of the page has them.
+    const originalRect = HTMLElement.prototype.getBoundingClientRect
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      if (this.dataset.tourStop !== undefined) {
+        return { top: 10_000, bottom: 10_500, left: 0, right: 0, width: 0, height: 500, x: 0, y: 10_000, toJSON: () => ({}) }
+      }
+      return originalRect.call(this)
+    }
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
+    try {
+      await loadOneReadyClip()
+      expect(mountedView()).toBe('tour')
+      // The tour shows no coverage notice above it: its last stop carries that.
+      expect(document.querySelector('.session-coverage')).toBeNull()
+      fireEvent.click(await screen.findByRole('button', { name: 'Skip intro' }))
+      expect(screen.queryByRole('button', { name: 'Skip intro' })).toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Skip to summary' }))
+      expect(mountedView()).toBe('summary')
+      expect(scrollTo).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: 'Replay tour' }))
+      expect(mountedView()).toBe('tour')
+      expect(scrollTo).toHaveBeenCalledWith({ top: expect.any(Number), behavior: 'instant' })
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Your runner model' }))
+      // A replay is a new intro key: it plays again.
+      expect(screen.getByRole('button', { name: 'Skip intro' })).toBeInTheDocument()
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = originalRect
+    }
   })
 
   it('Classic table writes view=classic, and Show summary removes it again', async () => {
@@ -1380,7 +1415,9 @@ describe('MultiClipVideoSession — results view mode', () => {
     window.history.back()
     await waitFor(() => expect(mountedView()).toBe('tour'))
     expect(window.localStorage.getItem('strides.resultsLanding')).toBe('summary')
-    expect(document.querySelector('.runner-tour .evidence-image > canvas')).toBe(canvas)
+    // The tour holds no card, so the canvas is out of the document until a card view mounts.
+    expect(document.querySelector('.runner-tour .evidence-image')).toBeNull()
+    expect(canvas.isConnected).toBe(false)
 
     window.history.forward()
     await waitFor(() => expect(mountedView()).toBe('summary'))
@@ -1441,16 +1478,18 @@ describe('MultiClipVideoSession — results view mode', () => {
     ).toMatch(/^\d+px$/)
   })
 
-  it('moves the SAME evidence canvas through tour → summary → classic → summary, never losing it', async () => {
+  it('mounts no canvas in the tour, then moves the SAME canvas through summary → classic → summary', async () => {
     const canvas = await settleOneEvidenceCanvas()
     await loadOneReadyClip()
 
     expect(mountedView()).toBe('tour')
-    // Identity, not a lookalike: the one node the extractor produced is what each view shows.
-    expect(document.querySelector('.runner-tour .guided-results .evidence-image > canvas')).toBe(canvas)
+    // The tour mounts no metric card and so no evidence canvas; the summary is the first to.
+    expect(document.querySelector('.runner-tour .evidence-image')).toBeNull()
+    expect(canvas.isConnected).toBe(false)
 
     fireEvent.click(screen.getByRole('button', { name: 'Skip to summary' }))
     expect(mountedView()).toBe('summary')
+    // Identity, not a lookalike: the one node the extractor produced is what each view shows.
     expect(document.querySelector('.results-summary .guided-results .evidence-image > canvas')).toBe(canvas)
 
     fireEvent.click(screen.getByRole('button', { name: 'Classic table' }))

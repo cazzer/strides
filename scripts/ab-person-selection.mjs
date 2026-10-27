@@ -25,6 +25,12 @@
  *                         window.__STRIDES_POSE_BACKEND_OVERRIDE__ the same way. Arms are joined
  *                         to --arm by LABEL, so one arm may set either plane or both; a label
  *                         named on only one plane gets `{}` on the other.
+ *   --view-arm <label>=<json>
+ *                         Repeatable. The third plane: which results view the page opens on,
+ *                         `{"view":"tour"|"summary"|"classic"}`, written to the address as
+ *                         `?view=<value>`. Joined by LABEL like --backend-arm. `{}` (or an arm
+ *                         that never names this plane) opens the bare address: the default view.
+ *                         For fidelity gates — a view must never change what gets measured.
  *   --clips <a,b,c>       side-landscape | side-portrait | front-approach | multiperson
  *                         (default: all four). ⚠️ These keys were `demo1`/`demo2` and now name
  *                         the footage instead — `demo1` was the Pexels stock clip, which the UI
@@ -237,6 +243,14 @@ const BACKEND_ARM_ENUMS = {
 }
 
 /**
+ * The THIRD plane: not an override global but the address. `view` is `resolveResultsViewMode`'s
+ * closed set (src/results/resultsViewMode.ts); any other value would silently fall back to the
+ * default view there and read as a clean "no effect", so it is refused here.
+ */
+const VIEW_ARM_KEYS = { view: null }
+const VIEW_ARM_ENUMS = { view: ['tour', 'summary', 'classic'] }
+
+/**
  * Field groups, in report order. Within a group fields sort alphabetically, so the row order is a
  * property of the field NAMES rather than of which arm happened to produce which keys first —
  * without that, an arm whose run skipped the selection stage (no `segments[0].*` at all) would
@@ -295,9 +309,9 @@ function assertKnownValues(enums, value, where) {
 }
 
 /**
- * Parses one `<label>=<json>` arm on either override plane. `flag` and `schema` are what differ;
- * everything else — the label split, the JSON parse, the object check, the recursive key check —
- * is shared, so the two planes cannot drift into validating to different standards.
+ * Parses one `<label>=<json>` arm on any of the three planes. `flag`, `schema` and `enums` are what
+ * differ; everything else — the label split, the JSON parse, the object check, the recursive key
+ * check — is shared, so the planes cannot drift into validating to different standards.
  */
 function parseArmOnPlane(flag, schema, enums, value) {
   const split = value.indexOf('=')
@@ -323,11 +337,13 @@ function parseArmOnPlane(flag, schema, enums, value) {
 const parseArm = (value) => parseArmOnPlane('--arm', ARM_KEYS, null, value)
 const parseBackendArm = (value) =>
   parseArmOnPlane('--backend-arm', BACKEND_ARM_KEYS, BACKEND_ARM_ENUMS, value)
+const parseViewArm = (value) => parseArmOnPlane('--view-arm', VIEW_ARM_KEYS, VIEW_ARM_ENUMS, value)
 
 function parseArgs(argv) {
   const options = {
     arms: [],
     backendArms: [],
+    viewArms: [],
     clips: PUBLIC_CLIP_NAMES,
     trials: 3,
     timeoutMs: 300_000,
@@ -349,6 +365,10 @@ function parseArgs(argv) {
         break
       case '--backend-arm':
         options.backendArms.push(parseBackendArm(requireValue(flag, value)))
+        i += 1
+        break
+      case '--view-arm':
+        options.viewArms.push(parseViewArm(requireValue(flag, value)))
         i += 1
         break
       case '--clips':
@@ -408,37 +428,47 @@ function parseArgs(argv) {
   for (const [flag, parsed] of [
     ['--arm', options.arms],
     ['--backend-arm', options.backendArms],
+    ['--view-arm', options.viewArms],
   ]) {
     const labels = new Set(parsed.map((arm) => arm.label))
     if (labels.size !== parsed.length) {
       throw new Error(`${flag} labels must be unique`)
     }
   }
-  if (options.arms.length === 0 && options.backendArms.length === 0) {
+  if (options.arms.length === 0 && options.backendArms.length === 0 && options.viewArms.length === 0) {
     throw new Error(
-      'at least one --arm or --backend-arm <label>=<json> is required (use `{}` for a baseline arm)',
+      'at least one --arm, --backend-arm or --view-arm <label>=<json> is required (use `{}` for a baseline arm)',
     )
   }
 
-  // Arms are joined by LABEL across the two planes, so one arm can carry a sampling override, a
-  // backend override, or both, and an arm named on only one plane gets `{}` on the other. Order is
-  // first appearance, sampling plane first, so a report's column order is a property of the
-  // command line rather than of which plane happened to be parsed first.
+  // Arms are joined by LABEL across the three planes (sampling, backend, view), so one arm can carry
+  // any combination of them, and an arm not named on a plane gets `{}` there. Order is first
+  // appearance, sampling plane first, then backend, then view, so a report's column order is a
+  // property of the command line rather than of which plane happened to be parsed first.
   const byLabel = new Map()
   for (const [plane, parsed] of [
     ['override', options.arms],
     ['backendOverride', options.backendArms],
+    ['viewOverride', options.viewArms],
   ]) {
     for (const arm of parsed) {
       const existing = byLabel.get(arm.label)
       if (existing) existing[plane] = arm.override
-      else byLabel.set(arm.label, { label: arm.label, override: {}, backendOverride: {}, [plane]: arm.override })
+      else
+        byLabel.set(arm.label, {
+          label: arm.label,
+          override: {},
+          backendOverride: {},
+          viewOverride: {},
+          [plane]: arm.override,
+        })
     }
   }
   options.arms = [...byLabel.values()]
   // Kept only so the report can tell "this arm set no backend override" from "this run used no
   // backend plane at all" — the latter suppresses the header lines entirely.
   options.usesBackendPlane = options.backendArms.length > 0
+  options.usesViewPlane = options.viewArms.length > 0
   return options
 }
 
@@ -582,11 +612,12 @@ async function warmUpAndReadRenderer(launchArgs, baseURL) {
  */
 async function runTrial(
   browser,
-  { baseURL, clip, clipName, override, backendOverride, timeoutMs, evidence, perf },
+  { baseURL, clip, clipName, override, backendOverride, viewOverride, timeoutMs, evidence, perf },
 ) {
   const context = await browser.newContext()
   try {
-    // Both planes go in via `addInitScript`, never `evaluate`: auto-analyze can start before an
+    // Both override planes go in via `addInitScript`, never `evaluate` (the view plane is the
+    // address `goto` opens, below): auto-analyze can start before an
     // `evaluate()` after `goto()` lands, and the backend override is read once per detector
     // creation — earlier still than the sampling one.
     await context.addInitScript((value) => {
@@ -650,7 +681,7 @@ async function runTrial(
       }
     })
 
-    await page.goto(baseURL)
+    await page.goto(viewURL(baseURL, viewOverride))
 
     const startedAt = Date.now()
     // Every clip routes through Upload now — see CLIPS. The demo-button branch, and the
@@ -708,6 +739,14 @@ async function runTrial(
   } finally {
     await context.close()
   }
+}
+
+/** The address a trial opens: the bare baseURL, or with `?view=` when the arm names a view. */
+function viewURL(baseURL, viewOverride = {}) {
+  if (viewOverride.view === undefined) return baseURL
+  const url = new URL(baseURL)
+  url.searchParams.set('view', viewOverride.view)
+  return url.toString()
 }
 
 function isPlainObject(value) {
@@ -898,6 +937,10 @@ function report({ renderer, baseURL, provenance, commit, options, results }) {
           (arm) => `# backend-arm ${arm.label}: ${JSON.stringify(arm.backendOverride)}`,
         )
       : []),
+    // Same rule as the backend plane: absent unless this run used the view plane.
+    ...(options.usesViewPlane
+      ? options.arms.map((arm) => `# view-arm ${arm.label}: ${JSON.stringify(arm.viewOverride)}`)
+      : []),
   ]
 
   for (const clipName of options.clips) {
@@ -1006,6 +1049,7 @@ async function main() {
               clipName,
               override: arm.override,
               backendOverride: arm.backendOverride,
+              viewOverride: arm.viewOverride,
               timeoutMs: options.timeoutMs,
               evidence: options.evidence,
               perf: options.perf,

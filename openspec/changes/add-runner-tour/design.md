@@ -143,7 +143,7 @@ to try"), the prefix and the cue. Why lines are ≤ 14 words.
 | landing (if overstriding is ever banded) | Landing + why (5) + prefix (3) + step-rate cue (16) | 25 |
 | foot path | Foot path (2) + step-width non-point (10) | 12 |
 | one thing | One thing to try (4) + prefix (3) + longest cue that can fire (13) | 20 |
-| one thing, nothing to change | One thing to try (4) + "Nothing here calls for a change." (6) | 10 |
+| one thing, nothing to change | One thing to try (4) + "No studied change to try for these readings." (8) | 12 |
 
 ### D5. Layering and imports
 
@@ -156,6 +156,55 @@ type moved down into `src/guidance/bandApplicability.ts`. `src/results/guidedGro
 No production module in `src/guidance` imports from `src/results`. Running
 `grep -rn "from '../results" src/guidance` lists only test files, which import the shared fixtures
 and `metricTier`. Nothing comes from `src/runner`.
+
+### D6. The tour (`strides-trn2.3`)
+
+- **One shell, one runner.** `RunnerTour` renders its body through `GuidedResultsView`'s children
+  slot (`null` while there is no result), so the status line and Start over exist once. The body is
+  a rail holding ONE `ModelRunner`, never keyed per stop (the reader's Pause lives in its state),
+  beside a column of stop sections. The tour mounts no metric card, so it holds no evidence canvas;
+  the summary is the first view to mount them.
+- **Plan.** `tour/tourPlan.ts` (pure) builds the stops from `summaryRows` (which now also returns
+  all six `views`, so `selectOneThing` reads the same views), each with `feedbackFor`, plus the one
+  thing, the unmeasured areas and one capture hint. The hint reads the session's coverage needs
+  whose metrics sit in an unmeasured area: one view → "Add a front-view clip." (or side), both →
+  "Add a side-view and a front-view clip.", none → "Film several seconds of steady running, whole
+  body in frame."
+- **Active stop.** `useActiveStop`: the last `[data-tour-stop]` whose top is at or above a reading
+  line at 42% of the viewport (MotionStoryStage's line), rAF-batched on scroll/resize; `focusin`
+  selects the focused stop. A `#tour-<id>` fragment goes through `useRevealFragment`, which focuses
+  the stop, so focus covers it. The stop sets camera and rate from `FOCUS_AREA_CAMERA`
+  (`NO_FOCUS_CAMERA` for the one thing) and focus from `runnerFocusFor` over the stop's HEADLINE
+  metric only (memoised on its id), so the figure never labels a number the stop does not state.
+  Landing frames `legsSide` at 0.4×, a stopgap shared with the summary: `footSide`'s 3× zoom kept
+  the foot in frame only around contact. A contact-tracking camera is a runner follow-up. The band
+  legend shows only while the shown stop's headline has a compact bar. The plan and the active stop
+  live in `RunnerTour`, above the shell, because the sticky bar also shows them as progress dots
+  (links to `#tour-<id>`, `aria-current="step"`, "Stop N of M" to assistive technology).
+- **Intro.** `useRunnerIntro` with `order` = every area's metrics in tour order, `camera` =
+  `introCamera(coverage)` (`feetFront` for a front-only session, whose lateral parameters need a
+  view that sees sideways movement; `wholeBodySide` otherwise) — the runner's own camera for as long
+  as the intro runs, since no stop is shown then — and `active` = `onActiveChange` AND the runner's
+  figure (its `svg`, found through the rail) being ≥ 90% on screen (the tour's own
+  `IntersectionObserver`), so the intro never plays out below the fold. Gating on the whole rail
+  held the intro at scroll 0 on a 1280×800 screen, where the rail's Pause row and legend sit just
+  below the fold. For the same reason the session shows no coverage notice above the tour; the end block
+  carries it, its hint the add-a-clip control itself. Replay tour scrolls the view region to the
+  top, instantly, before focusing the heading. `resultKey` is the session's clip ids plus a
+  replay count that "Replay tour" increments, so a replay plays the intro again and the scale-pass
+  graft does not. UI reads `running`, never `onDone`. An effect skips the intro once the active stop
+  is past the first.
+- **Word budget.** Counted in jsdom per D4 on each `[data-tour-stop]` over its text nodes joined
+  with spaces (a `TreeWalker`, so adjacent elements never run together), removing `.sr-only`,
+  `.runner-tour__value` (name, value, confidence), `.feedback-line__citation` (evidence kind and
+  source) and `.runner-tour__end`, which is budgeted separately (≤ 25).
+- **Phones.** The rail, body and stop class strings are exported constants (`TOUR_RAIL_CLASS`,
+  `TOUR_BODY_CLASS`, `TOUR_STOP_CLASS`) so `strides-trn2.4` can add its `max-lg:` background layout
+  in place.
+- **Fidelity.** The tour is the default view and its runner animates through the scale pass. The
+  A/B driver gained a `--view-arm` plane; tour vs `?view=classic` on side-landscape, side-portrait
+  and front-approach, three fresh-process trials each with `--evidence`, was bit-identical in every
+  field but `elapsedMs`.
 
 ## Risks / Trade-offs
 

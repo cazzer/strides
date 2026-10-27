@@ -91,9 +91,10 @@ Selecting a view SHALL NOT require a routing library.
 
 The runner tour, the results summary and the classic results view SHALL NOT be mounted
 simultaneously. The choice between them SHALL be exclusive. The tour and the summary SHALL each
-render exactly one guided results shell, never a hidden second copy, and mount each metric's card
-(and so its evidence) at most once; a collapsed summary row SHALL hide its content without
-unmounting it.
+render exactly one guided results shell, never a hidden second copy. The tour SHALL mount no metric
+card and so no evidence canvas; its evidence is mounted when the reader switches to the summary or
+the classic view. The summary SHALL mount each metric's card (and so its evidence) at most once; a
+collapsed summary row SHALL hide its content without unmounting it.
 
 This is forced by the DOM, not chosen for tidiness. Session evidence hands out real canvas elements
 and each is mounted by replacing a host's children with it. **A DOM node has exactly one parent.**
@@ -101,8 +102,8 @@ Mounting two views would silently move every evidence canvas into whichever rend
 the other view's imagery with no error raised anywhere — a failure that looks like missing evidence
 rather than like a bug in view selection.
 
-For the same reason neither the guided view nor the results summary SHALL acquire session evidence
-itself. Each SHALL receive evidence as input from the single existing acquisition, so that
+For the same reason neither the guided view, the runner tour nor the results summary SHALL acquire
+session evidence itself. Each SHALL receive evidence as input from the single existing acquisition, so that
 switching views moves the canvases rather than duplicating or re-extracting them.
 
 #### Scenario: Only one view is in the document
@@ -114,14 +115,14 @@ switching views moves the canvases rather than duplicating or re-extracting them
 
 - **WHEN** the reader switches from the tour to the summary, to the classic view and back to the
   summary
-- **THEN** evidence imagery renders in the view that is mounted, the same canvas elements move with
-  each switch, and no image is lost
+- **THEN** the tour shows no evidence imagery, and from the summary on the imagery renders in the
+  view that is mounted, the same canvas elements move with each switch, and no image is lost
 
 #### Scenario: The guided view does not acquire evidence itself
 
-- **WHEN** the guided view or the results summary renders
-- **THEN** it renders the evidence it was given as input and starts no evidence acquisition of its
-  own
+- **WHEN** the guided view, the runner tour or the results summary renders
+- **THEN** it renders at most the evidence it was given as input and starts no evidence acquisition
+  of its own
 
 #### Scenario: Collapsed summary rows keep their imagery
 
