@@ -1,34 +1,32 @@
 import { describe, expect, it } from 'vitest'
 import { bindAll } from './__fixtures__/boundParams'
 import { CAMERA_PRESETS } from './camera'
-import { GAIT_PHASES, poseAt } from './gaitModel'
+import { GAIT_PHASES, GROUND_Y, poseAt } from './gaitModel'
 import { flashAlign, flashAnchor, labelBox, placeFlash, pointsBox } from './introFlash'
-import { footFloor } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
 import { LABEL_LINE_HEIGHT, RUNNER_PARAM_IDS } from './runnerScene'
 
 const VALUES = runnerParamValues(bindAll())
-const FLOOR = footFloor(VALUES)
 const HELD = GAIT_PHASES.midStance
 
 describe('flashAnchor', () => {
-  it('puts cadence above the head, landing and the feet on the floor, lean between hip and shoulders', () => {
+  it('puts cadence above the head, landing on the ground, lean between hip and shoulders', () => {
     const pose = poseAt(HELD, VALUES)
     const headTop = Math.max(...pose.filter((j) => j.name === 'nose' || j.name.endsWith('_ear')).map((j) => j.y))
-    expect(flashAnchor('cadence', VALUES, HELD, 0, FLOOR).y).toBeGreaterThan(headTop)
-    expect(flashAnchor('landingOffset', VALUES, HELD, 0, FLOOR).y).toBe(FLOOR)
-    const hip = flashAnchor('pelvisBounce', VALUES, HELD, 0, FLOOR)
-    const lean = flashAnchor('torsoPitch', VALUES, HELD, 0, FLOOR)
-    const shoulder = flashAnchor('armSwing', VALUES, HELD, 0, FLOOR)
+    expect(flashAnchor('cadence', VALUES, HELD, 0).y).toBeGreaterThan(headTop)
+    expect(flashAnchor('landingOffset', VALUES, HELD, 0).y).toBe(GROUND_Y)
+    const hip = flashAnchor('pelvisBounce', VALUES, HELD, 0)
+    const lean = flashAnchor('torsoPitch', VALUES, HELD, 0)
+    const shoulder = flashAnchor('armSwing', VALUES, HELD, 0)
     expect(lean.y).toBeGreaterThan(hip.y)
     expect(lean.y).toBeLessThan(shoulder.y)
   })
 
   it('is a fixed point for every parameter: the same inputs give the same anchor', () => {
     for (const id of RUNNER_PARAM_IDS) {
-      const a = flashAnchor(id, VALUES, HELD, 0, FLOOR)
+      const a = flashAnchor(id, VALUES, HELD, 0)
       expect(Object.values(a).every(Number.isFinite)).toBe(true)
-      expect(flashAnchor(id, VALUES, HELD, 0, FLOOR)).toEqual(a)
+      expect(flashAnchor(id, VALUES, HELD, 0)).toEqual(a)
     }
   })
 
@@ -38,11 +36,11 @@ describe('flashAnchor', () => {
       const j = pose.find((joint) => joint.name === name)
       return j && { x: j.x, y: j.y, z: j.z }
     }
-    expect(flashAnchor('peakThighAngle', VALUES, HELD, 0, FLOOR)).toEqual(knee('right_knee'))
-    expect(flashAnchor('peakThighAngle', VALUES, HELD, 180, FLOOR)).toEqual(knee('left_knee'))
+    expect(flashAnchor('peakThighAngle', VALUES, HELD, 0)).toEqual(knee('right_knee'))
+    expect(flashAnchor('peakThighAngle', VALUES, HELD, 180)).toEqual(knee('left_knee'))
     // Foot strike and swing arc sit on the near ankle, at ankle height.
-    expect(flashAnchor('contactShankOffset', VALUES, HELD, 0, FLOOR)).toEqual(knee('right_ankle'))
-    expect(flashAnchor('swingFootArc', VALUES, HELD, 180, FLOOR)).toEqual(knee('left_ankle'))
+    expect(flashAnchor('contactShankOffset', VALUES, HELD, 0)).toEqual(knee('right_ankle'))
+    expect(flashAnchor('swingFootArc', VALUES, HELD, 180)).toEqual(knee('left_ankle'))
   })
 
   it('puts the lean flash on the back side of the torso, every other flash after its anchor', () => {

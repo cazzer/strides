@@ -17,7 +17,7 @@
 import { formatGuidedValue } from '../results/formatGuidedValue'
 import type { MetricResult } from '../heuristics/types'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
-import { GAIT_PHASES, MODEL_PROPORTIONS, PELVIS_HEIGHT, poseAt } from './gaitModel'
+import { GAIT_PHASES, GROUND_Y, MODEL_PROPORTIONS, pelvisHeight, poseAt } from './gaitModel'
 import type { RunnerSources } from './runnerScene'
 import type {
   BoundRunnerParams,
@@ -145,8 +145,6 @@ export interface AnnotationInput {
   kind?: AnnotationKind
   /** The target camera's yaw: picks the near limb in a side view, the stance leg in a front one. */
   cameraYawDeg: number
-  /** `footFloor(values)`, computed once by the caller. */
-  floor: number
 }
 
 export interface AnnotationPlan {
@@ -191,30 +189,6 @@ export function circularDistance(a: number, b: number): number {
 /** The leg in the first (stance) half of its own cycle at `phase`. */
 function stanceSide(phase: number): RunnerSide {
   return fract(phase) < 0.5 ? 'left' : 'right'
-}
-
-const FOOT_FLOOR_SAMPLES = 120
-const FOOT_POINTS: readonly KeypointName[] = [
-  'left_ankle',
-  'right_ankle',
-  'left_heel',
-  'right_heel',
-  'left_foot_index',
-  'right_foot_index',
-]
-
-/**
- * The lowest foot point over a whole cycle. The model has no inverse kinematics, so away from the
- * neutral values the feet can dip below or float above y = 0; the renderer draws its
- * (illustrative) ground here so the figure never floats.
- */
-export function footFloor(values: RunnerParams): number {
-  let floor = Infinity
-  for (let i = 0; i < FOOT_FLOOR_SAMPLES; i += 1) {
-    const pose = poseAt(i / FOOT_FLOOR_SAMPLES, values)
-    for (const name of FOOT_POINTS) floor = Math.min(floor, joint(pose, name).y)
-  }
-  return floor
 }
 
 /**
@@ -278,7 +252,6 @@ interface BuildContext {
   side: RunnerSide
   /** The phase this annotation is drawn at: its key phase, or the held phase. */
   phase: number
-  floor: number
 }
 
 type Builder = (value: number, values: RunnerParams, ctx: BuildContext) => Built
@@ -328,16 +301,17 @@ const BUILDERS: Readonly<Record<Exclude<RunnerParamId, 'cadence'>, Builder>> = {
       label: { anchor: ray(knee, thighDeg, radius), side: value >= 0 ? 'right' : 'left' },
     }
   },
-  pelvisBounce(value) {
-    // Hip-mid's height runs exactly PELVIS_HEIGHT ± bounce / 2 over the cycle.
+  pelvisBounce(value, values) {
+    // Hip-mid's height runs exactly pelvisHeight ± bounce / 2 over the cycle.
     const x = -0.4
-    const low = PELVIS_HEIGHT - value / 2
-    const high = PELVIS_HEIGHT + value / 2
+    const centre = pelvisHeight(values)
+    const low = centre - value / 2
+    const high = centre + value / 2
     return {
       marks: verticalBracket(x, 0, low, high, BRACKET_TICK_HALF),
       fills: [],
       guides: [],
-      label: { anchor: { x, y: PELVIS_HEIGHT, z: 0 }, side: 'left' },
+      label: { anchor: { x, y: centre, z: 0 }, side: 'left' },
     }
   },
   armSwing(value, values, { side, phase }) {
@@ -362,11 +336,11 @@ const BUILDERS: Readonly<Record<Exclude<RunnerParamId, 'cadence'>, Builder>> = {
       label: { anchor: { x, y: low, z: shoulder.z }, side: 'below' },
     }
   },
-  landingOffset(_value, values, { side, phase, floor }) {
+  landingOffset(_value, values, { side, phase }) {
     const pose = poseAt(phase, values)
     const hip = midpoint(joint(pose, 'left_hip'), joint(pose, 'right_hip'))
     const ankle = sideJoint(pose, side, 'ankle')
-    const y = floor - 0.05
+    const y = GROUND_Y - 0.05
     const z = ankle.z
     const start = { x: hip.x, y, z }
     const end = { x: ankle.x, y, z }
@@ -377,7 +351,7 @@ const BUILDERS: Readonly<Record<Exclude<RunnerParamId, 'cadence'>, Builder>> = {
         // Short extension lines: up from the mark under hip-mid, and down from the ankle.
         [
           { x: hip.x, y: y - EXTENSION_OVERHANG, z },
-          { x: hip.x, y: floor + 0.25, z },
+          { x: hip.x, y: GROUND_Y + 0.25, z },
         ],
         [
           { x: ankle.x, y: ankle.y, z },
@@ -402,9 +376,9 @@ const BUILDERS: Readonly<Record<Exclude<RunnerParamId, 'cadence'>, Builder>> = {
       label: { anchor: { x: Math.max(knee.x, ankle.x), y, z }, side: 'right' },
     }
   },
-  stepWidth(_value, values, { side, phase, floor }) {
+  stepWidth(_value, values, { side, phase }) {
     const ankle = sideJoint(poseAt(phase, values), side, 'ankle')
-    const y = floor - 0.06
+    const y = GROUND_Y - 0.06
     const start = { x: ankle.x, y, z: 0 }
     const end = { x: ankle.x, y, z: ankle.z }
     return {
@@ -414,7 +388,7 @@ const BUILDERS: Readonly<Record<Exclude<RunnerParamId, 'cadence'>, Builder>> = {
         // The midline, short, and a drop from the contact ankle.
         [
           { x: ankle.x, y: y - EXTENSION_OVERHANG, z: 0 },
-          { x: ankle.x, y: floor + 0.3, z: 0 },
+          { x: ankle.x, y: GROUND_Y + 0.3, z: 0 },
         ],
         [ankle, { x: ankle.x, y: y - EXTENSION_OVERHANG, z: ankle.z }],
       ],
@@ -474,7 +448,6 @@ export function planAnnotations({
   focusParams,
   kind,
   cameraYawDeg,
-  floor,
 }: AnnotationInput): AnnotationPlan {
   const eligible = focusParams.filter((paramId) => {
     const natural = PARAM_ANNOTATION_KIND[paramId]
@@ -512,7 +485,6 @@ export function planAnnotations({
     const built = BUILDERS[paramId as Exclude<RunnerParamId, 'cadence'>](values[paramId], values, {
       side,
       phase,
-      floor,
     })
     const value = formatRunnerValue(param.metricId, param.metricValue)
     const annotation: RunnerAnnotation = {

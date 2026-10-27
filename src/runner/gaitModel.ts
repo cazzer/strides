@@ -43,6 +43,9 @@ export const MODEL_PROPORTIONS = {
   nose: { forward: 0.12, up: 0.38 },
 } as const
 
+/** The ground plane's height. The stance foot stands on it (design.md D15). */
+export const GROUND_Y = 0
+
 /** The model's torso, for converting `verticalOscillationCm` into torso lengths. Illustrative. */
 export const MODEL_TORSO_LENGTH_CM = 50
 
@@ -363,6 +366,7 @@ export function pelvisHeight(params: RunnerParams): number {
   const legs = sagittalLegLengths(params.stepWidth)
   const contact = solveContact(params)
   return (
+    GROUND_Y +
     footDrop(contact.shankDeg) +
     legs.thigh * Math.cos(contact.thighDeg * DEG) +
     legs.shank * Math.cos(contact.shankDeg * DEG) -

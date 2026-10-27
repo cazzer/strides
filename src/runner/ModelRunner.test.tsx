@@ -6,9 +6,9 @@ import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { bindAll, bindOnly } from './__fixtures__/boundParams'
 import { CAMERA_PRESETS, projectPoint, projectPose } from './camera'
-import { GAIT_PHASES, poseAt } from './gaitModel'
+import { GAIT_PHASES, GROUND_Y, poseAt } from './gaitModel'
 import { ModelRunner, RUNNER_CAPTION, type ModelRunnerProps } from './ModelRunner'
-import { footFloor, phaseForLeg } from './runnerAnnotations'
+import { phaseForLeg } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
 import { FAR_OPACITY, RUNNER_PARAM_IDS, UNFOCUSED_OPACITY, edgeKey } from './runnerScene'
 import type { CameraPreset, CameraState, RunnerParams } from './types'
@@ -277,11 +277,11 @@ describe('ModelRunner drawing', () => {
     expect(container.querySelector('[data-flash]')).toBeNull()
   })
 
-  it('stands the figure on the lowest foot point over the cycle', () => {
+  it('draws the ground at y = 0, where the stance foot stands', () => {
     const { container } = setup()
     const y = Number(container.querySelector('[data-ground]')?.getAttribute('y1'))
     const expected = projectPoint(
-      { x: CAMERA_PRESETS.wholeBodySide.target.x, y: footFloor(VALUES), z: 0 },
+      { x: CAMERA_PRESETS.wholeBodySide.target.x, y: GROUND_Y, z: 0 },
       'wholeBodySide',
     ).y
     expect(y).toBeCloseTo(expected, 3)

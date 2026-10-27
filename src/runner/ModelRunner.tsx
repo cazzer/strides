@@ -29,9 +29,8 @@ import {
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 import { interpolateCamera, projectPoint, projectPose } from './camera'
-import { cyclesPerSecond, poseAt } from './gaitModel'
+import { GROUND_Y, cyclesPerSecond, poseAt } from './gaitModel'
 import {
-  footFloor,
   planAnnotations,
   shownWhileStill,
   type AnnotationKind,
@@ -203,7 +202,6 @@ interface DrawTargets {
 interface Scene {
   /** The static values (bound plus `overrides.values`), before any value tween. */
   values: RunnerParams
-  floor: number
   pxPerUnit: number
   targets: DrawTargets
 }
@@ -388,7 +386,6 @@ export function ModelRunner({
   const focusMetrics = focus?.metricIds
   const focusParams = useMemo(() => focusParamsOf(focusMetrics ?? []), [focusMetrics])
   const annotationKind = focus?.annotation
-  const floor = useMemo(() => footFloor(values), [values])
   const { heldPhase, annotations: allAnnotations } = useMemo(
     () =>
       planAnnotations({
@@ -398,9 +395,8 @@ export function ModelRunner({
         focusParams,
         kind: annotationKind,
         cameraYawDeg: target.yawDeg,
-        floor,
       }),
-    [params, values, sources, focusParams, annotationKind, target.yawDeg, floor],
+    [params, values, sources, focusParams, annotationKind, target.yawDeg],
   )
   // A still figure shows a limb mark only at its key phase; a playing one shows every mark.
   const valueTween = overrides?.valueTween ?? null
@@ -433,10 +429,10 @@ export function ModelRunner({
     const end = valueTween ? mixValues(values, valueTween.from, valueTween.to, 1) : values
     return {
       paramId: flash.paramId,
-      anchor: flashAnchor(flash.paramId, end, heldPhase, target.yawDeg, floor),
+      anchor: flashAnchor(flash.paramId, end, heldPhase, target.yawDeg),
       chars: flash.text.length,
     }
-  }, [flash, valueTween, values, heldPhase, target.yawDeg, floor])
+  }, [flash, valueTween, values, heldPhase, target.yawDeg])
 
   const phaseRef = useRef<number>(heldPhase)
   const heldPhaseRef = useRef(heldPhase)
@@ -463,7 +459,7 @@ export function ModelRunner({
     }
     for (const { el, j } of joints) setPoint(el, 'cx', 'cy', projected[j].x, projected[j].y)
     if (ground) {
-      const groundY = fmt(projectPoint({ x: cam.target.x, y: scene.floor, z: cam.target.z }, cam).y)
+      const groundY = fmt(projectPoint({ x: cam.target.x, y: GROUND_Y, z: cam.target.z }, cam).y)
       ground.setAttribute('y1', groundY)
       ground.setAttribute('y2', groundY)
     }
@@ -513,7 +509,6 @@ export function ModelRunner({
     if (!svg) return
     sceneRef.current = {
       values,
-      floor,
       pxPerUnit,
       targets: collectTargets(svg, annotations, flashPoint),
     }

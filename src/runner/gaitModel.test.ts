@@ -12,7 +12,6 @@ import {
   realizeParams,
 } from './gaitModel'
 import {
-  DENSE_PHASES,
   MEASURE_PARAM,
   hipWidth,
   joint,
