@@ -11,6 +11,7 @@ import { FOCUS_AREAS } from '../../guidance/focusAreas'
 import type { FocusAreaId, TourStopId } from '../../guidance/focusAreas'
 import { METRIC_GUIDANCE } from '../../guidance/metricGuidance'
 import { MetricScale } from '../../guidance/MetricScale'
+import { BandLegend } from '../BandLegend'
 import { FeedbackLine } from '../FeedbackLine'
 import { guidedHeadlineParts } from '../formatGuidedValue'
 import { joinList } from '../guidedGroups'
@@ -28,7 +29,7 @@ import { tourStopDomId } from './tourPlan'
  * slot reaches the reading line while its panel is still low on the screen.
  */
 export const TOUR_STOP_CLASS =
-  'runner-tour__stop flex min-h-[calc(100dvh_-_var(--motion-story-header-height,88px)_-_3.5rem)] scroll-mt-[calc(var(--motion-story-header-height,88px)_+_3.5rem)] flex-col justify-center gap-3 border-t-2 border-black py-10 focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand-600 max-lg:min-h-[calc(100dvh_-_var(--rt-top))] max-lg:scroll-mt-[var(--rt-top)] max-lg:justify-end max-lg:border-t-0 max-lg:py-3 dark:border-white'
+  'runner-tour__stop flex min-h-[calc(100dvh_-_var(--motion-story-header-height,88px)_-_3.5rem)] scroll-mt-[calc(var(--motion-story-header-height,88px)_+_3.5rem)] flex-col justify-center gap-3 border-t-2 border-black py-10 focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand-600 max-lg:min-h-[calc(100dvh_-_var(--rt-top))] max-lg:scroll-mt-[var(--rt-top)] max-lg:snap-end max-lg:justify-end max-lg:first:snap-align-none max-lg:border-t-0 max-lg:py-3 dark:border-white'
 /**
  * A stop's content. At `lg` it has no box of its own (`contents`), so the section lays its content
  * out directly. Below `lg` it is the panel that scrolls over the runner: at least 85% opaque and
@@ -36,7 +37,7 @@ export const TOUR_STOP_CLASS =
  * (`tourPanelContrast.test.ts`, which reads the opacity from this string).
  */
 export const TOUR_PANEL_CLASS =
-  'runner-tour__panel lg:contents max-lg:flex max-lg:flex-col max-lg:gap-3 max-lg:border-2 max-lg:border-black max-lg:bg-white/90 max-lg:p-4 max-lg:backdrop-blur-md max-lg:dark:border-white max-lg:dark:bg-black/90'
+  'runner-tour__panel lg:contents max-lg:flex max-lg:flex-col max-lg:gap-3 max-lg:border-2 max-lg:border-black max-lg:bg-white/85 max-lg:p-4 max-lg:backdrop-blur-[3px] max-lg:dark:border-white max-lg:dark:bg-black/85'
 const STOP_HEADING = 'font-display text-2xl font-bold tracking-tight max-lg:text-xl'
 const VALUE_LABEL =
   'font-sans text-xs font-semibold uppercase tracking-wide text-neutral-600 dark:text-neutral-400'
@@ -125,6 +126,8 @@ export function AreaStop({ stop }: { stop: TourAreaStop }) {
           <MetricScale band={headline.band!} value={headline.metric.value!} compact />
         </div>
       )}
+      {/* Below `lg` the bar's key sits under it, in the panel; at `lg` it is beside the runner. */}
+      {hasCompactBar(headline) && <BandLegend className="runner-tour__panel-legend lg:hidden" />}
       {feedback.why !== null && <FeedbackLine line={feedback.why} className="runner-tour__why" />}
       {feedback.cue !== null ? (
         <CueLine {...feedback.cue} />

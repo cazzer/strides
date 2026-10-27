@@ -5,15 +5,20 @@ import { bindRunnerParams } from '../../runner/runnerParams'
 import { makeHeuristics } from '../__fixtures__/metricResult'
 
 /**
- * The phone tour styles the REAL runner's parts from outside (`RUNNER_CLASS` in `RunnerTour.tsx`),
- * through structural selectors on the figure's children, so `src/runner` needs no phone code:
- * `figure > figcaption`, `figure > div:has(> svg)` (the stage), `figure svg` (the drawing, which
- * must be the figure's only SVG) and `figure > div:last-child` (the control row, which must hold
- * Skip intro and Play/Pause). This pins that structure: a runner refactor that moves any of these
- * fails here, not silently on a phone, where the controls would fall under the panels.
+ * The phone tour styles the REAL runner's parts from outside (`RUNNER_CLASS` in `RunnerTour.tsx`)
+ * through its `data-runner-part` hooks, so `src/runner` carries no phone code. This pins the hooks
+ * and what the phone rules assume of them: one of each; the drawing (the figure's only SVG) inside
+ * the stage; every control the runner has inside the control row, so none is left under a panel;
+ * and the control row's note as its direct `p` child, which the phone layout moves below the row.
  */
-describe('the runner structure the phone tour styles', () => {
-  it('is a figure of caption, stage (holding the one drawing), and the control row last', () => {
+function part(figure: Element, name: string): Element {
+  const found = figure.querySelectorAll(`[data-runner-part="${name}"]`)
+  expect(found, name).toHaveLength(1)
+  return found[0]
+}
+
+describe('the runner hooks the phone tour styles', () => {
+  it('marks the caption, the stage, the drawing and the control row', () => {
     const { container } = render(
       <ModelRunner
         params={bindRunnerParams(makeHeuristics())}
@@ -23,24 +28,19 @@ describe('the runner structure the phone tour styles', () => {
       />,
     )
     const figure = container.querySelector('figure')!
-    const children = [...figure.children]
-    expect(children[0].tagName).toBe('FIGCAPTION')
-    expect(figure.querySelectorAll('figcaption')).toHaveLength(1)
+    expect(part(figure, 'caption').tagName).toBe('FIGCAPTION')
 
-    const stages = children.filter(
-      (child) => child.tagName === 'DIV' && [...child.children].some((grand) => grand.tagName === 'svg'),
-    )
-    expect(stages).toHaveLength(1)
+    const stage = part(figure, 'stage')
+    const drawing = part(figure, 'drawing')
+    expect(drawing.tagName).toBe('svg')
+    expect(drawing.parentElement).toBe(stage)
     expect(figure.querySelectorAll('svg')).toHaveLength(1)
+    expect(drawing.querySelectorAll('[data-ground]')).toHaveLength(1)
 
-    const controls = figure.lastElementChild!
-    expect(controls.tagName).toBe('DIV')
-    expect(controls).not.toBe(stages[0])
-    const skip = screen.getByRole('button', { name: 'Skip intro' })
-    const pause = screen.getByRole('button', { name: 'Pause runner' })
-    expect(controls.contains(skip)).toBe(true)
-    expect(controls.contains(pause)).toBe(true)
-    // Every control the runner has is in that row, so none is left under a phone panel.
+    const controls = part(figure, 'controls')
+    expect(controls.contains(screen.getByRole('button', { name: 'Skip intro' }))).toBe(true)
+    expect(controls.contains(screen.getByRole('button', { name: 'Pause runner' }))).toBe(true)
     expect([...figure.querySelectorAll('button')].every((button) => controls.contains(button))).toBe(true)
+    expect(controls.querySelectorAll(':scope > p')).toHaveLength(1)
   })
 })

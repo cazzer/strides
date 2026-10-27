@@ -24,6 +24,8 @@ import { describe, expect, it } from 'vitest'
 const here = dirname(fileURLToPath(import.meta.url))
 const source = (path: string) => readFileSync(join(here, path), 'utf8')
 const themeCss = readFileSync(createRequire(import.meta.url).resolve('tailwindcss/theme.css'), 'utf8')
+/** The app's own colours (`brand-*`), declared beside Tailwind's. */
+const appCss = source('../../index.css')
 
 const SURFACE_SOURCES = ['RunnerTour.tsx', 'TourStop.tsx'] as const
 /** Every component whose text renders on a panel or a note. */
@@ -32,6 +34,7 @@ const TEXT_SOURCES = [
   'RunnerTour.tsx',
   '../FeedbackLine.tsx',
   '../BandLegend.tsx',
+  '../../guidance/MetricScale.tsx',
 ] as const
 /** `ExternalLink` (the citations' links) lives in a file with many other colours; its own pair. */
 const LINK_TEXT = { light: 'black', dark: 'white' } as const
@@ -48,10 +51,12 @@ const MIN_OPACITY = 0.85
 type Theme = 'light' | 'dark'
 type Rgb = readonly [number, number, number]
 
-/** A Tailwind colour name (`neutral-900`, `cyan-300`, `black`) as sRGB 0–1. */
+/** A colour name (`neutral-900`, `cyan-300`, `brand-600`, `black`) as sRGB 0–1, from Tailwind's
+ * theme or the app's. Throws on a name neither declares, so no colour is silently skipped. */
 function tailwindColour(name: string): Rgb {
-  const match = new RegExp(`--color-${name}:\\s*([^;]+);`).exec(themeCss)
-  if (match === null) throw new Error(`tailwindcss/theme.css declares no --color-${name}`)
+  const pattern = new RegExp(`--color-${name}:\\s*([^;]+);`)
+  const match = pattern.exec(themeCss) ?? pattern.exec(appCss)
+  if (match === null) throw new Error(`neither tailwindcss/theme.css nor src/index.css declares --color-${name}`)
   return parseColour(match[1].trim())
 }
 
@@ -107,8 +112,18 @@ function over(top: Rgb, alpha: number, under: Rgb): Rgb {
  */
 function colourClasses(text: string, prop: string, theme: Theme): string[] {
   const variant = theme === 'light' ? '(?:max-lg:)?' : '(?:max-lg:)?dark:'
-  const re = new RegExp(`(?<=[\\s"'\`])${variant}${prop}-((?:neutral|cyan)-\\d+|black|white)(?:/(\\d+))?(?=[\\s"'\`])`, 'g')
+  // Every `<family>-<shade>` colour, whatever the family: each is then resolved by
+  // `tailwindColour`, which throws on one it cannot find, rather than a family list skipping it.
+  const re = new RegExp(`(?<=[\\s"'\`])${variant}${prop}-([a-z]+-\\d{2,3}|black|white)(?:/(\\d+))?(?=[\\s"'\`])`, 'g')
   return [...text.matchAll(re)].map((m) => (m[2] ? `${m[1]}/${m[2]}` : m[1]))
+}
+
+/** Arbitrary stroke or fill colours (`stroke-[…]`, `fill-[…]`) not under `forced-colors:`, which
+ * the extraction above cannot resolve and so would silently leave unchecked. */
+function arbitraryPaints(text: string): string[] {
+  return [...text.matchAll(/(?<=[\s"'`])((?:[a-z-]+:)*)(?:stroke|fill)-\[[^\]]*\]/g)]
+    .filter((m) => !m[1].split(':').includes('forced-colors'))
+    .map((m) => m[0])
 }
 
 /** The surfaces (panel and note backgrounds) the tour declares, per theme: colour and opacity. */
@@ -148,6 +163,21 @@ describe('the phone tour panels', () => {
         expect(alpha, `${theme} ${colour}`).toBeGreaterThanOrEqual(MIN_OPACITY)
       }
     }
+  })
+
+  it('paint with no arbitrary stroke or fill colour the check cannot resolve', () => {
+    for (const file of [RUNNER_SOURCE, ...TEXT_SOURCES]) expect(arbitraryPaints(source(file)), file).toEqual([])
+    expect(arbitraryPaints(' stroke-[#123456] ')).toEqual(['stroke-[#123456]'])
+    expect(arbitraryPaints(' forced-colors:stroke-[color:Highlight] ')).toEqual([])
+  })
+
+  it('resolve every colour they name (an unknown one throws)', () => {
+    for (const theme of ['light', 'dark'] as const) {
+      for (const name of [...runnerColours(), ...textColours(theme)]) {
+        expect(() => tailwindColour(name), name).not.toThrow()
+      }
+    }
+    expect(() => tailwindColour('nonsense-500')).toThrow()
   })
 
   it('find the runner colours and panel text colours they are checked against', () => {

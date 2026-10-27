@@ -203,17 +203,25 @@ and `metricTier`. Nothing comes from `src/runner`.
   the runner, its notes and the stops share one grid cell. The runner's parts are styled from the
   tour through structural selectors (`figure > figcaption`, `figure > div:has(> svg)`,
   `figure > div:last-child`), pinned by `runnerPhoneStructure.test.tsx`, so `src/runner` carries no
-  phone code. Each part sticks within the tour rather than being `fixed`: fixed would paint over
+  phone code. Review round 1 replaced the structural selectors with four inert
+  `data-runner-part` hooks (caption, stage, drawing, controls) on `ModelRunner`. Each part sticks
+  within the tour rather than being `fixed`: fixed would paint over
   the content above the tour at scroll 0, and `position: sticky`/`fixed` makes its element a
   stacking context, so the runner and its controls could not sit on different sides of the panels
   if one element held both. The stage (sticky, viewport tall, edge to edge) is under the panels; the
   control row (sticky, opaque, `z` above the panels) holds Skip intro and Pause; the caption shares
   its first line. Each stop is a transparent slot of the old height with its panel at the bottom,
   so a slot reaches the 42% reading line while its panel is still low, and the drawing is framed in
-  the slot's top: inset from the stage's bottom by `--rt-reserve` (`min(17.5rem, 50%)`, about a
-  resting panel), a CSS offset rather than a camera change. The bar wraps to two rows below `lg`
-  (heading and Skip, then dots) and is measured into `--runner-tour-bar-height`, since its height
-  depends on the width and the text size. `tourPanelContrast.test.ts` reads every surface opacity
+  the slot's top: inset from the stage's bottom by `--rt-reserve`, the ACTIVE panel's measured height
+  (a ResizeObserver; `min(17.5rem, 50%)` until measured), a CSS offset rather than a camera change.
+  Below `lg` the heading is `sr-only` and the bar is one row (dots, Skip), measured into
+  `--runner-tour-bar-height`; the runner's caption is `sr-only` and its "Dashed: …" note hangs
+  under the control row. The four controls do not fit one row at 360–390 px with 44 px targets, so
+  Skip intro and Pause keep their own row under the bar. The document snaps (`y proximity`, while
+  the tour is mounted) to each slot's end, except the first: its snap point is ~180 px down, so the
+  browser's initial snap would move the page as the tour mounted and the page's top would be
+  unreachable. The band legend moves into each banded panel below `lg` (outside the word budget, as
+  the bar's key). `tourPanelContrast.test.ts` reads every surface opacity
   from the tour's source and every colour from Tailwind's `theme.css`.
 - **Fidelity.** The tour is the default view and its runner animates through the scale pass. The
   A/B driver gained a `--view-arm` plane; tour vs `?view=classic` on side-landscape, side-portrait

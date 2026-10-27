@@ -92,6 +92,14 @@
 .motion-story__dialog { position: fixed; inset: 0; margin: auto; }
 @media (max-width: 63.999rem) {
   [data-motion-metric], .guided-results__scroll-target { scroll-margin-top: calc(var(--motion-story-header-height, 88px) + 92px); }
+  /* The phone tour: a swipe settles with a stop's slot ending at the screen's foot (`snap-end` on
+     each slot, `TOUR_STOP_CLASS`), its panel low and the runner clear above it. On the document,
+     the scroller, for as long as the tour is mounted; `proximity`, so a read part-way through a
+     stop is never yanked to a snap point. The FIRST slot does not snap (`first:snap-align-none`):
+     its snap point is ~180 px below the top of the page, so the browser's initial snap would jump
+     the page there as the tour mounts, and a reader scrolling back up could never settle on the
+     top (Start over, the completion line). */
+  :root:has(.runner-tour__body) { scroll-snap-type: y proximity; }
 }
 
 .motion-story__ghost { opacity: 0.26; }
