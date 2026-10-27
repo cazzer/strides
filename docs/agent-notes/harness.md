@@ -295,8 +295,13 @@ node scripts/ab-person-selection.mjs \
   side-landscape-only re-run, all completed, and the cause is not established.
   After review round 1 (headline-only focus, intro gated on a 90%-visible rail, no coverage notice
   above the tour) a side-landscape re-run, 3 trials per arm, was still identical to the first. ⚠️ The primary `[analysis-diagnostics]`
-  line predates the graft (VO_cm/stepWidthCm read `null` there); only the `[evidence-coverage]` rows
-  carry scale-pass output.
+  line predates the graft (VO_cm/stepWidthCm read `null` there), so pass **`--scale-pass`**
+  (`strides-trn2.6`) as well: it flattens the `[analysis-diagnostics:scale-pass]` line itself into
+  `scalePass.*` rows (status, subject agreement, the scale pass's own diagnostics, plus
+  `scalePass.lines`). Off by default; a report without it is byte-identical to one taken before it.
+  The `strides-trn2.6` gate (tour, classic AND summary, `--evidence --scale-pass`) and its timeout
+  record are in `runner-tour.md`. A trial that times out now carries a page snapshot (status text,
+  each `<video>`'s time/paused/readyState, last console lines) in its `# FAILED` row.
 - **Clips**: `side-landscape`, `side-portrait`, `front-approach` (the three bundled demo clips —
   see the table above) and `multiperson` (`e2e/fixtures/multiperson-track.mp4`). Default: all
   four. **Every one goes through the Upload tab**, including the demo clips: the demo button now

@@ -667,8 +667,13 @@ async function runTrial(
     let lastEvidenceAt = 0
     let scalePassSeen = false
 
+    // The last few console lines, kept only to explain a trial that never completes.
+    const recentConsole = []
+
     page.on('console', (message) => {
       const text = message.text()
+      recentConsole.push(`${message.type()}: ${text.slice(0, 160)}`)
+      if (recentConsole.length > 8) recentConsole.shift()
       if (text.startsWith(SCALE_PASS_PREFIX)) {
         scalePassSeen = true
         try {
@@ -724,7 +729,27 @@ async function runTrial(
     } catch (error) {
       // A bare Playwright timeout names a selector, not a clip. On a four-clip matrix that leaves
       // the reader to work out which trial died from the progress log's ordering.
-      throw new Error(`${clipName}: never reached "Analysis complete"`, { cause: error })
+      // The page's state at the deadline goes in the message (it reaches the report's `# FAILED`
+      // row), since a stalled trial does not reproduce on demand (strides-trn2.6).
+      const snapshot = await page
+        .evaluate(() => ({
+          status: [...document.querySelectorAll('[role=status]')]
+            .map((element) => element.textContent?.trim().slice(0, 120))
+            .filter(Boolean),
+          videos: [...document.querySelectorAll('video')].map((video) => ({
+            t: Number(video.currentTime.toFixed(3)),
+            paused: video.paused,
+            ended: video.ended,
+            readyState: video.readyState,
+          })),
+          hidden: document.hidden,
+        }))
+        .catch((snapshotError) => ({ snapshotError: snapshotError.message }))
+      throw new Error(
+        `${clipName}: never reached "Analysis complete" — page ${JSON.stringify(snapshot)}; ` +
+          `last console ${JSON.stringify(recentConsole)}`,
+        { cause: error },
+      )
     }
     const elapsedMs = Date.now() - startedAt
 
