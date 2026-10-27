@@ -45,4 +45,4 @@
 - [x] 6.6 `ResultsSummary.tsx`: one `ModelRunner` (sticky at lg, in flow below), camera follows the last-opened row, legend, rows, footer.
 - [x] 6.7 Spec: extend the single-mount MODIFIED block in place; add `specs/results-summary/spec.md`.
 - [x] 6.8 Tests: summaryRows, focusAreaCamera, feedbackSources, compact MetricScale, FocusAreaRow, ResultsSummary.
-- [ ] 6.9 Verify live on "Demo (3 clips)" at 1280 and 390 px, light and dark; e2e suite.
+- [x] 6.9 Verify live on "Demo (3 clips)" at 1280 and 390 px, light and dark; e2e suite.
