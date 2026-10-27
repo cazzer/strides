@@ -49,6 +49,13 @@
  *                         changes what gets measured — see the runTrial comment.
  *   --evidence            Also capture the `[evidence-coverage]` line (exemplar timestamps, crop
  *                         sides, per-metric status). Costs a wait for the scale-pass re-extraction.
+ *   --scale-pass          Also capture the `[analysis-diagnostics:scale-pass]` line (the background
+ *                         MediaPipe pass VO_cm and stepWidthCm come from) as `scalePass.*` rows:
+ *                         its status, subject agreement and full diagnostics, plus
+ *                         `scalePass.lines` (how many arrived; the last is the one flattened).
+ *                         Waits for the line like --evidence does. Off by default so a report
+ *                         without it stays byte-identical to one taken before the flag existed;
+ *                         a view fidelity gate passes `--evidence --scale-pass`.
  *   --perf                Also capture every dev-only `[perf-timings]` line as `perf.*` rows
  *                         (`src/results/perfTimings.ts`). Same settle wait as --evidence. Every
  *                         row is wall-clock, so expect spread; off by default so a report without
@@ -263,6 +270,7 @@ const FIELD_GROUPS = [
   'view.',
   'metrics.',
   'evidence.',
+  'scalePass.',
   'perf.',
 ]
 
@@ -351,6 +359,7 @@ function parseArgs(argv) {
     reuseServer: false,
     reuseBrowser: false,
     evidence: false,
+    scalePass: false,
     perf: false,
     jsonPath: null,
   }
@@ -412,6 +421,9 @@ function parseArgs(argv) {
         break
       case '--evidence':
         options.evidence = true
+        break
+      case '--scale-pass':
+        options.scalePass = true
         break
       case '--perf':
         options.perf = true
@@ -612,7 +624,18 @@ async function warmUpAndReadRenderer(launchArgs, baseURL) {
  */
 async function runTrial(
   browser,
-  { baseURL, clip, clipName, override, backendOverride, viewOverride, timeoutMs, evidence, perf },
+  {
+    baseURL,
+    clip,
+    clipName,
+    override,
+    backendOverride,
+    viewOverride,
+    timeoutMs,
+    evidence,
+    scalePass,
+    perf,
+  },
 ) {
   const context = await browser.newContext()
   try {
@@ -640,6 +663,7 @@ async function runTrial(
 
     const evidenceLines = []
     const perfLines = []
+    const scalePassLines = []
     let lastEvidenceAt = 0
     let scalePassSeen = false
 
@@ -647,6 +671,11 @@ async function runTrial(
       const text = message.text()
       if (text.startsWith(SCALE_PASS_PREFIX)) {
         scalePassSeen = true
+        try {
+          scalePassLines.push(JSON.parse(text.slice(SCALE_PASS_PREFIX.length).trim()))
+        } catch {
+          // A malformed scale-pass line costs the scalePass rows, not the trial.
+        }
         return
       }
       if (text.startsWith(PERF_PREFIX)) {
@@ -709,12 +738,18 @@ async function runTrial(
     // Wait for the evidence stream to go quiet rather than for a line count: see
     // EVIDENCE_SETTLE_MS. Quiescence is gated on the scale pass having reported, so a fast machine
     // cannot settle in the gap before the graft's re-extraction starts.
-    if (evidence || perf) {
+    // `--scale-pass` alone waits only for its own line; with --evidence or --perf the stricter
+    // evidence quiescence below already implies it.
+    if (evidence || perf || scalePass) {
       const deadline = Date.now() + EVIDENCE_MAX_WAIT_MS
       let settled = false
       while (!settled && Date.now() < deadline) {
         settled =
-          evidenceLines.length > 0 && scalePassSeen && Date.now() - lastEvidenceAt > EVIDENCE_SETTLE_MS
+          evidence || perf
+            ? evidenceLines.length > 0 &&
+              scalePassSeen &&
+              Date.now() - lastEvidenceAt > EVIDENCE_SETTLE_MS
+            : scalePassSeen
         if (!settled) await new Promise((resolve) => setTimeout(resolve, 250))
       }
       // The cap yields whatever arrived rather than failing the trial, so say so — an
@@ -735,6 +770,16 @@ async function runTrial(
       elapsedMs,
       evidence ? (evidenceLines.at(-1) ?? null) : undefined,
     )
+    if (scalePass) {
+      // The whole line, flattened like the primary one: `diagnostics` carries the scale pass's own
+      // sampling, selection and metrics, which is where VO_cm and stepWidthCm are measured, so a
+      // view that perturbed the background pass would show here even if the graft hid it.
+      // Arrays stay stringified (flatten's default) — one cell per array still compares exactly.
+      Object.assign(fields, {
+        'scalePass.lines': scalePassLines.length,
+        ...(scalePassLines.length > 0 ? flatten('scalePass.', scalePassLines.at(-1)) : {}),
+      })
+    }
     return perf ? { ...fields, ...flattenPerfLines(perfLines) } : fields
   } finally {
     await context.close()
@@ -1052,6 +1097,7 @@ async function main() {
               viewOverride: arm.viewOverride,
               timeoutMs: options.timeoutMs,
               evidence: options.evidence,
+              scalePass: options.scalePass,
               perf: options.perf,
             })
             process.stderr.write(
