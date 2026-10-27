@@ -16,6 +16,7 @@ import {
   labelLines,
   phaseForLeg,
   planAnnotations,
+  STACK_GAP_LINES,
   shownWhileStill,
   type AnnotationInput,
   type AnnotationPlan,
@@ -386,7 +387,8 @@ describe('the marks are the drawn values and lie on the live figure', () => {
       expect(first.anchor.x).toBe(own)
       expect(second.anchor.x).toBe(own)
       expect(first.offsetLines).toBe(0)
-      expect(second.offsetLines).toBe(first.lines.length)
+      expect(second.offsetLines).toBe(first.lines.length + STACK_GAP_LINES)
+      expect(STACK_GAP_LINES).toBe(0.5)
     }
     // Labels off the ground lane are left alone.
     const [lean] = annotate(bound, ['torsoPitch', 'landingOffset', 'contactShankOffset'])
@@ -439,7 +441,7 @@ describe('the cadence footfall beat', () => {
     expect(annotations).toHaveLength(1)
     const [beat] = annotations
     expect(beat.kind).toBe('beat')
-    expect(beat.keyPhase).toBeNull()
+    expect(beat.keyPhase).toBe(heldPhase)
     expect(beat.marks).toEqual([])
     expect(beat.fills).toEqual([])
     if (bound.cadence.source !== 'measured') throw new Error('cadence should be measured')
@@ -448,11 +450,29 @@ describe('the cadence footfall beat', () => {
     expect(beat.label.lines).toEqual([text])
     expect(beat.label.side).toBe('above')
     expect(beat.label.anchor).toEqual(flashAnchor('cadence', values, heldPhase, 0))
-    // Cadence has no key phase: it leaves the held phase alone.
-    expect(heldPhase).toBe(GAIT_PHASES.midStance)
-    expect(plan(bound, ['cadence', 'peakThighAngle']).heldPhase).toBe(
+    // Cadence is keyed on a footfall: the still frame holds the near foot's contact.
+    expect(KEY_LEG_PHASE.cadence).toBe(GAIT_PHASES.leftContact)
+    expect(heldPhase).toBe(phaseForLeg('right', GAIT_PHASES.leftContact))
+    // Behind an earlier keyed focus it keeps that focus's held phase.
+    expect(plan(bound, ['peakThighAngle', 'cadence']).heldPhase).toBe(
       plan(bound, ['peakThighAngle']).heldPhase,
     )
+  })
+
+  it('holds a side-view still frame with the near foot planted on the ticks', () => {
+    for (const yaw of [0, 180]) {
+      const camera = { ...SIDE, yawDeg: yaw }
+      const { heldPhase, annotations } = plan(bound, ['cadence'], { cameraYawDeg: yaw })
+      const near = yaw === 0 ? 'right' : 'left'
+      const heel = liveJoint(heldPhase, bound, `${near}_heel`)
+      const toe = liveJoint(heldPhase, bound, `${near}_foot_index`)
+      const planted = toe.y < heel.y ? toe : heel
+      expect(planted.y).toBeCloseTo(GROUND_Y, 9)
+      for (const [top] of annotations[0].guides) {
+        expect(projectPoint(top, camera).x).toBeCloseTo(projectPoint(planted, camera).x, 9)
+        expect(top.y).toBe(GROUND_Y)
+      }
+    }
   })
 
   it('pulses once per footfall, from each foot’s contact point on the ground', () => {
@@ -551,6 +571,9 @@ describe('the step-width guides meet both feet in the front view', () => {
         const hip = projectPoint(hipAtKey, FEET_FRONT)
         expect(top.x).toBeCloseTo(hip.x, 9)
         expect(top.y).toBeCloseTo(hip.y, 9)
+        // A plumb: both ends straight under hip-mid.
+        expect(midline[0]).toEqual({ x: hipAtKey.x, y: hipAtKey.y, z: 0 })
+        expect(midline[1].x).toBe(hipAtKey.x)
         for (const tick of ticks) expect(tick[0].y).toBe(GROUND_Y)
         const tickXs = ticks.map((tick) => projectPoint(tick[0], FEET_FRONT).x)
         // Every stance ankle, either foot, stands right above a tick.

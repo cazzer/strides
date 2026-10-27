@@ -22,7 +22,7 @@
  * from where it is. Paused on the landing camera, the figure stands at the held phase too.
  *
  * **Cadence beats at the footfalls.** A cadence focus is labelled above the head with ground ticks
- * under the feet; while the figure plays (and motion is allowed) a ring pulses out from each foot
+ * under the feet; while the figure plays (and motion is allowed) a ring flashes at each foot
  * as it lands, written by the loop from the live phase, so the rings beat at cadence × rate per
  * minute while the label keeps the real cadence. Still or under reduced motion there is no ring.
  *
@@ -220,7 +220,13 @@ interface DrawTargets {
   paths: { el: SVGPathElement; points: readonly Vec3[]; closed: boolean; lifts: boolean }[]
   labels: { lines: SVGTSpanElement[]; label: RunnerAnnotationLabel; lifts: boolean }[]
   /** Footfall rings: on the ground, so they never lift. */
-  pulses: { el: SVGCircleElement; centre: Vec3; phase: number }[]
+  pulses: {
+    el: SVGCircleElement
+    tick: SVGPathElement | null
+    tickPoints: readonly Vec3[]
+    centre: Vec3
+    phase: number
+  }[]
   ground: SVGLineElement | null
   flash: { el: SVGTextElement; paramId: RunnerParamId; anchor: Vec3; chars: number } | null
 }
@@ -371,8 +377,15 @@ function collectTargets(
   })
   const pulses = Array.from(svg.querySelectorAll<SVGCircleElement>('circle[data-pulse]'), (el) => {
     const [annotation, index] = (el.dataset.pulse ?? '').split(':').map(Number)
-    const pulse = (annotations[annotation].pulses ?? [])[index]
-    return { el, centre: pulse.centre, phase: pulse.phase }
+    const source = annotations[annotation]
+    const pulse = (source.pulses ?? [])[index]
+    return {
+      el,
+      tick: svg.querySelector<SVGPathElement>(`path[data-pulse-tick="${annotation}:${index}"]`),
+      tickPoints: source.guides[index] ?? [],
+      centre: pulse.centre,
+      phase: pulse.phase,
+    }
   })
   const flashEl = svg.querySelector<SVGTextElement>('text[data-flash]')
   return {
@@ -485,8 +498,9 @@ export function ModelRunner({
     () => neutralEdgeInFrame(edgeStyles, values, heldPhase, target),
     [edgeStyles, values, heldPhase, target],
   )
-  // Footfall rings move, so only a playing figure with motion allowed draws them.
-  const showPulses = playing && !reduced
+  // Footfall rings move, so only a playing figure with motion allowed draws them; the landing
+  // window's contact hold would freeze one at full strength, so not there either.
+  const showPulses = playing && !reduced && phaseWindow === null
   const flash = overrides?.flash ?? null
   const introRunning = intro?.running === true && !reduced
   // The flash's world point, taken once per flash from the values its tween ends at.
@@ -563,10 +577,20 @@ export function ModelRunner({
     for (const pulse of pulses) {
       const strength = beatEnvelope(phaseRef.current, pulse.phase)
       const at = projectPoint(pulse.centre, cam)
-      const px = RUNNER_PX.beatRingMax - (RUNNER_PX.beatRingMax - RUNNER_PX.beatRingMin) * strength
+      const px = RUNNER_PX.beatRingMin + (RUNNER_PX.beatRingMax - RUNNER_PX.beatRingMin) * strength
       setPoint(pulse.el, 'cx', 'cy', at.x, at.y)
       pulse.el.setAttribute('r', fmt(px * unit))
       pulse.el.setAttribute('opacity', fmt(strength))
+      if (pulse.tick) {
+        const d = pulse.tickPoints
+          .map((point, i) => {
+            const p = projectPoint(point, cam)
+            return `${i === 0 ? 'M' : 'L'}${fmt(p.x)} ${fmt(p.y)}`
+          })
+          .join('')
+        pulse.tick.setAttribute('d', d)
+        pulse.tick.setAttribute('opacity', fmt(strength))
+      }
     }
     if (flashTarget) {
       const align = flashAlign(flashTarget.paramId, cam)
@@ -865,14 +889,23 @@ export function ModelRunner({
                 </text>
                 {showPulses &&
                   (annotation.pulses ?? []).map((_, i) => (
-                    <circle
-                      key={`pulse-${i}`}
-                      data-pulse={`${a}:${i}`}
-                      fill="none"
-                      className={PULSE_CLASS}
-                      strokeWidth={RUNNER_PX.markStroke * unit}
-                      opacity={0}
-                    />
+                    <g key={`pulse-${i}`}>
+                      <path
+                        data-pulse-tick={`${a}:${i}`}
+                        fill="none"
+                        className={PULSE_CLASS}
+                        strokeWidth={RUNNER_PX.markStroke * unit}
+                        strokeLinecap="round"
+                        opacity={0}
+                      />
+                      <circle
+                        data-pulse={`${a}:${i}`}
+                        fill="none"
+                        className={PULSE_CLASS}
+                        strokeWidth={RUNNER_PX.beatRingStroke * unit}
+                        opacity={0}
+                      />
+                    </g>
                   ))}
               </g>
             ))}

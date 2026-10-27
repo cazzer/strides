@@ -15,7 +15,7 @@ import {
 } from './camera'
 import { GAIT_PHASES, GROUND_Y, pelvisHeight, poseAt } from './gaitModel'
 import { ModelRunner, RUNNER_CAPTION, type ModelRunnerProps } from './ModelRunner'
-import { phaseForLeg } from './runnerAnnotations'
+import { BEAT_DECAY_CYCLES, phaseForLeg } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
 import {
   FAR_OPACITY,
@@ -880,6 +880,7 @@ describe('ModelRunner landing camera', () => {
 describe('ModelRunner cadence beat', () => {
   const RHYTHM: ModelRunnerProps['focus'] = { metricIds: ['cadence'] }
   const UNIT = 1 / 100
+  const AT_180 = bindAll({ cadence: makeMetric('cadence', { value: 180 }) })
 
   function rings(): { opacity: number; r: number; cx: number; cy: number }[] {
     return Array.from(document.querySelectorAll('circle[data-pulse]'), (el) => ({
@@ -897,21 +898,20 @@ describe('ModelRunner cadence beat', () => {
   }
 
   function ringRadius(opacity: number): number {
-    return (RUNNER_PX.beatRingMax - (RUNNER_PX.beatRingMax - RUNNER_PX.beatRingMin) * opacity) * UNIT
+    return (RUNNER_PX.beatRingMin + (RUNNER_PX.beatRingMax - RUNNER_PX.beatRingMin) * opacity) * UNIT
   }
 
-  it('labels the cadence and pulses a ring from each foot as it lands, with no React commit per frame', () => {
+  it('flashes a ring and the tick at each foot as it lands, largest at contact, with no React commit per frame', () => {
     const onRender = vi.fn()
     render(
       <Profiler id="runner" onRender={onRender}>
-        <ModelRunner
-          {...props({ params: bindAll({ cadence: makeMetric('cadence', { value: 180 }) }), focus: RHYTHM })}
-        />
+        <ModelRunner {...props({ params: AT_180, focus: RHYTHM })} />
       </Profiler>,
     )
     expect(beat().getAttribute('data-kind')).toBe('beat')
     expect(beat().querySelector('text')?.textContent).toBe('180 steps/min')
-    expect(beat().querySelectorAll('[data-role="guide"]')).toHaveLength(2)
+    const guides = beat().querySelectorAll('[data-role="guide"]')
+    expect(guides).toHaveLength(2)
     expect(rings()).toHaveLength(2)
     const renders = onRender.mock.calls.length
     const groundY = projectPoint({ x: 0, y: GROUND_Y, z: 0 }, CAMERA_PRESETS.wholeBodySide).y
@@ -922,10 +922,14 @@ describe('ModelRunner cadence beat', () => {
       advance(16)
       const now = rings()
       for (const [i, ring] of now.entries()) {
-        // The radius grows exactly as the ring fades: 4 px at contact, 12 px when gone.
+        // Largest and opaque at contact, shrinking as it fades: 15 px down to 6 px.
         expect(ring.r).toBeCloseTo(ringRadius(ring.opacity), 3)
         expect(ring.cy).toBeCloseTo(groundY, 3)
-        if (ring.opacity < previous[i].opacity) expect(ring.r).toBeGreaterThanOrEqual(previous[i].r)
+        if (ring.opacity < previous[i].opacity) expect(ring.r).toBeLessThanOrEqual(previous[i].r)
+        // The foot's tick flashes in the accent with its ring, along the tick itself.
+        const tick = document.querySelector(`path[data-pulse-tick="0:${i}"]`)
+        expect(Number(tick?.getAttribute('opacity'))).toBe(ring.opacity)
+        expect(tick?.getAttribute('d')).toBe(guides[i].getAttribute('d'))
         peak = Math.max(peak, ring.opacity)
         if (ring.opacity === 0) gone = true
       }
@@ -936,38 +940,80 @@ describe('ModelRunner cadence beat', () => {
     expect(onRender.mock.calls.length).toBe(renders)
   })
 
-  it('pulses as each foot lands: a strong ring sits under a foot that is down', () => {
-    setup({ focus: RHYTHM })
+  it('centres each strong ring on the contact point, under the landing foot', () => {
+    setup({ params: AT_180, focus: RHYTHM })
+    const camera = CAMERA_PRESETS.wholeBodySide
+    // Which foot point lands first, and how far it slides back while the ring is above 0.5
+    // (u ≤ 1 − √0.5 of the decay): the tolerance for "under the foot".
+    const window = BEAT_DECAY_CYCLES * (1 - Math.SQRT1_2)
+    const feet = (['left', 'right'] as const).map((side) => {
+      const contact = phaseForLeg(side, GAIT_PHASES.leftContact)
+      const pose = poseAt(contact, VALUES)
+      const at = (name: KeypointName) => pose[COMMON_KEYPOINT_NAMES.indexOf(name)]
+      const name: KeypointName =
+        at(`${side}_foot_index`).y < at(`${side}_heel`).y ? `${side}_foot_index` : `${side}_heel`
+      const x0 = projectPoint(at(name), camera).x
+      let slide = 0
+      for (let k = 0; k <= 50; k += 1) {
+        const p = poseAt(contact + (window * k) / 50, VALUES)[COMMON_KEYPOINT_NAMES.indexOf(name)]
+        slide = Math.max(slide, Math.abs(projectPoint(p, camera).x - x0))
+      }
+      return { name, x0, slide }
+    })
     let strong = 0
     for (let t = 0; t < 1500; t += 16) {
       advance(16)
       for (const [i, ring] of rings().entries()) {
+        expect(ring.cx).toBeCloseTo(feet[i].x0, 3)
         if (ring.opacity < 0.5) continue
         strong += 1
-        const side = i === 0 ? 'left' : 'right'
-        const lowest = Math.max(joint(`${side}_heel`).cy, joint(`${side}_foot_index`).cy)
-        expect(Math.abs(lowest - ring.cy)).toBeLessThan(0.02)
+        const foot = joint(feet[i].name)
+        expect(Math.abs(foot.cy - ring.cy)).toBeLessThan(0.02)
+        expect(Math.abs(foot.cx - ring.cx)).toBeLessThanOrEqual(feet[i].slide + 1e-3)
       }
     }
     expect(strong).toBeGreaterThan(0)
+    expect(Math.max(...feet.map((f) => f.slide))).toBeLessThan(0.2)
   })
 
-  it('keeps the real cadence in the label when the playback is slowed', () => {
-    setup({
-      params: bindAll({ cadence: makeMetric('cadence', { value: 180 }) }),
-      focus: RHYTHM,
-      playbackRate: 0.4,
-    })
+  /** Ring onsets (opacity rising) per ring through the real loop over `ms`. */
+  function countOnsets(ms: number): number {
+    let previous = rings().map((r) => r.opacity)
+    let onsets = 0
+    for (let t = 0; t < ms; t += 16) {
+      advance(16)
+      const now = rings().map((r) => r.opacity)
+      onsets += now.filter((o, i) => o > previous[i] + 1e-6).length
+      previous = now
+    }
+    return onsets
+  }
+
+  it('beats 30 ± 1 times in 10 s at 180 steps/min, and 12 ± 1 at 0.4×, keeping the label', () => {
+    const fast = setup({ params: AT_180, focus: RHYTHM })
+    expect(Math.abs(countOnsets(10_000) - 30)).toBeLessThanOrEqual(1)
+    fast.unmount()
+    setup({ params: AT_180, focus: RHYTHM, playbackRate: 0.4 })
     expect(beat().querySelector('text')?.textContent).toBe('180 steps/min')
-    expect(rings()).toHaveLength(2)
+    expect(Math.abs(countOnsets(10_000) - 12)).toBeLessThanOrEqual(1)
   })
 
-  it('under reduced motion shows the label and ticks, never a ring, and leaves no frame pending', () => {
+  it('under reduced motion holds the near foot planted on the ticks, never a ring, no frame pending', () => {
     mockReducedMotion(true)
     setup({ focus: RHYTHM })
+    expectPose(phaseForLeg('right', GAIT_PHASES.leftContact), 'wholeBodySide')
     expect(beat().querySelector('text')?.textContent).toMatch(/steps\/min$/)
-    expect(beat().querySelectorAll('[data-role="guide"]')).toHaveLength(2)
+    const ticks = beat().querySelectorAll('[data-role="guide"]')
+    expect(ticks).toHaveLength(2)
+    const planted = Math.max(joint('right_heel').cy, joint('right_foot_index').cy)
+    const lowest = joint('right_heel').cy >= joint('right_foot_index').cy ? joint('right_heel') : joint('right_foot_index')
+    for (const tick of ticks) {
+      const [top] = pathEnds(tick.getAttribute('d'))
+      expect(top.x).toBeCloseTo(lowest.cx, 3)
+      expect(top.y).toBeCloseTo(planted, 3)
+    }
     expect(rings()).toHaveLength(0)
+    expect(document.querySelector('[data-pulse-tick]')).toBeNull()
     expect(vi.getTimerCount()).toBe(0)
     // The reader may play the figure; the ring stays off while reduced motion is preferred.
     fireEvent.click(screen.getByRole('button', { name: 'Play runner' }))
@@ -980,28 +1026,48 @@ describe('ModelRunner cadence beat', () => {
     expect(rings()).toHaveLength(2)
     fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
     expect(rings()).toHaveLength(0)
+    expect(document.querySelector('[data-pulse-tick]')).toBeNull()
     expect(beat().querySelectorAll('[data-role="guide"]')).toHaveLength(2)
     fireEvent.click(screen.getByRole('button', { name: 'Play runner' }))
     expect(rings()).toHaveLength(2)
   })
 
-  it('keeps the ring small and never red (WCAG 2.3.1)', () => {
+  it('shows no ring on the landing camera, whose contact hold would freeze it', () => {
+    setup({ camera: 'landingSide', focus: RHYTHM })
+    expect(screen.getByRole('button', { name: 'Pause runner' })).toBeInTheDocument()
+    advance(500)
+    expect(beat().querySelector('text')?.textContent).toMatch(/steps\/min$/)
+    expect(beat().querySelectorAll('[data-role="guide"]')).toHaveLength(2)
+    expect(rings()).toHaveLength(0)
+    expect(document.querySelector('[data-pulse-tick]')).toBeNull()
+  })
+
+  it('keeps the ring small, at least 2 px thick, and never red (WCAG 2.3.1)', () => {
+    expect(RUNNER_PX.beatRingMax).toBeGreaterThanOrEqual(14)
+    expect(RUNNER_PX.beatRingStroke).toBeGreaterThanOrEqual(2)
     setup({ focus: RHYTHM })
     for (let t = 0; t < 1000; t += 16) {
       advance(16)
       for (const ring of rings()) expect(ring.r).toBeLessThanOrEqual(16 * UNIT + 1e-9)
     }
-    for (const el of document.querySelectorAll('circle[data-pulse]')) {
+    for (const el of document.querySelectorAll('circle[data-pulse], path[data-pulse-tick]')) {
       expect(el.getAttribute('class')).not.toMatch(/red|rose|pink|orange/)
       expect(el.getAttribute('class')).toContain('forced-colors:stroke-[color:Highlight]')
       expect(el.getAttribute('fill')).toBe('none')
     }
+    for (const el of document.querySelectorAll('circle[data-pulse]')) {
+      expect(Number(el.getAttribute('stroke-width'))).toBeCloseTo(RUNNER_PX.beatRingStroke * UNIT, 6)
+    }
   })
 
   it('keeps the ticks on the ground while a tween changes the figure’s height; the head label rides it', () => {
-    const tall = { ...VALUES, pelvisBounce: VALUES.pelvisBounce + 0.1 }
-    expect(Math.abs(pelvisHeight(tall) - pelvisHeight(VALUES))).toBeGreaterThan(1e-3)
-    const { rerenderWith, container } = setup({ focus: RHYTHM })
+    // A wide frame, so the head label is never held at the frame's top edge.
+    const camera: CameraState = { yawDeg: 0, pitchDeg: 0, zoom: 0.8, target: { x: 0, y: 1.8, z: 0 } }
+    const lower = [VALUES.pelvisBounce + 0.1, VALUES.pelvisBounce - 0.05]
+      .map((pelvisBounce) => ({ ...VALUES, pelvisBounce }))
+      .sort((a, b) => pelvisHeight(a) - pelvisHeight(b))[0]
+    expect(pelvisHeight(lower)).toBeLessThan(pelvisHeight(VALUES) - 1e-3)
+    const { rerenderWith, container } = setup({ camera, focus: RHYTHM })
     fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
     const tick = () =>
       container.querySelector('[data-annotation="cadence"] [data-role="guide"]')?.getAttribute('d')
@@ -1009,13 +1075,20 @@ describe('ModelRunner cadence beat', () => {
     const tickBefore = tick()
     const labelBefore = labelY()
     rerenderWith({
+      camera,
       focus: RHYTHM,
       overrides: {
-        valueTween: { from: { pelvisBounce: tall.pelvisBounce }, to: { pelvisBounce: tall.pelvisBounce }, durationMs: 10_000, key: 'lift' },
+        valueTween: {
+          from: { pelvisBounce: lower.pelvisBounce },
+          to: { pelvisBounce: lower.pelvisBounce },
+          durationMs: 10_000,
+          key: 'lower',
+        },
       },
     })
     advance(100)
     expect(tick()).toBe(tickBefore)
-    expect(labelY()).not.toBeCloseTo(labelBefore, 3)
+    const drop = (pelvisHeight(VALUES) - pelvisHeight(lower)) * camera.zoom
+    expect(labelY() - labelBefore).toBeCloseTo(drop, 3)
   })
 })

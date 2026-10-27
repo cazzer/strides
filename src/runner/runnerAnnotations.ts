@@ -55,7 +55,8 @@ export const PARAM_ANNOTATION_KIND: Readonly<Record<RunnerParamId, AnnotationKin
  * held phase.
  */
 export const KEY_LEG_PHASE: Readonly<Record<RunnerParamId, number | null>> = {
-  cadence: null,
+  /** A footfall: a still figure holds the near foot planted on its beat tick. */
+  cadence: GAIT_PHASES.leftContact,
   pelvisBounce: null,
   torsoPitch: null,
   armSwing: null,
@@ -314,7 +315,7 @@ function contactPoint(values: RunnerParams, side: RunnerSide): Vec3 {
   return { x: first.x, y: GROUND_Y, z: first.z }
 }
 
-/** How far below the ground a footfall's tick reaches. */
+/** How far below the ground a footfall's tick reaches. Each tick is its pulse's guide, in order. */
 const BEAT_TICK_DEPTH = 0.08
 
 /** How much of a cycle a footfall's ring takes to fade out. */
@@ -323,7 +324,8 @@ export const BEAT_DECAY_CYCLES = 0.25
 /**
  * A footfall ring's strength at cycle `phase` for a foot landing at `pulsePhase`: 1 at the
  * contact, easing to 0 over `BEAT_DECAY_CYCLES` (quadratically), and 0 until the next contact.
- * The renderer draws its opacity as this and its radius growing as it fades.
+ * The renderer draws the ring largest and opaque at contact, shrinking as it fades, and flashes
+ * the foot's tick in the accent at the same strength.
  */
 export function beatEnvelope(phase: number, pulsePhase: number): number {
   const u = fract(phase - pulsePhase) / BEAT_DECAY_CYCLES
@@ -495,8 +497,8 @@ const BUILDERS: Readonly<Record<RunnerParamId, Builder>> = {
       guides: [
         // The midline, a plumb from hip-mid down past the mark.
         [
-          { x: ankle.x, y: hip.y, z: 0 },
-          { x: ankle.x, y: bottom, z: 0 },
+          { x: hip.x, y: hip.y, z: 0 },
+          { x: hip.x, y: bottom, z: 0 },
         ],
         // A tick from the ground under each foot. The model is symmetric, so the other foot
         // plants at the mirror of this one; a planted ankle stands right above its tick.
@@ -629,9 +631,13 @@ const GROUND_LANE_TOLERANCE = 1e-9
 /**
  * Two or more ground-lane labels (overstride under its mark, foot strike under the heel) would
  * print over each other: they stack in focus order as one block, centred under the first one's
- * anchor at the lane's lowest anchor height, each below the lines of the ones before it. A lone
+ * anchor at the lane's lowest anchor height, each below the lines of the ones before it and half a
+ * line clear of them. A lone
  * ground-lane label keeps its own anchor.
  */
+/** Extra gap between stacked labels, in lines, so the second never reads as the first's tail. */
+export const STACK_GAP_LINES = 0.5
+
 function stackGroundLane(annotations: RunnerAnnotation[]): RunnerAnnotation[] {
   const lane = annotations.filter((a) => inGroundLane(a.label))
   if (lane.length < 2) return annotations
@@ -641,7 +647,7 @@ function stackGroundLane(annotations: RunnerAnnotation[]): RunnerAnnotation[] {
   return annotations.map((a) => {
     if (!inGroundLane(a.label)) return a
     const label = { ...a.label, anchor: { ...a.label.anchor, x: laneX, y: laneY }, offsetLines }
-    offsetLines += a.label.lines.length
+    offsetLines += a.label.lines.length + STACK_GAP_LINES
     return { ...a, label }
   })
 }
