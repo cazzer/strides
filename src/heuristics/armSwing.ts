@@ -3,8 +3,12 @@ import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { HeuristicsConfig, MetricExemplar } from './types'
 import { resolveBilateralPair, resolvePoint } from './keypoints'
 import { distance, median } from './mathUtils'
-import { fitSpectralSinusoid } from './spectralFit'
-import type { SpectralFitFailureReason, SpectralFitResult } from './spectralFit'
+import { fitSpectralSinusoid, fitTrendAtFrequency } from './spectralFit'
+import type {
+  SpectralFitFailureReason,
+  SpectralFitResult,
+  SpectralSample,
+} from './spectralFit'
 import { analyzeHipBounce } from './hipBounce'
 import { resolvedSpanCenter, selectBounceInstants } from './bounceInstants'
 import {
@@ -379,8 +383,12 @@ export interface SideSwing {
    * reference scale (see `resolveScaleStabilizer`), `null` where it did not resolve, index-
    * parallel to `frames` — the shape `resolvedSpanCenter` reads. */
   seriesY: Array<number | null>
-  /** The spectral fit of that trace, over the stride-rate-anchored grid. */
+  /** The spectral fit of that trace, over the stride-rate-anchored grid. Its FUNDAMENTAL is what
+   * the shared gates read; its peak-to-peak is not the published size (see `travelPx`). */
   fit: SpectralFitResult
+  /** The wrist's per-stride travel in the same px as `seriesY` — see `perStrideTravel`. `null`
+   * whenever `fit` failed, or no stride window held enough samples to read a range from. */
+  travelPx: number | null
   /** Frames where this side's shoulder AND wrist both resolved. */
   resolvedCount: number
   /** Of resolvedCount, how many had either point flagged interpolated. */
@@ -469,7 +477,85 @@ export function computeSideSwing(
     frequencyStepHz: ARM_SWING_BAND_STEP_FRACTION * strideHz,
   })
 
-  return { seriesY, fit, resolvedCount, interpolatedCount }
+  return { seriesY, fit, travelPx: perStrideTravel(samples, fit), resolvedCount, interpolatedCount }
+}
+
+/** Fewest samples a stride window must hold for its max − min to be read at all — below three, a
+ * 3-point median has nothing to compare against and the "range" is one or two raw samples. */
+const MIN_TRAVEL_WINDOW_SAMPLES = 3
+
+function median3(a: number, b: number, c: number): number {
+  return Math.max(Math.min(a, b), Math.min(Math.max(a, b), c))
+}
+
+/**
+ * How far the wrist travels in one stride — the published size — read off the series rather than
+ * off the fit's fundamental (`measure-arm-swing-travel-at-stride-rate` design D2).
+ *
+ * A real arm-swing trace is not a sinusoid: the wrist dwells near one end, or reverses at a cusp,
+ * and the fundamental of such a waveform carries only part of its range (a triangle's fundamental
+ * is `8/π²` ≈ 81% of it; on Demo 2 the right arm's fitted 0.159 torso sat against a detrended
+ * visible range of 0.218–0.300). The fit stays the right tool for FINDING the rhythm and gating on
+ * it; this is the size:
+ *
+ * 1. Remove the quadratic trend fitted JOINTLY with the sinusoid at `f*` (`fitTrendAtFrequency`) —
+ *    exactly the drift the fit already refused to charge to the swing.
+ * 2. 3-point running median over consecutive usable samples (endpoints kept as-is) — a spike guard:
+ *    a single-frame glitch or left/right label swap would otherwise be reported in full by a range.
+ * 3. Tile `floor(observedCycles)` complete windows of one fitted period `1/f*` from the first usable
+ *    sample. `f*` is a stride rate by construction (the grid is anchored on it), so each window
+ *    holds one full swing whatever its phase, and step-rate content inside it is real
+ *    wrist-relative-to-shoulder travel (the torso's own step bounce cancels in wrist − shoulder) —
+ *    counted on purpose.
+ * 4. Median over windows of `max − min`, skipping windows under `MIN_TRAVEL_WINDOW_SAMPLES`.
+ *
+ * Known bias, stated rather than corrected: step 2 clips a sampled extremum to its higher
+ * neighbour, so a sinusoid reads low by at most `1 − cos(2π f* / fs)` (4.9% at 20 samples per cycle,
+ * 0.55% at 60) and a cusp by at most `4 f* / fs`; tracking jitter biases a range the other way.
+ * Rejected: a multi-harmonic fit — a triangle needs harmonics to ~7–9 to come within 5%, i.e. 17–21
+ * parameters over ~100 samples near Nyquist.
+ */
+function perStrideTravel(
+  samples: ReadonlyArray<SpectralSample>,
+  fit: SpectralFitResult,
+): number | null {
+  if (!fit.ok) return null
+  const trend = fitTrendAtFrequency(samples, fit.frequencyHz)
+  if (trend === null) return null
+
+  const usable = samples
+    .filter((sample) => Number.isFinite(sample.t) && Number.isFinite(sample.v))
+    .sort((a, b) => a.t - b.t)
+  const residual = usable.map(({ t, v }) => {
+    const centered = t - trend.tMeanSeconds
+    return v - (trend.offset + trend.linear * centered + trend.quadratic * centered * centered)
+  })
+  const filtered = residual.map((v, i) =>
+    i === 0 || i === residual.length - 1 ? v : median3(residual[i - 1], v, residual[i + 1]),
+  )
+
+  const periodSeconds = 1 / fit.frequencyHz
+  const windowCount = Math.floor(fit.observedCycles)
+  const firstT = usable[0].t
+  const travels: number[] = []
+  for (let k = 0; k < windowCount; k += 1) {
+    const start = firstT + k * periodSeconds
+    const end = start + periodSeconds
+    let low = Infinity
+    let high = -Infinity
+    let count = 0
+    usable.forEach(({ t }, i) => {
+      if (t < start || t >= end) return
+      count += 1
+      low = Math.min(low, filtered[i])
+      high = Math.max(high, filtered[i])
+    })
+    if (count >= MIN_TRAVEL_WINDOW_SAMPLES) travels.push(high - low)
+  }
+
+  if (travels.length === 0) return null
+  const travel = median(travels)
+  return Number.isFinite(travel) ? travel : null
 }
 
 export function caveatForFailure(reason: SpectralFitFailureReason, sampleCount: number): string {

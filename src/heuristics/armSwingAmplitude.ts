@@ -165,6 +165,16 @@ export function computeArmSwingAmplitude(
     )
   }
 
+  // A fit that completed a cycle almost always leaves a stride window to read; this is the guard
+  // for the one that did not, and its true cause is the clip's length.
+  if (left.travelPx === null || right.travelPx === null) {
+    return nullResult(
+      viewFitEntry.fit,
+      caveatForFailure('insufficient-cycles', 0),
+      frameCoverage,
+    )
+  }
+
   const bodyScale = estimateBodyScale(frames)
   if (bodyScale === null || bodyScale.torsoLengthPx <= 0) {
     // Overstriding's exact wording — the true cause is the missing normalizer, not the arms. The
@@ -177,9 +187,7 @@ export function computeArmSwingAmplitude(
     )
   }
 
-  const value =
-    (left.fit.peakToPeakAmplitude + right.fit.peakToPeakAmplitude) /
-    (2 * bodyScale.torsoLengthPx)
+  const value = (left.travelPx + right.travelPx) / (2 * bodyScale.torsoLengthPx)
 
   const interpolatedFraction = Math.max(
     left.interpolatedCount / left.resolvedCount,

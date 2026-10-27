@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { computeArmSwingAmplitude } from './armSwingAmplitude'
+import { computeSideSwing, resolveStrideRateHz } from './armSwing'
 import { buildFrame } from './__fixtures__/testFrames'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
@@ -148,6 +149,24 @@ const BASE_PARAMS = {
   swingFreqHz: 1.5,
 }
 
+/**
+ * The 3-point spike-guard median in the shared travel estimator clips a sampled extremum to its
+ * higher neighbour, so an exact sinusoid sampled at `fps` reads at most `1 − cos(2π f / fps)` low
+ * (`armSwing.ts`, `perStrideTravel`). At this suite's 1.5 Hz / 30 fps that is 4.9%, and the
+ * fixtures' phase puts a sample exactly on each extreme — the worst case.
+ */
+const SAMPLING_FLOOR = Math.cos((2 * Math.PI * BASE_PARAMS.swingFreqHz) / BASE_PARAMS.fps)
+
+/** Each side's per-stride travel, in px, from the shared module — what the metric must average. */
+function sideTravelsPx(frames: RobustPoseFrame[]): { left: number; right: number } {
+  const strideHz = resolveStrideRateHz(frames, DEFAULT_HEURISTICS_CONFIG)
+  if (strideHz === null) throw new Error('fixture must carry a stride rhythm')
+  const left = computeSideSwing(frames, 'left', { strideHz }).travelPx
+  const right = computeSideSwing(frames, 'right', { strideHz }).travelPx
+  if (left === null || right === null) throw new Error('fixture must yield a travel on both sides')
+  return { left, right }
+}
+
 /** The realistic fixture `armSwing.test.ts` uses for its shared-fit cases — stride-rate swing,
  * step-rate harmonic, modest jitter — reused so this metric's gates are exercised against the
  * same shape of trace the shared module is measured on. */
@@ -189,20 +208,23 @@ describe('buildArmSwingFrames — the default body bounce', () => {
 })
 
 describe('computeArmSwingAmplitude', () => {
-  it('a clean front-view clip reports the MEAN of the two sides over torso length, exactly', () => {
+  it('a clean front-view clip reports the MEAN of the two sides’ per-stride travel over torso length', () => {
     // Asymmetric on purpose: a mean of unequal sides is what distinguishes this metric's
-    // aggregation from min/max, and both inputs are exact by construction —
-    // (40 + 20) / (2 × 150) = 0.2.
+    // aggregation from min/max. The value is EXACTLY the mean of the shared module's two travels
+    // over the 150 px torso, and those travels track the fixture's own 40 px / 20 px excursions to
+    // within the estimator's stated sampling bias — (40 + 20) / (2 × 150) = 0.2 at most.
     const frames = buildArmSwingFrames({
       ...BASE_PARAMS,
       leftAmplitudePx: 40,
       rightAmplitudePx: 20,
     })
+    const travels = sideTravelsPx(frames)
 
     const result = computeArmSwingAmplitude(frames, 'front')
 
-    expect(result.value).not.toBeNull()
-    expect(result.value).toBeCloseTo((40 + 20) / (2 * TORSO_LENGTH_PX), 2)
+    expect(result.value).toBe((travels.left + travels.right) / (2 * TORSO_LENGTH_PX))
+    expect(result.value!).toBeGreaterThanOrEqual(0.2 * SAMPLING_FLOOR - 1e-9)
+    expect(result.value!).toBeLessThanOrEqual(0.2 + 1e-9)
     expect(result.unit).toBe('ratio')
     expect(result.viewFit).toBe('primary')
     expect(result.sampleSize).toBeGreaterThanOrEqual(4)
@@ -211,6 +233,36 @@ describe('computeArmSwingAmplitude', () => {
     // saturation R² and the cycle floor -> confidence at or very near 1.
     expect(result.confidence).toBeGreaterThan(0.9)
     expect(result.caveat).toBeNull()
+  })
+
+  it('reports the full travel of a swing carrying a second harmonic, not the fundamental’s size', () => {
+    // −sin φ + 0.4·sin 2φ (the REALISTIC shape, without its jitter): its peak-to-trough travel is
+    // larger than the fundamental's, and the published value is the travel.
+    const frames = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      fps: 60,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 40,
+      harmonicRatio: 0.4,
+    })
+    let high = -Infinity
+    let low = Infinity
+    for (let i = 0; i < 10000; i += 1) {
+      const phase = (2 * Math.PI * i) / 10000
+      const v = -20 * Math.sin(phase) + 8 * Math.sin(2 * phase)
+      high = Math.max(high, v)
+      low = Math.min(low, v)
+    }
+    const trueTravelPx = high - low
+
+    const result = computeArmSwingAmplitude(frames, 'front')
+    const strideHz = resolveStrideRateHz(frames, DEFAULT_HEURISTICS_CONFIG)!
+    const fit = computeSideSwing(frames, 'left', { strideHz }).fit
+
+    expect(trueTravelPx).toBeGreaterThan(44)
+    expect(fit.ok && fit.peakToPeakAmplitude).toBeCloseTo(40, 0)
+    expect(result.value! * TORSO_LENGTH_PX).toBeGreaterThan(0.97 * trueTravelPx)
+    expect(result.value! * TORSO_LENGTH_PX).toBeLessThanOrEqual(trueTravelPx + 1e-6)
   })
 
   it('a side-view clip: still computed (never withheld), viewFit unsuitable, confidence capped near the 0.1 multiplier', () => {
@@ -453,8 +505,7 @@ describe('computeArmSwingAmplitude', () => {
     // Whole-body exponential growth (strides-egw): the stabilized per-side amplitudes come out at
     // the clip's reference (median inter-shoulder) scale — i.e. ×g at the median-sample instant —
     // and `estimateBodyScale`'s clip-median torso is the same ×g at the same median instant, so
-    // the growth divides out exactly and the hand expectation is the STATIC one:
-    // (40 + 20) / (2 × 150) = 0.2.
+    // the growth divides out exactly and the expectation is the STATIC clip's own value.
     const growing = computeArmSwingAmplitude(
       buildArmSwingFrames({
         ...BASE_PARAMS,
@@ -465,8 +516,14 @@ describe('computeArmSwingAmplitude', () => {
       'front',
     )
 
+    const still = computeArmSwingAmplitude(
+      buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 20 }),
+      'front',
+    )
+
     expect(growing.value).not.toBeNull()
-    expect(growing.value).toBeCloseTo((40 + 20) / (2 * TORSO_LENGTH_PX), 3)
+    expect(growing.value).toBeCloseTo(still.value!, 3)
+    expect(growing.value!).toBeGreaterThanOrEqual(0.2 * SAMPLING_FLOOR - 1e-3)
   })
 
   it('never NaN: every degenerate input yields a finite number or null', () => {

@@ -370,6 +370,165 @@ describe('resolveStrideRateHz', () => {
   })
 })
 
+/**
+ * Both wrists following an arbitrary wrist-below-shoulder waveform under a fixed-size body, so the
+ * scale stabilizer is an exact no-op and `travelPx` can be compared with the waveform's own
+ * peak-to-trough travel directly.
+ */
+function framesFromWave(params: {
+  durationSec: number
+  fps: number
+  wave: (t: number, i: number) => number
+}): RobustPoseFrame[] {
+  const frameCount = Math.round(params.durationSec * params.fps)
+  return Array.from({ length: frameCount }, (_, i) => {
+    const t = i / params.fps
+    const wristY = SHOULDER_Y + BASE_WRIST_OFFSET_Y + params.wave(t, i)
+    return buildFrame(
+      {
+        left_shoulder: { x: LEFT_SHOULDER_X, y: SHOULDER_Y },
+        right_shoulder: { x: RIGHT_SHOULDER_X, y: SHOULDER_Y },
+        left_hip: { x: LEFT_HIP_X, y: SHOULDER_Y + TORSO_LENGTH_PX },
+        right_hip: { x: RIGHT_HIP_X, y: SHOULDER_Y + TORSO_LENGTH_PX },
+        left_wrist: { x: LEFT_SHOULDER_X, y: wristY },
+        right_wrist: { x: RIGHT_SHOULDER_X, y: wristY },
+      },
+      t,
+    )
+  })
+}
+
+function travelOf(frames: RobustPoseFrame[], strideHz: number): number {
+  const swing = computeSideSwing(frames, 'left', { strideHz })
+  if (swing.travelPx === null) throw new Error('fixture must yield a travel')
+  return swing.travelPx
+}
+
+const TAU = 2 * Math.PI
+
+/**
+ * The published size is the wrist's per-stride TRAVEL, not the fitted fundamental's peak-to-peak
+ * (`strides-eiil.2`, design D2). Tolerances are the estimator's own stated bounds: the 3-point
+ * spike-guard median clips a sampled extremum to its higher neighbour, at most `1 − cos(2π f/fs)`
+ * low for a sinusoid and `4 f/fs` for a cusp.
+ */
+describe('computeSideSwing — per-stride travel', () => {
+  it('a pure sinusoid reads its own peak-to-peak, within 1% at 60 fps', () => {
+    const frames = framesFromWave({ durationSec: 4, fps: 60, wave: (t) => 20 * Math.sin(TAU * t) })
+
+    const travel = travelOf(frames, 1.0)
+
+    expect(travel).toBeGreaterThan(40 * 0.99)
+    expect(travel).toBeLessThanOrEqual(40 + 1e-9)
+  })
+
+  it('at 20 samples per cycle the sinusoid reads low by no more than the stated sampling bound', () => {
+    // 1.5 Hz at 30 fps with a sample exactly on each extreme: the worst case, 1 − cos 18° = 4.9%.
+    const frames = framesFromWave({
+      durationSec: 4,
+      fps: 30,
+      wave: (t) => 20 * Math.sin(TAU * 1.5 * t),
+    })
+
+    const travel = travelOf(frames, 1.5)
+
+    expect(travel).toBeGreaterThanOrEqual(40 * Math.cos((TAU * 1.5) / 30) - 1e-9)
+    expect(travel).toBeLessThanOrEqual(40 + 1e-9)
+  })
+
+  it('a swing carrying a second harmonic reads its full travel, which the fundamental understates', () => {
+    // sin φ + 0.5·sin(2φ − π/2) peaks at +1.5 and troughs at −0.75: a travel of 2.25 per unit,
+    // against the fundamental's 2.
+    const frames = framesFromWave({
+      durationSec: 4,
+      fps: 60,
+      wave: (t) => 20 * (Math.sin(TAU * t) + 0.5 * Math.sin(2 * TAU * t - Math.PI / 2)),
+    })
+    const swing = computeSideSwing(frames, 'left', { strideHz: 1.0 })
+
+    expect(swing.fit.ok && swing.fit.peakToPeakAmplitude).toBeCloseTo(40, 0)
+    expect(swing.travelPx! / 45).toBeGreaterThan(0.98)
+    expect(swing.travelPx! / 45).toBeLessThanOrEqual(1 + 1e-9)
+  })
+
+  it('a cusp-shaped (triangle) swing reads its travel within the stated cusp bound', () => {
+    // A triangle's fundamental is 8/π² ≈ 81% of its range; the travel is within 4·f/fs (6.7%).
+    const triangle = (t: number) => {
+      const p = (((t * 1.0) % 1) + 1) % 1
+      return 20 * (p < 0.5 ? 4 * p - 1 : 3 - 4 * p)
+    }
+    const frames = framesFromWave({ durationSec: 4, fps: 60, wave: triangle })
+    const swing = computeSideSwing(frames, 'left', { strideHz: 1.0 })
+
+    expect(swing.fit.ok && swing.fit.peakToPeakAmplitude).toBeCloseTo((8 / Math.PI ** 2) * 40, 0)
+    expect(swing.travelPx!).toBeGreaterThanOrEqual(40 * (1 - 4 / 60) - 1e-9)
+    expect(swing.travelPx!).toBeLessThanOrEqual(40 + 1e-9)
+  })
+
+  it('a single-frame spike three swings tall moves the travel by no more than 3%', () => {
+    const wave = (t: number) => 20 * Math.sin(TAU * t)
+    const clean = travelOf(framesFromWave({ durationSec: 4, fps: 60, wave }), 1.0)
+    const spiked = travelOf(
+      framesFromWave({
+        durationSec: 4,
+        fps: 60,
+        wave: (t, i) => wave(t) + (i === 100 ? 3 * 40 : 0),
+      }),
+      1.0,
+    )
+
+    expect(Math.abs(spiked - clean) / clean).toBeLessThanOrEqual(0.03)
+  })
+
+  it('±10% uniform per-frame jitter inflates the travel by no more than 10%', () => {
+    const jitter = makeJitter(20261027)
+    const frames = framesFromWave({
+      durationSec: 4,
+      fps: 30,
+      wave: (t) => 20 * Math.sin(TAU * 1.5 * t) + 4 * jitter(),
+    })
+
+    const travel = travelOf(frames, 1.5)
+
+    expect(travel).toBeLessThanOrEqual(40 * 1.1)
+    expect(travel).toBeGreaterThan(40 * 0.9)
+  })
+
+  it('the realistic fixture reads its real excursion, above the fundamental’s size', () => {
+    // The step-harmonic, jittered shape the gate tests use: −20·sin φ + 8·sin 2φ on the left arm.
+    const frames = buildArmSwingFrames({
+      durationSec: 4,
+      fps: 30,
+      swingFreqHz: 1.5,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 20,
+      leftJitterPx: 4,
+      rightJitterPx: 4,
+      harmonicRatio: 0.4,
+      seed: 20260829,
+    })
+    let high = -Infinity
+    let low = Infinity
+    for (let i = 0; i < 10000; i += 1) {
+      const v = -20 * Math.sin((TAU * i) / 10000) + 8 * Math.sin((2 * TAU * i) / 10000)
+      high = Math.max(high, v)
+      low = Math.min(low, v)
+    }
+    const swing = computeSideSwing(frames, 'left', AT_STRIDE)
+
+    expect(swing.fit.ok).toBe(true)
+    if (!swing.fit.ok) return
+    expect(swing.travelPx!).toBeGreaterThan(swing.fit.peakToPeakAmplitude)
+    expect(Math.abs(swing.travelPx! - (high - low)) / (high - low)).toBeLessThan(0.1)
+  })
+
+  it('a failed fit has no travel', () => {
+    const frames = buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 0, rightAmplitudePx: 0 })
+
+    expect(computeSideSwing(frames, 'left', AT_STRIDE).travelPx).toBeNull()
+  })
+})
+
 describe('computeSideSwing — fit failures', () => {
   it('tracked but motionless arms: degenerate-signal, and the caveat names the missing motion', () => {
     // Wrists resolve every frame but never move relative to the shoulder, so there is no

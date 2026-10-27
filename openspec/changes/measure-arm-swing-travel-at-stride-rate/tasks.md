@@ -13,11 +13,11 @@
 
 ## 2. Report per-stride travel (`strides-eiil.2`, design D2)
 
-- [ ] 2.1 `fitTrendAtFrequency` in `spectralFit.ts` (additive; existing tests unedited)
-- [ ] 2.2 `SideSwing.travelPx`: trend-removed, 3-point-median, median over complete stride windows
-- [ ] 2.3 `armSwingAmplitude` value = mean of the two sides' travel / torso; `null` travel → too-short
+- [x] 2.1 `fitTrendAtFrequency` in `spectralFit.ts` (additive; existing tests unedited)
+- [x] 2.2 `SideSwing.travelPx`: trend-removed, 3-point-median, median over complete stride windows
+- [x] 2.3 `armSwingAmplitude` value = mean of the two sides' travel / torso; `null` travel → too-short
       caveat
-- [ ] 2.4 Tests: pure sine, sine + 2nd harmonic, triangle, single-frame spike, jitter, realistic
+- [x] 2.4 Tests: pure sine, sine + 2nd harmonic, triangle, single-frame spike, jitter, realistic
       fixture
 - [ ] 2.5 Live arm snapshot after this fix (Phase E)
 

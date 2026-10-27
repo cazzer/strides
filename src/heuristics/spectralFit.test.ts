@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fitSpectralSinusoid } from './spectralFit'
+import { fitSpectralSinusoid, fitTrendAtFrequency } from './spectralFit'
 import type { SpectralFitSuccess, SpectralSample } from './spectralFit'
 
 /** The same grid `DEFAULT_HEURISTICS_CONFIG` gives vertical oscillation: 1.2-4.0 Hz, 141 candidates. */
@@ -580,5 +580,48 @@ describe('fitSpectralSinusoid — phase', () => {
     const phaseAtOrigin = fit.phaseRadians - omega * fit.tMeanSeconds
     const wrapped = (((phaseAtOrigin - 0.7) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
     expect(Math.min(wrapped, 2 * Math.PI - wrapped)).toBeLessThan(0.02)
+  })
+})
+
+describe('fitTrendAtFrequency', () => {
+  /** A known quadratic drift under a 1.5 Hz sinusoid, sampled irregularly-ish at ~30 fps. */
+  const OFFSET = 300
+  const LINEAR = -12
+  const QUADRATIC = 4
+  const T_REF = 1.7
+  const drift = (t: number) =>
+    OFFSET + LINEAR * (t - T_REF) + QUADRATIC * (t - T_REF) * (t - T_REF)
+  const samples: SpectralSample[] = Array.from({ length: 110 }, (_, i) => {
+    const t = i / 30 + (i % 3) * 0.004
+    return { t, v: drift(t) + HALF_AMPLITUDE * Math.sin(2 * Math.PI * 1.5 * t + 0.4) }
+  })
+
+  it('recovers the drift under the oscillation, in the caller’s own clock', () => {
+    const fit = fitSpectralSinusoid(samples, GRID)
+    expect(fit.ok).toBe(true)
+    if (!fit.ok) return
+    const trend = fitTrendAtFrequency(samples, fit.frequencyHz)
+    expect(trend).not.toBeNull()
+    if (trend === null) return
+
+    expect(trend.tMeanSeconds).toBe(fit.tMeanSeconds)
+    for (const t of [0, 1, 2, 3.6]) {
+      const c = t - trend.tMeanSeconds
+      expect(trend.offset + trend.linear * c + trend.quadratic * c * c).toBeCloseTo(drift(t), 6)
+    }
+  })
+
+  it('is order-independent and drops non-finite samples, like the fit', () => {
+    const shuffled = [...samples].reverse()
+    const withJunk = [...samples, { t: Number.NaN, v: 1 }, { t: 2, v: Number.POSITIVE_INFINITY }]
+    expect(fitTrendAtFrequency(shuffled, 1.5)).toEqual(fitTrendAtFrequency(samples, 1.5))
+    expect(fitTrendAtFrequency(withJunk, 1.5)).toEqual(fitTrendAtFrequency(samples, 1.5))
+  })
+
+  it('refuses, rather than returning NaN, wherever the fit would refuse', () => {
+    expect(fitTrendAtFrequency(samples.slice(0, 11), 1.5)).toBeNull()
+    expect(fitTrendAtFrequency(samples.map((s) => ({ t: 1, v: s.v })), 1.5)).toBeNull()
+    expect(fitTrendAtFrequency(samples, 0)).toBeNull()
+    expect(fitTrendAtFrequency(samples, Number.NaN)).toBeNull()
   })
 })
