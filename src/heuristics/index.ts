@@ -20,7 +20,7 @@ import { computeSwingFootLateralExcursion } from './swingFootLateralExcursion'
 /**
  * View detection must run before all thirteen metrics — each one's view-fit gating and confidence
  * depend on the detected `View`. Encoding that ordering dependency here, rather than leaving it
- * to every caller, means the results view makes one call instead of twelve that have to be
+ * to every caller, means the results view makes one call instead of thirteen that have to be
  * invoked in the right order.
  *
  * `verticalOscillationCm` is appended AFTER `verticalRatio` rather than inserted between
@@ -39,7 +39,7 @@ import { computeSwingFootLateralExcursion } from './swingFootLateralExcursion'
  * What the metrics are gated by is the view PLAUSIBILITY, not the view label
  * (`propagate-view-confidence-to-metric-gating`). This function resolves the config's view-fit
  * table against `view.plausibility` once and hands every metric the resolved table plus the
- * most-plausible view, so all twelve share one view decision — as they always have — and that
+ * most-plausible view, so all thirteen share one view decision — as they always have — and that
  * decision now carries the classification's own certainty instead of discarding it. Two
  * consequences worth stating explicitly:
  *

@@ -33,7 +33,7 @@ const EXPECTED_METRIC_IDS: MetricId[] = [
 /**
  * Which metrics carry a band, named one at a time and in full.
  *
- * The point of listing all twelve rather than asserting a count is that adding a band later — or
+ * The point of listing all thirteen rather than asserting a count is that adding a band later — or
  * losing one — shows up in a diff as a line that says which metric changed and in which
  * direction. design.md's pre-registered rule R1 says that if a future contributor believes a
  * metric deserves a band this design does not list, the correct move is to stop and say so, not to
@@ -224,7 +224,7 @@ describe('METRIC_GUIDANCE exhaustiveness', () => {
     }
   })
 
-  it('returns all twelve in rank order from guidanceInDisplayOrder', () => {
+  it('returns all thirteen in rank order from guidanceInDisplayOrder', () => {
     const ordered = guidanceInDisplayOrder()
     expect(ordered).toHaveLength(EXPECTED_METRIC_IDS.length)
     expect(ordered.map((entry) => entry.displayRank)).toEqual([
@@ -241,7 +241,7 @@ describe('which metrics carry a band', () => {
     })
   }
 
-  it('bands exactly five of the twelve', () => {
+  it('bands exactly five of the thirteen', () => {
     expect(bandedEntries()).toHaveLength(5)
   })
 

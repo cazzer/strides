@@ -465,7 +465,7 @@ export function cropKeypoints(
  * The one place the gate and the budget are applied. Returns `undefined` rather than an empty
  * array when nothing clears the gate, so `MetricResult.exemplars` is simply ABSENT — "this metric
  * never emits exemplars" and "this run's candidates were all gated out" then read the same way at
- * the metric layer, and twelve metric modules stay free of an empty-array-versus-`undefined`
+ * the metric layer, and thirteen metric modules stay free of an empty-array-versus-`undefined`
  * subtlety. The layer that genuinely needs to tell those apart is the plan layer, which has its
  * own discriminated no-evidence result for it.
  */

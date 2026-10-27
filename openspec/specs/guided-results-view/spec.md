@@ -1,10 +1,10 @@
 # guided-results-view Specification
 
 ## Purpose
-An opt-in second results page (`?view=guide`) that presents each metric against a published
-reference band where one can be cited — with its source, population and sample size on screen —
-and demotes metrics with no defensible band, or not measured on this clip, to collapsed groups with
-a reason, without changing any measurement and without displacing the classic view as the default.
+The default results page (classic stays reachable with `?view=classic`) that presents each metric
+against a published reference band where one can be cited — with its source, population and sample
+size on screen — and demotes metrics with no defensible band, or not measured on this clip, to
+collapsed groups with a reason, without changing any measurement.
 ## Requirements
 ### Requirement: A reference band renders only with its provenance on screen
 
@@ -202,7 +202,7 @@ A metric that was measured but carries no defensible reference band SHALL still 
 its description, its own caveats, and its research and remediation links. Only the **scale** is
 withheld.
 
-Seven of this system's twelve metrics have no citable range in the unit this system reports them
+Eight of this system's thirteen metrics have no citable range in the unit this system reports them
 in — including the metric most often asked about. Omitting them would hide the majority of the
 measurement behind the minority that happens to be citable; showing them with an invented scale
 would be the error this whole capability exists to avoid. They render, without a scale, and each

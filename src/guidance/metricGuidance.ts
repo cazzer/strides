@@ -12,7 +12,7 @@ import type { BandSource, GuidanceLink, MetricGuidance } from './types'
  * unit this app already reports that metric in** (or in a unit convertible to it by a stated
  * definitional identity, never by a fitted constant). No band here was invented, inferred from
  * this repo's own footage, interpolated between studies, or chosen to make measured values land
- * inside it. Five of the twelve metrics clear that bar; seven do not, and each of the seven
+ * inside it. Five of the thirteen metrics clear that bar; eight do not, and each of the eight
  * carries the reason a reader gets when they ask.
  *
  * That is not caution for its own sake. Two prior investigations in this repo reached the same
@@ -43,7 +43,7 @@ import type { BandSource, GuidanceLink, MetricGuidance } from './types'
  *    on knee flexion, higher on vertical ratio. See `speedSensitivity` on each entry.
  * 3. **It does not claim any band is correct for an individual.** Every one is confounded by
  *    something the app cannot see — height, pelvis width, terrain, footwear, fatigue.
- * 4. **It does not claim the seven unbanded metrics are unimportant**, only that no citable range
+ * 4. **It does not claim the eight unbanded metrics are unimportant**, only that no citable range
  *    exists for them in this app's units. `verticalOscillation` is the explicit case where a band
  *    was arithmetically reachable and was refused on the quality of the derivation rather than on
  *    its absence.
