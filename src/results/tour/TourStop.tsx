@@ -35,9 +35,14 @@ export const TOUR_STOP_CLASS =
  * out directly. Below `lg` it is the panel that scrolls over the runner: at least 85% opaque and
  * blurred, inside a frame, so its text keeps WCAG AA contrast over the runner's worst-case stroke
  * (`tourPanelContrast.test.ts`, which reads the opacity from this string).
+ *
+ * Its height is capped so that, at rest, it never covers the top of the runner's drawing
+ * (`--rt-clear`, `TOUR_BODY_CLASS`), where the focus body part is: on a short phone a longer panel
+ * scrolls inside itself rather than over the figure (`strides-xsl3`). The cap never goes below
+ * 6rem (a heading and a value), which only a landscape phone reaches.
  */
 export const TOUR_PANEL_CLASS =
-  'runner-tour__panel lg:contents max-lg:flex max-lg:flex-col max-lg:gap-3 max-lg:border-2 max-lg:border-black max-lg:bg-white/85 max-lg:p-4 max-lg:backdrop-blur-[3px] max-lg:dark:border-white max-lg:dark:bg-black/85'
+  'runner-tour__panel lg:contents max-lg:flex max-lg:max-h-[max(6rem,calc(100dvh_-_var(--rt-top)_-_var(--rt-draw-top)_-_var(--rt-clear)_-_0.75rem))] max-lg:flex-col max-lg:gap-3 max-lg:overflow-y-auto max-lg:border-2 max-lg:border-black max-lg:bg-white/85 max-lg:p-4 max-lg:backdrop-blur-[3px] max-lg:dark:border-white max-lg:dark:bg-black/85'
 const STOP_HEADING = 'font-display text-2xl font-bold tracking-tight max-lg:text-xl'
 const VALUE_LABEL =
   'font-sans text-xs font-semibold uppercase tracking-wide text-neutral-600 dark:text-neutral-400'

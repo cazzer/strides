@@ -4,6 +4,25 @@ import type { TourStopId } from '../../guidance/focusAreas'
 
 /** The reading line, as a fraction of the viewport height: where MotionStoryStage reads too. */
 export const READING_LINE_FRACTION = 0.42
+/** How far below the tour's sticky bar the reading line sits at least, as a fraction of the screen
+ * left under the bar. */
+export const UNDER_BAR_FRACTION = 0.25
+
+/**
+ * Where the reading line is: 42% down the viewport, but never at or above the bottom of the tour's
+ * sticky bar (`.runner-tour__header`, inside `root`) once it is stuck. On a short phone the session
+ * header and the bar reach past 42% (375×548: the bar ends at 254 px, 42% is 230 px), so a stop at
+ * rest, its top just under the bar, would never reach a line drawn there, and the runner would show
+ * the stop before it (`strides-xsl3`). There the line is a quarter of the way down the screen under
+ * the bar. Where the bar sticks (its `top`), not where it is: at the top of the page it has not
+ * stuck yet, and a line under it would make the first stop active before the reader reached it.
+ */
+function readingLine(root: HTMLElement): number {
+  const viewport = window.innerHeight
+  const bar = root.querySelector<HTMLElement>('.runner-tour__header')
+  const barBottom = bar ? (parseFloat(getComputedStyle(bar).top) || 0) + bar.getBoundingClientRect().height : 0
+  return Math.max(viewport * READING_LINE_FRACTION, barBottom + (viewport - barBottom) * UNDER_BAR_FRACTION)
+}
 
 /**
  * Which tour stop the reader is on: the last `[data-tour-stop]` inside `rootRef` whose top has
@@ -30,7 +49,7 @@ export function useActiveStop(
     }
     let raf = 0
     const update = () => {
-      const line = window.innerHeight * READING_LINE_FRACTION
+      const line = readingLine(root)
       let current: TourStopId | null = null
       for (const stop of root.querySelectorAll<HTMLElement>('[data-tour-stop]')) {
         if (stop.getBoundingClientRect().top <= line) current = idOf(stop) ?? current
