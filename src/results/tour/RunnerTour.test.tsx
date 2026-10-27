@@ -121,10 +121,14 @@ function setReducedMotion(reduced: boolean) {
   })) as unknown as typeof window.matchMedia
 }
 
-/** Visible words a stop's prose carries (design.md D4): the value line, sr-only text, citations
- * and the end block are excluded; the end block is budgeted on its own. */
+/** Visible words a stop's prose carries (design.md D4): the value line, sr-only text, citations,
+ * the phone panel's band-bar key (the bar's legend, as beside the runner at `lg`) and the end block
+ * are excluded; the end block is budgeted on its own. */
 function proseWords(section: Element): number {
-  return words(section, '.sr-only, .runner-tour__value, .feedback-line__citation, .runner-tour__end')
+  return words(
+    section,
+    '.sr-only, .runner-tour__value, .feedback-line__citation, .runner-tour__panel-legend, .runner-tour__end',
+  )
 }
 
 /**
@@ -204,6 +208,29 @@ describe('RunnerTour — shell', () => {
     expect(skip).not.toHaveAttribute('data-view-entry')
     fireEvent.click(skip)
     expect(onLeaveTour).toHaveBeenCalledTimes(1)
+  })
+
+  it('lays out the phone layout in CSS alone: one runner, each stop’s content in one panel', () => {
+    // Below `lg` the runner is a background and each stop a panel over it, all through `max-lg:`
+    // classes: nothing renders per breakpoint, so a resize never remounts the runner (and never
+    // resets the reader's Pause).
+    const { container } = renderTour()
+    expect(runner.mounts).toBe(1)
+    for (const section of container.querySelectorAll<HTMLElement>('[data-tour-stop]')) {
+      const panels = section.querySelectorAll(':scope > .runner-tour__panel')
+      expect(panels, section.dataset.tourStop).toHaveLength(1)
+      expect(section.children).toHaveLength(1)
+      // The heading that labels the section is in its panel, first.
+      expect(panels[0].firstElementChild?.id).toBe(section.getAttribute('aria-labelledby'))
+      // The phone key to a band bar sits in the panel exactly when the panel has a bar.
+      const bar = panels[0].querySelector('.metric-scale--compact') !== null
+      expect(panels[0].querySelectorAll('.runner-tour__panel-legend'), section.dataset.tourStop).toHaveLength(
+        bar ? 1 : 0,
+      )
+    }
+    expect(container.querySelectorAll('.runner-tour__panel-legend').length).toBeGreaterThan(0)
+    // Every stop is labelled by its heading still, through the panel.
+    expect(screen.getByRole('region', { name: 'Landing' })).toHaveAttribute('data-tour-stop', 'landing')
   })
 
   it('ends with "See all measurements", which leaves the tour', () => {

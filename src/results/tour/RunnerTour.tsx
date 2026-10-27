@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { RefObject } from 'react'
 import type { FormHeuristicsResult, MetricId } from '../../heuristics/types'
 import { FOCUS_AREAS, FOCUS_AREA_ORDER } from '../../guidance/focusAreas'
 import type { TourStopId } from '../../guidance/focusAreas'
@@ -43,28 +44,85 @@ export interface RunnerTourProps extends GuidedResultsViewProps {
 
 /**
  * The sticky bar under the session header: the tour's heading, where the reader is, and Skip, in
- * view for the whole tour. `min-h-14` is the 3.5rem the rail and the stops offset themselves by.
+ * view for the whole tour. `min-h-14` is the 3.5rem the rail and the stops offset themselves by at
+ * `lg`. Below `lg` the heading is visually hidden (it stays the tour's focus target), so the dots and
+ * Skip share one row, and the tour measures the bar (`--runner-tour-bar-height`,
+ * `useBarHeightProperty`) rather than assuming its height.
  */
 export const TOUR_BAR_CLASS =
   'runner-tour__header sticky top-[var(--motion-story-header-height,88px)] z-[5] flex min-h-14 flex-wrap items-center justify-between gap-x-4 gap-y-2 bg-white py-2 dark:bg-black'
+/** The bar's dots and Skip: a group beside the heading at `lg`, the whole row below it. */
+const TOUR_BAR_ACTIONS_CLASS = 'flex items-center gap-4 max-lg:w-full max-lg:justify-between max-lg:gap-2'
 /**
- * The runner and the stops: the rail first (left) and wider at `lg`, the runner in flow above the
- * stops below it.
+ * The runner and the stops: the rail first (left) and wider at `lg`. Below `lg` the runner's parts
+ * and the stops share ONE grid cell, so the runner is a background the stops' panels scroll over:
+ * the stage and the runner's controls stick under the tour's bar (sticky within the tour, so they
+ * never cover the content above or below it).
+ *
+ * The phone geometry, as custom properties every phone rule below reads:
+ * - `--rt-top`: where the runner sticks, under the session header and the tour's bar;
+ * - `--rt-controls`: the runner's control row (44 px targets and their padding), which overlays the
+ *   top of the stage;
+ * - `--rt-reserve`: how much of the bottom of the viewport the active stop's panel covers at rest,
+ *   which the drawing keeps clear of, so the camera's target (the focus body part) sits in the
+ *   uncovered part. Measured (`usePanelReserveProperty`); the value here is the fallback.
  */
 export const TOUR_BODY_CLASS =
-  'runner-tour__body space-y-6 lg:grid lg:grid-cols-[minmax(18rem,2fr)_minmax(0,3fr)] lg:items-start lg:gap-8 lg:space-y-0'
+  'runner-tour__body grid grid-cols-1 lg:grid-cols-[minmax(18rem,2fr)_minmax(0,3fr)] lg:items-start lg:gap-8 [--rt-top:calc(var(--motion-story-header-height,88px)_+_var(--runner-tour-bar-height,3.75rem))] [--rt-controls:3.25rem] [--rt-reserve:min(17.5rem,50%)]'
 /**
- * The runner's rail: sticky under the header and the tour's bar at `lg`, in flow above the stops
- * below it. Named so the phone layout (`strides-trn2.4`) can make it a background with `max-lg:`.
+ * The runner's rail: sticky under the header and the tour's bar at `lg`. Below `lg` it has no box
+ * of its own (`contents`): the runner and its notes become cells of the body's grid, so they can be
+ * placed under the stops one by one.
  */
 export const TOUR_RAIL_CLASS =
-  'runner-tour__rail border-2 border-black p-3 lg:sticky lg:top-[calc(var(--motion-story-header-height,88px)_+_4.5rem)] lg:self-start dark:border-white'
+  'runner-tour__rail border-2 border-black p-3 max-lg:contents lg:sticky lg:top-[calc(var(--motion-story-header-height,88px)_+_4.5rem)] lg:self-start dark:border-white'
 /**
- * The runner's own height at `lg`: the viewport below the session header, less the tour's bar, the
- * rail's frame and the slow-motion and legend lines under the figure, so all of them stay on screen.
+ * The runner itself. At `lg`, its own height: the viewport below the session header, less the
+ * tour's bar, the rail's frame and the slow-motion and legend lines under the figure, so all of them
+ * stay on screen.
+ *
+ * Below `lg` the figure fills the body's one grid cell (as tall as the stops), and its parts stick
+ * inside it, styled from here through the runner's `data-runner-part` hooks (pinned by
+ * `runnerPhoneStructure.test.tsx`), so `src/runner` carries no phone code:
+ * - the stage: a background as tall as the viewport under the bar, edge to edge, under the panels.
+ *   Edge to edge is `-mx-4 sm:-mx-6`, which undoes the session's `<main>` padding (`px-4 sm:px-6`,
+ *   `MultiClipVideoSession`): change one and the other must follow, or the page scrolls sideways;
+ * - the drawing: inset from the stage's top by the control row and from its bottom by the active
+ *   panel's reserve, so its centre (the camera's target) is in the part of the screen no panel
+ *   covers. Clipped at its top edge (the control row's border) but free below and to the sides, so
+ *   a zoomed-in figure runs on behind the panel; the ground hairline is hidden, as it would show
+ *   through the panel as a stray rule;
+ * - the control row (Skip intro, Pause): stuck under the bar ABOVE the panels, opaque, so it stays
+ *   tappable whatever scrolls under it, and taking no room in the flow. Its "Dashed: …" note hangs
+ *   below it, at the top of the notes stack;
+ * - the caption: for assistive technology only (the tour's bar already says whose model this is).
  */
-const RUNNER_HEIGHT_CLASS =
-  'h-56 lg:h-[calc(100dvh_-_var(--motion-story-header-height,88px)_-_11rem)]'
+const RUNNER_CLASS = [
+  'lg:h-[calc(100dvh_-_var(--motion-story-header-height,88px)_-_11rem)]',
+  'max-lg:col-start-1 max-lg:row-start-1',
+  'max-lg:[&_[data-runner-part=caption]]:sr-only',
+  'max-lg:[&_[data-runner-part=stage]]:pointer-events-none max-lg:[&_[data-runner-part=stage]]:sticky max-lg:[&_[data-runner-part=stage]]:top-[var(--rt-top)] max-lg:[&_[data-runner-part=stage]]:-mx-4 max-lg:[&_[data-runner-part=stage]]:h-[calc(100dvh_-_var(--rt-top))] max-lg:[&_[data-runner-part=stage]]:flex-none sm:max-lg:[&_[data-runner-part=stage]]:-mx-6',
+  // An explicit height, not `bottom`: an absolutely positioned SVG with `height: auto` takes its
+  // viewBox's aspect ratio rather than stretching between `top` and `bottom`.
+  'max-lg:[&_[data-runner-part=drawing]]:top-[calc(var(--rt-controls)_+_0.25rem)] max-lg:[&_[data-runner-part=drawing]]:h-[calc(100%_-_var(--rt-controls)_-_0.25rem_-_var(--rt-reserve))] max-lg:[&_[data-runner-part=drawing]]:overflow-visible max-lg:[&_[data-runner-part=drawing]]:[clip-path:inset(0_-100vw_-100vh_-100vw)] max-lg:[&_[data-ground]]:hidden',
+  'max-lg:[&_[data-runner-part=controls]]:sticky max-lg:[&_[data-runner-part=controls]]:top-[var(--rt-top)] max-lg:[&_[data-runner-part=controls]]:z-[3] max-lg:[&_[data-runner-part=controls]]:order-first max-lg:[&_[data-runner-part=controls]]:-mx-4 max-lg:[&_[data-runner-part=controls]]:-mb-[var(--rt-controls)] max-lg:[&_[data-runner-part=controls]]:h-[var(--rt-controls)] max-lg:[&_[data-runner-part=controls]]:justify-end max-lg:[&_[data-runner-part=controls]]:border-b-2 max-lg:[&_[data-runner-part=controls]]:border-black max-lg:[&_[data-runner-part=controls]]:bg-white max-lg:[&_[data-runner-part=controls]]:px-4 max-lg:[&_[data-runner-part=controls]]:py-1 sm:max-lg:[&_[data-runner-part=controls]]:-mx-6 sm:max-lg:[&_[data-runner-part=controls]]:px-6 max-lg:dark:[&_[data-runner-part=controls]]:border-white max-lg:dark:[&_[data-runner-part=controls]]:bg-black',
+  // The control row's note, out of the row and onto the notes' surface below its left end.
+  'max-lg:[&_[data-runner-part=controls]>p]:absolute max-lg:[&_[data-runner-part=controls]>p]:left-4 max-lg:[&_[data-runner-part=controls]>p]:top-full max-lg:[&_[data-runner-part=controls]>p]:mt-1 max-lg:[&_[data-runner-part=controls]>p]:bg-white/85 max-lg:[&_[data-runner-part=controls]>p]:px-2 max-lg:[&_[data-runner-part=controls]>p]:py-1 max-lg:[&_[data-runner-part=controls]>p]:backdrop-blur-[3px] max-lg:[&_[data-runner-part=controls]>p:empty]:hidden sm:max-lg:[&_[data-runner-part=controls]>p]:left-6 max-lg:dark:[&_[data-runner-part=controls]>p]:bg-black/85',
+].join(' ')
+/**
+ * The runner's notes (slow motion): under the figure at `lg`; below it, a stack stuck at the top
+ * left of the runner's part of the screen, under the control row's "Dashed: …" note and under the
+ * panels like the runner.
+ */
+const RUNNER_NOTES_CLASS =
+  'runner-tour__notes lg:contents max-lg:pointer-events-none max-lg:sticky max-lg:top-[calc(var(--rt-top)_+_var(--rt-controls)_+_2.125rem)] max-lg:col-start-1 max-lg:row-start-1 max-lg:flex max-lg:flex-col max-lg:items-start max-lg:gap-1 max-lg:self-start'
+/**
+ * One note's chip below `lg`, on the stop panels' surface (`TOUR_PANEL_CLASS`): at least 85% opaque,
+ * so its text keeps its contrast over any runner stroke (held to WCAG AA by
+ * `tourPanelContrast.test.ts`, which reads every surface opacity from this file and `TourStop.tsx`).
+ */
+const RUNNER_NOTE_CLASS =
+  'max-lg:w-fit max-lg:max-w-[14rem] max-lg:bg-white/85 max-lg:px-2 max-lg:py-1 max-lg:backdrop-blur-[3px] max-lg:dark:bg-black/85'
 
 /** The runner's drawing inside the rail, which the intro waits to see. */
 const RUNNER_FIGURE_SELECTOR = 'figure svg'
@@ -73,7 +131,7 @@ const RUNNER_FIGURE_SELECTOR = 'figure svg'
 const INTRO_ORDER: readonly MetricId[] = FOCUS_AREA_ORDER.flatMap((area) => FOCUS_AREAS[area].metricIds)
 
 const SKIP_CLASS =
-  'inline-flex min-h-11 shrink-0 items-center justify-center whitespace-nowrap border-2 border-black px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black transition-colors hover:bg-black hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:border-white dark:text-white dark:hover:bg-white dark:hover:text-black'
+  'inline-flex min-h-11 shrink-0 items-center justify-center whitespace-nowrap border-2 border-black px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black transition-colors hover:bg-black hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 max-lg:px-2 dark:border-white dark:text-white dark:hover:bg-white dark:hover:text-black'
 /** A 24 px target around each progress dot (WCAG 2.2 target size, minimum). */
 const DOT_LINK =
   'inline-flex h-6 w-6 items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand-600'
@@ -100,6 +158,8 @@ export function RunnerTour({ onLeaveTour, resultKey, coverage, onAddClip, ...gui
   const { heuristics } = guidedProps.analysis
   const scalePassStatus = guidedProps.analysis.scalePass.status
   const rootRef = useRef<HTMLDivElement>(null)
+  const barRef = useRef<HTMLDivElement>(null)
+  useBarHeightProperty(barRef, rootRef)
   const plan = useMemo(
     () => (heuristics ? tourPlan(heuristics, scalePassStatus, coverage) : null),
     [heuristics, scalePassStatus, coverage],
@@ -109,13 +169,17 @@ export function RunnerTour({ onLeaveTour, resultKey, coverage, onAddClip, ...gui
   const active = useActiveStop(rootRef, stopIds)
   return (
     <div ref={rootRef} className="runner-tour">
-      <div className={TOUR_BAR_CLASS}>
+      <div ref={barRef} className={TOUR_BAR_CLASS}>
         {/* The tour's focus target after a switch (`data-view-entry`): a heading rather than Skip, so
             a reader arriving here hears where they are rather than an action they did not ask for. */}
-        <h2 tabIndex={-1} data-view-entry className="font-display text-xl font-bold tracking-tight focus:outline-none">
+        <h2
+          tabIndex={-1}
+          data-view-entry
+          className="font-display text-xl font-bold tracking-tight focus:outline-none max-lg:sr-only"
+        >
           Your runner model
         </h2>
-        <div className="flex items-center gap-4">
+        <div className={TOUR_BAR_ACTIONS_CLASS}>
           {stopIds.length > 0 && <TourProgress stopIds={stopIds} active={active} />}
           <button type="button" onClick={onLeaveTour} className={SKIP_CLASS}>
             Skip to summary
@@ -138,6 +202,75 @@ export function RunnerTour({ onLeaveTour, resultKey, coverage, onAddClip, ...gui
       </GuidedResultsView>
     </div>
   )
+}
+
+/**
+ * Publishes the tour bar's height on the tour's root as `--runner-tour-bar-height`, which the phone
+ * layout sticks the runner and offsets the stops by: below `lg` the bar wraps, and how far depends
+ * on the width and the text size, so it is measured rather than assumed.
+ */
+function useBarHeightProperty(
+  barRef: RefObject<HTMLElement | null>,
+  rootRef: RefObject<HTMLElement | null>,
+): void {
+  useEffect(() => {
+    const bar = barRef.current
+    const root = rootRef.current
+    if (!bar || !root) return
+    const set = (height: number) => root.style.setProperty('--runner-tour-bar-height', `${Math.ceil(height)}px`)
+    set(bar.getBoundingClientRect().height)
+    if (typeof ResizeObserver === 'undefined') {
+      const onResize = () => set(bar.getBoundingClientRect().height)
+      window.addEventListener('resize', onResize)
+      return () => window.removeEventListener('resize', onResize)
+    }
+    const observer = new ResizeObserver((entries) => {
+      const height = borderBoxHeight(entries[entries.length - 1])
+      if (height !== null) set(height)
+    })
+    observer.observe(bar)
+    return () => observer.disconnect()
+  }, [barRef, rootRef])
+}
+
+/** A ResizeObserver entry's border-box height, the size the sticky offsets have to clear. */
+function borderBoxHeight(entry: ResizeObserverEntry | undefined): number | null {
+  if (!entry) return null
+  const box = entry.borderBoxSize?.[0]
+  return box ? box.blockSize : entry.target.getBoundingClientRect().height
+}
+
+/**
+ * Publishes the active stop's panel height (plus its slot's bottom padding) on the tour body as
+ * `--rt-reserve`: below `lg` the runner's drawing is framed above it, so the focus body part is
+ * never under the panel the reader is on. Before any stop is active (the intro, at the top of the
+ * tour), the first stop's panel. At `lg` the panel has no box (`contents`), so this measures 0 and
+ * leaves the fallback, which nothing at `lg` reads.
+ */
+function usePanelReserveProperty(
+  rootRef: RefObject<HTMLElement | null>,
+  stopId: TourStopId | null,
+): void {
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root || stopId === null) return
+    const panel = root.querySelector<HTMLElement>(`[data-tour-stop="${stopId}"] .runner-tour__panel`)
+    if (!panel) return
+    const slot = panel.parentElement
+    const set = (height: number) => {
+      if (height <= 0) return
+      const padding = slot ? parseFloat(getComputedStyle(slot).paddingBottom) || 0 : 0
+      root.style.setProperty('--rt-reserve', `${Math.ceil(height + padding)}px`)
+    }
+    set(panel.getBoundingClientRect().height)
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const height = borderBoxHeight(entries[entries.length - 1])
+      if (height !== null) set(height)
+    })
+    observer.observe(panel)
+    return () => observer.disconnect()
+  }, [rootRef, stopId])
 }
 
 /**
@@ -209,6 +342,7 @@ function TourBody({
   const rootRef = useRef<HTMLDivElement>(null)
   const railRef = useRef<HTMLDivElement>(null)
   useRevealFragment(rootRef)
+  usePanelReserveProperty(rootRef, active ?? stopIds[0] ?? null)
   const reducedMotion = usePrefersReducedMotion()
   const activeIndex = active === null ? -1 : stopIds.indexOf(active)
 
@@ -257,16 +391,20 @@ function TourBody({
           overrides={intro.overrides}
           intro={{ running: introRunning, onSkip: skipIntro }}
           onActiveChange={setRunnerSeen}
-          className={RUNNER_HEIGHT_CLASS}
+          className={RUNNER_CLASS}
         />
-        {playbackRate < 1 && !reducedMotion && (
-          <p className="runner-tour__slow-motion mt-2 font-sans text-xs font-semibold uppercase tracking-wide text-neutral-700 dark:text-neutral-300">
-            Slow motion
-          </p>
-        )}
-        {showLegend && <BandLegend className="runner-tour__legend mt-2" />}
+        <div className={RUNNER_NOTES_CLASS}>
+          {playbackRate < 1 && !reducedMotion && (
+            <p
+              className={`runner-tour__slow-motion font-sans text-xs font-semibold uppercase tracking-wide text-neutral-700 lg:mt-2 dark:text-neutral-300 ${RUNNER_NOTE_CLASS}`}
+            >
+              Slow motion
+            </p>
+          )}
+          {showLegend && <BandLegend className="runner-tour__legend mt-2 max-lg:hidden" />}
+        </div>
       </div>
-      <div className="runner-tour__stops min-w-0">
+      <div className="runner-tour__stops min-w-0 max-lg:relative max-lg:z-[1] max-lg:col-start-1 max-lg:row-start-1">
         {plan.areaStops.map((stop) => (
           <AreaStop key={stop.view.area} stop={stop} />
         ))}

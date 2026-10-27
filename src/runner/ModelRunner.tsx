@@ -691,12 +691,13 @@ export function ModelRunner({
   const unit = 1 / pxPerUnit
   return (
     <figure ref={figureRef} aria-label={label} className={`flex flex-col ${className}`}>
-      <figcaption className="pb-1 font-sans text-xs text-neutral-700 dark:text-neutral-300">
+      <figcaption data-runner-part="caption" className="pb-1 font-sans text-xs text-neutral-700 dark:text-neutral-300">
         {RUNNER_CAPTION}
       </figcaption>
-      <div ref={stageRef} className="relative min-h-0 flex-1 overflow-hidden">
+      <div ref={stageRef} data-runner-part="stage" className="relative min-h-0 flex-1 overflow-hidden">
         <svg
           ref={svgRef}
+          data-runner-part="drawing"
           aria-hidden="true"
           focusable="false"
           viewBox={`${-VIEW_HALF_WIDTH} ${-VIEW_HALF_HEIGHT} ${2 * VIEW_HALF_WIDTH} ${2 * VIEW_HALF_HEIGHT}`}
@@ -809,7 +810,7 @@ export function ModelRunner({
         </svg>
       </div>
       <p className="sr-only">{description}</p>
-      <div className="flex items-center justify-between gap-3 pt-2">
+      <div data-runner-part="controls" className="flex items-center justify-between gap-3 pt-2">
         <p aria-hidden="true" className="min-w-0 font-sans text-xs text-neutral-600 dark:text-neutral-400">
           {legend ? (introRunning ? 'Dashed: not applied yet' : 'Dashed: not measured') : ''}
         </p>

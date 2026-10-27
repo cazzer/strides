@@ -27,8 +27,8 @@ and either the area's cue or its non-point, never both. Each cited line SHALL sa
 how strong its evidence is. A stop SHALL carry no description, no disclosure and no metric card.
 
 The visible words of every stop SHALL be at most 25, counting the heading and the lines' text and
-excluding the value line, text for assistive technology only, the citations and the end of the
-tour, which SHALL be at most 25 words on its own.
+excluding the value line, text for assistive technology only, the citations, the band legend
+under a narrow layout's bar, and the end of the tour, which SHALL be at most 25 words on its own.
 
 #### Scenario: A banded headline
 
@@ -48,8 +48,9 @@ reached a reading line at 42% of the viewport height; keyboard focus entering a 
 `#tour-<stop>` fragment, SHALL make that stop active. The active stop SHALL set the runner's camera
 preset, playback rate and focus. The focus SHALL be the stop's headline metric only (the one
 thing's cue metric at the one-thing stop, none without a cue), so the runner never labels a number
-the stop does not state. The band legend SHALL show beside the runner only while the active stop's
-headline has a compact bar.
+the stop does not state. At wide layouts the band legend SHALL show beside the runner only while
+the active stop's headline has a compact bar; at narrow layouts it SHALL show inside each stop's
+panel under its compact bar, and only in a panel that has one.
 
 | stop | camera | rate |
 |---|---|---|
@@ -153,12 +154,44 @@ no "Slow motion" label SHALL show, and the tour SHALL NOT scroll smoothly.
 - **WHEN** reduced motion is requested and the landing stop is active
 - **THEN** the runner frames the legs with no intro and no "Slow motion" label
 
-### Requirement: The runner sits beside the stops when wide and above them when narrow
+### Requirement: The runner sits beside the stops when wide and behind them when narrow
 
 At wide layouts the runner SHALL stay in view (sticky, under the tour's bar) in a column to the left
-of the stops, sized so its controls, the slow-motion label and the legend stay on screen. At narrow layouts it SHALL sit in flow above the stops.
+of the stops, sized so its controls, the slow-motion label and the legend stay on screen.
+
+At narrow layouts (below 1024 px) the runner SHALL be a background behind the stops for the length
+of the tour, sticky under the tour's bar and as tall as the viewport below it, and each stop's
+content SHALL be a panel that scrolls over it: at least 85% opaque, with a backdrop blur, so the
+runner shows through the gaps between panels. Panel text, and the runner's notes drawn on the same
+surface, SHALL meet WCAG AA contrast (4.5:1) against the panel's colour composited over the page
+and over every colour the runner paints with, in light and dark. The runner's drawing SHALL be
+framed above the active stop's panel as measured at rest, so the camera's target, the focus body
+part, is visible and the landing stop's feet sit above its panel. The runner's controls (Skip intro
+while the intro runs, and Pause or Play) SHALL stay stuck under the tour's bar above the panels, at
+least 44 px tall and never covered by one, and "Skip to summary" SHALL stay in view. The tour's
+heading SHALL be visually hidden, remaining its entry point, so the bar is one row of progress dots
+and Skip. A scroll SHALL settle, by proximity snapping, with a stop's panel at rest and the runner
+clear above it; the first stop SHALL NOT be a snap point, so the page never moves on its own as the
+tour appears and its top stays reachable. The tour SHALL NOT scroll horizontally at widths from 360
+to 430 px.
+
+Both layouts SHALL be the same elements styled per breakpoint: the tour SHALL render one runner at
+every width and SHALL NOT remount it when the width crosses a breakpoint, so the reader's Pause
+survives a resize or a tablet's rotation.
 
 #### Scenario: Wide layout
 
 - **WHEN** the tour renders at a desktop width
 - **THEN** the runner stays in view beside the stops while they scroll
+
+#### Scenario: A phone
+
+- **WHEN** the tour renders at 390 px wide and the reader scrolls a stop's panel halfway up over
+  the runner
+- **THEN** the runner stays behind the panel, Pause stays on screen above it and can be tapped,
+  and the page is no wider than the screen
+
+#### Scenario: Crossing the breakpoint
+
+- **WHEN** the reader pauses the runner and the width then crosses 1024 px
+- **THEN** the runner is the same element, still paused
