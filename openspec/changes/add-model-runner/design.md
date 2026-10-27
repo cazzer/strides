@@ -190,6 +190,37 @@ illustratively.
 - `PELVIS_HEIGHT` is exported so the camera presets derive their targets from it; the arm's mean
   angle (48°) is `MODEL_PROPORTIONS.armCentreDeg`.
 
+### D13. Renderer (ps19.2)
+
+`ModelRunner.tsx` renders the fixed SVG element set once per prop/state change; one rAF loop writes
+geometry onto those elements (queried once per render, never per frame), so React never re-renders
+per frame. Pacing: a frame draws when `now ≥ nextDue − 1.5 ms`, and `nextDue` advances by exactly
+1000/30 ms per draw (reset to `now + 1000/30` after a stall), so the long-run rate never exceeds 30
+fps and a 60 Hz display draws every other frame. Phase is integrated (`dt` capped at 100 ms); the
+first frame after any (re)start only sets the clock. Pure rules live in `runnerScene.ts` (styles,
+draw order, text alternative, label layout) and `runnerAnnotations.ts` (annotation geometry built on
+fixed key-phase poses, labels from `metricValue` via the widened `formatGuidedValue`). The intro
+seam is `overrides: { values, sources, flash }`; without it exactly `bound` is drawn.
+
+Deviations from the ps19.2 plan:
+- Annotation paths are split into `marks` (accent) and `guides` (thin solid reference rays,
+  extension lines and the key-pose limb), instead of one `paths` list.
+- `buildAnnotations` takes `sources` and `nearSide` (the per-limb annotations sit on the leg/arm
+  nearer the target camera).
+- Labels are placed by `side` (above/below/left/right of an anchor, 6 px gap) instead of a free
+  `dx/dy`, break "% of torso length" and "drawn at limit" onto their own lines, and are kept inside
+  the frame by an estimated text width. Screenshots at 390 px showed single-line labels shoved over
+  the figure by the frame edge. Trunk-lean, knee-drive and knee-flexion labels sit at an arc end
+  outside the wedge rather than on the bisector.
+- The landing-offset annotation also draws the contact leg (hip–knee–ankle) as a guide, so the
+  offset reads against the pose it is measured on.
+- Neutral dashes use butt caps (round caps closed the 5 px gaps); solid strokes stay round.
+- The stage clips (`overflow-hidden`) instead of `overflow: visible`: zoomed presets project most
+  of the body outside the viewBox, which would otherwise paint over the page.
+- The figcaption is the figure's first child (HTML requires first or last), above the drawing; the
+  "Dashed: not measured" legend and the button share the row below.
+- Far-side joints are dimmed like far-side edges (0.55 opacity).
+
 ## Risks / Trade-offs
 
 - When two measured contact parameters conflict (D4), the weaker one is drawn away from its

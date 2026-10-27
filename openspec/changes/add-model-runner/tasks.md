@@ -29,3 +29,12 @@
 
 - [x] 6.1 `npm run lint`, `npx tsc -b`, `npx vitest run src/runner`, and the full `npx vitest run`
 - [x] 6.2 `openspec validate add-model-runner --strict`
+
+## 7. Renderer (ps19.2)
+
+- [x] 7.1 `runnerScene.ts` + tests: segment/joint styles (agrees with `segmentSource`), effective sources, focus params, draw order, text alternative, label layout, timing constants
+- [x] 7.2 `runnerAnnotations.ts` + tests: kinds, units, labels from `metricValue` (clamp note), exact arc sweeps and bracket/offset lengths, kind filter
+- [x] 7.3 `usePrefersReducedMotion.ts`; `formatGuidedValue` parameter widened to `Pick<MetricResult, 'metric' | 'value' | 'unit'>` (type only)
+- [x] 7.4 `ModelRunner.tsx` + tests: dashes, focus annotations, 30 fps cap without React renders, hidden/offscreen stop, camera tween vs cut, persistent pause, reduced motion, StrictMode, overrides seam, a11y
+- [x] 7.5 Dev sandbox `src/runner/dev/sandbox.html` screenshotted at 390/1280 px, light/dark, reduced/normal motion; absent from `vite build`
+- [x] 7.6 Gates: lint, `tsc -b`, vitest (runner + full), `openspec validate --strict`, `vite build`
