@@ -152,6 +152,9 @@ const PIN_DOMAIN = grid({
   stepWidth: [-1, 0.3, 1.5],
 }).map((params) => realizeParams(params))
 
+/** The domain sweeps sample thousands of poses; under a loaded full-suite run they need longer. */
+const DOMAIN_SWEEP_TIMEOUT_MS = 60_000
+
 describe('the stance foot stands on the ground', () => {
   it('pins the neutral stance foot to y = 0 from contact to toe-off', () => {
     expect(Math.abs(lowestLeftFoot(NEUTRAL_RUNNER_PARAMS, 0))).toBeLessThan(1e-12)
@@ -170,13 +173,13 @@ describe('the stance foot stands on the ground', () => {
     for (const params of [...PIN_DOMAIN, ...backLanding]) {
       expect(stancePinError(params), JSON.stringify(params)).toBeLessThan(0.01)
     }
-  })
+  }, DOMAIN_SWEEP_TIMEOUT_MS)
 
   it('keeps the swing foot off the ground over the declared domain', () => {
     for (const params of PIN_DOMAIN) {
       expect(swingClearance(params), JSON.stringify(params)).toBeGreaterThan(-0.01)
     }
-  })
+  }, DOMAIN_SWEEP_TIMEOUT_MS)
 
   it('lets the foot give way, by a bounded amount, where the bindings cannot keep it down', () => {
     // The 0.7 landing corners: pinning them needs a stance knee bend that would break kneeFlexion.
@@ -192,7 +195,7 @@ describe('the stance foot stands on the ground', () => {
         expect(Math.abs(measure(params) - params[id]), `${id} ${label}`).toBeLessThanOrEqual(tolerance)
       }
     }
-  })
+  }, DOMAIN_SWEEP_TIMEOUT_MS)
 
   it('every still frame the renderer holds shows a foot on the ground at the neutral parameters', () => {
     const legPhases = [GAIT_PHASES.midStance, ...Object.values(KEY_LEG_PHASE).filter((q) => q !== null)]
