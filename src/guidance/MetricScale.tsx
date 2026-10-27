@@ -31,14 +31,26 @@ const DOMAIN_MAX_EXTENSION_FRACTION = 1
 /** Space kept between the domain's edge and an unclamped value, in envelope-widths. */
 const VALUE_MARGIN_FRACTION = 0.05
 
-export interface MetricScaleProps {
+interface MetricScaleBase {
   /** The cited band. Every bound is in `value`'s own computed domain (see `ReferenceBand`). */
   band: ReferenceBand
   /** The measured value, in the same domain as the band's bounds — no conversion. */
   value: number
-  /** The metric's display name. Prefixes the caption for assistive technology; not rendered visibly. */
-  label: string
 }
+
+/**
+ * The full scale needs `label` for its text alternative. `compact` draws the track and its marker
+ * only, for a row that already states the value and its position in words beside it (the results
+ * summary): decorative and `aria-hidden`, with no printed number, scope line, legend or text
+ * alternative, because the row's own text is that alternative. So it takes no label.
+ */
+export type MetricScaleProps =
+  | (MetricScaleBase & {
+      /** The metric's display name. Prefixes the caption for assistive technology; not rendered visibly. */
+      label: string
+      compact?: false
+    })
+  | (MetricScaleBase & { label?: never; compact: true })
 
 type Side = 'below' | 'above'
 
@@ -242,10 +254,18 @@ function shadeSteps(zones: BandZone[]): number[] | null {
  * seam by its width, its overhang above and below the track, and its ring. The text around the track
  * is left to the browser's own adjustment.
  */
-export function MetricScale({ band, value, label }: MetricScaleProps) {
+export function MetricScale(props: MetricScaleProps) {
+  const { band, value } = props
   // A band with no extent to draw (none ships) has no scale; its text still renders.
   const envelope = referenceBandEnvelope(band)
   const domain = envelope !== null ? scaleDomain(envelope, value) : null
+  if (props.compact) {
+    return domain === null ? null : (
+      <div className="metric-scale metric-scale--compact w-full min-w-0" aria-hidden="true">
+        <ScaleTrack band={band} bounds={bandBounds(band)} domain={domain} value={value} compact />
+      </div>
+    )
+  }
   const valueText = formatMeasuredBandValue(band, value)
   let sentence = describeBandPosition(band, value)
   if (domain?.clamped) {
@@ -263,7 +283,7 @@ export function MetricScale({ band, value, label }: MetricScaleProps) {
         reader would meet the identical fact twice, in two wordings, before reaching the picture.
       */}
       <figcaption className="metric-scale__position sr-only">
-        {label}: {sentence}
+        {props.label}: {sentence}
       </figcaption>
 
       <p className="metric-scale__scope text-xs font-semibold leading-4 text-neutral-700 dark:text-neutral-300">
@@ -322,7 +342,6 @@ function MetricScaleGraphic({
   valueText: string
 }) {
   const valuePercent = toPercent(domain, value)
-  const boundPercents = bounds.map((bound) => toPercent(domain, bound))
   const steps = shadeSteps(band.zones)
   const singleRange = band.zones.length === 1
   const gaps = gapsBetween(band.zones)
@@ -344,50 +363,7 @@ function MetricScaleGraphic({
         </span>
       </div>
 
-      <div className="metric-scale__track relative h-5 border-2 border-scale-mark bg-scale-track dark:border-scale-mark-dark dark:bg-scale-track-dark forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:forced-color-adjust-none">
-        {band.zones.map((zone, index) => {
-          const left = toPercent(domain, zone.min ?? domain.min)
-          const right = toPercent(domain, zone.max ?? domain.max)
-          const shade = singleRange
-            ? SINGLE_RANGE_SHADE
-            : ZONE_SHADES[steps === null ? 1 : steps[index]]
-          return (
-            <div
-              key={`${zone.min}:${zone.max}`}
-              className={`metric-scale__zone absolute inset-y-0 ${shade} forced-colors:border-x forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:bg-none`}
-              style={{ left: `${left}%`, width: `${right - left}%` }}
-              data-shade={singleRange ? 'range' : (steps?.[index] ?? null)}
-            />
-          )
-        })}
-        {gapsBetween(band.zones).map(({ from, to }) => {
-          const left = toPercent(domain, from)
-          const right = toPercent(domain, to)
-          return (
-            <div
-              key={`gap:${from}:${to}`}
-              className="metric-scale__gap absolute inset-y-0 text-scale-hatch dark:text-scale-hatch-dark forced-colors:text-[CanvasText]"
-              style={{
-                left: `${left}%`,
-                width: `${right - left}%`,
-                backgroundImage: GAP_HATCH,
-              }}
-            />
-          )
-        })}
-        {boundPercents.map((percent, index) => (
-          <div
-            key={bounds[index]}
-            className="metric-scale__seam absolute inset-y-0 w-px bg-scale-mark dark:bg-scale-mark-dark forced-colors:bg-[CanvasText]"
-            style={anchorAt(percent)}
-          />
-        ))}
-        <div
-          className="metric-scale__marker absolute -inset-y-1.5 w-1.5 bg-scale-mark ring-2 ring-scale-track dark:bg-scale-mark-dark dark:ring-scale-track-dark forced-colors:bg-[Highlight] forced-colors:ring-[Canvas]"
-          style={anchorAt(valuePercent)}
-          data-clamped={domain.clamped ?? undefined}
-        />
-      </div>
+      <ScaleTrack band={band} bounds={bounds} domain={domain} value={value} />
 
       <div className="relative mt-1 h-4 text-[11px] leading-4 text-neutral-700 dark:text-neutral-300">
         {[envelope.min, envelope.max].map((bound) => (
@@ -444,6 +420,72 @@ function MetricScaleGraphic({
           </p>
         )
       )}
+    </div>
+  )
+}
+
+/** The drawn track: zones shaded by share, published gaps hatched, a seam at every bound, the marker. */
+function ScaleTrack({
+  band,
+  bounds,
+  domain,
+  value,
+  compact = false,
+}: {
+  band: ReferenceBand
+  bounds: number[]
+  domain: Domain
+  value: number
+  compact?: boolean
+}) {
+  const valuePercent = toPercent(domain, value)
+  const boundPercents = bounds.map((bound) => toPercent(domain, bound))
+  const steps = shadeSteps(band.zones)
+  const singleRange = band.zones.length === 1
+  return (
+    <div className={`metric-scale__track relative ${compact ? 'h-3' : 'h-5'} border-2 border-scale-mark bg-scale-track dark:border-scale-mark-dark dark:bg-scale-track-dark forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:forced-color-adjust-none`}>
+      {band.zones.map((zone, index) => {
+        const left = toPercent(domain, zone.min ?? domain.min)
+        const right = toPercent(domain, zone.max ?? domain.max)
+        const shade = singleRange
+          ? SINGLE_RANGE_SHADE
+          : ZONE_SHADES[steps === null ? 1 : steps[index]]
+        return (
+          <div
+            key={`${zone.min}:${zone.max}`}
+            className={`metric-scale__zone absolute inset-y-0 ${shade} forced-colors:border-x forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:bg-none`}
+            style={{ left: `${left}%`, width: `${right - left}%` }}
+            data-shade={singleRange ? 'range' : (steps?.[index] ?? null)}
+          />
+        )
+      })}
+      {gapsBetween(band.zones).map(({ from, to }) => {
+        const left = toPercent(domain, from)
+        const right = toPercent(domain, to)
+        return (
+          <div
+            key={`gap:${from}:${to}`}
+            className="metric-scale__gap absolute inset-y-0 text-scale-hatch dark:text-scale-hatch-dark forced-colors:text-[CanvasText]"
+            style={{
+              left: `${left}%`,
+              width: `${right - left}%`,
+              backgroundImage: GAP_HATCH,
+            }}
+          />
+        )
+      })}
+      {boundPercents.map((percent, index) => (
+        <div
+          key={bounds[index]}
+          className="metric-scale__seam absolute inset-y-0 w-px bg-scale-mark dark:bg-scale-mark-dark forced-colors:bg-[CanvasText]"
+          style={anchorAt(percent)}
+        />
+      ))}
+      <div
+        className={`metric-scale__marker absolute ${compact ? '-inset-y-1 w-1' : '-inset-y-1.5 w-1.5'} bg-scale-mark ring-2 ring-scale-track dark:bg-scale-mark-dark dark:ring-scale-track-dark forced-colors:bg-[Highlight] forced-colors:ring-[Canvas]`}
+        style={anchorAt(valuePercent)}
+        data-clamped={domain.clamped ?? undefined}
+      />
     </div>
   )
 }

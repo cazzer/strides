@@ -1,0 +1,61 @@
+import type { FormHeuristicsResult, MetricId, MetricResult } from '../../heuristics/types'
+import { FOCUS_AREA_ORDER, focusAreaView } from '../../guidance/focusAreas'
+import type { FocusAreaView } from '../../guidance/focusAreas'
+import { METRIC_GUIDANCE } from '../../guidance/metricGuidance'
+import type { MetricGuidance, MetricTier } from '../../guidance/types'
+import { guidedGroups } from '../guidedGroups'
+import type { GuidedEntry } from '../guidedGroups'
+import { metricTier } from '../metricConfidence'
+
+export interface SummaryArea {
+  view: FocusAreaView
+  /** The area's measured metrics as guided entries, headline first, in preference order. */
+  entries: GuidedEntry[]
+}
+
+export interface SummaryRows {
+  /** One per MEASURED focus area, in tour order. An area with every metric excluded has none. */
+  areas: SummaryArea[]
+  /** Every excluded metric, in the guided view's own order: the summary's final row. */
+  notMeasured: GuidedEntry[]
+}
+
+/**
+ * How the results summary lays the thirteen metrics out: one row per measured focus area, then one
+ * "Not measured" row. Every metric lands in exactly one of them.
+ *
+ * Entries come from `guidedGroups`, so a summary card is the very entry the guided view would render
+ * (the same band, or none), and both read the tier through `metricTier`, so "measured" means the
+ * same thing in the area rows as in the guided groups. Pure, so the partition is testable without
+ * rendering.
+ */
+export function summaryRows(
+  heuristics: FormHeuristicsResult,
+  guidance: Record<MetricId, MetricGuidance> = METRIC_GUIDANCE,
+): SummaryRows {
+  const { banded, unbanded, notMeasured } = guidedGroups(heuristics, guidance)
+  const measured = new Map(
+    [...banded, ...unbanded].map((entry) => [entry.metric.metric, entry]),
+  )
+  const tiers = Object.fromEntries(
+    (Object.keys(guidance) as MetricId[]).map((id) => [
+      id,
+      metricTier(heuristics[id] as MetricResult),
+    ]),
+  ) as Record<MetricId, MetricTier>
+
+  const areas = FOCUS_AREA_ORDER.map((area) => focusAreaView(area, heuristics, tiers))
+    .filter((view) => view.measured)
+    .map((view) => ({
+      view,
+      entries: [view.headline!, ...view.supporting].map((focus) => {
+        const entry = measured.get(focus.metric.metric)
+        // Both sides read `metricTier`, so a non-excluded area metric is always a measured entry.
+        if (entry === undefined) {
+          throw new Error(`summaryRows: ${focus.metric.metric} is measured but has no guided entry`)
+        }
+        return entry
+      }),
+    }))
+  return { areas, notMeasured }
+}

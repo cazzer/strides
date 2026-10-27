@@ -34,3 +34,15 @@
 - [x] 5.6 Tests: every URL form × landing, throwing storage, the canvas surviving tour → summary → classic → summary, one completion line after every step.
 - [x] 5.7 Review round 1: focus the `[data-view-entry]` control; push a `{ stridesView }` history entry per switch and restore on `popstate` (unstamped entries keep the view); rename to "Show summary"; move Replay tour into the summary footer; 44 px footer targets.
 - [x] 5.8 Verify: lint, `tsc -b`, `vitest run`, `openspec validate --strict`, the e2e suite and a live run on `park-side-landscape.mp4`.
+
+## 6. Results summary (`strides-trn2.5`)
+
+- [x] 6.1 `GuidedResultsView` takes a `children` body slot; extract `useRevealFragment` (`revealFragment.ts`) and `NotMeasuredEntries`.
+- [x] 6.2 `summary/summaryRows.ts`: one row per measured area in tour order, entries from `guidedGroups`, the rest in Not measured.
+- [x] 6.3 `focusAreaCamera.ts`: per-area camera preset and rate, and `runnerFocusFor` (one limb key phase per still beat).
+- [x] 6.4 `MetricScale` `compact`: track and marker only, `aria-hidden`.
+- [x] 6.5 `summary/FocusAreaRow.tsx` (native `<details>`, cards at full depth, why line / non-point with source) and `NotMeasuredRow`.
+- [x] 6.6 `ResultsSummary.tsx`: one `ModelRunner` (sticky at lg, in flow below), camera follows the last-opened row, legend, rows, footer.
+- [x] 6.7 Spec: extend the single-mount MODIFIED block in place; add `specs/results-summary/spec.md`.
+- [x] 6.8 Tests: summaryRows, focusAreaCamera, feedbackSources, compact MetricScale, FocusAreaRow, ResultsSummary.
+- [x] 6.9 Verify live on "Demo (3 clips)" at 1280 and 390 px, light and dark; e2e suite.
