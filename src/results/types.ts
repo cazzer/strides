@@ -1,4 +1,5 @@
 import type { FormHeuristicsResult } from '../heuristics/types'
+import type { ScalePassStatus } from '../guidance/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { AnalysisDiagnostics } from './analysisDiagnostics'
 import type { SubjectAgreement } from './scalePassSubjectAgreement'
@@ -10,7 +11,7 @@ export interface VideoAnalysisError {
   message: string
 }
 
-export type ScalePassStatus = 'idle' | 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+export type { ScalePassStatus }
 
 export type ScalePassSkipReason = 'disabled' | 'primary-scale'
 

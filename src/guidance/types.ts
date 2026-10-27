@@ -1,6 +1,21 @@
 import type { MetricId, MetricResult } from '../heuristics/types'
 
 /**
+ * How a metric is laid out: measured with confidence, measured but uncertain, or not measured.
+ * Computed by `metricTier` in `src/results/metricConfidence.ts`, which re-exports this type; it
+ * lives here so `src/guidance` needs nothing from `src/results` (add-runner-tour design.md D5).
+ */
+export type MetricTier = 'normal' | 'caveated' | 'excluded'
+
+/**
+ * The background scale pass's status. Driven by `src/results/useVideoAnalysis.ts` and re-exported
+ * from `src/results/types.ts`; it lives here for the same layering reason as `MetricTier`, because
+ * a centimetre metric's absence means "not measured yet" while the pass runs.
+ */
+export type ScalePassStatus =
+  'idle' | 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+
+/**
  * The unit a reference band's numbers are stated in.
  *
  * Structurally `MetricResult['unit']`, and deliberately not a narrower union of its own: a band
