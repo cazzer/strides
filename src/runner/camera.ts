@@ -46,7 +46,8 @@ export interface PhaseHold {
 export interface PhaseWindow {
   start: number
   length: number
-  /** Pauses inside the window, each taken once per pass. Absent: none. */
+  /** Pauses inside the window, each taken once per pass. Absent: none. A hold must sit after the
+   * window's start (offset > 0): one placed exactly at the start never fires. */
   holds?: readonly PhaseHold[]
 }
 

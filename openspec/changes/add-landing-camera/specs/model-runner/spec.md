@@ -56,8 +56,8 @@ ignored, and two focus metrics driving one parameter SHALL give one annotation.
 The contact marks SHALL meet the points their metrics read, which are ankles, not heels: the
 overstride offset's guides SHALL be plumb lines from hip-mid and from the contact ankle down to the
 offset, and the foot-strike offset SHALL run at ankle height from under the knee (a plumb from the
-knee) to the contact ankle. The foot-strike label SHALL hang under the contact keypoint: the heel
-when the foot lands heel-down, the toe on a forefoot strike. Labels hanging below the ground (the
+knee) to the contact ankle. When it is the ground lane's only label, the foot-strike label SHALL hang
+under the contact keypoint: the heel when the foot lands heel-down, the toe on a forefoot strike. Labels hanging below the ground (the
 ground lane) SHALL NOT overlap: two or more SHALL share the lane's lowest anchor height and stack in
 focus order as one block, centred on the first label's anchor.
 
@@ -86,7 +86,7 @@ focus order as one block, centred on the first label's anchor.
 - **THEN** one guide starts at the live hip-mid and the other at the live contact ankle, both dropping to the offset
 
 #### Scenario: The foot-strike label hangs at the heel
-- **WHEN** foot strike is in focus with a heel-down landing, and the runner holds the contact
+- **WHEN** foot strike is the only ground-lane label in focus, with a heel-down landing, and the runner holds the contact
 - **THEN** the foot-strike offset ends at the live contact ankle, and its label hangs under the live heel; on a forefoot strike it hangs under the live toe
 
 #### Scenario: Overstride and foot-strike labels stack
