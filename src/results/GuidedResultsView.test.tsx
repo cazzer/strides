@@ -1,19 +1,18 @@
 import type { ReactNode } from 'react'
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { GuidedMeasurements, GuidedResultsView } from './GuidedResultsView'
+import { fireEvent, render, screen, within } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { GuidedResultsView, NotMeasuredEntries } from './GuidedResultsView'
 import { GuidedMetricCard } from './GuidedMetricCard'
 import { MetricsPanel } from './MetricsPanel'
 import type { MetricCardEvidence } from './MetricsPanel'
 import type { EvidenceFramePlan, EvidenceInstantPlan } from './evidenceFrames'
 import { captionFor } from './evidenceCaptions'
-import { formatGuidedValue, guidedHeadline } from './formatGuidedValue'
+import { formatGuidedValue } from './formatGuidedValue'
 import {
   WITHHELD_BAND_REASON,
   cardReferences,
   citationParts,
   citationText,
-  guidedEntryId,
   guidedGroups,
   noteLead,
   splitFirstSentence,
@@ -24,6 +23,7 @@ import { METRIC_DESCRIPTIONS } from './metricDescriptions'
 import type { ScalePassStatus, VideoAnalysisState } from './types'
 import type { ExtractedEvidenceFrame } from '../video/extractFrames'
 import type { FormHeuristicsResult, MetricId } from '../heuristics/types'
+import { feedbackFor } from '../guidance/feedbackPoints'
 import {
   METRIC_GUIDANCE,
   guidanceInDisplayOrder,
@@ -41,6 +41,8 @@ import {
   makeMetric,
   makeVerticalOscillationCm,
 } from './__fixtures__/metricResult'
+import { FocusAreaRow } from './summary/FocusAreaRow'
+import { summaryRows } from './summary/summaryRows'
 
 // The guided view must render the evidence it is handed and start no acquisition of its own. If
 // anything under it ever called the hook, this spy would record it.
@@ -83,6 +85,45 @@ function readyAnalysis(
   })
 }
 
+/**
+ * Every guided card and not-measured entry for one result, flat and in display order, with nothing
+ * else around them. The cards' own behaviour is what these tests pin; how a view arranges them is
+ * each view's own suite (`ResultsSummary`, `FocusAreaRow`, `RunnerTour`). The not-measured entries
+ * sit in `.test-not-measured`, so a test can find them without a view's collapsed row.
+ */
+function CardsBody({
+  heuristics,
+  scalePassStatus,
+  evidence = [],
+  clipCount = 1,
+}: {
+  heuristics: FormHeuristicsResult
+  scalePassStatus: ScalePassStatus
+  evidence?: readonly MetricCardEvidence[]
+  clipCount?: number
+}) {
+  const { banded, unbanded, notMeasured } = guidedGroups(heuristics)
+  const evidenceByMetric = new Map(evidence.map((entry) => [entry.metric, entry]))
+  return (
+    <div>
+      {[...banded, ...unbanded].map((entry) => (
+        <GuidedMetricCard
+          key={entry.metric.metric}
+          entry={entry}
+          evidence={evidenceByMetric.get(entry.metric.metric)}
+          clipCount={clipCount}
+        />
+      ))}
+      {notMeasured.length > 0 && (
+        <div className="test-not-measured">
+          <NotMeasuredEntries entries={notMeasured} scalePassStatus={scalePassStatus} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** The guided shell around `CardsBody`, as the summary and the tour wrap theirs. */
 function renderView(
   analysis: VideoAnalysisState,
   extra: { evidence?: readonly MetricCardEvidence[]; clipCount?: number } = {},
@@ -95,9 +136,40 @@ function renderView(
       onTryAgain={onTryAgain}
       onStartOver={onStartOver}
       {...extra}
-    />,
+    >
+      {analysis.heuristics && (
+        <CardsBody
+          heuristics={analysis.heuristics}
+          scalePassStatus={analysis.scalePass.status}
+          evidence={extra.evidence}
+          clipCount={extra.clipCount}
+        />
+      )}
+    </GuidedResultsView>,
   )
   return { ...utils, onTryAgain, onStartOver }
+}
+
+/** Every summary row for one result, as `ResultsSummary` lays them out, without its runner. */
+function renderSummaryRows(heuristics: FormHeuristicsResult = makeHeuristics()) {
+  const { areas } = summaryRows(heuristics)
+  return render(
+    <div>
+      {areas.map((row) => (
+        <FocusAreaRow
+          key={row.view.area}
+          area={row.view.area}
+          label={row.view.label}
+          entries={row.entries}
+          feedback={feedbackFor(row.view)}
+          evidenceByMetric={new Map()}
+          clipCount={1}
+          sourceLabelFor={() => undefined}
+          onToggle={() => {}}
+        />
+      ))}
+    </div>,
+  )
 }
 
 const ALL_IDS = guidanceInDisplayOrder().map((g) => g.metric)
@@ -131,30 +203,9 @@ function card(label: string): HTMLElement {
   return screen.getByRole('article', { name: label })
 }
 
-function bandedSection(): HTMLElement {
-  return screen.getByRole('region', {
-    name: 'Compared with published research',
-  })
-}
-
-function groupSection(
-  container: HTMLElement,
-  modifier: 'unbanded' | 'not-measured',
-) {
-  return container.querySelector<HTMLElement>(
-    `section.guided-results__group--${modifier}`,
-  )
-}
-
-function groupDetails(
-  container: HTMLElement,
-  modifier: 'unbanded' | 'not-measured',
-) {
-  return (
-    groupSection(container, modifier)?.querySelector<HTMLDetailsElement>(
-      'details',
-    ) ?? null
-  )
+/** The not-measured entries `CardsBody` rendered, or null when every metric was measured. */
+function notMeasuredList(container: HTMLElement): HTMLElement | null {
+  return container.querySelector<HTMLElement>('.test-not-measured')
 }
 
 /** A card's visible name: its own `<h3>`, which also names the article. */
@@ -361,20 +412,18 @@ describe('GuidedResultsView — the body slot', () => {
     )
   }
 
-  it('renders nothing in place of the measurements for a null child, and keeps the shell', () => {
+  it('renders only the shell for a null body: it has no body of its own', () => {
     const { container } = renderWith(null)
     expect(container.querySelectorAll('section[aria-label="Analysis results"]')).toHaveLength(1)
     expect(screen.getByRole('status')).toHaveTextContent(/^Analysis complete\./)
-    expect(container.querySelector('.guided-results__results')).toBeNull()
-    expect(screen.queryByRole('navigation', { name: 'Measurements on this page' })).toBeNull()
     expect(container.querySelector('article')).toBeNull()
+    expect(container.querySelector('nav')).toBeNull()
+    expect(container.querySelector('h2')).toBeNull()
   })
 
-  it('renders a given body instead of the measurements', () => {
-    const { container } = renderWith(<p data-testid="body">Custom body</p>)
+  it('renders the given body inside the one results section, beside one completion line', () => {
+    renderWith(<p data-testid="body">Custom body</p>)
     expect(screen.getByTestId('body').closest('section[aria-label="Analysis results"]')).not.toBeNull()
-    expect(container.querySelector('.guided-results__results')).toBeNull()
-    expect(screen.queryByRole('navigation', { name: 'Measurements on this page' })).toBeNull()
     expect(screen.getAllByText(/analysis complete/i)).toHaveLength(1)
   })
 
@@ -443,443 +492,29 @@ describe('GuidedResultsView — shell controls mirror ResultsView', () => {
     fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }))
     expect(onTryAgain).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('button', { name: 'Analyze again' })).toBeEnabled()
-    expect(container.querySelector('.guided-results__group')).toBeNull()
     expect(container.querySelector('.guided-results__card')).toBeNull()
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
-  it('renders no metrics when ready but heuristics are missing', () => {
-    const { container } = renderView(
-      makeAnalysis({ phase: 'ready', heuristics: null }),
+  it('renders no body when ready but heuristics are missing, even when one is given', () => {
+    render(
+      <GuidedResultsView
+        analysis={makeAnalysis({ phase: 'ready', heuristics: null })}
+        onTryAgain={vi.fn()}
+        onStartOver={vi.fn()}
+      >
+        <p data-testid="body">Custom body</p>
+      </GuidedResultsView>,
     )
-    expect(container.querySelector('.guided-results__results')).toBeNull()
+    expect(screen.queryByTestId('body')).toBeNull()
   })
 })
 
 // ---------------------------------------------------------------------------------------------
-// The contents list
+// Headings
 // ---------------------------------------------------------------------------------------------
 
-describe('The contents list names every measurement and reaches it, even inside a closed group', () => {
-  // `GuidedResultsView` remembers, per page session, which fragment it already revealed. A fresh
-  // module per test is a fresh page session, so no test here inherits another's.
-  let FreshView: typeof GuidedResultsView
-  type ScrollIntoView = (arg?: boolean | ScrollIntoViewOptions) => void
-  let scrollIntoView: ReturnType<typeof vi.fn<ScrollIntoView>>
-  beforeEach(async () => {
-    vi.resetModules()
-    FreshView = (await import('./GuidedResultsView')).GuidedResultsView
-    // jsdom has no scrollIntoView; the view calls it optionally, so a stub makes it observable.
-    scrollIntoView = vi.fn<ScrollIntoView>()
-    HTMLElement.prototype.scrollIntoView = scrollIntoView
-  })
-  afterEach(() => {
-    window.history.replaceState(null, '', window.location.pathname)
-    delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView
-    vi.restoreAllMocks()
-  })
-
-  function renderView(analysis: VideoAnalysisState) {
-    const props = { onTryAgain: vi.fn(), onStartOver: vi.fn() }
-    const utils = render(<FreshView analysis={analysis} {...props} />)
-    return {
-      ...utils,
-      rerenderWith: (next: VideoAnalysisState) =>
-        utils.rerender(<FreshView analysis={next} {...props} />),
-    }
-  }
-
-  function contents(): HTMLElement {
-    return screen.getByRole('navigation', { name: 'Measurements on this page' })
-  }
-
-  it('sits directly under the status line, above the first group', () => {
-    const { container } = renderView(
-      readyAnalysis(withUnmeasured(['kneeDrive'])),
-    )
-    const status = screen.getByRole('status')
-    const nav = contents()
-    const firstGroup = container.querySelector('section.guided-results__group')!
-    expect(
-      status.compareDocumentPosition(nav) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-    expect(
-      nav.compareDocumentPosition(firstGroup) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it('lists all thirteen in page order, each with its value or "not measured", and no zone words', () => {
-    const heuristics = makeHeuristics({
-      cadence: makeMetric('cadence', { value: 163.5 }),
-      kneeDrive: makeMetric('kneeDrive', { value: null, confidence: 0 }),
-      stepWidth: makeMetric('stepWidth', { value: 0.4, viewFit: 'unsuitable' }),
-    })
-    const { container } = renderView(readyAnalysis(heuristics))
-    const { banded, unbanded, notMeasured } = guidedGroups(heuristics)
-    const pageOrder = [...banded, ...unbanded, ...notMeasured].map(
-      (e) => e.metric.metric,
-    )
-    const items = within(contents()).getAllByRole('listitem')
-    expect(items.map((li) => li.getAttribute('data-metric'))).toEqual(pageOrder)
-
-    for (const item of items) {
-      const id = item.getAttribute('data-metric') as MetricId
-      const anchor = within(item).getByRole('link')
-      expect(anchor).toHaveAttribute('href', `#${guidedEntryId(id)}`)
-      expect(container.querySelector(`#${guidedEntryId(id)}`)).not.toBeNull()
-      expect(anchor).toHaveTextContent(METRIC_LABELS[id])
-      const value = item.querySelector('.guided-results__contents-value')
-      if (notMeasured.some((e) => e.metric.metric === id)) {
-        expect(value).toHaveTextContent(/^not measured$/)
-      } else {
-        const onCard = container.querySelector(
-          `#${guidedEntryId(id)} .guided-results__value`,
-        )
-        expect(value?.textContent).toBe(onCard?.textContent)
-      }
-    }
-    // A measured value excluded for its view never prints, here either.
-    expect(contents()).not.toHaveTextContent('40.0% of torso length')
-    // Values only: no zone label from any band.
-    for (const g of BANDED) {
-      for (const zone of g.band!.zones)
-        expect(contents()).not.toHaveTextContent(zone.label)
-    }
-  })
-
-  it('opens the closed group holding a card when its link is clicked', () => {
-    const { container } = renderView(readyAnalysis())
-    const target = UNBANDED[0].metric
-    const details = groupDetails(container, 'unbanded')!
-    expect(details.open).toBe(false)
-    fireEvent.click(
-      within(contents()).getByRole('link', {
-        name: new RegExp(METRIC_LABELS[target]),
-      }),
-    )
-    expect(details.open).toBe(true)
-  })
-
-  it('opens the not-measured group when a not-measured entry is clicked', () => {
-    const { container } = renderView(
-      readyAnalysis(withUnmeasured(['kneeDrive'])),
-    )
-    const details = groupDetails(container, 'not-measured')!
-    const anchor = container.querySelector<HTMLAnchorElement>(
-      `a[href="#${guidedEntryId('kneeDrive')}"]`,
-    )!
-    fireEvent.click(anchor)
-    expect(details.open).toBe(true)
-  })
-
-  it('moves focus to the card a contents-list link names', () => {
-    const { container } = renderView(
-      readyAnalysis(withUnmeasured(['kneeDrive'])),
-    )
-    const target = UNBANDED[0].metric
-    fireEvent.click(
-      within(contents()).getByRole('link', {
-        name: new RegExp(METRIC_LABELS[target]),
-      }),
-    )
-    expect(document.activeElement).toBe(
-      container.querySelector(`#${guidedEntryId(target)}`),
-    )
-
-    const notMeasured = container.querySelector<HTMLAnchorElement>(
-      `a[href="#${guidedEntryId('kneeDrive')}"]`,
-    )!
-    fireEvent.click(notMeasured)
-    expect(document.activeElement).toBe(
-      container.querySelector(`#${guidedEntryId('kneeDrive')}`),
-    )
-  })
-
-  it('leaves this page alone on a modified click, which opens a new tab', () => {
-    const { container } = renderView(readyAnalysis())
-    const target = UNBANDED[0].metric
-    const anchor = within(contents()).getByRole('link', {
-      name: new RegExp(METRIC_LABELS[target]),
-    })
-    fireEvent.click(anchor, { metaKey: true })
-    expect(groupDetails(container, 'unbanded')!.open).toBe(false)
-    expect(document.activeElement).toBe(document.body)
-  })
-
-  it('opens the group when the address changes to a card inside it', () => {
-    const { container } = renderView(
-      readyAnalysis(withUnmeasured(['kneeDrive'])),
-    )
-    const details = groupDetails(container, 'not-measured')!
-    expect(details.open).toBe(false)
-    act(() => {
-      window.history.replaceState(null, '', `#${guidedEntryId('kneeDrive')}`)
-      window.dispatchEvent(new HashChangeEvent('hashchange'))
-    })
-    expect(details.open).toBe(true)
-    expect(document.activeElement).toBe(
-      container.querySelector(`#${guidedEntryId('kneeDrive')}`),
-    )
-  })
-
-  it('opens the group on mount when the page loads with a card in the address, and scrolls without taking focus', () => {
-    // Stands in for the view toggle, which sits outside this component and may hold focus.
-    const toggle = document.body.appendChild(document.createElement('button'))
-    toggle.focus()
-    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
-    const id = guidedEntryId(UNBANDED[1].metric)
-    window.history.replaceState(null, '', `#${id}`)
-    const { container } = renderView(readyAnalysis())
-    expect(groupDetails(container, 'unbanded')!.open).toBe(true)
-    expect(groupDetails(container, 'not-measured')).toBeNull()
-    expect(scrollIntoView).toHaveBeenCalledTimes(1)
-    expect(scrollIntoView.mock.contexts[0]).toBe(
-      container.querySelector(`#${id}`),
-    )
-    expect(focus).not.toHaveBeenCalled()
-    expect(document.activeElement).toBe(toggle)
-    toggle.remove()
-  })
-
-  it('does not scroll or take focus again when the view remounts with a fragment it already revealed', () => {
-    const id = guidedEntryId(UNBANDED[1].metric)
-    window.history.replaceState(null, '', `#${id}`)
-    const { rerenderWith, unmount } = renderView(readyAnalysis())
-    expect(scrollIntoView).toHaveBeenCalledTimes(1)
-    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
-
-    // An added clip: the analysis leaves ready and comes back, remounting the measurements.
-    rerenderWith(makeAnalysis({ phase: 'processing' }))
-    rerenderWith(readyAnalysis())
-    // Toggling back from the classic view: a whole new mount, with the hash the toggle kept.
-    unmount()
-    renderView(readyAnalysis())
-
-    expect(scrollIntoView).toHaveBeenCalledTimes(1)
-    expect(focus).not.toHaveBeenCalled()
-    expect(document.activeElement).toBe(document.body)
-  })
-
-  it('ignores a fragment that names nothing in the view', () => {
-    const toggle = document.body.appendChild(document.createElement('button'))
-    toggle.focus()
-    window.history.replaceState(null, '', '#somewhere-else')
-    const { container } = renderView(
-      readyAnalysis(withUnmeasured(['kneeDrive'])),
-    )
-    expect(groupDetails(container, 'unbanded')!.open).toBe(false)
-    expect(groupDetails(container, 'not-measured')!.open).toBe(false)
-    expect(scrollIntoView).not.toHaveBeenCalled()
-    expect(document.activeElement).toBe(toggle)
-    toggle.remove()
-  })
-})
-
-// ---------------------------------------------------------------------------------------------
-// The three groups
-// ---------------------------------------------------------------------------------------------
-
-describe('The bounce measures are explained together while their cards keep separate status', () => {
-  it('explains the three denominators and links to each original card', () => {
-    renderView(readyAnalysis())
-    const guide = screen.getByRole('region', { name: 'Three ways to describe bounce' })
-    const links = within(guide).getAllByRole('link')
-    expect(links.map((link) => link.textContent)).toEqual([
-      'Bounce relative to torso length',
-      'Bounce in centimetres',
-      'Bounce relative to stride length',
-    ])
-    expect(guide).toHaveTextContent('Uses your torso length as the denominator.')
-    expect(guide).toHaveTextContent('Uses real-world scale from the clip')
-    expect(guide).toHaveTextContent('Uses the distance you travel per stride as the denominator.')
-    expect(guide).toHaveTextContent('different scales')
-    const groups = guidedGroups(makeHeuristics())
-    const entries = [...groups.banded, ...groups.unbanded]
-    for (const [index, id] of ['verticalOscillation', 'verticalOscillationCm', 'verticalRatio'].entries()) {
-      const entry = entries.find((candidate) => candidate.metric.metric === id)!
-      expect(links[index].parentElement).toHaveTextContent(guidedHeadline(entry, false)!)
-    }
-    expect(screen.getAllByRole('article', { name: 'Vertical oscillation' })).toHaveLength(1)
-    expect(screen.getAllByRole('article', { name: 'Vertical oscillation (cm)' })).toHaveLength(1)
-    expect(screen.getAllByRole('article', { name: 'Vertical ratio' })).toHaveLength(1)
-  })
-
-  it('marks an unavailable centimetre measure and opens its original not-measured entry', () => {
-    renderView(readyAnalysis(withUnmeasured(['verticalOscillationCm'])))
-    const guide = screen.getByRole('region', { name: 'Three ways to describe bounce' })
-    expect(guide.querySelectorAll('li')).toHaveLength(3)
-    const link = within(guide).getByRole('link', { name: 'Bounce in centimetres' })
-    expect(link.parentElement).toHaveTextContent('not measured')
-    expect(link).toHaveAttribute('href', '#guided-results-verticalOscillationCm')
-    fireEvent.click(link)
-    const target = document.getElementById('guided-results-verticalOscillationCm')
-    expect(target).toHaveFocus()
-    expect(target?.closest('details')).toHaveAttribute('open')
-    expect(screen.queryByRole('article', { name: 'Vertical oscillation (cm)' })).not.toBeInTheDocument()
-  })
-})
-
-describe('The guided view ranks metrics into three groups by what can be said about them', () => {
-  it('Banded metrics render expanded and in their fixed rank order', () => {
-    const { container } = renderView(readyAnalysis())
-    const section = bandedSection()
-    expect(section.closest('details')).toBeNull()
-    const labels = within(section).getAllByRole('article').map(articleLabel)
-    expect(labels).toEqual(BANDED.map((g) => METRIC_LABELS[g.metric]))
-    // For makeHeuristics() defaults: 5 banded / 7 unbanded / 0 not measured.
-    expect(labels).toHaveLength(5)
-    expect(
-      groupDetails(container, 'unbanded')?.querySelectorAll('article'),
-    ).toHaveLength(8)
-    expect(groupSection(container, 'not-measured')).toBeNull()
-  })
-
-  it('keeps the banded order when values and confidences change', () => {
-    renderView(
-      readyAnalysis(
-        makeHeuristics({
-          cadence: makeMetric('cadence', { value: 120, confidence: 0.3 }),
-          kneeFlexion: makeMetric('kneeFlexion', {
-            value: 170,
-            confidence: 0.99,
-          }),
-        }),
-      ),
-    )
-    const labels = within(bandedSection())
-      .getAllByRole('article')
-      .map(articleLabel)
-    expect(labels).toEqual(BANDED.map((g) => METRIC_LABELS[g.metric]))
-  })
-
-  it('The two other groups render collapsed and expand on demand', () => {
-    const { container } = renderView(
-      readyAnalysis(withUnmeasured(['kneeDrive'])),
-    )
-    for (const modifier of ['unbanded', 'not-measured'] as const) {
-      const details = groupDetails(container, modifier)
-      if (details === null) throw new Error(`missing ${modifier} group`)
-      expect(details.open).toBe(false)
-      fireEvent.click(details.querySelector('summary') as HTMLElement)
-      expect(details.open).toBe(true)
-    }
-  })
-
-  it('titles each collapsed group with a real heading, and names every measurement inside in its summary', () => {
-    const heuristics = withUnmeasured(['kneeDrive', 'trunkLean'])
-    const { container } = renderView(readyAnalysis(heuristics))
-    const { unbanded, notMeasured } = guidedGroups(heuristics)
-    const names = (entries: GuidedEntry[]) =>
-      entries.map((e) => METRIC_LABELS[e.metric.metric]).join(', ')
-
-    const unbandedSection = screen.getByRole('region', {
-      name: 'Measured, no published range',
-    })
-    expect(unbandedSection.querySelector('summary h2')).toBeNull()
-    expect(unbandedSection.querySelector('summary')).toHaveTextContent(
-      `${unbanded.length} measurements: ${names(unbanded)}`,
-    )
-    expect(unbandedSection).toBe(groupSection(container, 'unbanded'))
-
-    const notMeasuredSection = screen.getByRole('region', {
-      name: 'Not measured on this clip',
-    })
-    expect(notMeasuredSection.querySelector('summary')).toHaveTextContent(
-      `2 measurements: ${names(notMeasured)}`,
-    )
-    // "measurements", never "metrics", in the view's own group copy.
-    for (const section of [unbandedSection, notMeasuredSection]) {
-      expect(section.querySelector('h2')!.textContent).not.toMatch(/metric/i)
-      expect(section.querySelector('summary')!.textContent).not.toMatch(
-        /metric/i,
-      )
-    }
-  })
-
-  it('says "1 measurement" in the singular', () => {
-    const { container } = renderView(
-      readyAnalysis(withUnmeasured(['kneeDrive'])),
-    )
-    expect(
-      groupDetails(container, 'not-measured')!.querySelector('summary'),
-    ).toHaveTextContent(/^1 measurement: Knee drive$/)
-  })
-
-  it('orders unbanded cards by display rank', () => {
-    const { container } = renderView(readyAnalysis())
-    const labels = Array.from(
-      groupDetails(container, 'unbanded')?.querySelectorAll('article') ?? [],
-    ).map(articleLabel)
-    expect(labels).toEqual(UNBANDED.map((g) => METRIC_LABELS[g.metric]))
-  })
-
-  it('omits empty groups entirely — no empty section, no empty details', () => {
-    const { container, unmount } = renderView(
-      readyAnalysis(withUnmeasured(ALL_IDS)),
-    )
-    expect(
-      screen.queryByRole('region', {
-        name: 'Compared with published research',
-      }),
-    ).not.toBeInTheDocument()
-    expect(groupSection(container, 'unbanded')).toBeNull()
-    expect(
-      groupDetails(container, 'not-measured')?.querySelector('summary'),
-    ).toHaveTextContent(/^13 measurements: /)
-    unmount()
-    const second = renderView(
-      readyAnalysis(withUnmeasured(BANDED.map((g) => g.metric))),
-    )
-    expect(
-      screen.queryByRole('region', {
-        name: 'Compared with published research',
-      }),
-    ).not.toBeInTheDocument()
-    expect(
-      groupDetails(second.container, 'unbanded')?.querySelector('summary'),
-    ).toHaveTextContent(new RegExp(`^${UNBANDED.length} measurements: `))
-  })
-
-  it('frames a banded card, and separates a card inside a framed group with a top rule instead', () => {
-    const { container } = renderView(readyAnalysis())
-    const bandedCard = within(bandedSection()).getAllByRole('article')[0]
-    expect(bandedCard.className).toMatch(/(^|\s)border-2(\s|$)/)
-    for (const article of groupDetails(container, 'unbanded')!.querySelectorAll(
-      'article',
-    )) {
-      expect(article.className).toMatch(/(^|\s)border-t-2(\s|$)/)
-      expect(article.className).not.toMatch(/(^|\s)border-2(\s|$)/)
-    }
-  })
-})
-
-describe('The heading outline reads group → measurement', () => {
-  it('gives every measurement an h3 whose nearest preceding h2 is its own group’s heading', () => {
-    const { container } = renderView(
-      readyAnalysis(withUnmeasured(['kneeDrive', 'cadence'])),
-    )
-    const h2s = Array.from(container.querySelectorAll('h2'))
-    // Energy cost, the bounce explainer, then the three metric groups.
-    expect(h2s).toHaveLength(5)
-    for (const h2 of h2s) expect(h2.closest('summary')).toBeNull()
-    const h3s = Array.from(
-      container.querySelectorAll('section.guided-results__group h3'),
-    )
-    expect(h3s).toHaveLength(13)
-    for (const h3 of h3s) {
-      const preceding = h2s.filter(
-        (h2) =>
-          h2.compareDocumentPosition(h3) & Node.DOCUMENT_POSITION_FOLLOWING,
-      )
-      const nearest = preceding[preceding.length - 1]
-      const group = h3.closest('section.guided-results__group')!
-      expect(nearest, h3.textContent ?? '').toBe(
-        document.getElementById(group.getAttribute('aria-labelledby')!),
-      )
-    }
-  })
-
+describe('Every measurement is named by its own heading', () => {
   it('names each card by its h3 rather than a duplicate aria-label', () => {
     renderView(readyAnalysis())
     for (const article of screen.getAllByRole('article')) {
@@ -1081,7 +716,7 @@ describe('A reference band renders only with its provenance on screen', () => {
     ).toHaveTextContent(WITHHELD_BAND_REASON)
   })
 
-  it('does not put a withheld band under copy claiming no published range exists', () => {
+  it('withholds a band whose sample size is blank, without claiming no published range exists', () => {
     const target = BANDED[0]
     const stripped: Record<MetricId, MetricGuidance> = {
       ...METRIC_GUIDANCE,
@@ -1093,38 +728,20 @@ describe('A reference band renders only with its provenance on screen', () => {
         },
       },
     }
+    const entry = guidedGroups(makeHeuristics(), stripped).unbanded.find(
+      (e) => e.metric.metric === target.metric,
+    )
+    if (entry === undefined)
+      throw new Error('expected the stripped metric in the unbanded group')
     const { container } = render(
-      <GuidedMeasurements
-        heuristics={makeHeuristics()}
-        scalePassStatus="idle"
-        evidence={[]}
-        clipCount={1}
-        guidance={stripped}
-      />,
+      <GuidedMetricCard entry={entry} clipCount={1} />,
     )
-    const section = groupSection(container, 'unbanded')!
-    expect(section.contains(card(METRIC_LABELS[target.metric]))).toBe(true)
-    expect(section.querySelector('h2')).toHaveTextContent(
-      'Measured, no range shown',
-    )
-    // The GROUP's title is what speaks for every card in it, and it is what must not claim a
-    // finding about the literature. An individual card's own reason may legitimately say "No
-    // published range exists for step width…" — that card really has none.
-    expect(section.querySelector('h2')).not.toHaveTextContent(
-      /no published range/i,
-    )
-    expect(
-      card(METRIC_LABELS[target.metric]).querySelector(
-        '.guided-results__no-band',
-      ),
-    ).toHaveTextContent(WITHHELD_BAND_REASON)
-  })
-
-  it('titles the unbanded group "no published range" when every metric in it genuinely has none', () => {
-    const { container } = renderView(readyAnalysis())
-    expect(
-      groupSection(container, 'unbanded')!.querySelector('h2'),
-    ).toHaveTextContent('Measured, no published range')
+    expect(container.querySelector('.metric-scale')).toBeNull()
+    // The card's reason is the neutral one: a range exists, its details are incomplete. It must not
+    // claim a finding about the literature that is false of this metric.
+    const reason = container.querySelector('.guided-results__no-band')
+    expect(reason).toHaveTextContent(WITHHELD_BAND_REASON)
+    expect(reason).not.toHaveTextContent(/no published range/i)
   })
 })
 
@@ -1147,11 +764,14 @@ describe('Group 1 cards — scale, headline value and notes', () => {
     expect(container.querySelectorAll('.metric-scale')).toHaveLength(
       BANDED.length,
     )
+    for (const guidance of UNBANDED.filter((g) => g.metric !== 'kneeDrive')) {
+      expect(
+        card(METRIC_LABELS[guidance.metric]).querySelector('.metric-scale'),
+        guidance.metric,
+      ).toBeNull()
+    }
     expect(
-      groupDetails(container, 'unbanded')?.querySelector('.metric-scale'),
-    ).toBeNull()
-    expect(
-      groupDetails(container, 'not-measured')?.querySelector('.metric-scale'),
+      notMeasuredList(container)!.querySelector('.metric-scale'),
     ).toBeNull()
   })
 
@@ -1661,9 +1281,8 @@ describe('Banding controls whether a scale renders, not whether the metric rende
     'An unbanded metric renders its value and its links — %s',
     (_id, guidance) => {
       const heuristics = makeHeuristics()
-      const { container } = renderView(readyAnalysis(heuristics))
+      renderView(readyAnalysis(heuristics))
       const article = card(METRIC_LABELS[guidance.metric])
-      expect(groupDetails(container, 'unbanded')?.contains(article)).toBe(true)
       expect(article.querySelector('.guided-results__value')).toHaveTextContent(
         formatGuidedValue(heuristics[guidance.metric]),
       )
@@ -1758,12 +1377,10 @@ describe('Banding controls whether a scale renders, not whether the metric rende
     }
   })
 
-  it("puts overstriding in group 2 with its reason, and its intervention links on cadence's card too (D8)", () => {
-    const { container } = renderView(readyAnalysis())
+  it("renders overstriding without a scale, with its reason, and its intervention links on cadence's card too (D8)", () => {
+    renderView(readyAnalysis())
     const overstriding = card('Overstriding')
-    expect(groupDetails(container, 'unbanded')?.contains(overstriding)).toBe(
-      true,
-    )
+    expect(overstriding.querySelector('.metric-scale')).toBeNull()
     // Whole — its first sentence visible, the rest inside the card's disclosure.
     expect(overstriding).toHaveTextContent(
       splitFirstSentence(METRIC_GUIDANCE.overstriding.noBandReason!).first,
@@ -2057,11 +1674,7 @@ describe('A metric not measured on this clip collapses with a reason and a captu
         ),
       ),
     )
-    const details = groupDetails(container, 'not-measured')!
-    expect(details.querySelector('summary')).toHaveTextContent(
-      '1 measurement: Cadence',
-    )
-    const entry = details.querySelector(
+    const entry = notMeasuredList(container)!.querySelector(
       '[data-metric="cadence"]',
     ) as HTMLElement
     expect(entry.querySelector('h3')).toHaveTextContent('Cadence')
@@ -2095,7 +1708,7 @@ describe('A metric not measured on this clip collapses with a reason and a captu
         }),
       ),
     )
-    const details = groupDetails(container, 'not-measured')!
+    const details = notMeasuredList(container)!
     const hint = (id: MetricId) =>
       details.querySelector(
         `[data-metric="${id}"] .guided-results__capture-hint`,
@@ -2115,7 +1728,7 @@ describe('A metric not measured on this clip collapses with a reason and a captu
     const { container } = renderView(
       readyAnalysis(withUnmeasured(['kneeDrive'])),
     )
-    const entry = groupDetails(container, 'not-measured')!.querySelector(
+    const entry = notMeasuredList(container)!.querySelector(
       '[data-metric="kneeDrive"]',
     )!
     const hint = entry.querySelector('.guided-results__capture-hint')!
@@ -2127,12 +1740,12 @@ describe('A metric not measured on this clip collapses with a reason and a captu
     expect(reason.className).toContain('text-neutral-600')
   })
 
-  it('The excluded group is collapsed, not omitted', () => {
+  // Collapsed by the view that holds them: the summary's Not measured row (`FocusAreaRow.test.tsx`).
+  it('lists every excluded metric, in display order, rather than omitting it', () => {
     const { container } = renderView(
       readyAnalysis(withUnmeasured(['trunkLean', 'kneeDrive'])),
     )
-    const details = groupDetails(container, 'not-measured')!
-    expect(details.open).toBe(false)
+    const details = notMeasuredList(container)!
     const entries = Array.from(details.querySelectorAll('[data-metric]')).map(
       (el) => el.getAttribute('data-metric'),
     )
@@ -2153,7 +1766,7 @@ describe('A metric not measured on this clip collapses with a reason and a captu
         }),
       ),
     )
-    const entry = groupDetails(container, 'not-measured')!.querySelector(
+    const entry = notMeasuredList(container)!.querySelector(
       '[data-metric="armSwingAmplitude"]',
     )
     expect(entry).toHaveTextContent(
@@ -2180,7 +1793,7 @@ describe('A metric not measured on this clip collapses with a reason and a captu
           status,
         ),
       )
-      const details = groupDetails(container, 'not-measured')!
+      const details = notMeasuredList(container)!
       for (const id of ['verticalOscillationCm', 'stepWidthCm'] as const) {
         const entry = details.querySelector(
           `[data-metric="${id}"]`,
@@ -2203,7 +1816,7 @@ describe('A metric not measured on this clip collapses with a reason and a captu
       ),
     )
     expect(
-      groupDetails(container, 'not-measured')!.querySelector(
+      notMeasuredList(container)!.querySelector(
         '[data-metric="kneeDrive"]',
       ),
     ).toHaveTextContent('Fixture reason: no knee.')
@@ -2214,7 +1827,7 @@ describe('A metric not measured on this clip collapses with a reason and a captu
       readyAnalysis(withUnmeasured(['kneeDrive'], null)),
     )
     expect(
-      groupDetails(container, 'not-measured')!.querySelector(
+      notMeasuredList(container)!.querySelector(
         '[data-metric="kneeDrive"]',
       ),
     ).toHaveTextContent('Not measurable for this clip.')
@@ -2245,23 +1858,14 @@ describe('Every outbound reference is from a verified set and opens safely', () 
     }
   })
 
-  it('keeps in-page anchors in the contents list or bounce explainer, and resolves each in the view', () => {
+  it('puts no in-page anchor on any card or not-measured entry: every link leaves the page', () => {
     const { container } = renderView(
       readyAnalysis(withUnmeasured(['kneeDrive'])),
     )
     const inPage = Array.from(container.querySelectorAll('a')).filter(
       (anchor) => (anchor.getAttribute('href') ?? '').startsWith('#'),
     )
-    expect(inPage).toHaveLength(16)
-    for (const anchor of inPage) {
-      expect(
-        anchor.closest('nav, .guided-results__bounce'),
-      ).not.toBeNull()
-      expect(anchor).not.toHaveAttribute('target')
-      expect(
-        container.querySelector(anchor.getAttribute('href')!),
-      ).not.toBeNull()
-    }
+    expect(inPage).toHaveLength(0)
   })
 
   it('renders every URL the guidance holds for a fully measured clip', () => {
@@ -2550,8 +2154,11 @@ describe('how much a card says before the reader opens anything', () => {
    */
   const CADENCE_VISIBLE_WORD_BUDGET = 78
 
+  // Measured on the card as it now appears: inside its summary row (`FocusAreaRow`), the only view
+  // that renders a guided card. The row's own summary and why line sit outside the article, so the
+  // measure is unchanged.
   it('keeps the cadence card inside its visible word budget', () => {
-    renderView(readyAnalysis())
+    renderSummaryRows()
     const words = visibleWordCount(card('Cadence'))
     expect(words, `cadence visible words: ${words}`).toBeLessThanOrEqual(
       CADENCE_VISIBLE_WORD_BUDGET,
@@ -2583,7 +2190,7 @@ describe('how much a card says before the reader opens anything', () => {
   const CARD_FURNITURE_WORD_BUDGET = 50
 
   it("keeps every banded card's own furniture inside a tighter budget", () => {
-    renderView(readyAnalysis())
+    renderSummaryRows()
     for (const guidance of BANDED) {
       const article = card(METRIC_LABELS[guidance.metric]).cloneNode(
         true,
@@ -2644,380 +2251,5 @@ describe('how much a card says before the reader opens anything', () => {
         guidance.metric,
       ).toContain(anchor.getAttribute('href'))
     }
-  })
-
-  it('drops the group intro paragraphs: the cards carry their own reasons', () => {
-    renderView(readyAnalysis(withUnmeasured(['kneeDrive'])))
-    expect(
-      document.querySelectorAll('.guided-results__group-intro'),
-    ).toHaveLength(0)
-  })
-})
-
-// ---------------------------------------------------------------------------------------------
-// Energy cost headlines (narrative-metric-headlines)
-// ---------------------------------------------------------------------------------------------
-
-describe('Energy cost headlines above the contents list', () => {
-  const VAN_HOOREN_URL = 'https://pmc.ncbi.nlm.nih.gov/articles/PMC11127892/'
-  const GRADING =
-    /\b(good|bad|poor|better|worse|best|worst|optimal|ideal|excessive|healthy|unhealthy|target|goal|should|correct|incorrect|normal|abnormal|recommended)\b/i
-
-  function withReadings({
-    cadence,
-    vo,
-    voConfidence,
-  }: {
-    cadence?: number | null
-    vo?: number | null
-    voConfidence?: number
-  }): FormHeuristicsResult {
-    return makeHeuristics({
-      ...(cadence === undefined
-        ? {}
-        : {
-            cadence: makeMetric('cadence', {
-              value: cadence,
-              ...(cadence === null ? { confidence: 0 } : {}),
-            }),
-          }),
-      ...(vo === undefined
-        ? {}
-        : {
-            verticalOscillationCm: makeVerticalOscillationCm({
-              value: vo,
-              ...(vo === null ? { confidence: 0, calibration: null } : {}),
-              ...(voConfidence === undefined ? {} : { confidence: voConfidence }),
-            }),
-          }),
-    })
-  }
-
-  function headlinesSection(): HTMLElement {
-    return screen.getByRole('region', { name: 'Energy cost' })
-  }
-
-  function stories(): HTMLElement[] {
-    return Array.from(
-      headlinesSection().querySelectorAll<HTMLElement>(
-        '.guided-results__headline-story',
-      ),
-    )
-  }
-
-  function emptyState(): HTMLElement {
-    return headlinesSection().querySelector<HTMLElement>(
-      '.guided-results__headlines-empty',
-    )!
-  }
-
-  /** A clone with screen-reader-only text and the named blocks removed. */
-  function without(element: Element, remove: string[] = []): Element {
-    const clone = element.cloneNode(true) as Element
-    for (const selector of ['.sr-only', ...remove]) {
-      clone.querySelectorAll(selector).forEach((node) => node.remove())
-    }
-    return clone
-  }
-
-  /** Tokens carrying a letter or a digit: a dash or a middot is punctuation, not a word. */
-  function words(element: Element): number {
-    return (element.textContent ?? '')
-      .split(/\s+/)
-      .filter((token) => /[\p{L}\p{N}]/u.test(token)).length
-  }
-
-  it('sits between the completion line and the contents list', () => {
-    renderView(readyAnalysis(withReadings({ vo: 10.4 })))
-    const status = screen.getByRole('status')
-    expect(status.textContent).toMatch(/^Analysis complete\./)
-    const section = headlinesSection()
-    const contents = screen.getByRole('navigation', {
-      name: 'Measurements on this page',
-    })
-    expect(
-      status.compareDocumentPosition(section) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-    expect(
-      section.compareDocumentPosition(contents) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-    expect(section).toHaveClass('guided-results__headlines')
-  })
-
-  it('renders a normal-tier bounce headline at 10.4 cm in reading order', () => {
-    renderView(readyAnalysis(withReadings({ vo: 10.4 })))
-    expect(stories()).toHaveLength(1)
-    const [story] = stories()
-    expect(story).toHaveAttribute('data-story', 'bounce')
-    expect(
-      within(story).getByRole('heading', {
-        level: 3,
-        name: METRIC_LABELS.verticalOscillationCm,
-      }),
-    ).toBeInTheDocument()
-    expect(story).toHaveTextContent('10.4 cm')
-    expect(story).toHaveTextContent('above the 6.0–9.5 cm range')
-    expect(story).toHaveTextContent('Varies with pace')
-    const consequence = story.querySelector<HTMLElement>(
-      '.guided-results__consequence',
-    )!
-    expect(consequence).toHaveTextContent(
-      METRIC_GUIDANCE.verticalOscillationCm.economyConsequence!.text,
-    )
-    expect(
-      within(consequence).getByRole('link', {
-        name: /Van Hooren et al\. 2024/,
-      }),
-    ).toHaveAttribute('href', VAN_HOOREN_URL)
-    const note = story.querySelector('.guided-results__headline-note')!
-    expect(note).toHaveTextContent(
-      splitFirstSentence(METRIC_GUIDANCE.verticalOscillationCm.mandatoryNotes[0])
-        .first,
-    )
-    const tryLine = story.querySelector('.guided-results__try')!
-    expect(tryLine).toHaveTextContent(/^If you choose to change your form:/)
-    const link = within(story).getByRole('link', {
-      name: 'All three bounce measures',
-    })
-    expect(link).toHaveAttribute('href', '#guided-bounce-heading')
-    // Reading order: value → consequence → note → studied change → link.
-    const order = [
-      story.querySelector('.guided-results__headline-value')!,
-      consequence,
-      note,
-      tryLine,
-      link,
-    ]
-    for (let i = 1; i < order.length; i++) {
-      expect(
-        order[i - 1].compareDocumentPosition(order[i]) &
-          Node.DOCUMENT_POSITION_FOLLOWING,
-        String(i),
-      ).toBeTruthy()
-    }
-    // Dropped in review round 1: the citation and caveat stay on the card.
-    expect(story.querySelector('.guided-results__citation')).toBeNull()
-    expect(story.querySelector('.guided-results__caveat')).toBeNull()
-    expect(story.querySelector('.guided-results__confidence')).toBeNull()
-  })
-
-  it('does not headline a caveated reading past its point, and sends the reader to its card', () => {
-    renderView(readyAnalysis(withReadings({ vo: 10.4, voConfidence: 0.05 })))
-    expect(stories()).toHaveLength(0)
-    const empty = emptyState()
-    expect(without(empty).textContent).toContain(
-      'Bounce in centimetres reads above 9.5 cm, but with low confidence — see its card.',
-    )
-    expect(
-      within(empty).getByRole('link', {
-        name: `see its card: ${METRIC_LABELS.verticalOscillationCm}`,
-      }),
-    ).toHaveAttribute('href', `#${guidedEntryId('verticalOscillationCm')}`)
-    // It still says where step rate stands.
-    expect(empty).toHaveTextContent(
-      "Step rate is not below the 5th percentile of Garmin's table",
-    )
-  })
-
-  it('keeps the caveated line beside a headline for the other story', () => {
-    renderView(
-      readyAnalysis(withReadings({ cadence: 150, vo: 10.4, voConfidence: 0.3 })),
-    )
-    expect(stories().map((s) => s.getAttribute('data-story'))).toEqual([
-      'stepRate',
-    ])
-    expect(
-      headlinesSection().querySelector('.guided-results__headlines-caveated'),
-    ).toHaveTextContent('Bounce in centimetres reads above 9.5 cm, but with low confidence')
-  })
-
-  it('renders the step-rate headline at 150 with the pace note and a link to its card', () => {
-    renderView(readyAnalysis(withReadings({ cadence: 150 })))
-    const [story] = stories()
-    expect(story).toHaveAttribute('data-story', 'stepRate')
-    expect(story).toHaveTextContent(
-      "below the 5th percentile of Garmin's table",
-    )
-    expect(story).toHaveTextContent('Varies with pace')
-    expect(story).toHaveTextContent('180 steps per minute is not a target.')
-    expect(story.querySelector('.guided-results__try')).toHaveTextContent(
-      /^If you choose to raise step rate:/,
-    )
-    expect(
-      within(story).getByRole('link', { name: 'Go to the Cadence card' }),
-    ).toHaveAttribute('href', `#${guidedEntryId('cadence')}`)
-  })
-
-  it('moves focus to the cadence card and to the bounce introduction', () => {
-    renderView(readyAnalysis(withReadings({ cadence: 150, vo: 10.4 })))
-    fireEvent.click(screen.getByRole('link', { name: 'Go to the Cadence card' }))
-    expect(document.activeElement).toBe(card('Cadence'))
-    fireEvent.click(
-      screen.getByRole('link', { name: 'All three bounce measures' }),
-    )
-    expect(document.activeElement).toBe(
-      document.getElementById('guided-bounce-heading'),
-    )
-    // The same scroll margin the cards use under the sticky header (index.css).
-    expect(document.activeElement).toHaveClass('guided-results__scroll-target')
-  })
-
-  it('names the clip each headline was measured from, as its card does', () => {
-    const heuristics = withReadings({ cadence: 150 })
-    const sourceIndices = Object.fromEntries(
-      ALL_IDS.map((id) => [id, id === 'cadence' ? 1 : 0]),
-    ) as Record<MetricId, number>
-    render(
-      <GuidedResultsView
-        analysis={readyAnalysis(heuristics)}
-        onTryAgain={vi.fn()}
-        onStartOver={vi.fn()}
-        clipCount={2}
-        clipViews={['Approach view', 'Side view']}
-        sourceIndices={sourceIndices}
-      />,
-    )
-    const [story] = stories()
-    expect(story).toHaveTextContent('Measured from Clip 2 of 2 · Side view')
-    expect(card('Cadence')).toHaveTextContent(
-      'Measured from Clip 2 of 2 · Side view',
-    )
-  })
-
-  it('renders no source label with one clip', () => {
-    renderView(readyAnalysis(withReadings({ cadence: 150 })))
-    expect(stories()[0]).not.toHaveTextContent('Measured from')
-  })
-
-  it('puts step rate before bounce when both trigger, however far bounce reads', () => {
-    renderView(readyAnalysis(withReadings({ cadence: 152, vo: 30 })))
-    expect(stories().map((s) => s.getAttribute('data-story'))).toEqual([
-      'stepRate',
-      'bounce',
-    ])
-  })
-
-  it('says where both readings stand when neither is past its point', () => {
-    renderView(readyAnalysis(withReadings({ cadence: 174, vo: 4.42 })))
-    expect(stories()).toHaveLength(0)
-    expect(emptyState()).toHaveTextContent(
-      "Step rate is not below the 5th percentile of Garmin's table and bounce in centimetres is not above 9.5 cm — the points past which energy-cost research leans one way. The measurements are below.",
-    )
-    // Secondary text, not a framed finding.
-    expect(headlinesSection().className).not.toMatch(/border-2/)
-  })
-
-  it('names an unmeasured story and still places the measured one', () => {
-    renderView(readyAnalysis(withReadings({ cadence: null })))
-    expect(emptyState()).toHaveTextContent(
-      'Bounce in centimetres is not above 9.5 cm — the point past which energy-cost research leans one way. Step rate could not be measured on this clip.',
-    )
-    expect(emptyState()).not.toHaveTextContent('Neither')
-  })
-
-  it('states the trigger positions when neither story could be measured', () => {
-    renderView(readyAnalysis(withReadings({ cadence: null, vo: null })))
-    expect(emptyState()).toHaveTextContent(
-      "Energy-cost research leans one way when step rate reads below the 5th percentile of Garmin's table or bounce in centimetres reads above 9.5 cm. Step rate and bounce in centimetres could not be measured on this clip.",
-    )
-  })
-
-  it('says the centimetre bounce is still being measured while the scale pass runs', () => {
-    renderView(readyAnalysis(withReadings({ vo: null }), 'running'))
-    expect(emptyState()).toHaveTextContent(
-      'Bounce in centimetres: measuring real-world scale with a second look at the clip…',
-    )
-    expect(emptyState()).not.toHaveTextContent('could not be measured')
-  })
-
-  it('keeps every empty-state variant within fifty words and free of grading words', () => {
-    const variants: Array<[FormHeuristicsResult, ScalePassStatus]> = [
-      [withReadings({ cadence: 174, vo: 4.42 }), 'done'],
-      [withReadings({ cadence: null }), 'done'],
-      [withReadings({ vo: null }), 'running'],
-      [withReadings({ cadence: null, vo: null }), 'done'],
-      [withReadings({ cadence: null, vo: null }), 'running'],
-      [withReadings({ cadence: null, vo: 10.4, voConfidence: 0.05 }), 'done'],
-      [
-        makeHeuristics({
-          cadence: makeMetric('cadence', { value: 140, confidence: 0.2 }),
-          verticalOscillationCm: makeVerticalOscillationCm({
-            value: 10.4,
-            confidence: 0.05,
-          }),
-        }),
-        'done',
-      ],
-    ]
-    for (const [heuristics, status] of variants) {
-      const { unmount } = renderView(readyAnalysis(heuristics, status))
-      const empty = emptyState()
-      const count = words(without(empty))
-      expect(count, empty.textContent ?? '').toBeLessThanOrEqual(50)
-      expect(empty.textContent ?? '').not.toMatch(GRADING)
-      expect(empty.textContent ?? '').not.toMatch(/a position, not a grade/)
-      unmount()
-    }
-  })
-
-  it('still renders every promoted metric as its own card below', () => {
-    renderView(readyAnalysis(withReadings({ cadence: 150, vo: 10.4 })))
-    expect(
-      card('Cadence').closest('.guided-results__group--banded'),
-    ).not.toBeNull()
-    expect(
-      card(METRIC_LABELS.verticalOscillationCm).closest(
-        '.guided-results__group--banded',
-      ),
-    ).not.toBeNull()
-    expect(headlinesSection().querySelectorAll('article')).toHaveLength(0)
-  })
-
-  it('renders no evidence imagery in the headline section', () => {
-    renderView(readyAnalysis(withReadings({ cadence: 150 })), {
-      evidence: [
-        {
-          metric: 'cadence',
-          clipIndex: 0,
-          items: [extracted(framePlan('cadence', 'A footstrike'))],
-        },
-      ],
-    })
-    expect(headlinesSection().querySelectorAll('canvas')).toHaveLength(0)
-    expect(card('Cadence').querySelectorAll('canvas').length).toBeGreaterThan(0)
-  })
-
-  /**
-   * About sixty visible words per headline (review round 1), not counting a mandatory note's first
-   * sentence: that is the source's sentence, not this page's (the cards' furniture budget excludes
-   * it on the same rule), and `verticalOscillationCm`'s runs to 40 words on its own. Measured: step
-   * rate 65, bounce 59. Step rate's five over are its studied-change line, the record's own text.
-   */
-  const HEADLINE_WORD_BUDGET = 65
-
-  it('keeps each headline within its word budget, with no hue-graded class or grading word of its own', () => {
-    renderView(readyAnalysis(withReadings({ cadence: 150, vo: 10.4 })))
-    const section = headlinesSection()
-    for (const element of [section, ...section.querySelectorAll('*')]) {
-      expect(element.getAttribute('class') ?? '').not.toMatch(
-        /\b(bg|text|border|fill|stroke|ring|outline|shadow|from|via|to|decoration|accent)-(red|green|emerald|rose|amber|yellow|lime|orange)-/,
-      )
-    }
-    for (const story of stories()) {
-      const visible = without(story, ['.guided-results__headline-note'])
-      const count = words(visible)
-      expect(count, `${story.dataset.story}: ${count}`).toBeLessThanOrEqual(
-        HEADLINE_WORD_BUDGET,
-      )
-      const authored = without(story, [
-        '.guided-results__headline-note',
-        '.guided-results__consequence',
-        '.guided-results__try',
-      ])
-      expect(authored.textContent ?? '').not.toMatch(GRADING)
-    }
-    expect(section.textContent ?? '').not.toMatch(/[✓✔✗✘]/)
   })
 })

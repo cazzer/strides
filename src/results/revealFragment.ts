@@ -5,7 +5,7 @@ import type { RefObject } from 'react'
  * Opens every closed `<details>` between `target` and the document root. Returns whether any was
  * closed, i.e. whether the target was hidden until now.
  */
-export function openAncestors(target: Element): boolean {
+function openAncestors(target: Element): boolean {
   let opened = false
   for (
     let details = target.parentElement?.closest('details');
@@ -21,14 +21,13 @@ export function openAncestors(target: Element): boolean {
 }
 
 /**
- * The fragment this page session has already revealed — on a mount or a hash change (a contents-list
- * click causes one, unless it names the fragment already in the address, which is handled already).
+ * The fragment this page session has already revealed — on a mount or a hash change.
  *
- * The guided measurements mount again every time an analysis reaches ready (adding a clip) and every
+ * A guided body mounts again every time an analysis reaches ready (adding a clip) and every
  * time the view is toggled back from classic, and the toggle keeps the hash. Revealing the hash on
  * each of those mounts would scroll the page back to a card the reader left long ago. So a mount
  * reveals a fragment only the first time the page session sees it, and never moves focus: focus
- * moves only when the reader asks for a card, by a hash change or a contents-list click.
+ * moves only when the reader asks for a card, by a hash change.
  *
  * Module scope, because the component's own state dies with the very remount this has to survive.
  */

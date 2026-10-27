@@ -5,8 +5,9 @@ import type { BandSource, MetricGuidance, ReferenceBand } from './types'
 /**
  * Whether a metric's band can be shown, and whether its studied change applies to a reading.
  *
- * Moved down from `src/results/guidedGroups.ts` and `guidedHeadlines.ts` (add-runner-tour design.md
- * D5) so `src/guidance` depends on nothing in `src/results`; both files re-export these unchanged.
+ * Moved down from `src/results/guidedGroups.ts` and the since-deleted `guidedHeadlines.ts`
+ * (add-runner-tour design.md D5) so `src/guidance` depends on nothing in `src/results`;
+ * `guidedGroups.ts` re-exports these unchanged.
  */
 
 /** A metric's reading beside its guidance and the band it renders against. */

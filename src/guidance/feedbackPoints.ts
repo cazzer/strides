@@ -182,7 +182,7 @@ function cueCapable(id: MetricId, guidance: Guidance): boolean {
 /**
  * Whether this reading earns its Try line as a cue (design.md D3): normal tier, the Try line applies,
  * the band is renderable, and the value is strictly past the band's outermost finite bound on the
- * costly side — the Energy cost headline's own threshold. Never an unbanded metric, never a value
+ * costly side (`pastCostlySide`). Never an unbanded metric, never a value
  * within the band's finite bounds.
  */
 function cueEligible(focus: FocusMetric, guidance: Guidance): boolean {

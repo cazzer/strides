@@ -146,13 +146,6 @@ describe('ResultsSummary', () => {
     expect(screen.getByRole('status')).toHaveTextContent(/^Analysis complete\./)
     expect(container.querySelector('.results-runner-slot')).toBeNull()
 
-    // The summary is not the guided measurements: no contents list, no energy-cost section, no
-    // bounce trio, no group headings.
-    expect(screen.queryByRole('navigation', { name: 'Measurements on this page' })).toBeNull()
-    expect(screen.queryByText('Energy cost')).toBeNull()
-    expect(screen.queryByText('Three ways to describe bounce')).toBeNull()
-    expect(screen.queryByRole('heading', { name: 'Compared with published research' })).toBeNull()
-
     const entries = container.querySelectorAll('[data-view-entry]')
     expect(entries).toHaveLength(1)
     expect(entries[0]).toBe(screen.getByRole('heading', { level: 2, name: 'Summary' }))
