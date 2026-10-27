@@ -29,3 +29,27 @@
 
 - [x] 6.1 `npm run lint`, `npx tsc -b`, `npx vitest run src/runner`, and the full `npx vitest run`
 - [x] 6.2 `openspec validate add-model-runner --strict`
+
+## 7. Renderer (ps19.2)
+
+- [x] 7.1 `runnerScene.ts` + tests: segment/joint styles (agrees with `segmentSource`), effective sources, focus params, draw order, text alternative, label layout, timing constants
+- [x] 7.2 `runnerAnnotations.ts` + tests: kinds, units, labels from `metricValue` (clamp note), exact arc sweeps and bracket/offset lengths, kind filter
+- [x] 7.3 `usePrefersReducedMotion.ts`; `formatGuidedValue` parameter widened to `Pick<MetricResult, 'metric' | 'value' | 'unit'>` (type only)
+- [x] 7.4 `ModelRunner.tsx` + tests: dashes, focus annotations, 30 fps cap without React renders, hidden/offscreen stop, camera tween vs cut, persistent pause, reduced motion, StrictMode, overrides seam, a11y
+- [x] 7.5 Dev sandbox `src/runner/dev/sandbox.html` screenshotted at 390/1280 px, light/dark, reduced/normal motion; absent from `vite build`
+- [x] 7.6 Gates: lint, `tsc -b`, vitest (runner + full), `openspec validate --strict`, `vite build`
+
+## 8. Renderer review round 1
+
+- [x] 8.1 No limb-shaped guides; the still frame holds the first keyed focus parameter's key phase; front views annotate the leg at its key phase
+- [x] 8.2 `overrides.valueTween` interpolated by the loop (no React commits), ends exactly at `to`
+- [x] 8.3 Live reduced-motion switch returns to the still frame; single loop controller; tests for media change, camera retarget, unmount, model cross-checks
+- [x] 8.4 Far/unfocused opacity floors, 6 px focus stroke, arc wedge, forced-colours palette, ground at the foot floor, "shown approximately", legend only when dashes are in frame
+- [x] 8.5 Gates and re-shot screenshots (390/1280, light/dark, reduced/normal, forced colours)
+
+## 9. Renderer review round 2
+
+- [x] 9.1 A still figure draws only the limb marks at its held phase; every mark while playing
+- [x] 9.2 The held phase is taken on the side view's near leg in every camera
+- [x] 9.3 Value tween progress is wall-clock and shared by drawing and cadence; zero duration is finished; overlap with a camera tween tested
+- [x] 9.4 Requirement renamed "Reduced motion holds a still pose"; `footFloor` computed once; left labels get more gap

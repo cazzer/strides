@@ -147,10 +147,137 @@ round, and move every projected joint continuously in t.
 
 ### Requirement: The model-runner core is pure and leaves measurement untouched
 
-The model-runner modules SHALL be pure functions and constants with no React, DOM or I/O
-dependency, and SHALL NOT change any measurement, threshold or heuristic. They SHALL read the
-heuristics only through their result types.
+The model-runner core modules (`types`, `gaitModel`, `runnerParams`, `camera`, `runnerScene` and
+`runnerAnnotations`) SHALL be pure functions and constants with no React, DOM or I/O dependency,
+and SHALL NOT change any measurement, threshold or heuristic. They SHALL read the heuristics only
+through their result types and the results view's value formatter. `ModelRunner.tsx` and `usePrefersReducedMotion.ts` SHALL be the only
+model-runner modules that depend on React or the DOM (the dev-only sandbox under `src/runner/dev/`
+aside, which is never bundled).
 
 #### Scenario: Adding the model runner changes no measurement
 - **WHEN** the model-runner modules are added
 - **THEN** no file under `src/heuristics/` changes and every existing measurement test passes unchanged
+
+### Requirement: The model runner renders measured parts solid and neutral parts dashed grey
+
+The renderer SHALL draw every skeleton edge, solid when the edge is measured and dashed grey when it
+is neutral, with joints as dots. Overridden sources (the intro beat's seam) SHALL take the place of
+the bound ones; without overrides the renderer SHALL draw exactly the bound parameter values and
+sources. A value tween passed through the seam SHALL be interpolated by the animation loop without
+re-rendering React, and SHALL end exactly at its target values. The ground SHALL be drawn at the
+lowest foot point over the cycle, as an illustrative reference.
+
+#### Scenario: Only knee drive is measured
+- **WHEN** the runner is rendered with only `kneeDrive` measured
+- **THEN** both thighs are drawn without a dash array and every other edge is dashed
+
+#### Scenario: An override turns a part neutral
+- **WHEN** every parameter's source is overridden to neutral
+- **THEN** every edge is dashed
+
+### Requirement: The focus area is accented and annotated with its metric's own value
+
+Edges shaped by a measured focus parameter SHALL be accented, by a wider stroke as well as a hue,
+with the other measured parts receding; measured parts SHALL never be dimmed so far that they read
+as neutral, and neutral dashes SHALL never be dimmed. In forced-colours mode measured, neutral and
+focus parts SHALL use distinct system colours. Each measured focus parameter except
+cadence SHALL carry an annotation of its natural kind (an angle arc for trunk lean, knee drive and
+knee flexion; a vertical bracket for bounce and arm swing; a horizontal offset for overstride, foot
+strike, step width and swing-foot excursion), whose geometry is the drawn value exactly and whose
+label is the metric's own reported value in the guided card's format. A clamped value's label SHALL
+say it is shown approximately. A limb annotation SHALL be built on the pose its metric reads (its
+key phase) and SHALL lie on the live figure's limb whenever the figure is at that phase; no
+second, limb-shaped figure SHALL be drawn. While the figure is still, a limb mark whose key phase is
+not the held phase SHALL NOT be drawn (its value stays in the text alternative); while the figure
+plays, every mark SHALL be drawn. A focus metric that drives no parameter SHALL be
+ignored, and two focus metrics driving one parameter SHALL give one annotation.
+
+#### Scenario: Trunk lean is annotated
+- **WHEN** trunk lean is measured at 5° and in focus
+- **THEN** the torso is accented and an arc sweeping 5° is labelled "5.0°"
+
+#### Scenario: A clamped foot strike says so
+- **WHEN** overstriding is measured at 0.05 and foot strike at 0.10, with foot strike in focus
+- **THEN** the foot-strike label reads its class and "shown approximately", and the text alternative says it is drawn at a limit of the figure, not at the measured value
+
+#### Scenario: A second keyed focus does not float
+- **WHEN** knee drive and knee flexion are both in focus and the runner is still
+- **THEN** only the knee-drive arc is drawn, and the knee-flexion arc appears once the runner plays
+
+#### Scenario: The annotated limb is the live limb
+- **WHEN** knee drive is in focus and the runner is still
+- **THEN** the arc's centre is the live near hip and its end lies on the live near thigh
+
+#### Scenario: An unmeasured focus is not annotated
+- **WHEN** a focus parameter is neutral
+- **THEN** it carries no annotation and no accent
+
+### Requirement: The runner animates at most thirty frames a second and only while seen
+
+The renderer SHALL animate from a single requestAnimationFrame loop that writes geometry to the
+rendered elements without re-rendering React, draws at most thirty times a second, and integrates
+phase at cadence / 120 cycles a second times the playback rate. The loop SHALL stop while the
+document is hidden or the figure is off screen, and resume without a jump.
+
+#### Scenario: A hidden tab
+- **WHEN** the document becomes hidden
+- **THEN** no animation frame is pending and the pose is frozen until it is visible again
+
+#### Scenario: Scrolled offscreen
+- **WHEN** the figure stops intersecting the viewport
+- **THEN** no animation frame is pending until it intersects again
+
+#### Scenario: Cadence changes mid-run
+- **WHEN** the bound cadence changes while the runner plays
+- **THEN** the drawn pose does not jump
+
+### Requirement: Camera changes tween, except under reduced motion
+
+A camera change SHALL tween from the current camera to the new one over about 600 ms, including
+while paused. Under reduced motion, or while the figure is hidden or off screen, it SHALL cut.
+
+#### Scenario: A camera change tweens
+- **WHEN** the camera changes without reduced motion
+- **THEN** joints are between the two projections at 300 ms and at the new projection after the tween
+
+#### Scenario: Reduced motion cuts
+- **WHEN** the camera changes under reduced motion
+- **THEN** the new projection is drawn immediately with no animation frame pending
+
+### Requirement: An inline pause control is always available and remembered
+
+The renderer SHALL show a pause/play button outside the hidden drawing at every width. The reader's
+choice SHALL persist for the component's lifetime, across focus and camera changes.
+
+#### Scenario: Pausing persists across focus and camera changes
+- **WHEN** the reader pauses and the focus and camera then change
+- **THEN** the button still offers "Play runner" and the phase stays frozen
+
+### Requirement: Reduced motion holds a still pose
+
+Under reduced motion the runner SHALL NOT autoplay; it SHALL hold a still pose until the reader
+presses play. The still pose (under reduced motion, while paused, and on the first frame) SHALL be
+the key phase of the first focus parameter that has one, so that limb lies exactly on its
+annotation, and mid-stance otherwise. The key phase SHALL be taken on the same leg in every
+camera (the leg a side view shows nearer), so a camera change never moves the still pose. A still
+figure SHALL move to a new focus's still pose, and reduced motion switching on while the reader has
+not chosen to play SHALL stop the figure at its still pose.
+
+#### Scenario: Reduced motion on load
+- **WHEN** the runner mounts with reduced motion preferred and no keyed focus
+- **THEN** it draws the mid-stance pose, offers "Play runner", and stays still until played
+
+#### Scenario: Reduced motion with an overstride focus
+- **WHEN** the runner mounts with reduced motion preferred and overstriding in focus
+- **THEN** it holds the near leg at contact, with the offset mark ending at the live ankle
+
+### Requirement: The runner is described in text and captioned honestly
+
+The drawing SHALL be hidden from assistive technology, and a visually hidden text alternative SHALL
+name which parameters were measured, which are fixed illustrative settings, and each measured focus
+value. The figure SHALL carry its accessible name from a prop and the caption "Model built from
+your numbers". No text SHALL call the runner a reference, an ideal or the reader's body.
+
+#### Scenario: Text alternative
+- **WHEN** only cadence and trunk lean are measured and trunk lean is in focus
+- **THEN** the text alternative begins "Measured from your clip: Cadence, Trunk lean." and states "Shown: Trunk lean 5.0°."
