@@ -26,15 +26,18 @@
  * as it lands, written by the loop from the live phase, so the rings beat at cadence × rate per
  * minute while the label keeps the real cadence. Still or under reduced motion there is no ring.
  *
- * **A still figure can show its measured instant's footage behind it, faintly** (`footage`,
- * `strides-zba4`). The headline metric's evidence frame is COPIED (never adopted: the summary's card
- * owns the canvas) to a blob URL and drawn as the svg's first child, under everything, at 0.26
- * opacity. It shows only while the figure stands still at its held phase with no camera or value
- * tween running, and only when that held phase is the footage metric's own key leg phase, so the
- * picture and the figure are the same instant of the stride. The loop writes its transform
- * (`fitFootagePlate`: hip-anchored, uniformly scaled from segment lengths, mirrored for a
+ * **A still figure can show its measured moment's evidence image behind it, faintly** (`footage`,
+ * `strides-zba4`). The headline metric's evidence image (the measured moment, with a paired
+ * metric's fainter second moment ghosted over it, as its card shows it) is COPIED (never adopted:
+ * the summary's card owns the canvas) to a blob URL and drawn greyscale as the svg's first child,
+ * under everything, at 0.26 opacity. It shows only while the figure stands still at its held phase
+ * with no camera or value tween running, only when that held phase is the footage metric's own key
+ * leg phase (so the measured moment and the figure are the same point of the stride), and only
+ * when the fit does not magnify the image past a clutter cap. The loop writes its transform
+ * (`placeFootagePlate`: hip-anchored, uniformly scaled from segment lengths, mirrored for a
  * right-to-left clip) from the pose as drawn, so it follows the lift and the live camera. It is
- * the reader's footage, never a target: it is placed, never reshaped.
+ * the reader's footage, never a target: it is placed, never reshaped. While it is on offer the
+ * legend says so in a few words and the text alternative in full.
  *
  * **Pausing with a limb focus stands the figure at its key phase**, as the landing camera always
  * has, so the limb meets its mark (and the footage plate can show). A cadence focus pauses where
@@ -63,9 +66,9 @@ import {
   type PhaseWindow,
 } from './camera'
 import {
-  fitFootagePlate,
   footageKeyPhase,
   heldLegFor,
+  placeFootagePlate,
   type FootageFitInput,
 } from './footagePlate'
 import { GAIT_PHASES, GROUND_Y, cyclesPerSecond, pelvisHeight, poseAt } from './gaitModel'
@@ -111,6 +114,7 @@ import {
   type RunnerSource,
   type SegmentStyle,
 } from './runnerScene'
+import { useForcedColors } from './useForcedColors'
 import { usePrefersReducedMotion } from './usePrefersReducedMotion'
 import type {
   BoundRunnerParams,
@@ -183,18 +187,22 @@ export interface RunnerIntroControl {
 }
 
 /**
- * The headline metric's evidence frame, placed behind a still figure (`src/results/runnerFootagePlate`
- * builds it and applies every gate that does not depend on the frame being drawn: side clip, side
- * camera, a metric with hips and a key leg phase, a known travel direction).
+ * The headline metric's evidence image, placed behind a still figure (`src/results/runnerFootagePlate`
+ * builds it and applies every gate that does not depend on the figure being drawn: side clip, side
+ * camera, a metric with a hip, a knee or ankle and a key leg phase, a known travel direction).
  */
 export interface RunnerFootage extends FootageFitInput {
-  /** The metric the frame was measured for. The plate shows only at its key leg phase. */
+  /** The metric the image was measured for. The plate shows only at its key leg phase. */
   metric: MetricId
   /** The extracted evidence canvas. Read once into a copy, never moved or drawn into. */
   image: HTMLCanvasElement
-  /** Appended to the text alternative while the plate is offered. */
+  /** Appended to the text alternative while the plate is on offer. */
   note: string
 }
+
+/** The legend's line while the footage plate is on offer: what the faint picture is, briefly. */
+export const PLATE_LEGEND = 'Faint photo: your clip, not a target'
+export const PLATE_LEGEND_FLIPPED = ' · flipped'
 
 export interface ModelRunnerProps {
   params: BoundRunnerParams
@@ -240,11 +248,13 @@ const GUIDE_CLASS =
   'stroke-neutral-500 dark:stroke-neutral-400 forced-colors:stroke-[color:CanvasText]'
 const GROUND_CLASS =
   'stroke-neutral-300 dark:stroke-neutral-700 forced-colors:stroke-[color:GrayText]'
-// The footage plate: hidden until the loop marks it shown, then faded in to a faint 0.26. No fade
-// under reduced motion; under forced colours a photograph behind system-coloured strokes would
-// only cost contrast, so it is not drawn.
+// The footage plate: hidden until the loop marks it shown, then faded in to a faint 0.26, also on
+// its first appearance (`starting:`, important so it wins the starting style over the shown rule).
+// Greyscale, so the evidence image's baked-in cyan and amber marks never read as a second accented
+// limb beside the figure's own. No fade under reduced motion; under forced colours a photograph
+// behind system-coloured strokes would only cost contrast, so it is not drawn.
 const PLATE_CLASS =
-  'opacity-0 transition-opacity duration-[240ms] ease-in-out data-[shown]:opacity-[0.26] motion-reduce:transition-none forced-colors:hidden'
+  'opacity-0 grayscale transition-opacity duration-[240ms] ease-in-out data-[shown]:opacity-[0.26] starting:opacity-0! motion-reduce:transition-none forced-colors:hidden'
 // The footfall ring: the focus accent, never a saturated red (WCAG 2.3.1, design D4).
 const PULSE_CLASS = 'stroke-cyan-700 dark:stroke-cyan-300 forced-colors:stroke-[color:Highlight]'
 const LABEL_CLASS =
@@ -415,6 +425,11 @@ function stillLift(pose: readonly Vec3[]): number {
   return sink > 1e-9 ? sink : 0
 }
 
+/** A pose raised by `lift` (`stillLift`). */
+function liftPose<T extends Vec3>(pose: readonly T[], lift: number): readonly T[] {
+  return lift === 0 ? pose : pose.map((j) => ({ ...j, y: j.y + lift }))
+}
+
 /** The point raised by `dy`: a mark built at the static values, moved with a tweening figure. */
 function lifted(point: Vec3, dy: number): Vec3 {
   return dy === 0 ? point : { x: point.x, y: point.y + dy, z: point.z }
@@ -497,6 +512,7 @@ export function ModelRunner({
   const svgRef = useRef<SVGSVGElement>(null)
 
   const reduced = usePrefersReducedMotion()
+  const forcedColors = useForcedColors()
   const visible = useDocumentVisible()
   const onScreen = useOnScreen(figureRef)
   const pxPerUnit = useSvgPixelScale(stageRef)
@@ -617,15 +633,25 @@ export function ModelRunner({
   }, [plateCopy])
   const heldLeg = heldLegFor(target.yawDeg)
   const plateKeyPhase = footage === null ? null : footageKeyPhase(footage.metric, heldLeg)
-  const plateOffered =
+  const plateKeyed =
     footage !== null &&
     plateCopy !== null &&
     !playing &&
+    !forcedColors &&
     plateKeyPhase !== null &&
     circularDistance(plateKeyPhase, heldPhase) < PHASE_TOLERANCE
+  // Whether the plate is on offer: the same placement the loop draws once the figure rests (held
+  // phase, still lift, target camera, static values), so the legend and the text alternative
+  // never name a picture the clutter cap or the fit would refuse. During a camera tween the loop
+  // hides the plate until the camera rests; the words stay, as they describe the frame it rests on.
+  const plateShown = useMemo(() => {
+    if (!plateKeyed || footage === null) return false
+    const pose = poseAt(heldPhase, values)
+    return placeFootagePlate(footage, projectPose(liftPose(pose, stillLift(pose)), target), heldLeg) !== null
+  }, [plateKeyed, footage, heldPhase, values, target, heldLeg])
   const plateInput = useMemo(
-    () => (plateOffered && footage !== null ? { input: footage, heldLeg } : null),
-    [plateOffered, footage, heldLeg],
+    () => (plateShown && footage !== null ? { input: footage, heldLeg } : null),
+    [plateShown, footage, heldLeg],
   )
 
   const phaseRef = useRef<number>(heldPhase)
@@ -654,21 +680,18 @@ export function ModelRunner({
     // A still figure is lifted onto the ground; marks that ride the figure lift with it, ground
     // marks stay. Playing again drops the lift.
     const lift = stillRef.current ? stillLift(pose) : 0
-    const projected = projectPose(
-      lift === 0 ? pose : pose.map((j) => ({ ...j, y: j.y + lift })),
-      cam,
-    )
+    const projected = projectPose(liftPose(pose, lift), cam)
     const { segments, joints, paths, labels, pulses, ground, flash: flashTarget, plate } = scene.targets
     if (plate) {
-      // Only on the held still frame, with nothing tweening: the footage is one instant, so it is
-      // shown only while the figure is exactly that instant, framed where the camera rests.
+      // Only on the held still frame, with nothing tweening: the image is of one measured moment,
+      // so it is shown only while the figure is exactly that moment, framed where the camera rests.
       const fit =
         scene.plate !== null &&
         stillRef.current &&
         circularDistance(phaseRef.current, scene.heldPhase) < PHASE_TOLERANCE &&
         cameraTweenRef.current === null &&
         !valueTweenRunning(valueTweenRef.current, now)
-          ? fitFootagePlate(scene.plate.input, projected, scene.plate.heldLeg)
+          ? placeFootagePlate(scene.plate.input, projected, scene.plate.heldLeg)
           : null
       if (fit) {
         plate.setAttribute('transform', `matrix(${fmt(fit.a)} 0 0 ${fmt(fit.d)} ${fmt(fit.e)} ${fmt(fit.f)})`)
@@ -1088,11 +1111,17 @@ export function ModelRunner({
       </div>
       <p className="sr-only">
         {description}
-        {plateOffered && footage !== null ? ` ${footage.note}` : ''}
+        {plateShown && footage !== null ? ` ${footage.note}` : ''}
       </p>
       <div data-runner-part="controls" className="flex items-center justify-between gap-3 pt-2">
         <p aria-hidden="true" className="min-w-0 font-sans text-xs text-neutral-600 dark:text-neutral-400">
           {legend ? (introRunning ? 'Dashed: not applied yet' : 'Dashed: not measured') : ''}
+          {plateShown && footage !== null && (
+            <span data-plate-legend="" className="block">
+              {PLATE_LEGEND}
+              {footage.mirror ? PLATE_LEGEND_FLIPPED : ''}
+            </span>
+          )}
         </p>
         <div className="flex shrink-0 items-center gap-2">
           {introRunning && (

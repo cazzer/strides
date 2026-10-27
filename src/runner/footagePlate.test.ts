@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import {
+  MAX_PLATE_SIDE_IN_FRAME_WIDTHS,
   MIN_FOOTAGE_SEGMENT_SUM,
   fitFootagePlate,
   footageKeyPhase,
   heldLegFor,
   mapFootageName,
+  placeFootagePlate,
+  plateSideInFrameWidths,
   type FootageFitInput,
   type FootagePoint,
   type PlateTransform,
@@ -69,14 +72,17 @@ describe('fitFootagePlate', () => {
   })
 
   it('draws the measured leg on the held leg: a left-measured footage fits the right model leg', () => {
-    const points = (['left_hip', 'right_knee', 'right_ankle'] as KeypointName[]).map((n) => {
-      const p = toFootage(KNOWN, n)
-      return { ...p, name: mapFootageName(n, 'right', 'left') }
-    })
-    expect(points.map((p) => p.name)).toEqual(['right_hip', 'left_knee', 'left_ankle'])
+    // Left-named footage joints placed where the drawn RIGHT leg is (under KNOWN), so the fit is
+    // exact only if the left knee and ankle are compared with the right model leg.
+    const at = (name: KeypointName, from: KeypointName): FootagePoint => ({ ...toFootage(KNOWN, from), name })
+    const points = [at('left_hip', 'right_hip'), at('left_knee', 'right_knee'), at('left_ankle', 'right_ankle')]
     const fit = fitFootagePlate(input(points, { measuredSide: 'left' }), drawn(), 'right') as PlateTransform
     expect(fit.a).toBeCloseTo(KNOWN.a, 12)
     expect(fit.e).toBeCloseTo(KNOWN.e, 12)
+    expect(fit.f).toBeCloseTo(KNOWN.f, 12)
+    // Compared with the drawn LEFT leg instead (measured side taken as right), the lengths differ.
+    const unswapped = fitFootagePlate(input(points, { measuredSide: 'right' }), drawn(), 'right') as PlateTransform
+    expect(Math.abs(unswapped.a - KNOWN.a)).toBeGreaterThan(0.1)
   })
 
   it('reads the scale from segment lengths, so a different knee angle leaves it unchanged', () => {
@@ -123,6 +129,31 @@ describe('fitFootagePlate', () => {
     const points = names.map((n) => toFootage(KNOWN, n))
     const first = fitFootagePlate(input(points), drawn(), 'right')
     expect(fitFootagePlate(input(points), drawn(), 'right')).toEqual(first)
+  })
+})
+
+describe('placeFootagePlate (the clutter cap)', () => {
+  const names: KeypointName[] = ['left_hip', 'right_hip', 'right_knee', 'right_ankle']
+
+  it('measures the placed image in drawing widths (the 3-unit-wide camera frame)', () => {
+    expect(plateSideInFrameWidths({ a: -4.6441, d: 4.6441, e: 0, f: 0 })).toBeCloseTo(1.548, 3)
+    expect(plateSideInFrameWidths({ a: 12.5413, d: 12.5413, e: 0, f: 0 })).toBeCloseTo(4.18, 2)
+  })
+
+  it('keeps a placement up to the cap and refuses one past it', () => {
+    const under: PlateTransform = { a: 3 * MAX_PLATE_SIDE_IN_FRAME_WIDTHS - 0.01, d: 0, e: -1, f: -1 }
+    under.d = under.a
+    const over: PlateTransform = { a: 3 * MAX_PLATE_SIDE_IN_FRAME_WIDTHS + 0.01, d: 0, e: -1, f: -1 }
+    over.d = over.a
+    for (const [t, kept] of [[under, true], [over, false]] as const) {
+      const placed = placeFootagePlate(input(names.map((n) => toFootage(t, n))), drawn(), 'right')
+      expect(placed !== null).toBe(kept)
+      if (placed) expect(placed.a).toBeCloseTo(t.a, 9)
+    }
+  })
+
+  it('refuses whatever the fit refuses', () => {
+    expect(placeFootagePlate(input([toFootage(KNOWN, 'right_knee')]), drawn(), 'right')).toBeNull()
   })
 })
 

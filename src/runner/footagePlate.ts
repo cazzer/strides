@@ -1,11 +1,14 @@
 /**
  * The footage plate's geometry (`strides-zba4`, `openspec/changes/add-runner-footage-plate`): where
- * a faint copy of the headline metric's evidence frame sits behind a still model runner, so the
- * reader can see the measured instant and the figure built from it in one place.
+ * a faint copy of the headline metric's evidence image sits behind a still model runner, so the
+ * reader can see the measured moment and the figure built from it in one place.
  *
- * **Footage, never a target.** The plate is the reader's own clip at the instant the metric
- * measured, drawn under the figure. It is placed by a SIMILARITY transform only: one uniform scale,
- * a translation and (for a right-to-left runner) a horizontal mirror. Never a rotation, a shear or a
+ * **Footage, never a target.** The plate is the metric's evidence image exactly as its card shows
+ * it: the reader's own clip at the moment the metric measured, and, for a paired metric, a fainter
+ * second moment ghosted over it (the ghosting is the point: it is the card's picture brought to the
+ * runner). The fit is read from the measured (base) moment's joints only. It is placed by a
+ * SIMILARITY transform only: one uniform scale, a translation and (for a right-to-left runner) a
+ * horizontal mirror. Never a rotation, a shear or a
  * per-joint warp, so the photograph is never reshaped to agree with the model, and any difference
  * between the two (a straighter knee, a longer reach) stays visible.
  *
@@ -15,11 +18,12 @@
  * hip-mid points are pinned together and the scale is the ratio of summed thigh and shank lengths,
  * which an angle difference leaves unchanged (`footagePlate.test.ts` pins exactly that).
  *
- * Pure: no DOM, no React. The renderer calls `fitFootagePlate` on every still draw with the pose as
- * it is drawn, and writes the result as an SVG `matrix(a 0 0 d e f)` on an `<image>` laid over the
+ * Pure: no DOM, no React. The renderer calls `placeFootagePlate` (the fit, refused past a clutter
+ * cap) on every still draw with the pose as it is drawn, and writes the result as an SVG `matrix(a 0 0 d e f)` on an `<image>` laid over the
  * unit square.
  */
 import type { KeypointName } from '../pose/types'
+import { CAMERA_FRAME_HALF_WIDTH } from './camera'
 import { KEY_LEG_PHASE, phaseForLeg, type RunnerSide } from './runnerAnnotations'
 import { paramForMetric } from './runnerParams'
 import type { MetricId, ProjectedJoint } from './types'
@@ -55,6 +59,18 @@ export interface PlateTransform {
  * a scale read from it would blow the plate up past the frame.
  */
 export const MIN_FOOTAGE_SEGMENT_SUM = 0.02
+
+/**
+ * The largest the placed evidence image may be, as a multiple of the drawing's width (the camera
+ * frame, in viewBox units). Past it the subject was small in its crop, so fitting its leg to the
+ * model's magnifies the photograph until it is a blur and its baked-in annotation marks (drawn at
+ * a fixed canvas size) become fat blobs and bars that dominate the figure. Measured live
+ * (`strides-zba4`, design.md): readable at 1.55–1.64 drawing widths (both side clips' knee-flexion
+ * images), cluttered at 4.18 (`park-side-portrait.mp4`'s far-apart overstride pair). 2.5 sits
+ * between them, about their geometric mean. Not a constant of any measurement: it only decides
+ * whether a picture is shown.
+ */
+export const MAX_PLATE_SIDE_IN_FRAME_WIDTHS = 2.5
 
 const LEGS: readonly RunnerSide[] = ['left', 'right']
 
@@ -172,4 +188,25 @@ export function fitFootagePlate(
   const a = input.mirror ? -s : s
   const transform = { a, d: s, e: modelHip.x - a * footageHip.x, f: modelHip.y - s * footageHip.y }
   return Object.values(transform).every(Number.isFinite) ? transform : null
+}
+
+/** How many drawing widths the placed evidence image spans. */
+export function plateSideInFrameWidths(transform: PlateTransform): number {
+  return Math.abs(transform.a) / (2 * CAMERA_FRAME_HALF_WIDTH)
+}
+
+/**
+ * `fitFootagePlate`, refusing a placement past `MAX_PLATE_SIDE_IN_FRAME_WIDTHS`: what the renderer
+ * draws, both when it decides at render whether the plate (and its label) is on offer and on every
+ * still draw.
+ */
+export function placeFootagePlate(
+  input: FootageFitInput,
+  drawn: readonly ProjectedJoint[],
+  heldLeg: RunnerSide,
+): PlateTransform | null {
+  const transform = fitFootagePlate(input, drawn, heldLeg)
+  return transform !== null && plateSideInFrameWidths(transform) <= MAX_PLATE_SIDE_IN_FRAME_WIDTHS
+    ? transform
+    : null
 }

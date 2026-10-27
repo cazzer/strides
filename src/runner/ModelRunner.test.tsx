@@ -14,9 +14,16 @@ import {
   projectPose,
 } from './camera'
 import { GAIT_PHASES, GROUND_Y, pelvisHeight, poseAt } from './gaitModel'
-import { fitFootagePlate, type PlateTransform } from './footagePlate'
+import {
+  MAX_PLATE_SIDE_IN_FRAME_WIDTHS,
+  fitFootagePlate,
+  plateSideInFrameWidths,
+  type PlateTransform,
+} from './footagePlate'
 import {
   ModelRunner,
+  PLATE_LEGEND,
+  PLATE_LEGEND_FLIPPED,
   RUNNER_CAPTION,
   type ModelRunnerProps,
   type RunnerFocus,
@@ -85,13 +92,15 @@ function setVisibility(state: DocumentVisibilityState) {
   })
 }
 
-/** A matchMedia mock whose `change` listeners can be fired. */
-function mockReducedMotion(initial: boolean) {
+/** A matchMedia mock whose `change` listeners can be fired. Only the reduced-motion query (and
+ * forced colours, when asked) matches. */
+function mockReducedMotion(initial: boolean, { forcedColors = false } = {}) {
   const state = { matches: initial }
   const listeners = new Set<() => void>()
   vi.stubGlobal('matchMedia', (media: string) => ({
     get matches() {
-      return state.matches
+      if (media.includes('forced-colors')) return forcedColors
+      return media.includes('reduced-motion') ? state.matches : false
     },
     media,
     addEventListener: (_: string, listener: () => void) => listeners.add(listener),
@@ -1199,7 +1208,7 @@ describe('ModelRunner footage plate', () => {
   }
 
   const KNEES_FOCUS: RunnerFocus = { metricIds: ['kneeFlexion'] }
-  const NOTE = 'Faint behind the model: your clip’s Knee flexion evidence frame.'
+  const NOTE = 'Faint behind the still model: your clip’s knee flexion evidence image.'
 
   function footage(overrides: Partial<RunnerFootage> = {}): RunnerFootage {
     return {
@@ -1220,6 +1229,7 @@ describe('ModelRunner footage plate', () => {
   const plate = () => document.querySelector('image[data-footage-plate]')
   const shown = () => plate()?.hasAttribute('data-shown') ?? false
   const note = () => document.querySelector('p.sr-only')?.textContent ?? ''
+  const legendLine = () => document.querySelector('[data-plate-legend]')?.textContent ?? null
 
   /** The pose as the renderer drew it, read back off the joints. */
   function drawnJoints(): ProjectedJoint[] {
@@ -1243,7 +1253,13 @@ describe('ModelRunner footage plate', () => {
     // The first child of the drawing, under the ground and the figure.
     expect(container.querySelector('svg')?.firstElementChild).toBe(el)
     expect(el?.getAttribute('class')).toContain('data-[shown]:opacity-[0.26]')
+    // Greyscale, and faded in on its first appearance too.
+    expect(el?.getAttribute('class')).toContain('grayscale')
+    expect(el?.getAttribute('class')).toContain('starting:opacity-0!')
     expect(shown()).toBe(true)
+    expect(legendLine()).toBe(PLATE_LEGEND)
+    // The legend line sits in the hidden legend, beside the dashed-part note.
+    expect(document.querySelector('[data-plate-legend]')?.closest('[aria-hidden="true"]')).not.toBeNull()
     expectPose(phaseForLeg('right', GAIT_PHASES.peakSwingKneeBend), 'legsSide')
     const fit = fitFootagePlate(source, drawnJoints(), 'right') as PlateTransform
     const [a, b, c, d, e, f] = matrixOf(el)
@@ -1263,6 +1279,36 @@ describe('ModelRunner footage plate', () => {
     const [a, , , d] = matrixOf(plate())
     expect(a).toBeLessThan(0)
     expect(a).toBeCloseTo(-d, 4)
+    expect(legendLine()).toBe(`${PLATE_LEGEND}${PLATE_LEGEND_FLIPPED}`)
+  })
+
+  it('refuses a placement that magnifies the image past the clutter cap: no plate, no words', () => {
+    mockReducedMotion(true)
+    // A leg spanning a few hundredths of the image: the fit would blow it up many frame widths.
+    const tiny = footage({
+      points: [
+        { name: 'right_hip', u: 0.5, v: 0.5 },
+        { name: 'right_knee', u: 0.52, v: 0.53 },
+        { name: 'right_ankle', u: 0.51, v: 0.56 },
+      ],
+    })
+    setup({ camera: 'legsSide', focus: KNEES_FOCUS, footage: tiny })
+    resolveBlobs()
+    const fit = fitFootagePlate(tiny, drawnJoints(), 'right') as PlateTransform
+    expect(plateSideInFrameWidths(fit)).toBeGreaterThan(MAX_PLATE_SIDE_IN_FRAME_WIDTHS)
+    expect(shown()).toBe(false)
+    expect(legendLine()).toBeNull()
+    expect(note()).not.toContain(NOTE)
+  })
+
+  it('names no photo under forced colours, where the plate is not drawn', () => {
+    mockReducedMotion(true, { forcedColors: true })
+    setup({ camera: 'legsSide', focus: KNEES_FOCUS, footage: footage() })
+    resolveBlobs()
+    expect(plate()?.getAttribute('class')).toContain('forced-colors:hidden')
+    expect(shown()).toBe(false)
+    expect(legendLine()).toBeNull()
+    expect(note()).not.toContain(NOTE)
   })
 
   it('hides on Play, in place, and drops the note; shows again on Pause', () => {
@@ -1274,6 +1320,7 @@ describe('ModelRunner footage plate', () => {
     expect(plate()).not.toBeNull()
     expect(shown()).toBe(false)
     expect(note()).not.toContain(NOTE)
+    expect(legendLine()).toBeNull()
     advance(500)
     expect(plate()?.getAttribute('transform')).toBe(transform)
     fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))

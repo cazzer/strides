@@ -1,12 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { FormHeuristicsResult, MetricId } from '../../heuristics/types'
+import type { FormHeuristicsResult, MetricId, View } from '../../heuristics/types'
 import { METRIC_GUIDANCE } from '../../guidance/metricGuidance'
 import type { ModelRunnerProps } from '../../runner/ModelRunner'
 import { makeHeuristics, makeMetric } from '../__fixtures__/metricResult'
 import type { EvidenceFramePlan } from '../evidenceFrames'
 import { guidedEntryId } from '../guidedGroups'
-import { metricTier } from '../metricConfidence'
+import { METRIC_LABELS, metricTier } from '../metricConfidence'
 import type { MetricCardEvidence } from '../MetricsPanel'
 import type { VideoAnalysisState } from '../types'
 import type { ResultsSummary as ResultsSummaryComponent } from './ResultsSummary'
@@ -72,7 +72,12 @@ function framePlan(metric: MetricId): EvidenceFramePlan {
 }
 
 function renderSummary(
-  extra: { evidence?: readonly MetricCardEvidence[]; heuristics?: FormHeuristicsResult } = {},
+  extra: {
+    evidence?: readonly MetricCardEvidence[]
+    heuristics?: FormHeuristicsResult
+    sourceIndices?: Record<MetricId, number> | null
+    clipViewKinds?: readonly (View | null)[]
+  } = {},
 ) {
   const onReplayTour = vi.fn()
   const onOpenClassic = vi.fn()
@@ -84,6 +89,8 @@ function renderSummary(
       onReplayTour={onReplayTour}
       onOpenClassic={onOpenClassic}
       evidence={extra.evidence}
+      sourceIndices={extra.sourceIndices}
+      clipViewKinds={extra.clipViewKinds}
     />,
   )
   return { ...result, onReplayTour, onOpenClassic }
@@ -387,5 +394,43 @@ describe('ResultsSummary', () => {
     expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled()
     expect(document.activeElement).toBe(toggle)
     toggle.remove()
+  })
+})
+
+describe('ResultsSummary — the footage plate', () => {
+  const SOURCES = Object.fromEntries(Object.keys(METRIC_LABELS).map((metric) => [metric, 0])) as Record<MetricId, number>
+  function kneeEvidence(): MetricCardEvidence[] {
+    const plan = framePlan('kneeFlexion')
+    plan.base = {
+      ...plan.base,
+      side: 'left',
+      keypoints: [
+        { name: 'left_hip', status: 'detected', x: 100, y: 40 },
+        { name: 'left_knee', status: 'detected', x: 110, y: 100 },
+        { name: 'left_ankle', status: 'detected', x: 90, y: 160 },
+      ],
+    }
+    return [{ metric: 'kneeFlexion', clipIndex: 0, items: [{ plan, canvas: document.createElement('canvas') }] }]
+  }
+
+  it('hands the runner the opened Knees row’s headline image at lg, the card keeping its canvas', async () => {
+    const evidence = kneeEvidence()
+    const { container } = renderSummary({ evidence, sourceIndices: SOURCES, clipViewKinds: ['side'] })
+    expect((await lastRunnerProps()).footage).toBeNull()
+    fireEvent.click(row(container, 'knees').querySelector('summary')!)
+    await waitFor(() => expect(wrapper(container)).toHaveAttribute('data-camera', 'legsSide'))
+    const footage = (await lastRunnerProps()).footage
+    expect(footage?.metric).toBe('kneeFlexion')
+    expect(footage?.image).toBe(evidence[0].items[0].canvas)
+    expect(row(container, 'knees').contains(evidence[0].items[0].canvas)).toBe(true)
+  })
+
+  it('hands none below lg, where the camera stays on the whole figure', async () => {
+    setWide(false)
+    const { container } = renderSummary({ evidence: kneeEvidence(), sourceIndices: SOURCES, clipViewKinds: ['side'] })
+    fireEvent.click(row(container, 'knees').querySelector('summary')!)
+    await waitFor(() => expect(row(container, 'knees').open).toBe(true))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect((await lastRunnerProps()).footage).toBeNull()
   })
 })

@@ -390,8 +390,14 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
   const clips: ClipSession[] = clipIds
     .map((id) => clipStates[id])
     .filter((session): session is ClipSession => session != null)
-  const clipViewKinds = clipIds.map((id) => clipStates[id]?.analysis.heuristics?.view.view ?? null)
-  const clipViews = clipViewKinds.map((view) => (view ? clipViewLabel(view) : 'View pending'))
+  const clipViews = clipIds.map((id) => {
+    const view = clipStates[id]?.analysis.heuristics?.view.view
+    return view ? clipViewLabel(view) : 'View pending'
+  })
+  // Indexed like `clips`, which `computeFusionSourceIndices` and every evidence section's
+  // `clipIndex` index into: the footage plate's side-view gate reads it by `sourceIndices[metric]`,
+  // and a just-mounted clip missing from `clips` would shift `clipIds`' indices against it.
+  const clipViewKinds = clips.map((clip) => clip.analysis.heuristics?.view.view ?? null)
 
   // Adjusts which clip is active during render, mirroring useVideoAnalysis.ts's own
   // "adjusting state when a prop changes" pattern (React's documented approach —

@@ -34,6 +34,23 @@ export interface RunnerFootageInput {
 }
 
 const SIDE_PREFIX = /^(left|right)_/
+/** A joint the fit reads a segment length to: a hip alone gives it nothing to scale from. */
+const LEG_JOINT = /^(left|right)_(knee|ankle)$/
+
+/**
+ * The text alternative's sentence for the plate. The picture is the card's evidence image as it
+ * is: the measured moment and, for a paired metric, a fainter second moment ghosted over it (the
+ * plate brings that ghosting to the runner deliberately), so the sentence says both, and says when
+ * the picture is flipped to face the model's way.
+ */
+export function plateNote(metric: MetricId, ghosted: boolean, mirror: boolean): string {
+  const second = ghosted ? ', with a fainter second moment over it' : ''
+  const flipped = mirror ? ', flipped to face the way the model runs' : ''
+  return (
+    `Faint behind the still model: your clip's ${METRIC_LABELS[metric].toLowerCase()} evidence image, ` +
+    `the measured moment${second}${flipped}, scaled to fit. Your footage, not a target.`
+  )
+}
 
 /**
  * The leg the frame's measurement was about: the plan's own per-instant side, else the one side
@@ -94,15 +111,17 @@ export function runnerFootageFor({
     if (travelDirection === 0) return null
     const points = unitSquarePoints(item)
     if (!points.some(({ name }) => name.endsWith('_hip'))) return null
+    if (!points.some(({ name }) => LEG_JOINT.test(name))) return null
     const measuredSide = measuredSideOf(item, points)
     if (measuredSide === null) return null
+    const mirror = travelDirection === -1
     return {
       metric,
       image: item.canvas,
-      note: `Faint behind the model: your clip's ${METRIC_LABELS[metric].toLowerCase()} evidence frame, scaled to fit. Footage, not a target.`,
+      note: plateNote(metric, item.plan.ghost !== null, mirror),
       points,
       measuredSide,
-      mirror: travelDirection === -1,
+      mirror,
     }
   }
   return null

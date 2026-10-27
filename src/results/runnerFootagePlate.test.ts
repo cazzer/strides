@@ -24,10 +24,12 @@ function item(
     keypoints = KNEE_POINTS,
     side = 'left',
     travelDirection = 1,
+    ghosted = false,
   }: {
     keypoints?: EvidenceKeypointPosition[]
     side?: EvidenceInstantPlan['side']
     travelDirection?: EvidenceFramePlan['travelDirection']
+    ghosted?: boolean
   } = {},
 ): ExtractedEvidenceFrame {
   const base: EvidenceInstantPlan = { timestamp: 1, opacity: 1, keypoints, outwardSign: null, side }
@@ -37,7 +39,7 @@ function item(
     quality: 1,
     label: '',
     base,
-    ghost: null,
+    ghost: ghosted ? { ...base, timestamp: 1.2, opacity: 0.35 } : null,
     crop: CROP,
     travelDirection,
     demotion: null,
@@ -71,7 +73,7 @@ describe('runnerFootageFor', () => {
     expect(footage).toEqual({
       metric: 'kneeFlexion',
       image: entry.canvas,
-      note: "Faint behind the model: your clip's knee flexion evidence frame, scaled to fit. Footage, not a target.",
+      note: "Faint behind the still model: your clip's knee flexion evidence image, the measured moment, scaled to fit. Your footage, not a target.",
       points: [
         { name: 'left_hip', u: 0.5, v: 0.25 },
         { name: 'left_knee', u: 0.55, v: 0.5 },
@@ -80,6 +82,22 @@ describe('runnerFootageFor', () => {
       measuredSide: 'left',
       mirror: false,
     })
+  })
+
+  it('says when the image carries a fainter second moment, and when it is flipped', () => {
+    const paired = item('kneeFlexion', { ghosted: true, travelDirection: -1 })
+    expect(runnerFootageFor(input({ evidence: [section('kneeFlexion', paired)] }))?.note).toBe(
+      "Faint behind the still model: your clip's knee flexion evidence image, the measured moment, " +
+        'with a fainter second moment over it, flipped to face the way the model runs, scaled to fit. ' +
+        'Your footage, not a target.',
+    )
+  })
+
+  it('needs a knee or an ankle besides the hip: a hip alone gives the fit nothing to scale from', () => {
+    const hipsOnly = item('kneeDrive', { keypoints: [at('left_hip', 300, 300), at('right_hip', 302, 300)] })
+    expect(
+      runnerFootageFor(input({ focus: { metricIds: ['kneeDrive'] }, evidence: [section('kneeDrive', hipsOnly)] })),
+    ).toBeNull()
   })
 
   it('mirrors a right-to-left clip and refuses an indeterminate direction', () => {

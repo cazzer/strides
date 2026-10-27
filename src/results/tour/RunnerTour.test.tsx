@@ -1,15 +1,18 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { FormHeuristicsResult } from '../../heuristics/types'
+import type { FormHeuristicsResult, MetricId, View } from '../../heuristics/types'
 import type { ModelRunnerProps } from '../../runner/ModelRunner'
 import { INTRO_HOLD_MS, INTRO_MAX_STEP_MS, INTRO_TOTAL_MS, __resetIntroRegistryForTests } from '../../runner/useRunnerIntro'
 import { makeHeuristics, makeMetric, makeVerticalOscillationCm } from '../__fixtures__/metricResult'
+import type { MetricCardEvidence } from '../MetricsPanel'
+import { METRIC_LABELS } from '../metricConfidence'
 import type { SessionCoverage } from '../sessionCoverage'
 import type { ScalePassStatus, VideoAnalysisState } from '../types'
 import { hasCompactBar } from '../summary/summaryLabels'
 import { RunnerTour } from './RunnerTour'
 import { tourPlan } from './tourPlan'
 import { SHORT_PHONE_QUERY } from './useShortPhoneLayout'
+import type { ExtractedEvidenceFrame } from '../../video/extractFrames'
 
 // The real runner draws SVG on a rAF loop; what this file checks is which camera, focus, rate and
 // intro the tour hands it, and that it is mounted once for the tour's whole life. It reports itself
@@ -70,6 +73,9 @@ interface TourOptions {
   scalePass?: ScalePassStatus
   coverage?: SessionCoverage | null
   resultKey?: string
+  evidence?: MetricCardEvidence[]
+  sourceIndices?: Record<MetricId, number> | null
+  clipViewKinds?: (View | null)[]
 }
 
 function renderTour(options: TourOptions = {}) {
@@ -83,6 +89,9 @@ function renderTour(options: TourOptions = {}) {
       onLeaveTour,
       resultKey: merged.resultKey ?? 'fixed-key',
       coverage: merged.coverage ?? null,
+      evidence: merged.evidence,
+      sourceIndices: merged.sourceIndices,
+      clipViewKinds: merged.clipViewKinds,
     }
   }
   const result = render(<RunnerTour {...props()} />)
@@ -652,5 +661,66 @@ describe('RunnerTour — word budget', () => {
     expect(stop(container, 'oneThing')).toHaveTextContent(
       "Can't say yet: bounce in centimetres is still being measured.",
     )
+  })
+})
+
+describe('RunnerTour — the footage plate', () => {
+  /** A knee-flexion evidence image from clip 0 with a hip, knee and ankle at its base moment. */
+  function kneeEvidence(): MetricCardEvidence {
+    const at = (name: 'left_hip' | 'left_knee' | 'left_ankle', x: number, y: number) =>
+      ({ name, status: 'detected', x, y }) as const
+    const item = {
+      plan: {
+        metric: 'kneeFlexion',
+        base: {
+          timestamp: 1,
+          opacity: 1,
+          keypoints: [at('left_hip', 300, 300), at('left_knee', 320, 400), at('left_ankle', 280, 500)],
+          outwardSign: null,
+          side: 'left',
+        },
+        ghost: null,
+        crop: { x: 100, y: 200, side: 400 },
+        travelDirection: 1,
+      },
+      canvas: document.createElement('canvas'),
+    } as unknown as ExtractedEvidenceFrame
+    return { metric: 'kneeFlexion', clipIndex: 0, items: [item] }
+  }
+  const SOURCES = Object.fromEntries(Object.keys(METRIC_LABELS).map((metric) => [metric, 0])) as Record<MetricId, number>
+
+  it('hands the runner the knees stop’s headline image from a side clip, and none elsewhere', async () => {
+    setReducedMotion(true)
+    const evidence = [kneeEvidence()]
+    const { container } = renderTour({ resultKey: nextKey(), evidence, sourceIndices: SOURCES, clipViewKinds: ['side'] })
+    await act(async () => {})
+    act(() => stop(container, 'knees').focus())
+    const footage = (await lastRunnerProps()).footage
+    expect(footage?.metric).toBe('kneeFlexion')
+    expect(footage?.image).toBe(evidence[0].items[0].canvas)
+    act(() => stop(container, 'posture').focus())
+    expect((await lastRunnerProps()).footage).toBeNull()
+  })
+
+  it('hands none from a front clip', async () => {
+    setReducedMotion(true)
+    const { container } = renderTour({
+      resultKey: nextKey(),
+      evidence: [kneeEvidence()],
+      sourceIndices: SOURCES,
+      clipViewKinds: ['front'],
+    })
+    await act(async () => {})
+    act(() => stop(container, 'knees').focus())
+    expect((await lastRunnerProps()).footage).toBeNull()
+  })
+
+  it('hands none while the intro runs', async () => {
+    vi.useFakeTimers()
+    renderTour({ resultKey: nextKey(), evidence: [kneeEvidence()], sourceIndices: SOURCES, clipViewKinds: ['side'] })
+    act(() => vi.advanceTimersByTime(INTRO_HOLD_MS + 100))
+    const props = await lastRunnerProps()
+    expect(props.intro?.running).toBe(true)
+    expect(props.footage).toBeNull()
   })
 })
