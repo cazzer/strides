@@ -194,39 +194,67 @@ illustratively.
 
 `ModelRunner.tsx` renders the fixed SVG element set once per prop/state change; one rAF loop writes
 geometry onto those elements (queried once per render, never per frame), so React never re-renders
-per frame. Pacing: a frame draws when `now ≥ nextDue − 1.5 ms`, and `nextDue` advances by exactly
-1000/30 ms per draw (reset to `now + 1000/30` after a stall), so the long-run rate never exceeds 30
-fps and a 60 Hz display draws every other frame. Phase is integrated (`dt` capped at 100 ms); the
-first frame after any (re)start only sets the clock. Pure rules live in `runnerScene.ts` (styles,
-draw order, text alternative, label layout) and `runnerAnnotations.ts` (annotation geometry built on
-fixed key-phase poses, labels from `metricValue` via the widened `formatGuidedValue`). The intro
-seam is `overrides: { values, sources, flash }`; without it exactly `bound` is drawn.
+per frame. The loop is created once and started/stopped by a "kick" after every render: it runs
+while the figure is visible, on screen, and has something to move (playing, a camera tween or a
+value tween), so a rate or camera change never restarts it. Pacing: a frame draws when
+`now >= nextDue - 1.5 ms`, and `nextDue` advances by exactly 1000/30 ms per draw (reset to
+`now + 1000/30` after a stall), so the long-run rate never exceeds 30 fps and a 60 Hz display draws
+every other frame. Phase is integrated (`dt` capped at 100 ms); the first frame after any (re)start
+only sets the clock. Pure rules live in `runnerScene.ts` (styles, opacity, draw order, text
+alternative, label layout, value-tween mixing) and `runnerAnnotations.ts` (`planAnnotations`: held
+phase and annotation geometry; labels from `metricValue` via the widened `formatGuidedValue`).
+
+**Annotations hang off the live figure (review round 1).** Each limb parameter has a key LEG phase
+(`KEY_LEG_PHASE`: thigh peak, swing knee peak, contact, mid swing-arc); its annotation is built on
+that pose. The still frame (reduced motion, paused, first frame) holds the FIRST annotated focus
+parameter's key phase on the annotated leg, so that limb lies exactly on its mark; without a keyed
+focus it holds mid-stance. A still figure moves to a new focus's held phase; a playing one is never
+jumped. Reduced motion switching on with no reader choice returns the figure to the held phase.
+Side views annotate the near limbs (cos yaw >= 0: right); front views (|cos yaw| < 0.5) put each
+limb mark on the leg whose key phase is nearest the held phase (the stance leg for a contact
+parameter), arms on the stance side. No limb-shaped guide is drawn: the first version drew ghost
+thighs, shanks and contact legs beside the runner, which read as a target pose (PRD honesty rule 3,
+strides-v2d). Guides are now short reference rays (arc radius + 0.12) and extension ticks.
+
+**Intro seam.** `overrides: { values, sources, flash }` are discrete (one render per change);
+`overrides.valueTween: { from, to, durationMs, key }` is interpolated linearly by the loop from the
+moment its key first appears, runs while paused (like a camera tween) but not while hidden or
+offscreen, jumps to `to` under reduced motion, and holds `to` exactly while the same key is passed.
+ps19.3 should drive each parameter's tween through `valueTween` and flip `sources`/`flash` per
+step. Without any override exactly `bound` is drawn.
+
+**Visual decisions.** Measured far-side parts dim to 0.75; while a focus is shown, unfocused
+measured parts recede to 0.7 and focus strokes widen to 6 px (a cue that is not hue alone, for dark
+mode); neutral dashes are never dimmed, so they keep their >= 3:1 contrast. Forced colours map
+measured to CanvasText, neutral to GrayText, focus and marks to Highlight, label halo to Canvas. The
+ground line is drawn at the lowest foot point over the cycle (illustrative: the model has no IK, so
+away from the neutrals the feet can dip or float relative to y = 0). The clamp note on the visible
+label is "shown approximately"; the text alternative keeps the full sentence. The "Dashed: not
+measured" legend shows only when a neutral edge is in frame at the held phase.
 
 Deviations from the ps19.2 plan:
-- Annotation paths are split into `marks` (accent) and `guides` (thin solid reference rays,
-  extension lines and the key-pose limb), instead of one `paths` list.
-- `buildAnnotations` takes `sources` and `nearSide` (the per-limb annotations sit on the leg/arm
-  nearer the target camera).
+- Annotation paths are split into `marks` (accent), `fills` (an arc's faint wedge) and `guides`
+  (short reference rays and extension ticks), instead of one `paths` list.
+- `planAnnotations` replaces `buildAnnotations`: it takes `sources` and the target camera yaw, and
+  returns the held phase with the annotations.
 - Labels are placed by `side` (above/below/left/right of an anchor, 6 px gap) instead of a free
-  `dx/dy`, break "% of torso length" and "drawn at limit" onto their own lines, and are kept inside
-  the frame by an estimated text width. Screenshots at 390 px showed single-line labels shoved over
-  the figure by the frame edge. Trunk-lean, knee-drive and knee-flexion labels sit at an arc end
-  outside the wedge rather than on the bisector.
-- The landing-offset annotation also draws the contact leg (hip–knee–ankle) as a guide, so the
-  offset reads against the pose it is measured on.
+  `dx/dy`, break "% of torso length" and the clamp note onto their own lines, and are kept inside
+  the frame by an estimated text width (screenshots at 390 px showed single-line labels shoved over
+  the figure by the frame edge). Arc labels sit at an arc end outside the wedge.
 - Neutral dashes use butt caps (round caps closed the 5 px gaps); solid strokes stay round.
 - The stage clips (`overflow-hidden`) instead of `overflow: visible`: zoomed presets project most
   of the body outside the viewBox, which would otherwise paint over the page.
 - The figcaption is the figure's first child (HTML requires first or last), above the drawing; the
-  "Dashed: not measured" legend and the button share the row below.
-- Far-side joints are dimmed like far-side edges (0.55 opacity).
+  legend and the button (with an aria-hidden play/pause glyph) share the row below.
+- No `aspect-[3/4]` fallback for an unsized figure: with `flex-1` on the stage, an aspect ratio
+  does not give a column-flex child a height when the figure has none, so the consumer must size
+  it through `className` (documented on the component).
 
 ## Risks / Trade-offs
 
 - When two measured contact parameters conflict (D4), the weaker one is drawn away from its
   measurement. It is flagged (`clamped: true`, `value` = what is drawn), and ps19.2 labels
-  `metricValue`, so the number shown stays true; the renderer decides how to mark "drawn at a
-  limit". A neutral partner adjusted to fit is still drawn as neutral.
+  `metricValue`, so the number shown stays true; the renderer marks it "shown approximately". A neutral partner adjusted to fit is still drawn as neutral.
 - ps19.2/.3 must integrate phase over time (`phase += dt · cyclesPerSecond · rate`); reduced motion
   can use `poseAt(GAIT_PHASES.midStance)`.
 - ps19.3's intro tweens measured parameters from `NEUTRAL_RUNNER_PARAMS` to `bound.value`, with the

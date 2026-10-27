@@ -150,7 +150,7 @@ round, and move every projected joint continuously in t.
 The model-runner core modules (`types`, `gaitModel`, `runnerParams`, `camera`, `runnerScene` and
 `runnerAnnotations`) SHALL be pure functions and constants with no React, DOM or I/O dependency,
 and SHALL NOT change any measurement, threshold or heuristic. They SHALL read the heuristics only
-through their result types. `ModelRunner.tsx` and `usePrefersReducedMotion.ts` SHALL be the only
+through their result types and the results view's value formatter. `ModelRunner.tsx` and `usePrefersReducedMotion.ts` SHALL be the only
 model-runner modules that depend on React or the DOM (the dev-only sandbox under `src/runner/dev/`
 aside, which is never bundled).
 
@@ -163,7 +163,9 @@ aside, which is never bundled).
 The renderer SHALL draw every skeleton edge, solid when the edge is measured and dashed grey when it
 is neutral, with joints as dots. Overridden sources (the intro beat's seam) SHALL take the place of
 the bound ones; without overrides the renderer SHALL draw exactly the bound parameter values and
-sources.
+sources. A value tween passed through the seam SHALL be interpolated by the animation loop without
+re-rendering React, and SHALL end exactly at its target values. The ground SHALL be drawn at the
+lowest foot point over the cycle, as an illustrative reference.
 
 #### Scenario: Only knee drive is measured
 - **WHEN** the runner is rendered with only `kneeDrive` measured
@@ -175,12 +177,18 @@ sources.
 
 ### Requirement: The focus area is accented and annotated with its metric's own value
 
-Edges shaped by a measured focus parameter SHALL be accented. Each measured focus parameter except
+Edges shaped by a measured focus parameter SHALL be accented, by a wider stroke as well as a hue,
+with the other measured parts receding; measured parts SHALL never be dimmed so far that they read
+as neutral, and neutral dashes SHALL never be dimmed. In forced-colours mode measured, neutral and
+focus parts SHALL use distinct system colours. Each measured focus parameter except
 cadence SHALL carry an annotation of its natural kind (an angle arc for trunk lean, knee drive and
 knee flexion; a vertical bracket for bounce and arm swing; a horizontal offset for overstride, foot
 strike, step width and swing-foot excursion), whose geometry is the drawn value exactly and whose
-label is the metric's own reported value in the guided card's format. A focus metric that drives no
-parameter SHALL be ignored, and two focus metrics driving one parameter SHALL give one annotation.
+label is the metric's own reported value in the guided card's format. A clamped value's label SHALL
+say it is shown approximately. A limb annotation SHALL be built on the pose its metric reads (its
+key phase) and SHALL lie on the live figure's limb whenever the figure is at that phase; no
+second, limb-shaped figure SHALL be drawn. A focus metric that drives no parameter SHALL be
+ignored, and two focus metrics driving one parameter SHALL give one annotation.
 
 #### Scenario: Trunk lean is annotated
 - **WHEN** trunk lean is measured at 5° and in focus
@@ -188,7 +196,11 @@ parameter SHALL be ignored, and two focus metrics driving one parameter SHALL gi
 
 #### Scenario: A clamped foot strike says so
 - **WHEN** overstriding is measured at 0.05 and foot strike at 0.10, with foot strike in focus
-- **THEN** the foot-strike label reads its class and "drawn at limit", and the text alternative says it is drawn at a limit of the figure, not at the measured value
+- **THEN** the foot-strike label reads its class and "shown approximately", and the text alternative says it is drawn at a limit of the figure, not at the measured value
+
+#### Scenario: The annotated limb is the live limb
+- **WHEN** knee drive is in focus and the runner is still
+- **THEN** the arc's centre is the live near hip and its end lies on the live near thigh
 
 #### Scenario: An unmeasured focus is not annotated
 - **WHEN** a focus parameter is neutral
@@ -237,12 +249,20 @@ choice SHALL persist for the component's lifetime, across focus and camera chang
 
 ### Requirement: Reduced motion holds a still mid-stance pose
 
-Under reduced motion the runner SHALL NOT autoplay; it SHALL hold the mid-stance pose until the
-reader presses play.
+Under reduced motion the runner SHALL NOT autoplay; it SHALL hold a still pose until the reader
+presses play. The still pose (under reduced motion, while paused, and on the first frame) SHALL be
+the key phase of the first focus parameter that has one, so that limb lies exactly on its
+annotation, and mid-stance otherwise. A still figure SHALL move to a new focus's still pose, and
+reduced motion switching on while the reader has not chosen to play SHALL stop the figure at its
+still pose.
 
 #### Scenario: Reduced motion on load
-- **WHEN** the runner mounts with reduced motion preferred
+- **WHEN** the runner mounts with reduced motion preferred and no keyed focus
 - **THEN** it draws the mid-stance pose, offers "Play runner", and stays still until played
+
+#### Scenario: Reduced motion with an overstride focus
+- **WHEN** the runner mounts with reduced motion preferred and overstriding in focus
+- **THEN** it holds the near leg at contact, with the offset mark ending at the live ankle
 
 ### Requirement: The runner is described in text and captioned honestly
 

@@ -38,3 +38,11 @@
 - [x] 7.4 `ModelRunner.tsx` + tests: dashes, focus annotations, 30 fps cap without React renders, hidden/offscreen stop, camera tween vs cut, persistent pause, reduced motion, StrictMode, overrides seam, a11y
 - [x] 7.5 Dev sandbox `src/runner/dev/sandbox.html` screenshotted at 390/1280 px, light/dark, reduced/normal motion; absent from `vite build`
 - [x] 7.6 Gates: lint, `tsc -b`, vitest (runner + full), `openspec validate --strict`, `vite build`
+
+## 8. Renderer review round 1
+
+- [x] 8.1 No limb-shaped guides; the still frame holds the first keyed focus parameter's key phase; front views annotate the leg at its key phase
+- [x] 8.2 `overrides.valueTween` interpolated by the loop (no React commits), ends exactly at `to`
+- [x] 8.3 Live reduced-motion switch returns to the still frame; single loop controller; tests for media change, camera retarget, unmount, model cross-checks
+- [x] 8.4 Far/unfocused opacity floors, 6 px focus stroke, arc wedge, forced-colours palette, ground at the foot floor, "shown approximately", legend only when dashes are in frame
+- [x] 8.5 Gates and re-shot screenshots (390/1280, light/dark, reduced/normal, forced colours)
