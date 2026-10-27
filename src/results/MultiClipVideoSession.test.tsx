@@ -1284,7 +1284,7 @@ describe('MultiClipVideoSession — results view mode', () => {
     expect(window.localStorage.getItem('strides.resultsLanding')).toBe('summary')
     expect(window.location.search).toBe('?clip=demo')
     expect(window.location.hash).toBe('#top')
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Replay tour' }))
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Summary' }))
   })
 
   it('Replay tour returns to the tour and leaves the remembered landing alone', async () => {
@@ -1296,7 +1296,7 @@ describe('MultiClipVideoSession — results view mode', () => {
     expect(mountedView()).toBe('tour')
     expect(window.localStorage.getItem('strides.resultsLanding')).toBe('summary')
     expect(window.location.search).toBe('')
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Skip to summary' }))
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Your runner' }))
   })
 
   it('Classic table writes view=classic, and Show summary removes it again', async () => {
@@ -1316,10 +1316,10 @@ describe('MultiClipVideoSession — results view mode', () => {
     fireEvent.click(show)
     expect(mountedView()).toBe('summary')
     expect(window.location.search).toBe('?clip=demo')
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Replay tour' }))
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Summary' }))
   })
 
-  it('focuses the marked entry control, not a button that happens to come first', async () => {
+  it('focuses the marked entry point, not a button that happens to come first', async () => {
     const { ResultsSummary: ActualSummary } = await vi.importActual<
       typeof import('./summary/ResultsSummary')
     >('./summary/ResultsSummary')
@@ -1340,7 +1340,7 @@ describe('MultiClipVideoSession — results view mode', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Skip to summary' }))
     expect(mountedView()).toBe('summary')
     expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Runner control' }))
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Replay tour' }))
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Summary' }))
   })
 
   it('does not move focus when the first view mounts', async () => {
@@ -1374,7 +1374,7 @@ describe('MultiClipVideoSession — results view mode', () => {
     await waitFor(() => expect(mountedView()).toBe('summary'))
     expect(window.location.search).toBe('?clip=demo')
     expect(document.querySelector('.results-summary .evidence-image > canvas')).toBe(canvas)
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Replay tour' }))
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Summary' }))
 
     // The load entry restores the tour, although the summary is remembered by now.
     window.history.back()

@@ -29,8 +29,10 @@ view, such as one an in-page link created, SHALL leave the view on screen unchan
 
 Each view SHALL offer keyboard-operable controls to the others: the tour a control to skip to the
 summary; the summary, below its results, a control to replay the tour and a control to open the
-classic table; the classic view a control to show the summary. Each view SHALL mark one of its
-controls as its entry control, and after a switch focus SHALL move to the new view's entry control.
+classic table; the classic view a control to show the summary. Each view SHALL mark one entry
+point at its top: a heading in the tour and the summary, and the show-summary control in the classic
+view. After a switch, focus SHALL move to the new view's entry point, never to a control further
+down the page.
 
 Selecting a view SHALL NOT require a routing library.
 
@@ -69,7 +71,7 @@ Selecting a view SHALL NOT require a routing library.
 
 - **WHEN** any of the three views renders
 - **THEN** it offers native buttons, operable from the keyboard, that reach the other views as listed
-  above, and activating one moves focus to the new view's entry control
+  above, and activating one moves focus to the new view's entry point
 
 #### Scenario: Browser Back returns to the previous view
 

@@ -48,8 +48,13 @@ describe('RunnerTour (stub)', () => {
     expect(skip).toHaveAttribute('type', 'button')
     // The tour's own control comes before the guided view's.
     expect(container.querySelector('button')).toBe(skip)
-    expect(container.querySelectorAll('[data-view-entry]')).toHaveLength(1)
-    expect(skip).toHaveAttribute('data-view-entry')
+    const entries = container.querySelectorAll('[data-view-entry]')
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toBe(screen.getByRole('heading', { level: 2, name: 'Your runner' }))
+    expect(entries[0]).toHaveAttribute('tabindex', '-1')
+    // Above Skip, which stays an ordinary button.
+    expect(entries[0].compareDocumentPosition(skip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(skip).not.toHaveAttribute('data-view-entry')
     fireEvent.click(skip)
     expect(onLeaveTour).toHaveBeenCalledTimes(1)
   })

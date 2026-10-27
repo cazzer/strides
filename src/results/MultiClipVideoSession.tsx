@@ -276,8 +276,8 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
   useEffect(() => {
     if (!focusViewAfterSwitchRef.current) return
     focusViewAfterSwitchRef.current = false
-    // Each view marks its one entry control explicitly: Skip to summary in the tour, Replay tour
-    // in the summary, Show summary above the classic table. A marker rather than "the first button",
+    // Each view marks its one entry point explicitly: the "Your runner" heading in the tour, the
+    // "Summary" heading in the summary, Show summary above the classic table. A marker rather than "the first button",
     // so a control a later ticket puts in the runner slot cannot take focus by position.
     viewRegionRef.current?.querySelector<HTMLElement>('[data-view-entry]')?.focus()
   }, [resultsViewMode])

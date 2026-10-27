@@ -46,8 +46,13 @@ describe('ResultsSummary (stub)', () => {
     // land on it; and the one control marked as the summary's entry point.
     const replay = screen.getByRole('button', { name: 'Replay tour' })
     expect(replay.closest('footer')).not.toBeNull()
-    expect(container.querySelectorAll('[data-view-entry]')).toHaveLength(1)
-    expect(replay).toHaveAttribute('data-view-entry')
+    // The focus target is the heading at the top, not a footer control (focusing that would scroll).
+    const entries = container.querySelectorAll('[data-view-entry]')
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toBe(screen.getByRole('heading', { level: 2, name: 'Summary' }))
+    expect(entries[0]).toHaveAttribute('tabindex', '-1')
+    expect(container.firstElementChild?.firstElementChild).toBe(entries[0])
+    expect(replay).not.toHaveAttribute('data-view-entry')
     expect(replay).toHaveClass('min-h-11')
     fireEvent.click(replay)
     expect(onReplayTour).toHaveBeenCalledTimes(1)

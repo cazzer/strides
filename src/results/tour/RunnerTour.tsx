@@ -23,12 +23,16 @@ export interface RunnerTourProps extends GuidedResultsViewProps {
 export function RunnerTour({ onLeaveTour, ...guidedProps }: RunnerTourProps) {
   return (
     <div className="runner-tour space-y-6">
+      {/* The tour's focus target after a switch (`data-view-entry`): a heading rather than Skip, so a
+          reader arriving here hears where they are rather than an action they did not ask for. */}
+      <h2 tabIndex={-1} data-view-entry className="font-display text-xl font-bold tracking-tight focus:outline-none">
+        Your runner
+      </h2>
       {/* Where the model runner will stand (`strides-trn2.3`). Empty and hidden from assistive
           technology until there is something in it to describe. */}
       <div className="results-runner-slot" aria-hidden="true" />
       <button
         type="button"
-        data-view-entry
         onClick={onLeaveTour}
         className="inline-flex items-center justify-center border-2 border-black px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black transition-colors hover:bg-black hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:border-white dark:text-white dark:hover:bg-white dark:hover:text-black"
       >

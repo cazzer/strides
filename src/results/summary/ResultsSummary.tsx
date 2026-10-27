@@ -22,6 +22,11 @@ export interface ResultsSummaryProps extends GuidedResultsViewProps {
 export function ResultsSummary({ onReplayTour, onOpenClassic, ...guidedProps }: ResultsSummaryProps) {
   return (
     <div className="results-summary space-y-6">
+      {/* The summary's focus target after a switch (`data-view-entry`). It sits at the top, so
+          arriving here does not scroll the page down to the footer's controls. */}
+      <h2 tabIndex={-1} data-view-entry className="font-display text-xl font-bold tracking-tight focus:outline-none">
+        Summary
+      </h2>
       {/* Where the model runner will stand (`strides-trn2.5`). */}
       <div className="results-runner-slot" aria-hidden="true" />
       <GuidedResultsView {...guidedProps} />
@@ -31,7 +36,6 @@ export function ResultsSummary({ onReplayTour, onOpenClassic, ...guidedProps }: 
       <footer className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t-2 border-black pt-4 dark:border-white">
         <button
           type="button"
-          data-view-entry
           onClick={onReplayTour}
           className="inline-flex min-h-11 items-center px-1 font-sans text-sm font-semibold text-black underline underline-offset-4 hover:text-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:text-white dark:hover:text-brand-400"
         >
