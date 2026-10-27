@@ -74,15 +74,17 @@ export function introCamera(coverage: SessionCoverage | null): CameraPreset {
 
 /**
  * What the runner tour walks through, PURE so the stops are testable without rendering: one stop
- * per measured focus area in focus-area order (the summary's own rows, with their feedback), then
- * the one-thing stop.
+ * per measured focus area in focus-area order (the summary's own rows, with their feedback and
+ * readings), then the one-thing stop. `sourceIndices` (null: one clip) guards the bounce reading's
+ * derivation to vertical ratio's own clip.
  */
 export function tourPlan(
   heuristics: FormHeuristicsResult,
   scalePassStatus: ScalePassStatus,
   coverage: SessionCoverage | null,
+  sourceIndices: Readonly<Record<MetricId, number>> | null = null,
 ): TourPlan {
-  const { areas, views } = summaryRows(heuristics)
+  const { areas, views } = summaryRows(heuristics, { sourceIndices })
   const unmeasured = views.filter((view) => !view.measured).map((view) => view.area)
   return {
     areaStops: areas.map((area) => ({ ...area, feedback: feedbackFor(area.view) })),

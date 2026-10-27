@@ -23,7 +23,8 @@ function renderRow(
     <FocusAreaRow
       area={area}
       label={row.view.label}
-      entries={row.entries}
+      readings={row.readings}
+      bounce={row.bounce}
       feedback={feedbackFor(row.view)}
       evidenceByMetric={new Map(evidence.map((entry) => [entry.metric, entry]))}
       clipCount={1}
@@ -59,13 +60,67 @@ describe('FocusAreaRow', () => {
       new RegExp(`^Cadence ${parts.value}`),
     )
     expect(summary.textContent).toContain(parts.position!)
-    // The other measured metrics, the bounce family collapsed, so nothing is findable only by
-    // opening the row and nothing reads as listed twice.
+    // The other readings: the bounce composite once, by its headline's name, so nothing reads as
+    // listed twice.
     const others = summary.querySelector('.results-summary__row-others')!
-    expect(others.textContent).toBe('Also: bounce (cm, ratio, % torso)')
+    expect(others.textContent).toBe('Also: Vertical ratio')
     // A span, never a heading: a heading inside a summary loses its role.
     expect(summary.querySelector('h1, h2, h3, h4, h5, h6')).toBeNull()
     expect(summary).toHaveClass('min-h-11')
+  })
+
+  it('renders the bounce reading as vertical ratio with its From line, the other two collapsed inside', () => {
+    const { details } = renderRow('rhythm')
+    const composite = details.querySelector<HTMLElement>('section.results-summary__composite')!
+    expect(composite).toHaveAttribute('data-composite', 'bounce')
+    expect(composite).toHaveAccessibleName('Bounce')
+    // The headline card first, its From line directly under the headline value.
+    const [headlineCard] = composite.querySelectorAll('article')
+    expect(headlineCard).toHaveAttribute('data-metric', 'verticalRatio')
+    const derived = headlineCard.querySelector('.guided-results__derived-from')!
+    expect(derived.textContent).toBe('From bounce 7.5 cm and stride 3.8 torso lengths (7 strides)')
+    expect(derived.previousElementSibling).toHaveClass('guided-results__headline')
+    // One nested disclosure, closed, naming the cards inside, which are mounted already.
+    const more = composite.querySelectorAll<HTMLDetailsElement>('details.results-summary__composite-more')
+    expect(more).toHaveLength(1)
+    expect(more[0].open).toBe(false)
+    const moreSummary = more[0].querySelector(':scope > summary')!
+    expect(moreSummary.textContent).toBe('▸Also: Vertical oscillation (cm), Vertical oscillation')
+    expect(moreSummary).toHaveClass('min-h-11')
+    expect(
+      [...more[0].querySelectorAll('article')].map((article) => article.getAttribute('data-metric')),
+    ).toEqual(['verticalOscillationCm', 'verticalOscillation'])
+    // Cadence stays its own card, first.
+    expect(details.querySelector('article')).toHaveAttribute('data-metric', 'cadence')
+  })
+
+  it('heads the row with vertical ratio when cadence is excluded, and gives a fallback headline no From line', () => {
+    const noCadence = renderRow('rhythm', makeHeuristics({ cadence: makeMetric('cadence', { value: null, confidence: 0 }) }))
+    expect(noCadence.summary.querySelector('.results-summary__row-headline')!.textContent).toMatch(/^Vertical ratio /)
+    expect(noCadence.summary.querySelector('.results-summary__row-others')).toBeNull()
+    noCadence.unmount()
+
+    const noRatio = renderRow(
+      'rhythm',
+      makeHeuristics({ verticalRatio: makeMetric('verticalRatio', { value: null, confidence: 0 }) }),
+    )
+    expect(noRatio.summary.querySelector('.results-summary__row-others')!.textContent).toBe(
+      'Also: Vertical oscillation (cm)',
+    )
+    const composite = noRatio.details.querySelector('section.results-summary__composite')!
+    expect(composite.querySelector('article')).toHaveAttribute('data-metric', 'verticalOscillationCm')
+    expect(composite.querySelector('.guided-results__derived-from')).toBeNull()
+  })
+
+  it('ignores the bounce reading’s nested disclosure opening inside the row', async () => {
+    const { details, onToggle } = renderRow('rhythm')
+    const more = details.querySelector<HTMLDetailsElement>('details.results-summary__composite-more')!
+    act(() => {
+      more.open = true
+    })
+    await waitFor(() => expect(more.open).toBe(true))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(onToggle).not.toHaveBeenCalled()
   })
 
   it('draws a decorative band marker only when the headline is banded', () => {

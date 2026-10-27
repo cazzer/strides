@@ -388,6 +388,11 @@ export interface GuidedMetricCardProps {
   clipCount: number
   sourceLabel?: string
   onOpenEvidenceVideo?: (clipIndex: number, timestamp: number, returnFocus: HTMLButtonElement | null) => void
+  /**
+   * What the headline value was derived from, as one line under it (a composite reading's
+   * `formatBounceDerivation`). Plain text, not `sr-only`: it is part of the reading.
+   */
+  derivation?: string
 }
 
 /**
@@ -403,6 +408,7 @@ export function GuidedMetricCard({
   clipCount,
   sourceLabel,
   onOpenEvidenceVideo,
+  derivation,
 }: GuidedMetricCardProps) {
   const headingId = useId()
   const { metric, guidance, band } = entry
@@ -493,6 +499,9 @@ export function GuidedMetricCard({
             </span>
           )}
         </p>
+        {derivation !== undefined && (
+          <p className={`guided-results__derived-from ${BODY}`}>{derivation}</p>
+        )}
         {sourceLabel && <p className="font-sans text-xs font-semibold text-neutral-600 dark:text-neutral-400">Measured from {sourceLabel}</p>}
         {tier === 'caveated' && (
           <p className="guided-results__confidence font-sans text-sm">

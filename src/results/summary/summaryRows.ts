@@ -1,4 +1,6 @@
 import type { FormHeuristicsResult, MetricId, MetricResult } from '../../heuristics/types'
+import { areaReadings, bounceDerivation } from '../../guidance/compositeReadings'
+import type { AreaReading, BounceDerivation } from '../../guidance/compositeReadings'
 import { FOCUS_AREA_ORDER, focusAreaView } from '../../guidance/focusAreas'
 import type { FocusAreaView } from '../../guidance/focusAreas'
 import { METRIC_GUIDANCE } from '../../guidance/metricGuidance'
@@ -11,6 +13,20 @@ export interface SummaryArea {
   view: FocusAreaView
   /** The area's measured metrics as guided entries, headline first, in preference order. */
   entries: GuidedEntry[]
+  /**
+   * The same entries grouped for presentation (`areaReadings`): one reading per metric, except the
+   * bounce composite, one reading where its first member sat. The first reading's headline is what
+   * the row and the tour stop headline; `view.headline` (feedback, the one thing) is unchanged.
+   */
+  readings: AreaReading<GuidedEntry>[]
+  /** What vertical ratio was derived from, when this area holds a measured one; else null. */
+  bounce: BounceDerivation | null
+}
+
+export interface SummaryRowsOptions {
+  guidance?: Record<MetricId, MetricGuidance>
+  /** Which clip each fused metric came from (`computeFusionSourceIndices`); null means one clip. */
+  sourceIndices?: Readonly<Record<MetricId, number>> | null
 }
 
 export interface SummaryRows {
@@ -36,7 +52,7 @@ export interface SummaryRows {
  */
 export function summaryRows(
   heuristics: FormHeuristicsResult,
-  guidance: Record<MetricId, MetricGuidance> = METRIC_GUIDANCE,
+  { guidance = METRIC_GUIDANCE, sourceIndices = null }: SummaryRowsOptions = {},
 ): SummaryRows {
   const { banded, unbanded, notMeasured } = guidedGroups(heuristics, guidance)
   const measured = new Map(
@@ -50,18 +66,21 @@ export function summaryRows(
   ) as Record<MetricId, MetricTier>
 
   const views = FOCUS_AREA_ORDER.map((area) => focusAreaView(area, heuristics, tiers))
+  const derivation = bounceDerivation(heuristics, tiers, sourceIndices)
   const areas = views
     .filter((view) => view.measured)
-    .map((view) => ({
-      view,
-      entries: [view.headline!, ...view.supporting].map((focus) => {
+    .map((view) => {
+      const entries = [view.headline!, ...view.supporting].map((focus) => {
         const entry = measured.get(focus.metric.metric)
         // Both sides read `metricTier`, so a non-excluded area metric is always a measured entry.
         if (entry === undefined) {
           throw new Error(`summaryRows: ${focus.metric.metric} is measured but has no guided entry`)
         }
         return entry
-      }),
-    }))
+      })
+      const readings = areaReadings(entries, (entry) => entry.metric.metric)
+      const holdsRatio = entries.some((entry) => entry.metric.metric === 'verticalRatio')
+      return { view, entries, readings, bounce: holdsRatio ? derivation : null }
+    })
   return { areas, notMeasured, views }
 }

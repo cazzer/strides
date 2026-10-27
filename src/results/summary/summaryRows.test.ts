@@ -113,6 +113,45 @@ describe('summaryRows', () => {
     expect(cadence.band).not.toBeNull()
   })
 
+  it('groups each row’s entries into readings without changing the entries', () => {
+    const { areas } = summaryRows(makeHeuristics())
+    const rhythm = areas.find(({ view }) => view.area === 'rhythm')!
+    // `entries` keeps the area's preference order: the runner focus and the evidence map read it.
+    expect(rhythm.entries.map((entry) => entry.metric.metric)).toEqual(FOCUS_AREAS.rhythm.metricIds)
+    expect(rhythm.readings.map((reading) => reading.kind)).toEqual(['single', 'composite'])
+    const bounce = rhythm.readings[1]
+    if (bounce.kind !== 'composite') throw new Error('bounce is not a composite')
+    expect([bounce.headline, ...bounce.members].map((entry) => entry.metric.metric)).toEqual([
+      'verticalRatio',
+      'verticalOscillationCm',
+      'verticalOscillation',
+    ])
+    // Every other area: one reading per entry, in the same order.
+    for (const { view, entries, readings } of areas.filter(({ view }) => view.area !== 'rhythm')) {
+      expect(readings.map((reading) => reading.kind === 'single' && reading.item), view.area).toEqual(entries)
+    }
+  })
+
+  it('carries the bounce derivation on the rhythm row only, guarded to vertical ratio’s clip', () => {
+    const { areas } = summaryRows(makeHeuristics())
+    expect(areas.find(({ view }) => view.area === 'rhythm')!.bounce).toEqual({
+      bounce: { metric: 'verticalOscillationCm', value: 7.5, unit: 'centimeters' },
+      strideTorsoLengths: expect.closeTo(3.75, 10),
+      strideCount: 7,
+    })
+    expect(areas.filter(({ bounce }) => bounce !== null)).toHaveLength(1)
+    const sourceIndices = Object.fromEntries(ALL_IDS.map((id) => [id, 0])) as Record<MetricId, number>
+    const mixed = summaryRows(makeHeuristics(), {
+      sourceIndices: { ...sourceIndices, verticalOscillationCm: 1, verticalOscillation: 1 },
+    })
+    expect(mixed.areas.find(({ view }) => view.area === 'rhythm')!.bounce).toEqual({
+      bounce: null,
+      strideTorsoLengths: null,
+      strideCount: 7,
+    })
+    expect(summaryRows(withUnmeasured(['verticalRatio'])).areas[0].bounce).toBeNull()
+  })
+
   it('returns all six areas’ views, measured or not, in tour order', () => {
     const { views, areas } = summaryRows(withUnmeasured(['armSwingAmplitude']))
     expect(views.map((view) => view.area)).toEqual(FOCUS_AREA_ORDER)

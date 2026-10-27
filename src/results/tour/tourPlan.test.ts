@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { MetricId } from '../../heuristics/types'
 import { FOCUS_AREA_ORDER } from '../../guidance/focusAreas'
 import { makeHeuristics, makeMetric, makeVerticalOscillationCm } from '../__fixtures__/metricResult'
 import { FOCUS_AREA_CAMERA, NO_FOCUS_CAMERA } from '../focusAreaCamera'
@@ -41,6 +42,18 @@ describe('tourPlan', () => {
   it('carries each stop’s feedback, keyed to its area', () => {
     const plan = tourPlan(makeHeuristics(), 'done', null)
     for (const stop of plan.areaStops) expect(stop.feedback.area).toBe(stop.view.area)
+  })
+
+  it('guards the rhythm stop’s bounce derivation to vertical ratio’s clip', () => {
+    const rhythm = (sourceIndices: Record<MetricId, number> | null) =>
+      tourPlan(makeHeuristics(), 'done', null, sourceIndices).areaStops.find((stop) => stop.view.area === 'rhythm')!
+    expect(rhythm(null).bounce?.bounce?.metric).toBe('verticalOscillationCm')
+    const oneClip = Object.fromEntries(Object.keys(makeHeuristics()).map((key) => [key, 0])) as Record<MetricId, number>
+    expect(rhythm({ ...oneClip, verticalOscillationCm: 1, verticalOscillation: 1 }).bounce).toEqual({
+      bounce: null,
+      strideTorsoLengths: null,
+      strideCount: 7,
+    })
   })
 
   it('picks one thing from all six areas: a cue, nothing to change, or unclear', () => {

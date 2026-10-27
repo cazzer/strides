@@ -1,5 +1,7 @@
 import { memo } from 'react'
 import type { MetricId } from '../../heuristics/types'
+import { readingHeadline } from '../../guidance/compositeReadings'
+import type { AreaReading, BounceDerivation } from '../../guidance/compositeReadings'
 import type { AreaFeedback } from '../../guidance/feedbackPoints'
 import type { FocusAreaId } from '../../guidance/focusAreas'
 import { MetricScale } from '../../guidance/MetricScale'
@@ -11,7 +13,8 @@ import { NotMeasuredEntries } from '../GuidedResultsView'
 import { METRIC_LABELS } from '../metricConfidence'
 import type { MetricCardEvidence } from '../MetricsPanel'
 import type { ScalePassStatus } from '../types'
-import { SHORT_METRIC_LABELS, alsoMeasuredNames, hasCompactBar } from './summaryLabels'
+import { CompositeReading } from './CompositeReading'
+import { SHORT_METRIC_LABELS, alsoMeasuredNames, hasCompactBar, readingDerivation } from './summaryLabels'
 
 const ROW_FOCUS =
   'focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand-600'
@@ -33,8 +36,13 @@ function RowChevron() {
 export interface FocusAreaRowProps {
   area: FocusAreaId
   label: string
-  /** The area's measured metrics, headline first. Never empty: an unmeasured area gets no row. */
-  entries: readonly GuidedEntry[]
+  /**
+   * The area's measured metrics grouped into readings (`areaReadings`), the first reading's headline
+   * heading the row. Never empty: an unmeasured area gets no row.
+   */
+  readings: readonly AreaReading<GuidedEntry>[]
+  /** What vertical ratio was derived from, for a bounce reading headlined by it; else null. */
+  bounce: BounceDerivation | null
   feedback: AreaFeedback
   evidenceByMetric: ReadonlyMap<MetricId, MetricCardEvidence>
   clipCount: number
@@ -63,7 +71,8 @@ export interface FocusAreaRowProps {
 export const FocusAreaRow = memo(function FocusAreaRow({
   area,
   label,
-  entries,
+  readings,
+  bounce,
   feedback,
   evidenceByMetric,
   clipCount,
@@ -71,13 +80,13 @@ export const FocusAreaRow = memo(function FocusAreaRow({
   onOpenEvidenceVideo,
   onToggle,
 }: FocusAreaRowProps) {
-  const [headline, ...others] = entries
+  const headline = readingHeadline(readings[0])
   // Standalone: the row names the range itself ("within the 6.0–9.5 cm range"), since the compact
   // bar beside it prints no numbers to point back to.
   const parts = guidedHeadlineParts(headline, { standalone: true })
   const { band, metric } = headline
   const shortName = SHORT_METRIC_LABELS[metric.metric]
-  const also = alsoMeasuredNames(others.map((entry) => entry.metric.metric))
+  const also = alsoMeasuredNames(readings.slice(1))
 
   return (
     <details
@@ -125,16 +134,30 @@ export const FocusAreaRow = memo(function FocusAreaRow({
           </div>
         )}
         <div className="space-y-6">
-          {entries.map((entry) => (
-            <GuidedMetricCard
-              key={entry.metric.metric}
-              entry={entry}
-              evidence={evidenceByMetric.get(entry.metric.metric)}
-              clipCount={clipCount}
-              sourceLabel={sourceLabelFor(entry.metric.metric)}
-              onOpenEvidenceVideo={onOpenEvidenceVideo}
-            />
-          ))}
+          {readings.map((reading) =>
+            reading.kind === 'single' ? (
+              <GuidedMetricCard
+                key={reading.item.metric.metric}
+                entry={reading.item}
+                evidence={evidenceByMetric.get(reading.item.metric.metric)}
+                clipCount={clipCount}
+                sourceLabel={sourceLabelFor(reading.item.metric.metric)}
+                onOpenEvidenceVideo={onOpenEvidenceVideo}
+              />
+            ) : (
+              <CompositeReading
+                key={reading.id}
+                id={reading.id}
+                headline={reading.headline}
+                members={reading.members}
+                derivation={readingDerivation(reading, bounce)}
+                evidenceByMetric={evidenceByMetric}
+                clipCount={clipCount}
+                sourceLabelFor={sourceLabelFor}
+                onOpenEvidenceVideo={onOpenEvidenceVideo}
+              />
+            ),
+          )}
         </div>
       </div>
     </details>

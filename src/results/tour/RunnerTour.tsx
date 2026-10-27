@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import type { FormHeuristicsResult, MetricId, View } from '../../heuristics/types'
+import { readingHeadline } from '../../guidance/compositeReadings'
 import { FOCUS_AREAS, FOCUS_AREA_ORDER } from '../../guidance/focusAreas'
 import type { TourStopId } from '../../guidance/focusAreas'
 import { ONE_THING_LABEL } from '../../guidance/feedbackPoints'
@@ -209,12 +210,13 @@ const DOT_ACTIVE = 'bg-black dark:bg-white forced-colors:bg-[color:Highlight]'
 export function RunnerTour({ onLeaveTour, resultKey, coverage, onAddClip, ...guidedProps }: RunnerTourProps) {
   const { heuristics } = guidedProps.analysis
   const scalePassStatus = guidedProps.analysis.scalePass.status
+  const sourceIndices = guidedProps.sourceIndices ?? null
   const rootRef = useRef<HTMLDivElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
   useBarHeightProperty(barRef, rootRef)
   const plan = useMemo(
-    () => (heuristics ? tourPlan(heuristics, scalePassStatus, coverage) : null),
-    [heuristics, scalePassStatus, coverage],
+    () => (heuristics ? tourPlan(heuristics, scalePassStatus, coverage, sourceIndices) : null),
+    [heuristics, scalePassStatus, coverage, sourceIndices],
   )
   const stopIds: TourStopId[] =
     plan === null ? [] : [...plan.areaStops.map((stop) => stop.view.area), 'oneThing']
@@ -255,7 +257,7 @@ export function RunnerTour({ onLeaveTour, resultKey, coverage, onAddClip, ...gui
             onAddClip={onAddClip}
             barRow={actionsInBody ? actions : null}
             evidence={guidedProps.evidence ?? NO_EVIDENCE}
-            sourceIndices={guidedProps.sourceIndices ?? null}
+            sourceIndices={sourceIndices}
             clipViewKinds={guidedProps.clipViewKinds ?? NO_VIEW_KINDS}
           />
         ) : null}
@@ -536,8 +538,9 @@ interface TourBodyProps {
  * only once the runner's figure (its drawing) is at least 90% on screen as well as seen by the
  * runner, so it never plays out below the fold. Reading on past the first stop ends it.
  *
- * The runner's focus is the shown stop's HEADLINE metric only, so the figure never labels a number
- * the stop's text does not state.
+ * The runner's focus is the shown stop's HEADLINE metric only — its first reading's headline — so
+ * the figure never labels a number the stop's text does not state. A secondary bounce block at the
+ * rhythm stop is not the headline, so it never reaches the figure.
  */
 function TourBody({
   heuristics,
@@ -583,7 +586,7 @@ function TourBody({
   const shownArea = plan.areaStops.find((stop) => stop.view.area === shown) ?? null
   const focusMetric: MetricId | null =
     shownArea !== null
-      ? shownArea.entries[0].metric.metric
+      ? readingHeadline(shownArea.readings[0]).metric.metric
       : shown === 'oneThing' && plan.oneThing.kind === 'cue'
         ? plan.oneThing.metric
         : null
@@ -600,7 +603,7 @@ function TourBody({
     [introRunning, focus, camera, evidence, sourceIndices, clipViewKinds],
   )
   const runnerLabel = shownArea === null ? 'whole body' : shownArea.view.label.toLowerCase()
-  const showLegend = shownArea !== null && hasCompactBar(shownArea.entries[0])
+  const showLegend = shownArea !== null && hasCompactBar(readingHeadline(shownArea.readings[0]))
 
   return (
     <div ref={rootRef} className={TOUR_BODY_CLASS}>

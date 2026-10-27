@@ -1,5 +1,8 @@
 import type { MetricId } from '../../heuristics/types'
+import { readingHeadline } from '../../guidance/compositeReadings'
+import type { AreaReading, BounceDerivation } from '../../guidance/compositeReadings'
 import { referenceBandEnvelope } from '../../guidance/types'
+import { formatGuidedValue } from '../formatGuidedValue'
 import type { GuidedEntry } from '../guidedGroups'
 import { METRIC_LABELS } from '../metricConfidence'
 
@@ -23,28 +26,44 @@ export const SHORT_METRIC_LABELS: Readonly<Partial<Record<MetricId, string>>> = 
   swingFootLateralExcursion: 'Swing-foot path',
 }
 
-/** The three bounce measures, each by the unit that tells it apart, in the order they are listed. */
-const BOUNCE_UNITS: ReadonlyArray<[MetricId, string]> = [
-  ['verticalOscillationCm', 'cm'],
-  ['verticalRatio', 'ratio'],
-  ['verticalOscillation', '% torso'],
-]
+/**
+ * The names a row's "Also:" line lists: each later reading once, by its headline metric's full
+ * name. A composite is named once ("Vertical ratio", or "Vertical oscillation (cm)" when vertical
+ * ratio is excluded), never by each of its members, which read as the same thing listed twice.
+ */
+export function alsoMeasuredNames(readings: readonly AreaReading<GuidedEntry>[]): string[] {
+  return readings.map((reading) => METRIC_LABELS[readingHeadline(reading).metric.metric])
+}
+
+function strides(count: number): string {
+  return `${count} ${count === 1 ? 'stride' : 'strides'}`
+}
 
 /**
- * The names a row's "Also:" line lists. Two or more bounce measures collapse into one
- * "bounce (cm, ratio, % torso)" entry naming only those present, where the first of them sat —
- * listed apart, "Vertical oscillation" and "Vertical oscillation (cm)" read as the same thing twice.
+ * What vertical ratio was derived from, in words and never with an operator (the bounce and the
+ * stride are in different units): `From bounce 7.2 cm and stride 4.6 torso lengths (5 strides)`,
+ * `From bounce 7.2 cm and 5 strides` without a stride figure, `From 5 strides` with neither.
  */
-export function alsoMeasuredNames(metrics: readonly MetricId[]): string[] {
-  const bounce = BOUNCE_UNITS.filter(([id]) => metrics.includes(id))
-  const collapse = bounce.length >= 2
-  const names: string[] = []
-  for (const metric of metrics) {
-    const isBounce = BOUNCE_UNITS.some(([id]) => id === metric)
-    if (!collapse || !isBounce) names.push(METRIC_LABELS[metric])
-    else if (metric === bounce[0][0]) names.push(`bounce (${bounce.map(([, unit]) => unit).join(', ')})`)
-  }
-  return names
+export function formatBounceDerivation(derivation: BounceDerivation): string {
+  const { bounce, strideTorsoLengths, strideCount } = derivation
+  const stride =
+    strideTorsoLengths === null
+      ? strides(strideCount)
+      : `stride ${strideTorsoLengths.toFixed(1)} torso lengths (${strides(strideCount)})`
+  return bounce === null ? `From ${stride}` : `From bounce ${formatGuidedValue(bounce)} and ${stride}`
+}
+
+/**
+ * A reading's "From …" line: only for a composite headlined by vertical ratio, the one metric the
+ * others' figures were inputs to. A fallback headline (vertical ratio excluded) cites nothing.
+ */
+export function readingDerivation(
+  reading: AreaReading<GuidedEntry>,
+  bounce: BounceDerivation | null,
+): string | undefined {
+  return reading.kind === 'composite' && reading.headline.metric.metric === 'verticalRatio' && bounce !== null
+    ? formatBounceDerivation(bounce)
+    : undefined
 }
 
 /**

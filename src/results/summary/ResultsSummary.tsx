@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { FormHeuristicsResult, MetricId, View } from '../../heuristics/types'
 import { feedbackFor } from '../../guidance/feedbackPoints'
+import { readingHeadline } from '../../guidance/compositeReadings'
 import { FOCUS_AREAS } from '../../guidance/focusAreas'
 import type { FocusAreaId } from '../../guidance/focusAreas'
 import { ModelRunner } from '../../runner/ModelRunner'
@@ -123,12 +124,12 @@ function SummaryBody({
   const activeArea = wide ? openedArea : null
 
   const { rows, notMeasured } = useMemo(() => {
-    const { areas, notMeasured } = summaryRows(heuristics)
+    const { areas, notMeasured } = summaryRows(heuristics, { sourceIndices })
     return {
       rows: areas.map((row) => ({ ...row, feedback: feedbackFor(row.view) })),
       notMeasured,
     }
-  }, [heuristics])
+  }, [heuristics, sourceIndices])
   const params = useMemo(() => bindRunnerParams(heuristics), [heuristics])
   const activeRow = rows.find((row) => row.view.area === activeArea) ?? null
   const focus = useMemo(
@@ -158,7 +159,7 @@ function SummaryBody({
         : undefined,
     [clipCount, sourceIndices, clipViews],
   )
-  const anyBar = rows.some(({ entries: [headline] }) => hasCompactBar(headline))
+  const anyBar = rows.some(({ readings }) => hasCompactBar(readingHeadline(readings[0])))
 
   const onRowToggle = useCallback(
     (area: FocusAreaId, open: boolean) =>
@@ -197,12 +198,13 @@ function SummaryBody({
       <div className="min-w-0 space-y-3">
         {anyBar && <BandLegend className="results-summary__legend" />}
         <div className="results-summary__rows divide-y-2 divide-black border-2 border-black dark:divide-white dark:border-white">
-          {rows.map(({ view, entries, feedback }) => (
+          {rows.map(({ view, readings, bounce, feedback }) => (
             <FocusAreaRow
               key={view.area}
               area={view.area}
               label={FOCUS_AREAS[view.area].label}
-              entries={entries}
+              readings={readings}
+              bounce={bounce}
               feedback={feedback}
               evidenceByMetric={evidenceByMetric}
               clipCount={clipCount}

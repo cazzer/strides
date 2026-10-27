@@ -8,6 +8,8 @@ import {
   ONE_THING_UNCLEAR,
 } from '../../guidance/feedbackPoints'
 import type { OneThing } from '../../guidance/feedbackPoints'
+import { readingHeadline } from '../../guidance/compositeReadings'
+import type { AreaReading } from '../../guidance/compositeReadings'
 import { FOCUS_AREAS } from '../../guidance/focusAreas'
 import type { FocusAreaId, TourStopId } from '../../guidance/focusAreas'
 import { METRIC_GUIDANCE } from '../../guidance/metricGuidance'
@@ -16,9 +18,10 @@ import { BandLegend } from '../BandLegend'
 import { FeedbackLine } from '../FeedbackLine'
 import { guidedHeadlineParts } from '../formatGuidedValue'
 import { joinList } from '../guidedGroups'
+import type { GuidedEntry } from '../guidedGroups'
 import { ExternalLink } from '../GuidedMetricCard'
-import { confidenceLabel } from '../metricConfidence'
-import { SHORT_METRIC_LABELS, hasCompactBar } from '../summary/summaryLabels'
+import { confidenceLabel, metricTier } from '../metricConfidence'
+import { SHORT_METRIC_LABELS, hasCompactBar, readingDerivation } from '../summary/summaryLabels'
 import type { CaptureHint, TourAreaStop } from './tourPlan'
 import { tourStopDomId } from './tourPlan'
 
@@ -48,6 +51,9 @@ const STOP_HEADING = 'font-display text-2xl font-bold tracking-tight max-lg:text
 const VALUE_LABEL =
   'font-sans text-xs font-semibold uppercase tracking-wide text-neutral-600 dark:text-neutral-400'
 const VALUE = 'font-display text-4xl font-bold tabular-nums leading-tight max-lg:text-3xl'
+const SECONDARY_VALUE = 'font-display text-2xl font-bold tabular-nums leading-tight'
+const DERIVATION = 'runner-tour__derivation font-sans text-sm text-neutral-700 dark:text-neutral-300'
+const CONFIDENCE = 'font-sans text-sm text-neutral-700 dark:text-neutral-300'
 const CITATION = 'feedback-line__citation font-sans text-xs text-neutral-600 dark:text-neutral-400'
 const BUTTON =
   'inline-flex min-h-11 items-center justify-center border-2 border-black px-4 py-2 font-sans text-sm font-semibold uppercase tracking-wide text-black transition-colors hover:bg-black hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:border-white dark:text-white dark:hover:bg-white dark:hover:text-black'
@@ -134,32 +140,63 @@ function StopSection({ id, heading, children }: StopSectionProps) {
 }
 
 /**
- * One measured focus area: its headline value (named, with its confidence when that is not
- * normal), a compact band bar when the headline is banded, the cited why line, then either the
- * area's one studied option or its non-point. Nothing else — the cards are in the summary.
+ * A value on its own line, named by a small label above it, with its band position for assistive
+ * technology only, its confidence when that is not normal, and a composite's "From …" line.
+ * Excluded from the word budget (`.runner-tour__value`): numbers and names, not prose.
+ */
+function ValueBlock({
+  entry,
+  derivation,
+  secondary,
+  composite,
+}: {
+  entry: GuidedEntry
+  derivation: string | undefined
+  secondary: boolean
+  composite: string | undefined
+}) {
+  const parts = guidedHeadlineParts(entry, { standalone: true })
+  const shortName = SHORT_METRIC_LABELS[entry.metric.metric]
+  return (
+    <div
+      className={secondary ? 'runner-tour__value runner-tour__value--secondary space-y-1' : 'runner-tour__value space-y-1'}
+      data-composite={composite}
+    >
+      {shortName !== undefined && <p className={VALUE_LABEL}>{shortName}</p>}
+      <p className={secondary ? SECONDARY_VALUE : VALUE}>
+        {parts.value}
+        {parts.position !== null && <span className="sr-only">, {parts.position}</span>}
+      </p>
+      {metricTier(entry.metric) === 'caveated' && <p className={CONFIDENCE}>{confidenceLabel(entry.metric)}</p>}
+      {derivation !== undefined && <p className={DERIVATION}>{derivation}</p>}
+    </div>
+  )
+}
+
+function compositeIdOf(reading: AreaReading<GuidedEntry>): string | undefined {
+  return reading.kind === 'composite' ? reading.id : undefined
+}
+
+/**
+ * One measured focus area: its first reading's headline value (named, with its confidence when that
+ * is not normal, and a composite's "From …" line), a compact band bar when that headline is banded,
+ * then, when a composite reading comes later (rhythm's bounce, after cadence), that reading's value
+ * as a smaller secondary block with no bar, then the cited why line, then either the area's one
+ * studied option or its non-point. Nothing else: the cards are in the summary.
  */
 export function AreaStop({ stop }: { stop: TourAreaStop }) {
-  const { view, entries, feedback } = stop
-  const [headline] = entries
-  const parts = guidedHeadlineParts(headline, { standalone: true })
-  const shortName = SHORT_METRIC_LABELS[headline.metric.metric]
-  const tier = view.headline?.tier
+  const { view, readings, bounce, feedback } = stop
+  const [first, ...later] = readings
+  const headline = readingHeadline(first)
+  const secondary = later.find((reading) => reading.kind === 'composite')
   return (
     <StopSection id={view.area} heading={FOCUS_AREAS[view.area].label}>
-      {/* The value on its own line, named by a small label above it. Excluded from the word budget
-          with its label and confidence: numbers and names, not prose. */}
-      <div className="runner-tour__value space-y-1">
-        {shortName !== undefined && <p className={VALUE_LABEL}>{shortName}</p>}
-        <p className={VALUE}>
-          {parts.value}
-          {parts.position !== null && <span className="sr-only">, {parts.position}</span>}
-        </p>
-        {tier === 'caveated' && (
-          <p className="font-sans text-sm text-neutral-700 dark:text-neutral-300">
-            {confidenceLabel(headline.metric)}
-          </p>
-        )}
-      </div>
+      <ValueBlock
+        entry={headline}
+        derivation={readingDerivation(first, bounce)}
+        secondary={false}
+        composite={compositeIdOf(first)}
+      />
       {hasCompactBar(headline) && (
         <div className="runner-tour__scale w-full max-w-sm">
           <MetricScale band={headline.band!} value={headline.metric.value!} compact />
@@ -167,6 +204,15 @@ export function AreaStop({ stop }: { stop: TourAreaStop }) {
       )}
       {/* Below `lg` the bar's key sits under it, in the panel; at `lg` it is beside the runner. */}
       {hasCompactBar(headline) && <BandLegend className="runner-tour__panel-legend lg:hidden" />}
+      {/* One bar per stop: the secondary reading is a value and its derivation, never a second bar. */}
+      {secondary !== undefined && (
+        <ValueBlock
+          entry={readingHeadline(secondary)}
+          derivation={readingDerivation(secondary, bounce)}
+          secondary
+          composite={compositeIdOf(secondary)}
+        />
+      )}
       {feedback.why !== null && <FeedbackLine line={feedback.why} className="runner-tour__why" />}
       {feedback.cue !== null ? (
         <CueLine {...feedback.cue} />
