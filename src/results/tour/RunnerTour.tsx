@@ -396,7 +396,7 @@ function TourBarActions({ stopIds, active, onLeaveTour, compact }: TourBarAction
       <button type="button" onClick={onLeaveTour} className={SKIP_CLASS}>
         {compact ? (
           <>
-            <span className="sr-only">Skip to </span>summary
+            <span className="sr-only">Skip to</span> summary
           </>
         ) : (
           'Skip to summary'

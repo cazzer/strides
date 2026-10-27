@@ -9,6 +9,7 @@ import type { ScalePassStatus, VideoAnalysisState } from '../types'
 import { hasCompactBar } from '../summary/summaryLabels'
 import { RunnerTour } from './RunnerTour'
 import { tourPlan } from './tourPlan'
+import { SHORT_PHONE_QUERY } from './useShortPhoneLayout'
 
 // The real runner draws SVG on a rAF loop; what this file checks is which camera, focus, rate and
 // intro the tour hands it, and that it is mounted once for the tour's whole life. It reports itself
@@ -233,6 +234,51 @@ describe('RunnerTour — shell', () => {
     expect(screen.getByRole('region', { name: 'Landing' })).toHaveAttribute('data-tour-stop', 'landing')
   })
 
+  it('on a short phone, puts the dots and Skip in one row with the runner’s controls, without remounting it', async () => {
+    const short = { matches: true }
+    const listeners = new Set<() => void>()
+    window.matchMedia = vi.fn((query: string) => ({
+      matches: query === SHORT_PHONE_QUERY ? short.matches : false,
+      media: query,
+      onchange: null,
+      addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia
+    const { container, onLeaveTour } = renderTour()
+
+    const heading = screen.getByRole('heading', { level: 2, name: 'Your runner model' })
+    const skip = screen.getByRole('button', { name: 'Skip to summary' })
+    // The bar keeps only the heading, which stays the tour's entry point and comes first.
+    expect(heading.parentElement?.children).toHaveLength(1)
+    expect(heading.compareDocumentPosition(skip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // The tour's own controls come first in the body.
+    expect(container.querySelector('.runner-tour__body button')).toBe(skip)
+    // The row is a sticky cell of the body's grid, ahead of the runner's rail.
+    const row = skip.closest('.runner-tour__header')!
+    expect(row).toHaveClass('sticky')
+    expect(row.parentElement).toHaveClass('runner-tour__body')
+    expect(row.compareDocumentPosition(rail(container)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(row.querySelector('nav[aria-label="Tour stops"]')).not.toBeNull()
+    // Visibly "Summary"; the name is unchanged.
+    expect(skip.querySelector('.sr-only')).toHaveTextContent('Skip to')
+    // The runner is told to lay its controls over the row.
+    expect((await lastRunnerProps()).className).toContain('[data-runner-part=controls]]:w-fit')
+    fireEvent.click(skip)
+    expect(onLeaveTour).toHaveBeenCalledTimes(1)
+
+    // Turning the phone (no longer short): back in the bar, and the runner is never remounted.
+    short.matches = false
+    act(() => listeners.forEach((listener) => listener()))
+    expect(screen.getByRole('button', { name: 'Skip to summary' }).closest('.runner-tour__header')).toBe(
+      heading.parentElement,
+    )
+    expect((await lastRunnerProps()).className).not.toContain('[data-runner-part=controls]]:w-fit')
+    expect(runner.mounts).toBe(1)
+  })
+
   it('ends with "See all measurements", which leaves the tour', () => {
     const { onLeaveTour } = renderTour()
     fireEvent.click(screen.getByRole('button', { name: 'See all measurements' }))
@@ -414,7 +460,9 @@ describe('RunnerTour — the runner follows the active stop', () => {
             [
               {
                 intersectionRatio: ratio,
-                intersectionRect: { height: 100 * ratio },
+                intersectionRect: { height: 200 * ratio },
+                // Tall enough for the gate's height floor (`MOSTLY_VISIBLE_MIN_HEIGHT`).
+                boundingClientRect: { height: 200 },
                 rootBounds: { height: 800 },
                 target,
               } as unknown as IntersectionObserverEntry,
