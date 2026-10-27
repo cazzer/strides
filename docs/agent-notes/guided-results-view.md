@@ -203,4 +203,3 @@ Tests: the card suite in `GuidedResultsView.test.tsx` renders the bare cards (`C
 word-budget tests render them inside `FocusAreaRow`, with the same measure and the same numbers.
 ⚠️ The cadence budget in code is **78**, not the ≤ 70 quoted above (it was raised in `strides-3f6`).
 The spec side is the REMOVED blocks in `add-runner-tour`'s guided-results-view delta.
-Left for later: `.guided-results__scroll-target` in `index.css` now matches nothing.

@@ -241,7 +241,7 @@ describe('RunnerTour — shell', () => {
 
   it('mounts no metric card, no disclosure and no evidence', () => {
     const { container } = renderTour()
-    expect(container.querySelector('.guided-results__group')).toBeNull()
+    expect(container.querySelector('[data-motion-metric]')).toBeNull()
     expect(container.querySelector('details')).toBeNull()
     expect(container.querySelector('.evidence-image')).toBeNull()
     expect(container.querySelector('canvas')).toBeNull()

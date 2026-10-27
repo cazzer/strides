@@ -91,7 +91,7 @@
 .motion-story { top: var(--motion-story-header-height, 88px); }
 .motion-story__dialog { position: fixed; inset: 0; margin: auto; }
 @media (max-width: 63.999rem) {
-  [data-motion-metric], .guided-results__scroll-target { scroll-margin-top: calc(var(--motion-story-header-height, 88px) + 92px); }
+  [data-motion-metric] { scroll-margin-top: calc(var(--motion-story-header-height, 88px) + 92px); }
   /* The phone tour: a swipe settles with a stop's slot ending at the screen's foot (`snap-end` on
      each slot, `TOUR_STOP_CLASS`), its panel low and the runner clear above it. On the document,
      the scroller, for as long as the tour is mounted; `proximity`, so a read part-way through a
