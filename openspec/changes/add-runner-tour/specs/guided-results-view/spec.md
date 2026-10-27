@@ -148,6 +148,56 @@ fails them as surely as none.
 - **WHEN** any results view renders for a completed analysis
 - **THEN** exactly one element with a status role contains the text "Analysis complete."
 
+### Requirement: A running-economy consequence is stated across runners, never as the effect of changing
+
+A metric's guidance record MAY carry one running-economy consequence: a sentence stating what
+published work found, between runners, about this quantity and energy cost, with the side of the
+band that association points away from (its costly side). Where it does, the sentence SHALL cite one
+of that metric's own verified sources, and every number it contains SHALL appear in that source's
+own summary.
+
+The consequence is guidance data, not rendered copy: no results view renders its sentence or its
+link. Its costly side is what the data is for. It SHALL be the side opposite the one the metric's
+studied change moves toward, and it decides cue eligibility: a reading earns a cue only strictly
+beyond its band's outermost finite bound on that side (runner-feedback, "A cue appears only where the
+studied change applies to this value"). A metric with no consequence SHALL never earn a cue.
+
+The sentence is kept as the record that costly side rests on, and the record SHALL hold it to the
+same rules whether or not anything renders it. The sentence SHALL open "Across runners" and SHALL
+state an association between runners, not the effect of one runner changing. Its subject SHALL be
+the quantity. It SHALL NOT address the reader, SHALL NOT use a causal verb such as raises, reduces,
+causes or improves, SHALL NOT apply a grading word, SHALL NOT name a target, and SHALL NOT mention
+injury. It SHOULD be in plain language: a statistic belongs in the source's summary, not in the
+sentence.
+
+A consequence SHALL exist only where the source reports the association in the unit this system
+reports the metric in. A metric normalised differently from every published row SHALL carry none,
+and none SHALL be imported from a sibling metric in another unit.
+
+#### Scenario: Only the two metrics with a published economy association carry one
+
+- **WHEN** the guidance record is read
+- **THEN** step rate and vertical oscillation in centimetres carry an economy consequence, and every
+  other metric, including vertical oscillation relative to torso length, carries none
+
+#### Scenario: A consequence quotes only its own source's numbers
+
+- **WHEN** a consequence contains a number
+- **THEN** that number appears in the summary of the source it cites, and that source is one of the
+  metric's own research or remediation links
+
+#### Scenario: A consequence describes runners, not the reader
+
+- **WHEN** the guidance record is read
+- **THEN** every consequence's sentence opens "Across runners", contains no "you" or "your", no
+  causal verb, no grading word and nothing about injury
+
+#### Scenario: The costly side is opposite the studied change
+
+- **WHEN** the guidance record is read
+- **THEN** every metric carrying a consequence has a studied change, and its costly side is below
+  the band when that change moves higher and above it when that change moves lower
+
 ## REMOVED Requirements
 
 ### Requirement: The guided results view is the default

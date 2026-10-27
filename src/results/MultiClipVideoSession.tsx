@@ -47,9 +47,9 @@ const NO_EVIDENCE: readonly EvidenceSection[] = []
 /**
  * Publishes the sticky header's height on `<main>` as `--motion-story-header-height`, for the two
  * rules that read it (`index.css`): the classic view's sticky motion stage, and the scroll margin on
- * every card and `.guided-results__scroll-target`. On `<main>` rather than on the stage, because the
- * stage renders beside the classic view only; set there, every other view's scroll targets would
- * fall back to the 88 px guess and land under a header that is often taller.
+ * every card. On `<main>` rather than on the stage, because the stage renders beside the classic
+ * view only; set there, every other view's scroll targets would fall back to the 88 px guess and
+ * land under a header that is often taller.
  */
 function useHeaderHeightProperty(
   headerRef: RefObject<HTMLElement | null>,
