@@ -4,9 +4,12 @@ import { METRIC_LABELS } from '../results/metricConfidence'
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 import { bindAll, bindOnly } from './__fixtures__/boundParams'
-import { CAMERA_PRESETS } from './camera'
-import { runnerParamValues, segmentSource } from './runnerParams'
+import { CAMERA_PRESETS, LANDING_PHASE_WINDOW, type PhaseWindow } from './camera'
+import { cyclesPerSecond } from './gaitModel'
+import { NEUTRAL_RUNNER_PARAMS, runnerParamValues, segmentSource } from './runnerParams'
 import {
+  FRAME_MS,
+  advancePhase,
   RUNNER_PARAM_IDS,
   VIEW_HALF_HEIGHT,
   VIEW_HALF_WIDTH,
@@ -222,6 +225,66 @@ describe('small helpers', () => {
     expect(labelAlign('right')).toBe('start')
     expect(labelAlign('left')).toBe('end')
     expect(labelAlign('above')).toBe('middle')
+  })
+
+  it('stacks a label block offsetLines line pitches further out, before keeping it in frame', () => {
+    const font = 0.1
+    const lines = ['Heel strike']
+    const plain = placeLabel({ x: 0, y: 0 }, 'below', lines, font, 0.05)
+    const stacked = placeLabel({ x: 0, y: 0 }, 'below', lines, font, 0.05, 2)
+    expect(stacked.ys[0] - plain.ys[0]).toBeCloseTo(2 * font * 1.2, 12)
+    const up = placeLabel({ x: 0, y: 0 }, 'above', lines, font, 0.05, 1)
+    expect(up.ys[0] - placeLabel({ x: 0, y: 0 }, 'above', lines, font, 0.05).ys[0]).toBeCloseTo(
+      -font * 1.2,
+      12,
+    )
+    const clamped = placeLabel({ x: 0, y: VIEW_HALF_HEIGHT - 0.1 }, 'below', lines, font, 0.05, 3)
+    expect(clamped.ys[0] + font * 0.6).toBeLessThanOrEqual(VIEW_HALF_HEIGHT + 1e-12)
+  })
+})
+
+describe('advancePhase', () => {
+  const window: PhaseWindow = LANDING_PHASE_WINDOW
+  const end = window.start + window.length
+  const inside = (phase: number) =>
+    phase >= window.start - 1e-9 && phase <= end + 1e-9
+
+  it('runs round the whole cycle without a window', () => {
+    expect(advancePhase(0.9, 0.2, null)).toBeCloseTo(0.1, 12)
+    expect(advancePhase(0.2, 0.05, null)).toBeCloseTo(0.25, 12)
+  })
+
+  it('loops inside the window: past its end it starts again from its start', () => {
+    expect(advancePhase(0.5, 0.05, window)).toBeCloseTo(0.55, 12)
+    expect(advancePhase(end - 0.01, 0.03, window)).toBeCloseTo(window.start + 0.02, 12)
+    expect(advancePhase(end, 0, window)).toBeCloseTo(end, 12)
+  })
+
+  it('a window wrapping past the cycle end loops across it', () => {
+    const wrapping: PhaseWindow = { start: 0.9, length: 0.2 }
+    expect(advancePhase(0.95, 0.1, wrapping)).toBeCloseTo(0.05, 12)
+    expect(advancePhase(0.08, 0.04, wrapping)).toBeCloseTo(0.92, 12)
+  })
+
+  it('plays on from outside the window into it, without a jump', () => {
+    expect(advancePhase(0.1, 0.05, window)).toBeCloseTo(0.15, 12)
+    const entered = advancePhase(window.start - 0.01, 0.03, window)
+    expect(entered).toBeCloseTo(window.start + 0.02, 12)
+    expect(advancePhase(entered, 0.03, window)).toBeCloseTo(window.start + 0.05, 12)
+  })
+
+  it('once inside, never leaves over ten seconds of 30 fps at cadence 170 and 0.4×', () => {
+    const delta = (FRAME_MS / 1000) * cyclesPerSecond({ ...NEUTRAL_RUNNER_PARAMS, cadence: 170 }) * 0.4
+    let phase = 0.5
+    let passedContact = 0
+    for (let i = 0; i < 300; i += 1) {
+      const next = advancePhase(phase, delta, window)
+      expect(inside(next), `frame ${i}: ${next}`).toBe(true)
+      if (phase < 0.5 && next >= 0.5) passedContact += 1
+      phase = next
+    }
+    // The window holds contact, and the loop keeps passing through it.
+    expect(passedContact).toBeGreaterThan(2)
   })
 })
 
