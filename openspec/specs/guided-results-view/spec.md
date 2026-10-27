@@ -1,8 +1,9 @@
 # guided-results-view Specification
 
 ## Purpose
-The default results page (classic stays reachable with `?view=classic`) that presents each metric
-against a published reference band where one can be cited — with its source, population and sample
+The shell the tour and summary render in, the view routing (the tour by default, the summary, and
+classic with `?view=classic`), and the band rules every guided card follows: each metric is
+presented against a published reference band where one can be cited — with its source, population and sample
 size on screen — and demotes metrics with no defensible band, or not measured on this clip, to
 collapsed groups with a reason, without changing any measurement.
 ## Requirements
@@ -268,76 +269,64 @@ other cause, and the view SHALL render the one that matches.
 
 ### Requirement: Exactly one results view is mounted at a time
 
-The guided view and the existing results view SHALL NOT be mounted simultaneously. The choice
-between them SHALL be exclusive.
+The runner tour, the results summary and the classic results view SHALL NOT be mounted
+simultaneously. The choice between them SHALL be exclusive. The tour and the summary SHALL each
+render exactly one guided results shell, never a hidden second copy. The tour SHALL mount no metric
+card and so no evidence canvas; its evidence is mounted when the reader switches to the summary or
+the classic view. The summary SHALL mount each metric's card (and so its evidence) at most once; a
+collapsed summary row SHALL hide its content without unmounting it.
 
 This is forced by the DOM, not chosen for tidiness. Session evidence hands out real canvas elements
 and each is mounted by replacing a host's children with it. **A DOM node has exactly one parent.**
-Mounting both views would silently move every evidence canvas into whichever rendered last, emptying
+Mounting two views would silently move every evidence canvas into whichever rendered last, emptying
 the other view's imagery with no error raised anywhere — a failure that looks like missing evidence
 rather than like a bug in view selection.
 
-For the same reason the guided view SHALL NOT acquire session evidence itself. It SHALL receive
-evidence as input from the single existing acquisition, so that switching views moves the canvases
-rather than duplicating or re-extracting them.
+For the same reason neither the guided view, the runner tour nor the results summary SHALL acquire
+session evidence itself. Each SHALL receive evidence as input from the single existing acquisition, so that
+switching views moves the canvases rather than duplicating or re-extracting them.
 
 #### Scenario: Only one view is in the document
 
-- **WHEN** the session has an analysable clip and either view is selected
-- **THEN** exactly one of the two results views is present in the document, and never both
+- **WHEN** the session has an analysable clip and any view is selected
+- **THEN** exactly one of the three results views is present in the document, and never two
 
 #### Scenario: Switching views preserves the imagery
 
-- **WHEN** the reader switches from one results view to the other and back
-- **THEN** evidence imagery renders in the view that is mounted, and no image is lost by the switch
+- **WHEN** the reader switches from the tour to the summary, to the classic view and back to the
+  summary
+- **THEN** the tour shows no evidence imagery, and from the summary on the imagery renders in the
+  view that is mounted, the same canvas elements move with each switch, and no image is lost
 
 #### Scenario: The guided view does not acquire evidence itself
 
-- **WHEN** the guided view renders
-- **THEN** it renders the evidence it was given as input and starts no evidence acquisition of its
-  own
+- **WHEN** the guided view, the runner tour or the results summary renders
+- **THEN** it renders at most the evidence it was given as input and starts no evidence acquisition
+  of its own
+
+#### Scenario: Collapsed summary rows keep their imagery
+
+- **WHEN** the results summary renders with every row collapsed
+- **THEN** each evidence canvas is already in the document inside its metric's row, exactly once,
+  and opening the row shows that same canvas rather than mounting a new one
 
 ### Requirement: The guided view announces completion with the same words the classic view does
 
-When the analysis has completed, the guided view SHALL render a status role containing the exact
-text "Analysis complete."
+When the analysis has completed, every results view — the runner tour, the results summary and the
+classic view — SHALL render exactly one status role beginning with the exact text "Analysis
+complete." A view that wraps the guided view SHALL rely on the guided view's line and SHALL NOT
+render a second one.
 
 That literal is a hard external coupling, not a copy decision: this repo's end-to-end spec and its
-A/B measurement driver both wait on those exact words, and today they exist only in the classic
-view. Rendering them in the guided view means a harness can drive either view, and means the default
-can be changed later without breaking either instrument.
+A/B measurement driver both wait on those exact words. Rendering them in every view means a harness
+can drive any of them, and means the default can change without breaking either instrument. Exactly
+one match matters as much as the words: both instruments locate the line strictly, and a second match
+fails them as surely as none.
 
 #### Scenario: The completion line is present and verbatim
 
-- **WHEN** the guided view renders for a completed analysis
-- **THEN** an element with a status role contains the text "Analysis complete."
-
-### Requirement: The guided view ranks metrics into three groups by what can be said about them
-
-The guided view SHALL present metrics in three groups: those measured with a reference band,
-expanded and ranked; those measured without one, collapsed; and those not measured on this clip,
-collapsed. Rank within the banded group SHALL be a fixed property of the guidance data, ordered by
-the strength of the evidence behind each band rather than by the metric's value on this clip.
-
-Ranking by the runner's own numbers would make the page's structure a judgement about the runner,
-which is the thing this capability does not do. Ranking by evidence strength makes the page's
-structure a statement about the research, which is what it is for.
-
-Where a metric's evidenced intervention is the same as another metric's, that remediation content
-MAY be attached to both, so that an unbanded metric's actionable answer is still reachable from a
-banded one.
-
-#### Scenario: Banded metrics render expanded and in their fixed rank order
-
-- **WHEN** the guided view renders an analysis in which several banded metrics resolved
-- **THEN** they render expanded, in the order their guidance data specifies, independently of their
-  measured values
-
-#### Scenario: The two other groups render collapsed and expand on demand
-
-- **WHEN** the guided view renders
-- **THEN** the unbanded and the not-measured groups render collapsed, and expand to reveal their
-  entries
+- **WHEN** any results view renders for a completed analysis
+- **THEN** exactly one element with a status role contains the text "Analysis complete."
 
 ### Requirement: Every outbound reference is from a verified set and opens safely
 
@@ -568,52 +557,27 @@ already decided to change, and leaves the decision with them.
 - **THEN** it opens with "If you choose to change your form:", and no studied-change line opens with
   an imperative such as "Try:"
 
-### Requirement: The three bounce measures are introduced together, each linking to its own entry
-
-The guided view SHALL render one introduction to the three measures of bounce — relative to torso
-length, in centimetres, and relative to stride length — stating that they describe related motion on
-different scales and answer different questions. For each measure the introduction SHALL name what
-it is relative to, show its value or that it was not measured on this clip, and link to that
-metric's own entry.
-
-The introduction SHALL NOT move any of the three out of the group it belongs to. Each still renders
-in its own banded, unbanded or not-measured group, with its own card, evidence and limits; the
-introduction is a signpost, not a parallel grouping. Following one of its links SHALL reveal and
-focus the target entry even where that entry sits inside a collapsed group.
-
-Three numbers that all say "bounce" in different units, scattered across three groups, read either
-as one finding stated three times or as three findings that disagree. Introducing them together says
-which question each one answers before the reader meets them apart.
-
-#### Scenario: The introduction names all three measures and links each
-
-- **WHEN** the guided view renders an analysis
-- **THEN** one section introduces the three bounce measures, naming for each what it is relative to,
-  its value or that it was not measured, and a link to that metric's own entry
-
-#### Scenario: Each measure still renders in its own group
-
-- **WHEN** the bounce introduction renders
-- **THEN** each of the three metrics also renders in the group its guidance and tier place it in,
-  unchanged
-
-#### Scenario: A link into a collapsed group reveals its target
-
-- **WHEN** the reader follows the introduction's link to a metric whose group is collapsed
-- **THEN** that group opens and the metric's entry receives focus
-
 ### Requirement: A running-economy consequence is stated across runners, never as the effect of changing
 
-A metric's guidance MAY carry one running-economy consequence: a sentence stating what published
-work found, between runners, about this quantity and energy cost, with the side of the band that
-association points away from. Where it does, the sentence SHALL cite one of that metric's own
-verified sources, and every number it contains SHALL appear in that source's own summary.
+A metric's guidance record MAY carry one running-economy consequence: a sentence stating what
+published work found, between runners, about this quantity and energy cost, with the side of the
+band that association points away from (its costly side). Where it does, the sentence SHALL cite one
+of that metric's own verified sources, and every number it contains SHALL appear in that source's
+own summary.
 
-The sentence SHALL open "Across runners" and SHALL state an association between runners, not the
-effect of one runner changing. Its subject SHALL be the quantity. It SHALL NOT address the reader,
-SHALL NOT use a causal verb such as raises, reduces, causes or improves, SHALL NOT apply a grading
-word, SHALL NOT name a target, and SHALL NOT mention injury. It SHOULD be in plain language: a
-statistic belongs in the source's summary, not in the visible sentence.
+The consequence is guidance data, not rendered copy: no results view renders its sentence or its
+link. Its costly side is what the data is for. It SHALL be the side opposite the one the metric's
+studied change moves toward, and it decides cue eligibility: a reading earns a cue only strictly
+beyond its band's outermost finite bound on that side (runner-feedback, "A cue appears only where the
+studied change applies to this value"). A metric with no consequence SHALL never earn a cue.
+
+The sentence is kept as the record that costly side rests on, and the record SHALL hold it to the
+same rules whether or not anything renders it. The sentence SHALL open "Across runners" and SHALL
+state an association between runners, not the effect of one runner changing. Its subject SHALL be
+the quantity. It SHALL NOT address the reader, SHALL NOT use a causal verb such as raises, reduces,
+causes or improves, SHALL NOT apply a grading word, SHALL NOT name a target, and SHALL NOT mention
+injury. It SHOULD be in plain language: a statistic belongs in the source's summary, not in the
+sentence.
 
 A consequence SHALL exist only where the source reports the association in the unit this system
 reports the metric in. A metric normalised differently from every published row SHALL carry none,
@@ -633,205 +597,98 @@ and none SHALL be imported from a sibling metric in another unit.
 
 #### Scenario: A consequence describes runners, not the reader
 
-- **WHEN** a consequence renders
-- **THEN** it opens "Across runners", contains no "you" or "your", no causal verb, no grading word and
-  nothing about injury
+- **WHEN** the guidance record is read
+- **THEN** every consequence's sentence opens "Across runners", contains no "you" or "your", no
+  causal verb, no grading word and nothing about injury
 
-### Requirement: A headline appears only where its spokesman reads past its cited band on the costly side
+#### Scenario: The costly side is opposite the studied change
 
-The view SHALL render an "Energy cost" section after the completion line and before the contents
-list. A story SHALL receive a headline only when its spokesman is in the banded group, is at the
-normal confidence tier, carries an economy consequence, and reads strictly beyond its band's
-outermost published finite bound on the side that consequence names as costly. A value exactly on
-that bound SHALL NOT trigger.
+- **WHEN** the guidance record is read
+- **THEN** every metric carrying a consequence has a studied change, and its costly side is below
+  the band when that change moves higher and above it when that change moves lower
 
-A spokesman at the caveated tier that reads past that bound SHALL NOT receive a headline. The section
-SHALL instead state in one line that it reads past that point with its card's confidence wording, and
-link to its card. A low-confidence reading is not a finding to lead the page with, and dropping it
-silently would hide the one position the section exists to report.
+### Requirement: The runner tour is the default results view
 
-A spokesman whose band is withheld or whose tier is excluded SHALL NOT trigger. The costly side SHALL
-be the side opposite the one the metric's studied change moves toward, so that a headline never sits
-beside a studied change pointing further out.
+With no view explicitly selected and no remembered landing, the runner tour SHALL render. The
+system SHALL offer three results views — the runner tour, the results summary and the classic
+table — and SHALL mount exactly one of them.
 
-The threshold is the outermost position the cited population was published at, on the side the
-association points away from. It SHALL NOT be presented as a target, and the band SHALL keep no
-preferred end.
+Exactly one `view` parameter whose value is exactly `tour`, `summary` or `classic` SHALL select
+that view. The legacy value `guide` SHALL select the runner tour. Every other address, including an
+absent, empty, unknown, repeated or differently-cased parameter, SHALL select the remembered landing
+view when one is set, and the runner tour otherwise. An explicit selection, `guide` included, SHALL
+take precedence over the remembered landing.
 
-#### Scenario: Bounce above the cited range earns a headline at the normal tier
+When the reader skips or finishes the tour, the system SHALL remember the summary as the landing
+view in browser storage, and SHALL switch to the summary. Replaying the tour SHALL NOT change the
+remembered landing. Unavailable or throwing storage SHALL NOT prevent a view from rendering; it SHALL
+read as no remembered landing.
 
-- **WHEN** vertical oscillation in centimetres reads 10.4 cm against a 6.0–9.5 cm band, at the
-  normal tier
-- **THEN** a bounce headline renders
+Selecting the classic view SHALL write `view=classic` to the address, so a reload or a shared link
+renders the classic view. Selecting the tour or the summary SHALL remove the `view` parameter from
+the address rather than write a value.
 
-#### Scenario: A caveated reading past its point is sent to its card instead
+Each switch the reader makes SHALL add a history entry that records the view it shows, so the
+browser's Back and Forward step through the views the reader visited without leaving the page.
+Returning to an entry SHALL restore the view that entry records, and SHALL NOT add an entry of its
+own. The entry the page loaded on SHALL record the view it opened with. An entry that records no
+view, such as one an in-page link created, SHALL leave the view on screen unchanged.
 
-- **WHEN** vertical oscillation in centimetres reads 10.4 cm at the caveated tier
-- **THEN** no headline renders, and the section says it reads above 9.5 cm with its card's confidence
-  wording and links to its card
-
-#### Scenario: Bounce inside or below the range earns none
-
-- **WHEN** vertical oscillation in centimetres reads 8.0 cm or 4.42 cm
-- **THEN** no bounce headline renders
-
-#### Scenario: Step rate below the 5th-percentile cut earns a headline
-
-- **WHEN** step rate reads 150 steps/min at the normal tier, against a band whose lowest published
-  bound is 153
-- **THEN** a step-rate headline renders, and at exactly 153 or at 174 none does
-
-#### Scenario: An excluded spokesman never triggers
-
-- **WHEN** a spokesman's tier is excluded, whatever its value
-- **THEN** no headline renders for its story
-
-### Requirement: Each story has one fixed spokesman and yields at most one headline
-
-Step rate SHALL speak only through the step-rate metric, and bounce only through vertical
-oscillation in centimetres. Overstriding, vertical oscillation relative to torso length and vertical
-ratio SHALL NOT speak for either story, whatever they read, and no other metric SHALL be substituted
-when a spokesman is not measured. Each story SHALL yield at most one headline.
-
-A metric that tells the same story still renders its own card below, unchanged.
-
-#### Scenario: No fallback when the spokesman is missing
-
-- **WHEN** vertical oscillation in centimetres is not measured and vertical oscillation relative to
-  torso length reads high
-- **THEN** no bounce headline renders
-
-#### Scenario: Promoted metrics still render below
-
-- **WHEN** a headline renders for a spokesman
-- **THEN** that metric's card still renders in its group below, and the headline section contains no
-  card
-
-### Requirement: Headlines render in evidence order, never in order of the runner's readings
-
-Headlines SHALL render in ascending presentation rank of their spokesmen, so step rate precedes
-bounce. The order SHALL NOT depend on how far a value sits past its bound, on any value's magnitude,
-or on any other property of the runner's readings.
-
-#### Scenario: The order is fixed whatever the readings
-
-- **WHEN** both headlines render, with either reading the further past its bound
-- **THEN** step rate renders first and bounce second
-
-### Requirement: An empty headline section says where each story stands, without grading
-
-Where no story earns a headline, the section SHALL say, for each story in reader terms ("step rate",
-"bounce in centimetres"), where it stands, from that story's own status:
-
-- **inside** — that it is not past its point, naming the point;
-- **past at a caveated tier** — the one line the headline requirement describes;
-- **not measured** — that it could not be measured on this clip;
-- **still being measured** — while the background scale pass is pending or running, that it is being
-  measured with a second look at the clip, never that it could not be measured;
-- **no band shown** — that there is no range shown to compare it with.
-
-It SHALL NOT say a reading is not past its point unless that story was measured against a shown band
-and is not past it. Every point it names SHALL come from a band the page shows; a band withheld for
-missing provenance SHALL NOT be named, and no empty slot SHALL be printed in its place. Where no
-measured story names its point, the section SHALL name the points for the stories still to be
-measured, so the reader learns what the section reports.
-
-The section SHALL direct the reader to the measurements below, SHALL use at most fifty words of its
-own in every variant, SHALL be styled as secondary text rather than framed as a finding, SHALL NOT
-promote another metric, and SHALL NOT apply a grading word.
-
-#### Scenario: Neither reading past its point
-
-- **WHEN** step rate reads 174 and bounce reads 4.42 cm
-- **THEN** the section says step rate is not below the 5th percentile of Garmin's table and bounce in
-  centimetres is not above 9.5 cm, and renders no headline
-
-#### Scenario: One story not measured
-
-- **WHEN** step rate is not measured and bounce reads inside its band
-- **THEN** the section says where bounce stands and that step rate could not be measured on this clip
-
-#### Scenario: The centimetre bounce still being measured
-
-- **WHEN** the scale pass is still running and the centimetre bounce has no value yet
-- **THEN** the section says it is being measured with a second look at the clip, and does not say it
-  could not be measured
-
-### Requirement: A headline states the position, the association, and the card's own cautions
-
-A headline SHALL render, in this order: its spokesman's name as a heading; the value and its position
-against the band, in words that name the range since no scale renders beside it, with the speed tag
-where speed moves the metric; which clip it was measured from, exactly as that metric's card states
-it, where the session holds more than one clip; the economy consequence with a link to its source;
-the first sentence of every mandatory note on that metric; the metric's studied-change line exactly
-where its card would render it; and a link to the metric's card, or, for bounce, to the introduction
-of the three bounce measures.
-
-The band's citation line, the metric's caveat and its confidence label stay on the card: a headline
-renders only normal-tier readings, and the card is one link away. A headline SHALL render no evidence
-image, no scale, no colour beyond the card's own neutral palette and no icon, and SHOULD stay near
-sixty visible words of its own. A link SHALL move focus to its target, and the target SHALL be
-scrolled clear of any sticky header. The completion line SHALL be unchanged.
-
-#### Scenario: The bounce headline carries its position, association and cautions in order
-
-- **WHEN** a bounce headline renders at 10.4 cm
-- **THEN** it states "above the 6.0–9.5 cm range" and the speed tag, then the consequence linked to
-  its source, then the first sentence of the metric's mandatory note, then the studied-change line
-  opening "If you choose to change your form:", then a link to the bounce introduction, and it
-  renders no citation line and no caveat
-
-#### Scenario: The step-rate headline carries the pace caution
-
-- **WHEN** a step-rate headline renders
-- **THEN** it carries the speed tag, the sentence "180 steps per minute is not a target." and a link
-  "Go to the Cadence card"
-
-#### Scenario: A headline names its source clip in a multi-clip session
-
-- **WHEN** a headline renders in a session of two clips
-- **THEN** it states the clip and view its metric was measured from, the same words its card shows
-
-#### Scenario: A headline link moves focus to its target
-
-- **WHEN** the reader follows a headline's link
-- **THEN** focus moves to the cadence card or to the bounce introduction's heading
-
-#### Scenario: A headline renders no imagery
-
-- **WHEN** a headline renders for a metric whose card has evidence images
-- **THEN** the images render on the card and none renders in the headline section
-
-### Requirement: The guided results view is the default
-
-With no view explicitly selected, the guided results view SHALL render. The classic view SHALL be
-reachable by an explicit selection that survives a reload and can be shared as a link, and by a
-visible control that names both destinations and is operable from the keyboard.
-
-Exactly one `view` parameter whose value is exactly `classic` SHALL select the classic view; every
-other address, including an absent, unknown, repeated or differently-cased parameter, SHALL select
-the guided view. Selecting the guided view SHALL remove the `view` parameter from the address rather
-than write a value, so the default address carries none.
+Each view SHALL offer keyboard-operable controls to the others: the tour a control to skip to the
+summary; the summary, below its results, a control to replay the tour and a control to open the
+classic table; the classic view a control to show the summary. Each view SHALL mark one entry
+point at its top: a heading in the tour and the summary, and the show-summary control in the classic
+view. After a switch, focus SHALL move to the new view's entry point, never to a control further
+down the page.
 
 Selecting a view SHALL NOT require a routing library.
 
-#### Scenario: No selection renders the guided view
+#### Scenario: No selection and no landing renders the tour
 
-- **WHEN** the results render with no view explicitly selected, or with an unrecognised selection
-- **THEN** the guided results view renders
+- **WHEN** the results render with no view selected and no remembered landing
+- **THEN** the runner tour renders
+
+#### Scenario: A remembered summary landing renders the summary
+
+- **WHEN** the results render with no view selected and the summary remembered as the landing view
+- **THEN** the results summary renders
+
+#### Scenario: Skipping or finishing the tour remembers the summary
+
+- **WHEN** the reader skips or finishes the tour
+- **THEN** the summary renders, the summary is remembered as the landing view, and the address
+  carries no `view` parameter
+
+#### Scenario: Unavailable storage still renders a view
+
+- **WHEN** browser storage throws on every access
+- **THEN** the runner tour renders, and skipping it still switches to the summary
+
+#### Scenario: An older guided link renders the tour
+
+- **WHEN** the page loads with `?view=guide`, whether or not a landing is remembered
+- **THEN** the runner tour renders
 
 #### Scenario: An explicit classic selection survives a reload and is shareable
 
 - **WHEN** the reader selects the classic view
 - **THEN** the address carries `view=classic`, so reloading or sharing it renders the classic view
 
-#### Scenario: An older guided link still renders the guided view
+#### Scenario: Each view offers keyboard-operable controls to the others
 
-- **WHEN** the page loads with `?view=guide`
-- **THEN** the guided results view renders
+- **WHEN** any of the three views renders
+- **THEN** it offers native buttons, operable from the keyboard, that reach the other views as listed
+  above, and activating one moves focus to the new view's entry point
 
-#### Scenario: The control is reachable and names both destinations
+#### Scenario: Browser Back returns to the previous view
 
-- **WHEN** the view control renders
-- **THEN** it is operable from the keyboard and carries an accessible name identifying both views
+- **WHEN** the reader moves from the summary to the classic view and then presses the browser's Back
+- **THEN** the summary renders again with its evidence imagery intact, the address carries no `view`
+  parameter, and the page has not been left
+
+#### Scenario: No routing library
+
+- **WHEN** the dependencies are inspected
+- **THEN** no routing library is installed, and the view is read from and written to the address
+  directly
 
