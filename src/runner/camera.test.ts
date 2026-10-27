@@ -50,7 +50,7 @@ describe('projection', () => {
       .toBeCloseTo(2.5, 12)
   })
 
-  it('a pitched-up camera looks down: a point nearer the camera rises on screen, height shrinks', () => {
+  it('a pitched-up camera looks down: a point nearer the camera drops on screen, height shrinks', () => {
     const camera = at(0, 30)
     expect(projectPoint({ x: 0, y: 1, z: 0 }, camera).y).toBeCloseTo(-Math.cos(Math.PI / 6), 12)
     expect(projectPoint({ x: 0, y: 0, z: 1 }, camera).y).toBeCloseTo(Math.sin(Math.PI / 6), 12)
@@ -121,6 +121,14 @@ describe('presets', () => {
     }
   })
 
+  it('presets and their targets are frozen', () => {
+    expect(Object.isFrozen(CAMERA_PRESETS)).toBe(true)
+    for (const preset of PRESETS) {
+      expect(Object.isFrozen(CAMERA_PRESETS[preset])).toBe(true)
+      expect(Object.isFrozen(CAMERA_PRESETS[preset].target)).toBe(true)
+    }
+  })
+
   it('resolveCamera accepts a preset name or a state', () => {
     expect(resolveCamera('legsSide')).toBe(CAMERA_PRESETS.legsSide)
     const state = at(12, 3, 2)
@@ -146,6 +154,16 @@ describe('interpolateCamera', () => {
   it('takes the shorter way round: 350° to 10° passes through 0°, not 180°', () => {
     expect(yawMod(interpolateCamera(at(350), at(10), 0.5).yawDeg)).toBeCloseTo(0, 9)
     expect(yawMod(interpolateCamera(at(10), at(350), 0.25).yawDeg)).toBeCloseTo(5, 9)
+  })
+
+  it('returns yaw normalised to [0, 360)', () => {
+    expect(interpolateCamera(at(350), at(10), 1).yawDeg).toBeCloseTo(10, 9)
+    expect(interpolateCamera(at(10), at(350), 0.75).yawDeg).toBeCloseTo(355, 9)
+    for (let i = 0; i <= 20; i += 1) {
+      const { yawDeg } = interpolateCamera(at(-30), at(400), i / 20)
+      expect(yawDeg).toBeGreaterThanOrEqual(0)
+      expect(yawDeg).toBeLessThan(360)
+    }
   })
 
   it('interpolates zoom geometrically: 1 to 4 is 2 at the midpoint', () => {

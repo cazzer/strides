@@ -62,19 +62,32 @@ export type RunnerMetricId =
   | 'swingFootLateralExcursion'
 
 /**
- * A parameter after binding. `value` is what the model draws, in the parameter's unit.
- * `metricValue` is the metric's own reported number (the one to label), and `clamped` says the
- * drawing hit a geometry limit, so `value` differs from `metricValue × scale`.
+ * A parameter after binding. `value` is always exactly what the model draws, in the parameter's
+ * unit: measuring the model drawn from these values returns each `value`.
  */
 export type BoundRunnerParam =
   | {
       source: 'measured'
       value: number
       metricId: RunnerMetricId
+      /** The metric's own reported number: the one to label, even when `value` differs. */
       metricValue: number
+      /**
+       * True when `value` differs from `metricValue × scale`: the figure's drawable range clipped
+       * it, or a stronger measured parameter sharing the contact leg made it give way
+       * (`realizeParams`). Read it as "drawn at a limit, not at the measured number".
+       */
       clamped: boolean
     }
-  | { source: 'neutral'; value: number }
+  | {
+      source: 'neutral'
+      /**
+       * The illustrative neutral constant, or, when a measured parameter sharing the contact leg
+       * needed the geometry, that constant adjusted to fit around it (`realizeParams`). Never a
+       * measurement either way.
+       */
+      value: number
+    }
 
 export type BoundRunnerParams = Readonly<Record<RunnerParamId, BoundRunnerParam>>
 

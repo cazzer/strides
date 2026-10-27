@@ -18,7 +18,14 @@
 - [x] 4.1 `src/runner/camera.ts`: orthographic projection, `CAMERA_PRESETS`, `CAMERA_FRAME_HALF_HEIGHT`, `resolveCamera`, `projectPoint`, `projectPose`, `interpolateCamera`
 - [x] 4.2 `camera.test.ts`: side and front projection, target and zoom, pitch, preset framing, interpolation endpoints, yaw wrap, geometric zoom, continuity for every preset pair
 
-## 5. Gates
+## 5. Review round 1
 
-- [x] 5.1 `npm run lint`, `npx tsc -b`, `npx vitest run src/runner`, and the full `npx vitest run`
-- [x] 5.2 `openspec validate add-model-runner --strict`
+- [x] 5.1 `realizeParams`: contact conflicts resolved by precedence (measured beats neutral; landing, foot strike, thigh peak); `bindRunnerParams` sets every `value` to what is drawn, `clamped` on a measured parameter that gave way; invariant and reviewer cases tested; convex-mix tween test
+- [x] 5.2 Contact knee bend capped at the mid-stance key (30°); peak metrics measured in tests with the heuristics' own extrema finder and median
+- [x] 5.3 Non-tautological seam tests at phase 1 and at the right leg's wrap (0.5)
+- [x] 5.4 Camera: test title fixed, yaw normalised to [0, 360), presets frozen; per-binding moved-joint families asserted
+
+## 6. Gates
+
+- [x] 6.1 `npm run lint`, `npx tsc -b`, `npx vitest run src/runner`, and the full `npx vitest run`
+- [x] 6.2 `openspec validate add-model-runner --strict`

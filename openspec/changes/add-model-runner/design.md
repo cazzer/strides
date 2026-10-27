@@ -34,8 +34,14 @@ returns the bound value"**: `gaitModel.test.ts` applies each metric's formula to
 unit `'percent'`, which in this codebase is a 0..1 fraction (here, of hip width), so they bind into
 hip widths with `scale = 1`. There is no `stepWidthCm` fallback for `stepWidth`.
 
-Out-of-range values clamp and the bound parameter carries `clamped: true` alongside the metric's
-own `metricValue`, so a renderer labels the true number and knows the drawing sits at a limit.
+Every bound `value` is exactly what the model draws. Out-of-range values clamp, and a contact
+parameter can give way to a stronger partner (D4); either way the bound parameter carries
+`clamped: true` alongside the metric's own `metricValue`, so a renderer labels the true number and
+knows the drawing sits at a limit. The tested invariant is that measuring the model drawn from
+`runnerParamValues(bound)` returns every `bound[id].value`, and that a measured `value` differing
+from `metricValue × scale` is always `clamped`. The peak metrics (kneeDrive, kneeFlexion) are
+measured in the tests with the heuristics' own `findLocalExtrema` and `median` (read-only, test-only
+imports), not as a cycle maximum.
 
 ### D2. kneeFlexion is a swing angle
 
@@ -43,9 +49,12 @@ own `metricValue`, so a renderer labels the true number and knows the drawing si
 `kneeFlexion.ts:160-166` explains that the series' prominent maxima are the swing-phase
 heel-toward-glutes peaks, `kneeFlexion.ts:245` keeps only maxima, and `kneeFlexion.ts:273` reports
 their median. `kneeDrive.ts:162` describes it the same way ("swing-phase knee BEND"). So it binds
-the peak swing knee bend. The model's knee curve has keys [0: κc ≤ 45°], [0.19: 30°], [0.38: 22°],
-[0.62: peakSwingKneeBend], [0.90: 15°], and the parameter's floor (50°) is above every other key, so
-the curve's single maximum is the bound value.
+the peak swing knee bend. The model's knee curve has keys [0: κc ≤ 30°], [0.19: 30°], [0.38: 22°],
+[0.62: peakSwingKneeBend], [0.90: 15°], and the parameter's floor (50°) is above every other key.
+The contact bend is capped at the mid-stance key (30°), so late swing → contact → mid-stance never
+forms a second maximum: the metric's prominence scan (20°) then finds one maximum per leg per cycle,
+at the bound value. An earlier 45° cap let contact become a second prominent maximum and pulled the
+median well below the bound value (review round 1).
 
 ### D3. footStrikePattern binds the contact shank offset exactly
 
@@ -54,14 +63,36 @@ not a foot angle. The model binds that offset directly (`contactShankOffset`) ra
 a foot angle from it. The foot's pitch at contact is set equal to the shank angle, an illustrative
 choice that makes a positive offset read as toes-up.
 
-### D4. Contact conflict: landing stays exact, foot strike gives way
+### D4. Contact conflicts: measured beats neutral; landing, then foot strike, then thigh peak
 
-Both contact offsets fix the contact thigh and shank angles. When the knee bend they imply lies in
-[0°, 45°] both are exact. Otherwise (e.g. a shank offset larger than half the landing offset would
-need a hyperextended knee) the bend is clamped to that range and the thigh is re-solved so the
-landing offset stays exact; the shank offset is then not reproduced. A peak thigh angle below the
-contact thigh angle is a second, documented conflict: the measured knee drive then reads as the
-contact angle. Neither case is flagged on the bound parameter in this change.
+Three parameters share the contact leg. `landingOffset` and `contactShankOffset` fix the contact
+thigh and shank angles, and the measured knee drive reads the larger of the swing peak and the
+contact thigh angle, so `peakThighAngle` needs the contact thigh at or below it. Not every
+combination can be drawn: the contact knee bend must lie in [0°, 30°] (no hyperextension, D2), so,
+for example, a shank offset larger than about half the landing offset, or a landing offset at or
+behind the hip, conflicts. Those are common on real numbers (overstriding near −0.04..0.05, foot
+strike near ±0.03–0.1).
+
+`realizeParams(params, measured)` resolves this by precedence and returns the conflict-free set the
+model draws:
+
+- **A measured parameter beats a neutral one.** A neutral partner gives way, so a lone measured
+  value is always drawn exactly. Example: foot strike measured at 0.2 with landing neutral at 0.3
+  draws 0.2 and moves the neutral landing to fit.
+- **Among measured (or among neutral) parameters, the order is landing offset, foot strike, thigh
+  peak.** Both offsets measured at (0.05, 0.10) draw the landing exactly and the foot strike at
+  0.025; knee drive measured at 12° with a measured landing of 0.3 draws about 15°.
+- A parameter that gives way is drawn as close to its request as the stronger ones allow (the knee
+  bend is clamped at the boundary it crossed). In the one case where the thigh peak outranks both
+  offsets and even a straight leg lands too far ahead, the leg stays straight at the thigh peak and
+  both neutral offsets give way, which keeps the drawn values continuous in the inputs.
+
+`bindRunnerParams` applies this, so every bound `value` is what is drawn: a measured parameter that
+gave way carries the drawn `value`, `clamped: true` and its true `metricValue`; a neutral one that
+gave way stays `source: 'neutral'` with its constant adjusted to fit (it may then sit outside the
+nominal drawable range, which only bounds measured values). `poseAt` itself, called with raw
+parameters (for instance a tween), resolves any conflict with the default order (landing exact,
+foot strike gives way, thigh peak reads as the contact thigh) and stays continuous.
 
 ### D5. Neutral constants are illustrative and never a target
 
@@ -151,7 +182,8 @@ illustratively.
 ### D12. Smaller deviations from the plan
 
 - Mid-stance knee key 40° → 30°: at 40° the stance foot lifted about 0.19 torso lengths over
-  stance; 30° minimized that lift (0.12) and stays below the 50° knee-bend floor.
+  stance; 30° minimized that lift (0.12) and stays below the 50° knee-bend floor. The contact knee
+  cap now equals this key (D2).
 - The arm-swing check reads the raw peak-to-peak of wrist − shoulder height; the metric fits a
   sinusoid, and the model's drop is the cosine of a sinusoid, so a fitted amplitude could differ
   slightly from the raw one.
@@ -160,7 +192,14 @@ illustratively.
 
 ## Risks / Trade-offs
 
-- The two contact conflicts (D4) draw something other than the measured foot strike or knee drive
-  without a flag. ps19.2 labels `metricValue`, so the number shown stays true.
+- When two measured contact parameters conflict (D4), the weaker one is drawn away from its
+  measurement. It is flagged (`clamped: true`, `value` = what is drawn), and ps19.2 labels
+  `metricValue`, so the number shown stays true; the renderer decides how to mark "drawn at a
+  limit". A neutral partner adjusted to fit is still drawn as neutral.
 - ps19.2/.3 must integrate phase over time (`phase += dt · cyclesPerSecond · rate`); reduced motion
   can use `poseAt(GAIT_PHASES.midStance)`.
+- ps19.3's intro tweens measured parameters from `NEUTRAL_RUNNER_PARAMS` to `bound.value`, with the
+  neutral ones held at `bound.value`. Intermediate mixes go straight to `poseAt` (not through
+  `realizeParams`), which stays finite and continuous on any convex mix (tested); only the endpoint
+  is guaranteed conflict-free.
+- `interpolateCamera` returns yaw normalised to [0, 360), and the presets are frozen.

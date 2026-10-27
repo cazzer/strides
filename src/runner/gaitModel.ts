@@ -14,7 +14,7 @@
  * 0, right contact at 0.5. The right side is the left side half a cycle later, mirrored.
  */
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
-import type { Joint3D, RunnerParams, Vec3 } from './types'
+import type { Joint3D, RunnerParamId, RunnerParams, Vec3 } from './types'
 
 /** Illustrative stick-figure proportions, torso lengths (shoulder-mid to hip-mid = 1). */
 export const MODEL_PROPORTIONS = {
@@ -70,8 +70,11 @@ const KNEE_MID_STANCE_DEG = 30
 const KNEE_TOE_OFF_DEG = 22
 const KNEE_LATE_SWING_DEG = 15
 const KNEE_LATE_SWING_PHASE = 0.9
-/** The contact knee bend is held at or below every unbound knee key's ceiling (see D4). */
-const MAX_CONTACT_KNEE_DEG = 45
+/**
+ * The contact knee bend is held at or below the mid-stance key, so late swing → contact →
+ * mid-stance never forms a second prominent knee-flexion maximum (design.md D2, D4).
+ */
+const MAX_CONTACT_KNEE_DEG = KNEE_MID_STANCE_DEG
 const FOOT_MID_STANCE_DEG = 0
 const FOOT_TOE_OFF_DEG = -35
 const FOOT_MID_SWING_DEG = -20
@@ -118,45 +121,152 @@ interface ContactGeometry {
   shankDeg: number
 }
 
+interface SagittalLegLengths {
+  thigh: number
+  shank: number
+}
+
+/** sin of the whole leg's constant outward tilt that puts the contact ankle at `stepWidth`. */
+function legTiltSin(stepWidth: number): number {
+  const { hipWidth, thigh, shank } = MODEL_PROPORTIONS
+  // Each segment tilts outward by the same angle, so the contact ankle's lateral offset from its
+  // own hip joint is (T + S)·sin(tilt), independent of the sagittal angles.
+  return clamp(((stepWidth - 0.5) * hipWidth) / (thigh + shank), -1, 1)
+}
+
+/** The leg segments' side-view lengths: the outward tilt shortens both by cos(tilt). */
+function sagittalLegLengths(stepWidth: number): SagittalLegLengths {
+  const sinTilt = legTiltSin(stepWidth)
+  const scale = Math.sqrt(1 - sinTilt * sinTilt)
+  return { thigh: MODEL_PROPORTIONS.thigh * scale, shank: MODEL_PROPORTIONS.shank * scale }
+}
+
+const MAX_CONTACT_KNEE_RAD = MAX_CONTACT_KNEE_DEG * DEG
+
 /**
- * Thigh, knee and shank angles at contact from `landingOffset` (ankle ahead of hip-mid) and
- * `contactShankOffset` (ankle ahead of knee). `sagittalScale` is cos of the leg's lateral tilt,
- * which shortens both segments' sagittal projections equally.
- *
- * Both offsets are exact when the knee bend they imply lies in [0°, 45°]. Otherwise the bend is
- * clamped to that range and the thigh is re-solved so the landing offset stays exact: the shank
- * offset (foot strike) is the one that gives way (design.md D4).
+ * The contact thigh angle that puts the ankle exactly `landingOffset` ahead of the hip with knee
+ * bend `kneeRad`: ankle.x − hip.x = Im(e^{iθ}(T + S e^{−iκ})) = R sin(θ + φ). Increasing in the
+ * knee bend over [0, MAX_CONTACT_KNEE_DEG] for these proportions.
  */
-function solveContact(
-  landingOffset: number,
-  contactShankOffset: number,
-  sagittalScale: number,
-): ContactGeometry {
-  const thigh = MODEL_PROPORTIONS.thigh * sagittalScale
-  const shank = MODEL_PROPORTIONS.shank * sagittalScale
-  const shankRatio = contactShankOffset / shank
+function thighForLanding(landingOffset: number, kneeRad: number, legs: SagittalLegLengths): number {
+  const re = legs.thigh + legs.shank * Math.cos(kneeRad)
+  const im = -legs.shank * Math.sin(kneeRad)
+  return Math.asin(clamp(landingOffset / Math.hypot(re, im), -1, 1)) - Math.atan2(im, re)
+}
+
+/** The shank angle that puts the ankle exactly `contactShankOffset` ahead of the knee. */
+function shankForStrike(contactShankOffset: number, legs: SagittalLegLengths): number {
+  return Math.asin(clamp(contactShankOffset / legs.shank, -1, 1))
+}
+
+/**
+ * Thigh, knee and shank angles at contact, as `poseAt` draws them. Both offsets are exact when the
+ * knee bend they imply lies in [0°, MAX_CONTACT_KNEE_DEG]. Otherwise the bend is clamped and the
+ * thigh re-solved so the landing offset stays exact: the shank offset gives way. Parameters from
+ * `realizeParams` never conflict, so for them both offsets are always exact.
+ */
+function solveContact(params: RunnerParams): ContactGeometry {
+  const legs = sagittalLegLengths(params.stepWidth)
+  const shankRatio = params.contactShankOffset / legs.shank
   const shankRad = Math.asin(clamp(shankRatio, -1, 1))
-  const thighRatio = (landingOffset - shank * Math.sin(shankRad)) / thigh
+  const thighRatio = (params.landingOffset - legs.shank * Math.sin(shankRad)) / legs.thigh
   const thighRad = Math.asin(clamp(thighRatio, -1, 1))
   const kneeRad = thighRad - shankRad
   if (
     Math.abs(shankRatio) <= 1 &&
     Math.abs(thighRatio) <= 1 &&
     kneeRad >= 0 &&
-    kneeRad <= MAX_CONTACT_KNEE_DEG * DEG
+    kneeRad <= MAX_CONTACT_KNEE_RAD
   ) {
     return { thighDeg: thighRad / DEG, kneeDeg: kneeRad / DEG, shankDeg: shankRad / DEG }
   }
-  const knee = clamp(kneeRad, 0, MAX_CONTACT_KNEE_DEG * DEG)
-  // ankle.x − hip.x = Im(e^{iθ}(T + S e^{−iκ})) = R sin(θ + φ).
-  const re = thigh + shank * Math.cos(knee)
-  const im = -shank * Math.sin(knee)
-  const reach = Math.hypot(re, im)
-  const thighSolved = Math.asin(clamp(landingOffset / reach, -1, 1)) - Math.atan2(im, re)
+  const knee = clamp(kneeRad, 0, MAX_CONTACT_KNEE_RAD)
+  const thighSolved = thighForLanding(params.landingOffset, knee, legs)
+  return { thighDeg: thighSolved / DEG, kneeDeg: knee / DEG, shankDeg: (thighSolved - knee) / DEG }
+}
+
+/** The three parameters that share the contact leg geometry, in default precedence order. */
+export const CONTACT_PARAMS = ['landingOffset', 'contactShankOffset', 'peakThighAngle'] as const
+
+type ContactParamId = (typeof CONTACT_PARAMS)[number]
+
+/**
+ * The parameters the model actually draws. `landingOffset`, `contactShankOffset` and
+ * `peakThighAngle` all constrain the contact leg (the measured knee drive reads the larger of the
+ * swing peak and the contact thigh angle), and some combinations cannot all be drawn. This
+ * resolves them by precedence and returns a conflict-free set, for which measuring `poseAt` returns
+ * every value exactly. Every other parameter is returned unchanged.
+ *
+ * Precedence: a parameter in `measured` beats one that is not, so a neutral partner gives way and
+ * the measured value is drawn exactly. Within the measured (or within the neutral) ones the order
+ * is landing offset, then contact shank offset, then peak thigh angle (design.md D4). A parameter
+ * that gives way is drawn as close to its requested value as the stronger ones allow.
+ */
+export function realizeParams(
+  params: RunnerParams,
+  measured: ReadonlySet<RunnerParamId> = new Set(),
+): RunnerParams {
+  const rank = (id: ContactParamId) =>
+    (measured.has(id) ? 0 : CONTACT_PARAMS.length) + CONTACT_PARAMS.indexOf(id)
+  const landingRank = rank('landingOffset')
+  const strikeRank = rank('contactShankOffset')
+  const thighPeakRank = rank('peakThighAngle')
+  const legs = sagittalLegLengths(params.stepWidth)
+  const landing = params.landingOffset
+  const peak = params.peakThighAngle * DEG
+  const strikeShank = shankForStrike(params.contactShankOffset, legs)
+  const landingKept = landingRank < strikeRank
+
+  // Landing vs foot strike: the knee bend both imply, clamped; the stronger one stays exact.
+  const exactThigh = Math.asin(
+    clamp((landing - legs.shank * Math.sin(strikeShank)) / legs.thigh, -1, 1),
+  )
+  let knee = clamp(exactThigh - strikeShank, 0, MAX_CONTACT_KNEE_RAD)
+  let thigh = landingKept ? thighForLanding(landing, knee, legs) : strikeShank + knee
+
+  if (thigh > peak && thighPeakRank < Math.max(landingRank, strikeRank)) {
+    // The thigh peak outranks the weaker contact offset, so the contact thigh comes down to it.
+    const peakOutranksKept = thighPeakRank < Math.min(landingRank, strikeRank)
+    if (landingKept) {
+      if (thighForLanding(landing, 0, legs) <= peak) {
+        const shankOnLanding = Math.asin(
+          clamp((landing - legs.thigh * Math.sin(peak)) / legs.shank, -1, 1),
+        )
+        knee = clamp(peak - shankOnLanding, 0, MAX_CONTACT_KNEE_RAD)
+        thigh = peak
+      } else if (peakOutranksKept) {
+        // Even a straight leg lands too far ahead for this thigh peak, so both offsets give way.
+        // The leg stays straight, which is where the landing-exact branch above leaves it at the
+        // boundary, so the drawn offsets stay continuous in the inputs.
+        thigh = peak
+        knee = 0
+      } else {
+        knee = 0
+        thigh = thighForLanding(landing, 0, legs)
+      }
+    } else if (peak - strikeShank >= 0) {
+      knee = Math.min(peak - strikeShank, MAX_CONTACT_KNEE_RAD)
+      thigh = peak
+    } else if (peakOutranksKept) {
+      knee = 0
+      thigh = peak
+    } else {
+      knee = 0
+      thigh = strikeShank
+    }
+  }
+
+  const drawnStrike = legs.shank * Math.sin(thigh - knee)
+  const drawnLanding = legs.thigh * Math.sin(thigh) + drawnStrike
+  const drawnPeak = Math.max(peak, thigh) / DEG
+  // A value the solve reproduced is returned as given, not as its floating-point echo.
+  const keep = (requested: number, drawn: number) =>
+    Math.abs(drawn - requested) <= 1e-9 ? requested : drawn
   return {
-    thighDeg: thighSolved / DEG,
-    kneeDeg: knee / DEG,
-    shankDeg: (thighSolved - knee) / DEG,
+    ...params,
+    landingOffset: keep(landing, drawnLanding),
+    contactShankOffset: keep(params.contactShankOffset, drawnStrike),
+    peakThighAngle: keep(params.peakThighAngle, drawnPeak),
   }
 }
 
@@ -177,14 +287,10 @@ interface LegFrame {
 }
 
 function legFrame(params: RunnerParams): LegFrame {
-  const { hipWidth, thigh, shank } = MODEL_PROPORTIONS
-  // Each segment tilts outward by the same angle, so the contact ankle's lateral offset from its
-  // own hip joint is (T + S)·sin(tilt), independent of the sagittal angles.
-  const sinTilt = clamp(((params.stepWidth - 0.5) * hipWidth) / (thigh + shank), -1, 1)
-  const sagittalScale = Math.sqrt(1 - sinTilt * sinTilt)
+  const { hipWidth, shank } = MODEL_PROPORTIONS
   return {
-    contact: solveContact(params.landingOffset, params.contactShankOffset, sagittalScale),
-    sinTilt,
+    contact: solveContact(params),
+    sinTilt: legTiltSin(params.stepWidth),
     arcSinPeak: (params.swingFootArc * hipWidth) / (shank * RAISED_COSINE_P80_P20),
   }
 }

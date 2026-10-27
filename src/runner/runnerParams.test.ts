@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { METRIC_GUIDANCE } from '../guidance/metricGuidance'
 import { referenceBandEnvelope } from '../guidance/types'
-import type { MetricId, MetricResult } from '../heuristics/types'
+import type { FormHeuristicsResult, MetricId, MetricResult } from '../heuristics/types'
 import {
   makeHeuristics,
   makeMetric,
@@ -9,7 +9,8 @@ import {
   makeVerticalOscillationCm,
 } from '../results/__fixtures__/metricResult'
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
-import { MODEL_TORSO_LENGTH_CM } from './gaitModel'
+import { CONTACT_PARAMS, MODEL_TORSO_LENGTH_CM } from './gaitModel'
+import { MEASURE_PARAM } from './measureModel.testUtils'
 import {
   NEUTRAL_RUNNER_PARAMS,
   RUNNER_PARAM_SEGMENTS,
@@ -41,6 +42,15 @@ function expectNeutral(bound: BoundRunnerParams, id: RunnerParamId): void {
   expect(bound[id]).toEqual({ source: 'neutral', value: RUNNER_PARAM_SPECS[id].neutral })
 }
 
+/**
+ * Neutral, and at its constant unless it is a contact parameter that a measured partner made give
+ * way (the fixture's 0.08 overstriding cannot be drawn with the 0.08 neutral shank offset).
+ */
+function expectNeutralOrAdjusted(bound: BoundRunnerParams, id: RunnerParamId): void {
+  expect(bound[id].source).toBe('neutral')
+  if (!(CONTACT_PARAMS as readonly RunnerParamId[]).includes(id)) expectNeutral(bound, id)
+}
+
 describe('bindRunnerParams', () => {
   it('binds every parameter to its metric when all are measured', () => {
     const heuristics = makeHeuristics()
@@ -65,7 +75,7 @@ describe('bindRunnerParams', () => {
       const bound = bindRunnerParams(
         makeHeuristics({ [metricId]: makeMetric(metricId, { value: null, confidence: 0 }) }),
       )
-      expectNeutral(bound, id)
+      expectNeutralOrAdjusted(bound, id)
       for (const other of PARAM_IDS) {
         if (other !== id) expect(bound[other].source).toBe('measured')
       }
@@ -79,8 +89,18 @@ describe('bindRunnerParams', () => {
       const bound = bindRunnerParams(
         makeHeuristics({ [metricId]: makeMetric(metricId, { viewFit: 'unsuitable' }) }),
       )
-      expectNeutral(bound, id)
+      expectNeutralOrAdjusted(bound, id)
     }
+  })
+
+  it('a null contact metric with no conflicting partner sits exactly at its neutral constant', () => {
+    const bound = bindRunnerParams(
+      makeHeuristics({
+        footStrikePattern: makeMetric('footStrikePattern', { value: null }),
+        overstriding: makeMetric('overstriding', { value: 0.3 }),
+      }),
+    )
+    expectNeutral(bound, 'contactShankOffset')
   })
 
   it('binds a caveated (low-confidence) metric: uncertain is still measured', () => {
@@ -179,6 +199,88 @@ describe('bindRunnerParams', () => {
     expect(values.cadence).toBe(NEUTRAL_RUNNER_PARAMS.cadence)
     expect(values.torsoPitch).toBe(5)
     expect(Object.keys(values).sort()).toEqual([...PARAM_IDS].sort())
+  })
+})
+
+describe('every bound value is what the model draws', () => {
+  const metricOverrides = (values: Partial<Record<RunnerMetricId, number | null>>) =>
+    makeHeuristics(
+      Object.fromEntries(
+        Object.entries(values).map(([metric, value]) => [
+          metric,
+          makeMetric(metric as RunnerMetricId, { value: value as number | null }),
+        ]),
+      ),
+    )
+
+  const CASES: Record<string, FormHeuristicsResult> = {
+    defaults: makeHeuristics(),
+    'landing 0.05, foot strike 0.10': metricOverrides({ overstriding: 0.05, footStrikePattern: 0.1 }),
+    'landing 0.10, foot strike 0.06': metricOverrides({ overstriding: 0.1, footStrikePattern: 0.06 }),
+    'landing −0.10, foot strike 0': metricOverrides({ overstriding: -0.1, footStrikePattern: 0 }),
+    'foot strike 0.2, landing neutral': metricOverrides({ footStrikePattern: 0.2, overstriding: null }),
+    'knee drive 12°, landing and foot strike neutral': metricOverrides({
+      kneeDrive: 12,
+      overstriding: null,
+      footStrikePattern: null,
+    }),
+    'knee drive 12°, landing 0.3 measured': metricOverrides({ kneeDrive: 12, overstriding: 0.3 }),
+    'crossover, wide arc, deep lean': metricOverrides({
+      stepWidth: -0.4,
+      swingFootLateralExcursion: 0.5,
+      trunkLean: 18,
+      kneeFlexion: 130,
+    }),
+    'everything neutral': metricOverrides(
+      Object.fromEntries(
+        (Object.keys(EXPECTED_BINDING) as RunnerParamId[]).map((id) => [EXPECTED_BINDING[id], null]),
+      ) as Record<RunnerMetricId, null>,
+    ),
+  }
+
+  for (const [label, heuristics] of Object.entries(CASES)) {
+    it(`${label}: measuring the drawn model returns every bound value; a differing one is clamped`, () => {
+      const bound = bindRunnerParams(heuristics)
+      const drawn = runnerParamValues(bound)
+      for (const id of PARAM_IDS) {
+        const { measure, tolerance } = MEASURE_PARAM[id]
+        expect(Math.abs(measure(drawn) - bound[id].value), id).toBeLessThanOrEqual(tolerance)
+        const param = bound[id]
+        if (param.source === 'measured') {
+          const scale = RUNNER_PARAM_SPECS[id].metrics.find((m) => m.metric === param.metricId)!.scale
+          if (param.value !== param.metricValue * scale) expect(param.clamped, id).toBe(true)
+          else expect(param.clamped, id).toBe(false)
+        }
+      }
+    })
+  }
+
+  it('both offsets measured in conflict: landing exact, foot strike drawn lower and clamped', () => {
+    const bound = bindRunnerParams(CASES['landing 0.05, foot strike 0.10'])
+    expect(bound.landingOffset).toMatchObject({ source: 'measured', value: 0.05, clamped: false })
+    expect(bound.contactShankOffset).toMatchObject({
+      source: 'measured',
+      metricId: 'footStrikePattern',
+      metricValue: 0.1,
+      clamped: true,
+    })
+    expect(bound.contactShankOffset.value).toBeCloseTo(0.025, 2)
+  })
+
+  it('a measured foot strike is drawn exactly; the neutral landing is adjusted around it', () => {
+    const bound = bindRunnerParams(CASES['foot strike 0.2, landing neutral'])
+    expect(bound.contactShankOffset).toMatchObject({ value: 0.2, metricValue: 0.2, clamped: false })
+    expect(bound.landingOffset.source).toBe('neutral')
+    expect(bound.landingOffset.value).not.toBe(RUNNER_PARAM_SPECS.landingOffset.neutral)
+  })
+
+  it('a measured knee drive is drawn exactly over a neutral contact leg, and gives way to a measured landing', () => {
+    const alone = bindRunnerParams(CASES['knee drive 12°, landing and foot strike neutral'])
+    expect(alone.peakThighAngle).toMatchObject({ value: 12, clamped: false })
+    const withLanding = bindRunnerParams(CASES['knee drive 12°, landing 0.3 measured'])
+    expect(withLanding.landingOffset).toMatchObject({ value: 0.3, clamped: false })
+    expect(withLanding.peakThighAngle).toMatchObject({ metricValue: 12, clamped: true })
+    expect(withLanding.peakThighAngle.value).toBeGreaterThan(12)
   })
 })
 

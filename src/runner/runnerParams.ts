@@ -16,7 +16,7 @@
  */
 import { metricTier, type MetricTier } from '../results/metricConfidence'
 import type { FormHeuristicsResult, MetricResult } from '../heuristics/types'
-import { MODEL_TORSO_LENGTH_CM } from './gaitModel'
+import { MODEL_TORSO_LENGTH_CM, realizeParams } from './gaitModel'
 import type {
   BoundRunnerParam,
   BoundRunnerParams,
@@ -115,12 +115,26 @@ function bindOne(
  * Binds every parameter to its first measured candidate metric, or to its neutral constant when
  * every candidate is null or tiered `'excluded'`. A `'caveated'` metric binds: low confidence is
  * still a measurement.
+ *
+ * Every bound `value` is what the model draws. The contact parameters are passed through
+ * `realizeParams`, so where they conflict the weaker one is redrawn: a measured one then carries
+ * the drawn `value` with `clamped: true` (its `metricValue` stays the truth), and a neutral one
+ * carries its constant adjusted to fit.
  */
 export function bindRunnerParams(
   metrics: RunnerMetrics,
   tierOf: (metric: MetricResult) => MetricTier = metricTier,
 ): BoundRunnerParams {
-  return mapParams((id) => bindOne(RUNNER_PARAM_SPECS[id], metrics, tierOf))
+  const bound = mapParams((id) => bindOne(RUNNER_PARAM_SPECS[id], metrics, tierOf))
+  const measured = new Set(RUNNER_PARAM_IDS.filter((id) => bound[id].source === 'measured'))
+  const drawn = realizeParams(runnerParamValues(bound), measured)
+  return mapParams((id): BoundRunnerParam => {
+    const param = bound[id]
+    if (drawn[id] === param.value) return param
+    return param.source === 'measured'
+      ? { ...param, value: drawn[id], clamped: true }
+      : { source: 'neutral', value: drawn[id] }
+  })
 }
 
 /** The plain values `poseAt` takes. */

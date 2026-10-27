@@ -18,19 +18,18 @@ export const CAMERA_FRAME_HALF_HEIGHT = 2
 const SHOULDER_HEIGHT = PELVIS_HEIGHT + 1
 const HEAD_TOP = SHOULDER_HEIGHT + MODEL_PROPORTIONS.ear.up
 
-export const CAMERA_PRESETS: Readonly<Record<CameraPreset, CameraState>> = {
-  wholeBodySide: { yawDeg: 0, pitchDeg: 0, zoom: 1, target: { x: 0, y: HEAD_TOP / 2, z: 0 } },
-  upperFrontQuarter: {
-    yawDeg: 45,
-    pitchDeg: 5,
-    zoom: 1.7,
-    target: { x: 0, y: PELVIS_HEIGHT + 0.6, z: 0 },
-  },
-  torsoSide: { yawDeg: 0, pitchDeg: 0, zoom: 1.8, target: { x: 0, y: PELVIS_HEIGHT + 0.5, z: 0 } },
-  legsSide: { yawDeg: 0, pitchDeg: 0, zoom: 1.4, target: { x: 0, y: PELVIS_HEIGHT / 2, z: 0 } },
-  footSide: { yawDeg: 0, pitchDeg: 0, zoom: 3, target: { x: 0.25, y: 0.25, z: 0 } },
-  feetFront: { yawDeg: 90, pitchDeg: 0, zoom: 2.4, target: { x: 0, y: 0.35, z: 0 } },
+function preset(yawDeg: number, pitchDeg: number, zoom: number, target: Vec3): CameraState {
+  return Object.freeze({ yawDeg, pitchDeg, zoom, target: Object.freeze({ ...target }) })
 }
+
+export const CAMERA_PRESETS: Readonly<Record<CameraPreset, CameraState>> = Object.freeze({
+  wholeBodySide: preset(0, 0, 1, { x: 0, y: HEAD_TOP / 2, z: 0 }),
+  upperFrontQuarter: preset(45, 5, 1.7, { x: 0, y: PELVIS_HEIGHT + 0.6, z: 0 }),
+  torsoSide: preset(0, 0, 1.8, { x: 0, y: PELVIS_HEIGHT + 0.5, z: 0 }),
+  legsSide: preset(0, 0, 1.4, { x: 0, y: PELVIS_HEIGHT / 2, z: 0 }),
+  footSide: preset(0, 0, 3, { x: 0.25, y: 0.25, z: 0 }),
+  feetFront: preset(90, 0, 2.4, { x: 0, y: 0.35, z: 0 }),
+})
 
 export function resolveCamera(camera: CameraPreset | CameraState): CameraState {
   return typeof camera === 'string' ? CAMERA_PRESETS[camera] : camera
@@ -105,7 +104,8 @@ function lerp(a: number, b: number, t: number): number {
 
 /**
  * Camera between `a` (t = 0) and `b` (t = 1), t clamped to [0, 1]. Yaw takes the shorter way
- * round, pitch and target interpolate linearly, and zoom geometrically so a zoom-in feels even.
+ * round and is returned in [0, 360), pitch and target interpolate linearly, and zoom
+ * geometrically so a zoom-in feels even.
  */
 export function interpolateCamera(
   a: CameraPreset | CameraState,
@@ -117,7 +117,7 @@ export function interpolateCamera(
   const u = Math.min(1, Math.max(0, t))
   const yawDelta = ((((to.yawDeg - from.yawDeg) % 360) + 540) % 360) - 180
   return {
-    yawDeg: from.yawDeg + yawDelta * u,
+    yawDeg: ((((from.yawDeg + yawDelta * u) % 360) + 360) % 360),
     pitchDeg: lerp(from.pitchDeg, to.pitchDeg, u),
     zoom: from.zoom * (to.zoom / from.zoom) ** u,
     target: {

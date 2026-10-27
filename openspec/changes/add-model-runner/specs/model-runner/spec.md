@@ -27,6 +27,13 @@ No metric SHALL be a candidate for more than one parameter, and `verticalRatio` 
 SHALL bind nothing. A value outside the drawable range SHALL be clamped and the bound parameter
 SHALL record the metric's own value and that it was clamped.
 
+Every bound parameter's value SHALL be exactly what the model draws. Where the landing offset, the
+contact shank offset and the peak thigh angle cannot all be drawn together, a measured parameter
+SHALL take precedence over a neutral one, and among parameters of the same source the order SHALL
+be landing offset, then contact shank offset, then peak thigh angle. A measured parameter that gives
+way SHALL carry the drawn value, be marked clamped, and keep the metric's own value. A neutral
+parameter that gives way SHALL remain neutral, with its constant adjusted to fit.
+
 #### Scenario: A measured metric binds
 - **WHEN** `trunkLean` is measured at 5° with normal confidence
 - **THEN** torso pitch is bound to 5°, its source is measured, and it names `trunkLean`
@@ -51,6 +58,18 @@ SHALL record the metric's own value and that it was clamped.
 - **WHEN** the binding table is inspected
 - **THEN** each metric appears as a candidate for at most one parameter
 
+#### Scenario: A measured foot strike beats a neutral landing
+- **WHEN** `footStrikePattern` is measured at 0.2 and `overstriding` is null
+- **THEN** the contact shank offset is drawn at exactly 0.2, unclamped, and the neutral landing offset is adjusted to fit and stays neutral
+
+#### Scenario: Two measured contact offsets conflict
+- **WHEN** `overstriding` is measured at 0.05 and `footStrikePattern` at 0.10
+- **THEN** the landing offset is drawn at exactly 0.05, and the contact shank offset carries the drawn value (about 0.025), is marked clamped, and keeps 0.10 as its metric value
+
+#### Scenario: The bound values are what is drawn
+- **WHEN** the model is drawn from the bound values and each binding metric's formula is applied to it
+- **THEN** every formula returns its parameter's bound value
+
 ### Requirement: Neutral constants are illustrative and never a target
 
 Each neutral constant SHALL be documented as illustrative and SHALL NOT equal, to within 1%, any
@@ -68,9 +87,9 @@ SHALL NOT provide any per-side or variability parameter, because no metric repor
 
 ### Requirement: A bound parameter changes only its own part of the runner, in the direction of its value
 
-Applying a bound metric's own formula to the model's joints SHALL return the parameter's value,
-for every parameter (the swing-foot arc to within its percentile sampling) except in the
-documented contact and thigh-peak conflicts. Raising a parameter SHALL raise
+Applying a bound metric's own formula to the model's joints SHALL return the parameter's value
+for every parameter in a conflict-free set (the swing-foot arc to within its percentile sampling,
+the peak metrics to within their extrema finder's sampling). Raising a parameter SHALL raise
 that measured quantity. Changing a parameter SHALL leave every joint outside that parameter's
 documented set of joints bit-identical. Cadence SHALL change only the cycle rate.
 
@@ -82,9 +101,9 @@ documented set of joints bit-identical. Cadence SHALL change only the cycle rate
 - **WHEN** step width is bound to 0.05 hip widths
 - **THEN** the contact ankle's outward offset from the hip midline, over the model's hip width, is 0.05
 
-#### Scenario: Contact conflict keeps the landing exact
-- **WHEN** the shank offset at contact is too large for the landing offset without hyperextending the knee
-- **THEN** the landing offset is still exact, the knee is held straight, and the foot-strike offset is what gives way
+#### Scenario: Contact conflict keeps the stronger parameter exact
+- **WHEN** both contact offsets are measured and the shank offset is too large for the landing offset without hyperextending the knee
+- **THEN** the landing offset is still exact, the knee is held straight, and the foot-strike offset is what gives way, drawn at the value its bound parameter carries
 
 ### Requirement: Neutral parts are identifiable per segment
 
