@@ -355,7 +355,7 @@ describe('the marks are the drawn values and lie on the live figure', () => {
     }
   })
 
-  it('stacks the ground-lane labels in focus order at the lane’s lowest anchor', () => {
+  it('stacks the ground-lane labels in focus order, centred under the first, at the lane’s lowest anchor', () => {
     for (const focus of [
       ['landingOffset', 'contactShankOffset'],
       ['contactShankOffset', 'landingOffset'],
@@ -365,6 +365,9 @@ describe('the marks are the drawn values and lie on the live figure', () => {
       const landingMarkY = only(bound, 'landingOffset').marks[0][0].y
       expect(first.anchor.y).toBe(landingMarkY)
       expect(second.anchor.y).toBe(landingMarkY)
+      const own = only(bound, focus[0]).label.anchor.x
+      expect(first.anchor.x).toBe(own)
+      expect(second.anchor.x).toBe(own)
       expect(first.offsetLines).toBe(0)
       expect(second.offsetLines).toBe(first.lines.length)
     }

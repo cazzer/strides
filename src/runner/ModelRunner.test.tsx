@@ -20,6 +20,7 @@ import { runnerParamValues } from './runnerParams'
 import {
   FAR_OPACITY,
   FRAME_MS,
+  LABEL_LINE_HEIGHT,
   RUNNER_PARAM_IDS,
   RUNNER_PX,
   UNFOCUSED_OPACITY,
@@ -836,7 +837,7 @@ describe('ModelRunner landing camera', () => {
     })
   }
 
-  it('draws the landing marks on the live leg: guides meet hip-mid and the ankle, the strike label under the heel', () => {
+  it('draws the landing marks on the live leg: guides meet hip-mid and the ankle, the labels stacked as one block', () => {
     mockReducedMotion(true)
     const { container } = setup({ camera: 'landingSide', focus: LANDING_FOCUS })
     const hip = {
@@ -855,19 +856,23 @@ describe('ModelRunner landing camera', () => {
     )
     expect(strikeEnd.x).toBeCloseTo(joint('right_ankle').cx, 3)
     expect(strikeEnd.y).toBeCloseTo(joint('right_ankle').cy, 3)
-    // Both ground-lane labels sit below the ground, the foot strike's under the overstride's.
-    const firstLine = (id: string) =>
-      container.querySelector(`[data-annotation="${id}"] text tspan`) as SVGTSpanElement
-    const overstrideY = Number(firstLine('landingOffset').getAttribute('y'))
-    const strike = firstLine('contactShankOffset')
-    expect(Number(strike.getAttribute('y'))).toBeGreaterThan(overstrideY)
-    // Centred under the heel, kept inside the frame by the usual label clamp.
-    const lines = Array.from(strike.parentElement?.querySelectorAll('tspan') ?? [], (t) => t.textContent ?? '')
-    const font = RUNNER_PX.label / 100
-    const chars = Math.max(...lines.map((line) => line.length))
-    expect(Number(strike.getAttribute('x'))).toBeCloseTo(
-      clampLabelX(joint('right_heel').cx, 'middle', chars, font),
-      3,
+    // The foot strike's block sits a whole line pitch below the overstride's last line, on the
+    // same centre (the overstride's, kept inside the frame by the usual label clamp).
+    const spans = (id: string) =>
+      Array.from(container.querySelectorAll<SVGTSpanElement>(`[data-annotation="${id}"] text tspan`))
+    const overstride = spans('landingOffset')
+    const strike = spans('contactShankOffset')
+    const y = (span: SVGTSpanElement) => Number(span.getAttribute('y'))
+    const pitch = (RUNNER_PX.label / 100) * LABEL_LINE_HEIGHT
+    expect(y(strike[0])).toBeGreaterThanOrEqual(y(overstride[overstride.length - 1]) + pitch - 1e-3)
+    const [start, end] = pathEnds(
+      container.querySelector('[data-annotation="landingOffset"] [data-role="mark"]')?.getAttribute('d') ?? null,
     )
+    const centre = (start.x + end.x) / 2
+    const font = RUNNER_PX.label / 100
+    for (const block of [overstride, strike]) {
+      const chars = Math.max(...block.map((span) => (span.textContent ?? '').length))
+      expect(Number(block[0].getAttribute('x'))).toBeCloseTo(clampLabelX(centre, 'middle', chars, font), 3)
+    }
   })
 })

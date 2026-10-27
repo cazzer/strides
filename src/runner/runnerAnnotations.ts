@@ -536,17 +536,19 @@ const GROUND_LANE_TOLERANCE = 1e-9
 
 /**
  * Two or more ground-lane labels (overstride under its mark, foot strike under the heel) would
- * print over each other: they share the lane's lowest anchor height and stack in focus order, each
- * below the lines of the ones before it. A lone ground-lane label keeps its own anchor.
+ * print over each other: they stack in focus order as one block, centred under the first one's
+ * anchor at the lane's lowest anchor height, each below the lines of the ones before it. A lone
+ * ground-lane label keeps its own anchor.
  */
 function stackGroundLane(annotations: RunnerAnnotation[]): RunnerAnnotation[] {
   const lane = annotations.filter((a) => inGroundLane(a.label))
   if (lane.length < 2) return annotations
+  const laneX = lane[0].label.anchor.x
   const laneY = Math.min(...lane.map((a) => a.label.anchor.y))
   let offsetLines = 0
   return annotations.map((a) => {
     if (!inGroundLane(a.label)) return a
-    const label = { ...a.label, anchor: { ...a.label.anchor, y: laneY }, offsetLines }
+    const label = { ...a.label, anchor: { ...a.label.anchor, x: laneX, y: laneY }, offsetLines }
     offsetLines += a.label.lines.length
     return { ...a, label }
   })
