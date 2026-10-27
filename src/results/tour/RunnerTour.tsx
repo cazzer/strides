@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
-import type { FormHeuristicsResult, MetricId } from '../../heuristics/types'
+import type { FormHeuristicsResult, MetricId, View } from '../../heuristics/types'
 import { FOCUS_AREAS, FOCUS_AREA_ORDER } from '../../guidance/focusAreas'
 import type { TourStopId } from '../../guidance/focusAreas'
 import { ONE_THING_LABEL } from '../../guidance/feedbackPoints'
@@ -14,7 +14,9 @@ import { BandLegend } from '../BandLegend'
 import { NO_FOCUS_CAMERA, runnerFocusFor } from '../focusAreaCamera'
 import { GuidedResultsView } from '../GuidedResultsView'
 import type { GuidedResultsViewProps } from '../GuidedResultsView'
+import type { MetricCardEvidence } from '../MetricsPanel'
 import { useRevealFragment } from '../revealFragment'
+import { runnerFootageFor } from '../runnerFootagePlate'
 import type { SessionCoverage } from '../sessionCoverage'
 import { hasCompactBar } from '../summary/summaryLabels'
 import { introCamera, stopCamera, tourPlan, tourStopDomId } from './tourPlan'
@@ -172,6 +174,9 @@ const RUNNER_NOTE_CLASS =
 /** The runner's drawing inside the rail, which the intro waits to see. */
 const RUNNER_FIGURE_SELECTOR = 'figure svg'
 
+const NO_EVIDENCE: readonly MetricCardEvidence[] = []
+const NO_VIEW_KINDS: readonly (View | null)[] = []
+
 /** Every area's metrics in tour order: the intro applies the figure's parameters in this order. */
 const INTRO_ORDER: readonly MetricId[] = FOCUS_AREA_ORDER.flatMap((area) => FOCUS_AREAS[area].metricIds)
 
@@ -194,7 +199,9 @@ const DOT_ACTIVE = 'bg-black dark:bg-white forced-colors:bg-[color:Highlight]'
  * labelled "Analysis results": the guided view inside it is that section, and there is exactly one.
  *
  * The tour mounts no metric card and so no evidence canvas: those mount once the reader moves on to
- * the summary, which holds every card.
+ * the summary, which holds every card. The runner may still show the shown stop's headline evidence
+ * frame faintly behind a still figure (`runnerFootageFor`); it copies the canvas's pixels and never
+ * mounts the canvas itself.
  *
  * The plan and the active stop live here, above the shell, because the sticky bar's progress dots
  * show the active stop as well as the body.
@@ -247,6 +254,9 @@ export function RunnerTour({ onLeaveTour, resultKey, coverage, onAddClip, ...gui
             onSeeAll={onLeaveTour}
             onAddClip={onAddClip}
             barRow={actionsInBody ? actions : null}
+            evidence={guidedProps.evidence ?? NO_EVIDENCE}
+            sourceIndices={guidedProps.sourceIndices ?? null}
+            clipViewKinds={guidedProps.clipViewKinds ?? NO_VIEW_KINDS}
           />
         ) : null}
       </GuidedResultsView>
@@ -509,6 +519,11 @@ interface TourBodyProps {
   /** On a short phone, the tour's dots and Skip, for the row they share with the runner's
    * controls at the top of the body; otherwise null (they are in the tour's bar). */
   barRow: ReactNode
+  /** For the runner's footage plate (`runnerFootageFor`): the session's evidence, which clip won
+   * each metric, and each clip's view. */
+  evidence: readonly MetricCardEvidence[]
+  sourceIndices: Record<MetricId, number> | null
+  clipViewKinds: readonly (View | null)[]
 }
 
 /**
@@ -534,6 +549,9 @@ function TourBody({
   onSeeAll,
   onAddClip,
   barRow,
+  evidence,
+  sourceIndices,
+  clipViewKinds,
 }: TourBodyProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const railRef = useRef<HTMLDivElement>(null)
@@ -575,6 +593,12 @@ function TourBody({
     : shown === null
       ? NO_FOCUS_CAMERA
       : stopCamera(shown)
+  // None while the intro runs: no stop is shown then, and the figure is still adopting the gait.
+  const footage = useMemo(
+    () =>
+      introRunning ? null : runnerFootageFor({ focus, camera, evidence, sourceIndices, clipViewKinds }),
+    [introRunning, focus, camera, evidence, sourceIndices, clipViewKinds],
+  )
   const runnerLabel = shownArea === null ? 'whole body' : shownArea.view.label.toLowerCase()
   const showLegend = shownArea !== null && hasCompactBar(shownArea.entries[0])
 
@@ -590,6 +614,7 @@ function TourBody({
           overrides={intro.overrides}
           intro={{ running: introRunning, onSkip: skipIntro }}
           onActiveChange={setRunnerSeen}
+          footage={footage}
           className={`${RUNNER_CLASS} ${barRow !== null ? RUNNER_CONTROLS_IN_ROW_CLASS : RUNNER_CONTROL_ROW_CLASS}`}
         />
         <div className={RUNNER_NOTES_CLASS}>

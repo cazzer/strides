@@ -112,7 +112,9 @@ This is the load-bearing decision, so it gets a section.
    alongside. Label: "Model built from your numbers", never "your body".
 4. The model shows each measurement as one fixed setting. Strides has no per-side values and no
    per-stride spread, so the model never draws left/right asymmetry or variability.
-5. The real footage is one tap away in the summary, as the evidence frame.
+5. The real footage is one tap away in the summary, as the evidence frame; on a still beat of a
+   side stop, the measured instant's evidence frame also sits faintly behind the model, scaled
+   (not reshaped) to it, never as a target (`strides-zba4`).
 
 ## Success criteria
 

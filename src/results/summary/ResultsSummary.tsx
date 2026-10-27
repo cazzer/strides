@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
-import type { FormHeuristicsResult, MetricId } from '../../heuristics/types'
+import type { FormHeuristicsResult, MetricId, View } from '../../heuristics/types'
 import { feedbackFor } from '../../guidance/feedbackPoints'
 import { FOCUS_AREAS } from '../../guidance/focusAreas'
 import type { FocusAreaId } from '../../guidance/focusAreas'
@@ -12,6 +12,7 @@ import { GuidedResultsView } from '../GuidedResultsView'
 import type { GuidedResultsViewProps } from '../GuidedResultsView'
 import type { MetricCardEvidence } from '../MetricsPanel'
 import { useRevealFragment } from '../revealFragment'
+import { runnerFootageFor } from '../runnerFootagePlate'
 import type { ScalePassStatus } from '../types'
 import { FocusAreaRow, NotMeasuredRow } from './FocusAreaRow'
 import { hasCompactBar } from './summaryLabels'
@@ -27,6 +28,7 @@ export interface ResultsSummaryProps extends GuidedResultsViewProps {
 
 const NO_EVIDENCE: readonly MetricCardEvidence[] = []
 const NO_CLIP_VIEWS: readonly string[] = []
+const NO_VIEW_KINDS: readonly (View | null)[] = []
 
 const FOOTER_LINK =
   'inline-flex min-h-11 items-center px-1 font-sans text-sm font-semibold text-black underline underline-offset-4 hover:text-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 dark:text-white dark:hover:text-brand-400'
@@ -62,6 +64,7 @@ export function ResultsSummary({ onReplayTour, onOpenClassic, ...guidedProps }: 
             evidence={guidedProps.evidence ?? NO_EVIDENCE}
             clipCount={guidedProps.clipCount ?? 1}
             clipViews={guidedProps.clipViews ?? NO_CLIP_VIEWS}
+            clipViewKinds={guidedProps.clipViewKinds ?? NO_VIEW_KINDS}
             sourceIndices={guidedProps.sourceIndices ?? null}
             onOpenEvidenceVideo={guidedProps.onOpenEvidenceVideo}
           />
@@ -88,6 +91,7 @@ interface SummaryBodyProps {
   evidence: readonly MetricCardEvidence[]
   clipCount: number
   clipViews: readonly string[]
+  clipViewKinds: readonly (View | null)[]
   sourceIndices: Record<MetricId, number> | null
   onOpenEvidenceVideo?: GuidedResultsViewProps['onOpenEvidenceVideo']
 }
@@ -108,6 +112,7 @@ function SummaryBody({
   evidence,
   clipCount,
   clipViews,
+  clipViewKinds,
   sourceIndices,
   onOpenEvidenceVideo,
 }: SummaryBodyProps) {
@@ -135,6 +140,12 @@ function SummaryBody({
   )
   const { camera, playbackRate } =
     activeRow === null ? NO_FOCUS_CAMERA : FOCUS_AREA_CAMERA[activeRow.view.area]
+  // The opened side row's headline frame, faintly behind the still figure. Below lg the camera
+  // stays on the whole figure with no focus, so there is none.
+  const footage = useMemo(
+    () => runnerFootageFor({ focus, camera, evidence, sourceIndices, clipViewKinds }),
+    [focus, camera, evidence, sourceIndices, clipViewKinds],
+  )
   // Keyed by metric, never by position: evidence arrives in the extraction plan's own order.
   const evidenceByMetric = useMemo(
     () => new Map(evidence.map((entry) => [entry.metric, entry])),
@@ -173,6 +184,7 @@ function SummaryBody({
           focus={focus}
           playbackRate={playbackRate}
           label={`Model runner, ${activeRow === null ? 'whole body' : activeRow.view.label.toLowerCase()}`}
+          footage={footage}
           className="h-56 lg:h-[min(28rem,calc(100dvh-14rem))]"
         />
         {playbackRate < 1 && (

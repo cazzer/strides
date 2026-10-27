@@ -1,5 +1,5 @@
 import type { AggregateAnalysisState } from './types'
-import type { MetricId } from '../heuristics/types'
+import type { MetricId, View } from '../heuristics/types'
 import { MetricsPanel } from './MetricsPanel'
 import type { MetricCardEvidence } from './MetricsPanel'
 import { metricTier } from './metricConfidence'
@@ -26,6 +26,10 @@ export interface ResultsViewProps {
   /** How many clips the session holds, so a card can say which one its evidence came from. */
   clipCount?: number
   clipViews?: readonly string[]
+  /** Each clip's raw view classification (null until known), beside `clipViews`' display strings:
+   * the runner's footage plate is offered only for a clip classified a side view, and a gate must
+   * not read a label. */
+  clipViewKinds?: readonly (View | null)[]
   sourceIndices?: Record<MetricId, number> | null
   onOpenEvidenceVideo?: (clipIndex: number, timestamp: number, returnFocus: HTMLButtonElement | null) => void
 }

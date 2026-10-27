@@ -14,7 +14,14 @@ import {
   projectPose,
 } from './camera'
 import { GAIT_PHASES, GROUND_Y, pelvisHeight, poseAt } from './gaitModel'
-import { ModelRunner, RUNNER_CAPTION, type ModelRunnerProps } from './ModelRunner'
+import { fitFootagePlate, type PlateTransform } from './footagePlate'
+import {
+  ModelRunner,
+  RUNNER_CAPTION,
+  type ModelRunnerProps,
+  type RunnerFocus,
+  type RunnerFootage,
+} from './ModelRunner'
 import { BEAT_DECAY_CYCLES, phaseForLeg } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
 import {
@@ -27,7 +34,7 @@ import {
   clampLabelX,
   edgeKey,
 } from './runnerScene'
-import type { CameraPreset, CameraState, RunnerParams } from './types'
+import type { CameraPreset, CameraState, ProjectedJoint, RunnerParams } from './types'
 
 const LABEL = 'Wireframe runner'
 const HEAD_EDGES = new Set(
@@ -1161,5 +1168,206 @@ describe('ModelRunner still figure stands on the ground', () => {
     expect(ticks()).toEqual(ticksPlaying)
     // The cadence label hangs off the head, so it rides the lift.
     expect(label() - labelPlaying).toBeCloseTo(rise, 3)
+  })
+})
+
+describe('ModelRunner footage plate', () => {
+  /** `toBlob` held until the test resolves it, as the browser's encode is asynchronous. */
+  let pendingBlobs: BlobCallback[] = []
+  let urls = 0
+  let revoked: string[] = []
+  beforeEach(() => {
+    pendingBlobs = []
+    urls = 0
+    revoked = []
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback: BlobCallback) => {
+      pendingBlobs.push(callback)
+    })
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(() => `blob:plate-${(urls += 1)}`)
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation((url: string) => {
+      revoked.push(url)
+    })
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function resolveBlobs() {
+    act(() => {
+      for (const callback of pendingBlobs.splice(0)) callback(new Blob(['png']))
+    })
+  }
+
+  const KNEES_FOCUS: RunnerFocus = { metricIds: ['kneeFlexion'] }
+  const NOTE = 'Faint behind the model: your clip’s Knee flexion evidence frame.'
+
+  function footage(overrides: Partial<RunnerFootage> = {}): RunnerFootage {
+    return {
+      metric: 'kneeFlexion',
+      image: document.createElement('canvas'),
+      note: NOTE,
+      measuredSide: 'right',
+      mirror: false,
+      points: [
+        { name: 'right_hip', u: 0.5, v: 0.35 },
+        { name: 'right_knee', u: 0.58, v: 0.6 },
+        { name: 'right_ankle', u: 0.45, v: 0.82 },
+      ],
+      ...overrides,
+    }
+  }
+
+  const plate = () => document.querySelector('image[data-footage-plate]')
+  const shown = () => plate()?.hasAttribute('data-shown') ?? false
+  const note = () => document.querySelector('p.sr-only')?.textContent ?? ''
+
+  /** The pose as the renderer drew it, read back off the joints. */
+  function drawnJoints(): ProjectedJoint[] {
+    return COMMON_KEYPOINT_NAMES.map((name) => ({ name, x: joint(name).cx, y: joint(name).cy, depth: 0 }))
+  }
+
+  function matrixOf(el: Element | null): number[] {
+    const match = /^matrix\((.*)\)$/.exec(el?.getAttribute('transform') ?? '')
+    return match ? match[1].split(' ').map(Number) : []
+  }
+
+  it('shows a still figure’s footage at 0.26 behind it, placed by the hip-anchored fit over the drawn joints', () => {
+    mockReducedMotion(true)
+    const source = footage()
+    const { container } = setup({ camera: 'legsSide', focus: KNEES_FOCUS, footage: source })
+    expect(plate()).toBeNull()
+    resolveBlobs()
+    const el = plate()
+    expect(el).not.toBeNull()
+    expect(el?.getAttribute('href')).toBe('blob:plate-1')
+    // The first child of the drawing, under the ground and the figure.
+    expect(container.querySelector('svg')?.firstElementChild).toBe(el)
+    expect(el?.getAttribute('class')).toContain('data-[shown]:opacity-[0.26]')
+    expect(shown()).toBe(true)
+    expectPose(phaseForLeg('right', GAIT_PHASES.peakSwingKneeBend), 'legsSide')
+    const fit = fitFootagePlate(source, drawnJoints(), 'right') as PlateTransform
+    const [a, b, c, d, e, f] = matrixOf(el)
+    expect([b, c]).toEqual([0, 0])
+    expect(a).toBeCloseTo(fit.a, 3)
+    expect(d).toBeCloseTo(fit.d, 3)
+    expect(a).toBe(d)
+    expect(e).toBeCloseTo(fit.e, 3)
+    expect(f).toBeCloseTo(fit.f, 3)
+    expect(note()).toContain(NOTE)
+  })
+
+  it('mirrors a right-to-left clip', () => {
+    mockReducedMotion(true)
+    setup({ camera: 'legsSide', focus: KNEES_FOCUS, footage: footage({ mirror: true }) })
+    resolveBlobs()
+    const [a, , , d] = matrixOf(plate())
+    expect(a).toBeLessThan(0)
+    expect(a).toBeCloseTo(-d, 4)
+  })
+
+  it('hides on Play, in place, and drops the note; shows again on Pause', () => {
+    mockReducedMotion(true)
+    setup({ camera: 'legsSide', focus: KNEES_FOCUS, footage: footage() })
+    resolveBlobs()
+    const transform = plate()?.getAttribute('transform')
+    fireEvent.click(screen.getByRole('button', { name: 'Play runner' }))
+    expect(plate()).not.toBeNull()
+    expect(shown()).toBe(false)
+    expect(note()).not.toContain(NOTE)
+    advance(500)
+    expect(plate()?.getAttribute('transform')).toBe(transform)
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    // The same canvas is not copied again.
+    expect(pendingBlobs).toHaveLength(0)
+    expect(shown()).toBe(true)
+    expect(note()).toContain(NOTE)
+  })
+
+  it('copies nothing while the figure plays, and shows once paused and copied', () => {
+    setup({ camera: 'legsSide', focus: KNEES_FOCUS, footage: footage() })
+    expect(pendingBlobs).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    expect(plate()).toBeNull()
+    expect(note()).not.toContain(NOTE)
+    resolveBlobs()
+    expect(shown()).toBe(true)
+  })
+
+  it('stays hidden while the camera tweens, and shows where it comes to rest', () => {
+    const source = footage()
+    const { rerenderWith } = setup({ camera: 'legsSide', focus: KNEES_FOCUS, footage: source })
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    resolveBlobs()
+    expect(shown()).toBe(true)
+    const closer: CameraState = { ...CAMERA_PRESETS.legsSide, zoom: 1.8 }
+    rerenderWith({ camera: closer })
+    advance(100)
+    expect(shown()).toBe(false)
+    advance(1000)
+    expect(shown()).toBe(true)
+    const fit = fitFootagePlate(source, drawnJoints(), 'right') as PlateTransform
+    expect(matrixOf(plate())[0]).toBeCloseTo(fit.a, 3)
+  })
+
+  it('never shows when the footage metric is keyed to another phase than the one held', () => {
+    mockReducedMotion(true)
+    setup({ camera: 'legsSide', focus: KNEES_FOCUS, footage: footage({ metric: 'kneeDrive' }) })
+    resolveBlobs()
+    expect(plate()).not.toBeNull()
+    expect(shown()).toBe(false)
+    expect(note()).not.toContain(NOTE)
+  })
+
+  it('shows nothing without footage, and nothing when the canvas cannot be read back', () => {
+    mockReducedMotion(true)
+    const { rerenderWith } = setup({ camera: 'legsSide', focus: KNEES_FOCUS })
+    expect(pendingBlobs).toHaveLength(0)
+    vi.mocked(HTMLCanvasElement.prototype.toBlob).mockImplementation(() => {
+      throw new DOMException('tainted', 'SecurityError')
+    })
+    rerenderWith({ footage: footage() })
+    expect(plate()).toBeNull()
+    expect(note()).not.toContain(NOTE)
+  })
+
+  it('drops and revokes the copy when the canvas changes, and on unmount', () => {
+    mockReducedMotion(true)
+    const { rerenderWith, unmount } = setup({ camera: 'legsSide', focus: KNEES_FOCUS, footage: footage() })
+    resolveBlobs()
+    rerenderWith({ footage: footage() })
+    expect(plate()).toBeNull()
+    expect(revoked).toEqual(['blob:plate-1'])
+    resolveBlobs()
+    expect(plate()?.getAttribute('href')).toBe('blob:plate-2')
+    unmount()
+    expect(revoked).toEqual(['blob:plate-1', 'blob:plate-2'])
+  })
+})
+
+describe('ModelRunner pause with a limb focus', () => {
+  it('stands a figure paused mid-cycle at its knee-flexion key phase', () => {
+    setup({ camera: 'legsSide', focus: { metricIds: ['kneeFlexion'] } })
+    const held = phaseForLeg('right', GAIT_PHASES.peakSwingKneeBend)
+    advance(16)
+    advance(300)
+    const before = jointCx('right_ankle')
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    expect(jointCx('right_ankle')).not.toBe(before)
+    expectPose(held, 'legsSide')
+    // The knee arc lies on the knee it is about.
+    const [centre] = pathEnds(
+      document.querySelector('[data-annotation="peakSwingKneeBend"] [data-role="fill"]')?.getAttribute('d') ?? null,
+    )
+    expect(centre.x).toBeCloseTo(joint('right_knee').cx, 3)
+    expect(centre.y).toBeCloseTo(joint('right_knee').cy, 3)
+  })
+
+  it('leaves a cadence focus paused where it is', () => {
+    setup({ camera: 'wholeBodySide', focus: { metricIds: ['cadence'] } })
+    advance(16)
+    advance(300)
+    const before = jointCx('right_ankle')
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    expect(jointCx('right_ankle')).toBe(before)
   })
 })

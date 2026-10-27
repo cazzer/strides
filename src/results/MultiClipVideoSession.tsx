@@ -390,10 +390,8 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
   const clips: ClipSession[] = clipIds
     .map((id) => clipStates[id])
     .filter((session): session is ClipSession => session != null)
-  const clipViews = clipIds.map((id) => {
-    const view = clipStates[id]?.analysis.heuristics?.view.view
-    return view ? clipViewLabel(view) : 'View pending'
-  })
+  const clipViewKinds = clipIds.map((id) => clipStates[id]?.analysis.heuristics?.view.view ?? null)
+  const clipViews = clipViewKinds.map((view) => (view ? clipViewLabel(view) : 'View pending'))
 
   // Adjusts which clip is active during render, mirroring useVideoAnalysis.ts's own
   // "adjusting state when a prop changes" pattern (React's documented approach —
@@ -519,6 +517,7 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
     evidence,
     clipCount: clips.length,
     clipViews,
+    clipViewKinds,
     sourceIndices,
     onOpenEvidenceVideo: clips.every(
       (clip) => !clipHostsLiveElement(clip.analysis.phase, clip.analysis.scalePass.status),

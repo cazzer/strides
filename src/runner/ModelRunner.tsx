@@ -26,6 +26,20 @@
  * as it lands, written by the loop from the live phase, so the rings beat at cadence × rate per
  * minute while the label keeps the real cadence. Still or under reduced motion there is no ring.
  *
+ * **A still figure can show its measured instant's footage behind it, faintly** (`footage`,
+ * `strides-zba4`). The headline metric's evidence frame is COPIED (never adopted: the summary's card
+ * owns the canvas) to a blob URL and drawn as the svg's first child, under everything, at 0.26
+ * opacity. It shows only while the figure stands still at its held phase with no camera or value
+ * tween running, and only when that held phase is the footage metric's own key leg phase, so the
+ * picture and the figure are the same instant of the stride. The loop writes its transform
+ * (`fitFootagePlate`: hip-anchored, uniformly scaled from segment lengths, mirrored for a
+ * right-to-left clip) from the pose as drawn, so it follows the lift and the live camera. It is
+ * the reader's footage, never a target: it is placed, never reshaped.
+ *
+ * **Pausing with a limb focus stands the figure at its key phase**, as the landing camera always
+ * has, so the limb meets its mark (and the footage plate can show). A cadence focus pauses where
+ * it is: its beat reads at any phase.
+ *
  * Size it through `className`: the figure fills its box, and the drawing fills what the caption
  * and controls leave.
  */
@@ -48,13 +62,21 @@ import {
   projectPose,
   type PhaseWindow,
 } from './camera'
+import {
+  fitFootagePlate,
+  footageKeyPhase,
+  heldLegFor,
+  type FootageFitInput,
+} from './footagePlate'
 import { GAIT_PHASES, GROUND_Y, cyclesPerSecond, pelvisHeight, poseAt } from './gaitModel'
 import {
   beatEnvelope,
+  circularDistance,
   planAnnotations,
   shownWhileStill,
   type AnnotationKind,
   type RunnerAnnotationLabel,
+  type RunnerSide,
 } from './runnerAnnotations'
 import { flashAlign, flashAnchor, labelBox, placeFlash, pointsBox, type LabelBox } from './introFlash'
 import { runnerParamValues } from './runnerParams'
@@ -160,6 +182,20 @@ export interface RunnerIntroControl {
   onSkip: () => void
 }
 
+/**
+ * The headline metric's evidence frame, placed behind a still figure (`src/results/runnerFootagePlate`
+ * builds it and applies every gate that does not depend on the frame being drawn: side clip, side
+ * camera, a metric with hips and a key leg phase, a known travel direction).
+ */
+export interface RunnerFootage extends FootageFitInput {
+  /** The metric the frame was measured for. The plate shows only at its key leg phase. */
+  metric: MetricId
+  /** The extracted evidence canvas. Read once into a copy, never moved or drawn into. */
+  image: HTMLCanvasElement
+  /** Appended to the text alternative while the plate is offered. */
+  note: string
+}
+
 export interface ModelRunnerProps {
   params: BoundRunnerParams
   camera: CameraPreset | CameraState
@@ -175,6 +211,8 @@ export interface ModelRunnerProps {
    * and with false on unmount.
    */
   onActiveChange?: (active: boolean) => void
+  /** The footage plate's source; absent or null: no plate. */
+  footage?: RunnerFootage | null
   className?: string
 }
 
@@ -202,6 +240,11 @@ const GUIDE_CLASS =
   'stroke-neutral-500 dark:stroke-neutral-400 forced-colors:stroke-[color:CanvasText]'
 const GROUND_CLASS =
   'stroke-neutral-300 dark:stroke-neutral-700 forced-colors:stroke-[color:GrayText]'
+// The footage plate: hidden until the loop marks it shown, then faded in to a faint 0.26. No fade
+// under reduced motion; under forced colours a photograph behind system-coloured strokes would
+// only cost contrast, so it is not drawn.
+const PLATE_CLASS =
+  'opacity-0 transition-opacity duration-[240ms] ease-in-out data-[shown]:opacity-[0.26] motion-reduce:transition-none forced-colors:hidden'
 // The footfall ring: the focus accent, never a saturated red (WCAG 2.3.1, design D4).
 const PULSE_CLASS = 'stroke-cyan-700 dark:stroke-cyan-300 forced-colors:stroke-[color:Highlight]'
 const LABEL_CLASS =
@@ -212,6 +255,9 @@ const CONTROL_CLASS =
 
 /** Pixels per viewBox unit before the stage has been measured (and in jsdom). */
 const DEFAULT_PX_PER_UNIT = 100
+
+/** "The figure is at this phase", as `shownWhileStill` reads it. */
+const PHASE_TOLERANCE = 1e-6
 
 interface DrawTargets {
   segments: { el: SVGLineElement; a: number; b: number }[]
@@ -229,6 +275,7 @@ interface DrawTargets {
   }[]
   ground: SVGLineElement | null
   flash: { el: SVGTextElement; paramId: RunnerParamId; anchor: Vec3; chars: number } | null
+  plate: SVGImageElement | null
 }
 
 interface Scene {
@@ -236,6 +283,15 @@ interface Scene {
   values: RunnerParams
   pxPerUnit: number
   targets: DrawTargets
+  heldPhase: number
+  /** The footage plate on offer (copied, still, keyed to the held phase); null: none. */
+  plate: { input: FootageFitInput; heldLeg: RunnerSide } | null
+}
+
+/** A footage canvas's pixels, copied to a blob URL. */
+interface PlateCopy {
+  source: HTMLCanvasElement
+  url: string
 }
 
 interface CameraTween {
@@ -412,6 +468,7 @@ function collectTargets(
     pulses,
     ground: svg.querySelector<SVGLineElement>('line[data-ground]'),
     flash: flashEl && flash ? { el: flashEl, ...flash } : null,
+    plate: svg.querySelector<SVGImageElement>('image[data-footage-plate]'),
   }
 }
 
@@ -429,6 +486,7 @@ export function ModelRunner({
   overrides,
   intro,
   onActiveChange,
+  footage = null,
   className = '',
 }: ModelRunnerProps) {
   const figureRef = useRef<HTMLElement>(null)
@@ -491,6 +549,8 @@ export function ModelRunner({
       }),
     [params, values, sources, focusParams, annotationKind, target.yawDeg, tracksContact],
   )
+  // A limb focus keys the still frame to a leg phase; a cadence beat reads at any phase.
+  const limbKeyed = allAnnotations.some((a) => a.kind !== 'beat' && a.keyPhase !== null)
   // A still figure shows a limb mark only at its key phase; a playing one shows every mark.
   const valueTween = overrides?.valueTween ?? null
   // A parameter tweening in shows only its flash: its annotation would duplicate the value and
@@ -530,6 +590,44 @@ export function ModelRunner({
     }
   }, [flash, valueTween, values, heldPhase, target.yawDeg])
 
+  // The footage plate. Its pixels are copied only while still (the copy is a PNG encode, never
+  // worth doing mid-animation), kept for as long as the same canvas is passed, and dropped (then
+  // revoked) as soon as another canvas or none is.
+  const plateSource = footage?.image ?? null
+  const [plateCopy, setPlateCopy] = useState<PlateCopy | null>(null)
+  if (plateCopy !== null && plateCopy.source !== plateSource) setPlateCopy(null)
+  useEffect(() => {
+    if (plateSource === null || playing || plateCopy !== null) return
+    let cancelled = false
+    try {
+      plateSource.toBlob((blob) => {
+        if (!cancelled && blob !== null) setPlateCopy({ source: plateSource, url: URL.createObjectURL(blob) })
+      })
+    } catch {
+      // A canvas that cannot be read back (tainted, no encoder): the figure simply has no plate.
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [plateSource, playing, plateCopy])
+  useEffect(() => {
+    if (plateCopy === null) return
+    const { url } = plateCopy
+    return () => URL.revokeObjectURL(url)
+  }, [plateCopy])
+  const heldLeg = heldLegFor(target.yawDeg)
+  const plateKeyPhase = footage === null ? null : footageKeyPhase(footage.metric, heldLeg)
+  const plateOffered =
+    footage !== null &&
+    plateCopy !== null &&
+    !playing &&
+    plateKeyPhase !== null &&
+    circularDistance(plateKeyPhase, heldPhase) < PHASE_TOLERANCE
+  const plateInput = useMemo(
+    () => (plateOffered && footage !== null ? { input: footage, heldLeg } : null),
+    [plateOffered, footage, heldLeg],
+  )
+
   const phaseRef = useRef<number>(heldPhase)
   // Wall-clock ms still to rest on a landing hold (`stepPlayback`).
   const holdLeftRef = useRef(0)
@@ -550,7 +648,8 @@ export function ModelRunner({
     if (!scene) return
     const cam = cameraNowRef.current
     const unit = 1 / scene.pxPerUnit
-    const drawn = drawnValues(scene.values, valueTweenRef.current, performance.now())
+    const now = performance.now()
+    const drawn = drawnValues(scene.values, valueTweenRef.current, now)
     const pose = poseAt(phaseRef.current, drawn)
     // A still figure is lifted onto the ground; marks that ride the figure lift with it, ground
     // marks stay. Playing again drops the lift.
@@ -559,7 +658,26 @@ export function ModelRunner({
       lift === 0 ? pose : pose.map((j) => ({ ...j, y: j.y + lift })),
       cam,
     )
-    const { segments, joints, paths, labels, pulses, ground, flash: flashTarget } = scene.targets
+    const { segments, joints, paths, labels, pulses, ground, flash: flashTarget, plate } = scene.targets
+    if (plate) {
+      // Only on the held still frame, with nothing tweening: the footage is one instant, so it is
+      // shown only while the figure is exactly that instant, framed where the camera rests.
+      const fit =
+        scene.plate !== null &&
+        stillRef.current &&
+        circularDistance(phaseRef.current, scene.heldPhase) < PHASE_TOLERANCE &&
+        cameraTweenRef.current === null &&
+        !valueTweenRunning(valueTweenRef.current, now)
+          ? fitFootagePlate(scene.plate.input, projected, scene.plate.heldLeg)
+          : null
+      if (fit) {
+        plate.setAttribute('transform', `matrix(${fmt(fit.a)} 0 0 ${fmt(fit.d)} ${fmt(fit.e)} ${fmt(fit.f)})`)
+        plate.setAttribute('data-shown', '')
+      } else {
+        // Hidden in place: the transform stays put while it fades, never sliding with the figure.
+        plate.removeAttribute('data-shown')
+      }
+    }
     for (const { el, a, b } of segments) {
       setPoint(el, 'x1', 'y1', projected[a].x, projected[a].y)
       setPoint(el, 'x2', 'y2', projected[b].x, projected[b].y)
@@ -643,6 +761,8 @@ export function ModelRunner({
       values,
       pxPerUnit,
       targets: collectTargets(svg, annotations, flashPoint),
+      heldPhase,
+      plate: plateInput,
     }
     drawRef.current()
   })
@@ -689,20 +809,21 @@ export function ModelRunner({
   }, [valueTween, reduced])
 
   // The still frame: a new held phase (focus change) moves a still figure to it, and so does
-  // reduced motion switching on while the reader has not chosen to play. On the landing camera
-  // every still state (pausing included) shows the held phase, so the marks meet the drawn leg.
+  // reduced motion switching on while the reader has not chosen to play. On the landing camera,
+  // and with a limb focus, every still state (pausing included) shows the held phase, so the marks
+  // meet the drawn limb (and the footage plate can show). A cadence beat pauses where it is.
   useLayoutEffect(() => {
     const heldChanged = heldPhaseRef.current !== heldPhase
     const reducedStarted = reduced && !reducedRef.current && choice === null
     heldPhaseRef.current = heldPhase
     reducedRef.current = reduced
     if (!playing) holdLeftRef.current = 0
-    const landingStill = tracksContact && !playing && phaseRef.current !== heldPhase
-    if ((heldChanged && !playing) || reducedStarted || landingStill) {
+    const snapStill = (tracksContact || limbKeyed) && !playing && phaseRef.current !== heldPhase
+    if ((heldChanged && !playing) || reducedStarted || snapStill) {
       phaseRef.current = heldPhase
       drawRef.current()
     }
-  }, [heldPhase, reduced, choice, playing, tracksContact])
+  }, [heldPhase, reduced, choice, playing, tracksContact, limbKeyed])
 
   // Report whether the figure is seen, and that it no longer is once unmounted (an unmount-only
   // cleanup, so a parent holding `active` never keeps a stale true for a runner that is gone).
@@ -827,6 +948,19 @@ export function ModelRunner({
           preserveAspectRatio="xMidYMid meet"
           className="absolute inset-0 h-full w-full"
         >
+          {/* First, so it sits under everything; the unit square, placed by the loop's transform. */}
+          {plateCopy !== null && (
+            <image
+              data-footage-plate=""
+              href={plateCopy.url}
+              x={0}
+              y={0}
+              width={1}
+              height={1}
+              preserveAspectRatio="none"
+              className={PLATE_CLASS}
+            />
+          )}
           <line
             data-ground=""
             x1={-10}
@@ -952,7 +1086,10 @@ export function ModelRunner({
           )}
         </svg>
       </div>
-      <p className="sr-only">{description}</p>
+      <p className="sr-only">
+        {description}
+        {plateOffered && footage !== null ? ` ${footage.note}` : ''}
+      </p>
       <div data-runner-part="controls" className="flex items-center justify-between gap-3 pt-2">
         <p aria-hidden="true" className="min-w-0 font-sans text-xs text-neutral-600 dark:text-neutral-400">
           {legend ? (introRunning ? 'Dashed: not applied yet' : 'Dashed: not measured') : ''}
