@@ -69,6 +69,10 @@ it. Uncertain items are marked.
   https://sportsmedicine-open.springeropen.com/articles/10.1186/s40798-024-00750-4
 - **Arellano 2011.** Running narrower or wider than preferred raised cost by 3–15%; preferred width
   is the economy optimum. Souza's rule of thumb: the feet should not overlap.
+  Arellano & Kram 2011, J Biomech 44(7):1291–1295, https://pubmed.ncbi.nlm.nih.gov/21316058/
+  (verified 2026-10-27 for `add-runner-tour`): "When subjects ran at target step widths less (0%
+  LL) or greater (15%, 20%, and 25% LL) than preferred, both net metabolic power demand (by 3%, 9%,
+  12%, and 15%) and step width variability (by 7%, 33%, 46%, and 69%) increased."
 - 2D step width is unreliable (reliability study, 2022).
   https://vivo.weill.cornell.edu/display/pubid36263278
 
