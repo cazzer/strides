@@ -16,7 +16,7 @@ the main thing people care about".
   area's measured metrics group into readings; the bounce composite sits where its first member
   sat, headlined by vertical ratio (falling back to cm, then relative).
 - Vertical ratio's bounce reading cites its own inputs: "From hip bounce 15.3% of torso ÷ stride
-  length 6.3 torsos (median of 3)". Figures only from vertical ratio's own clip; never the
+  length 6.30 torsos (median of 3)". Figures only from vertical ratio's own clip; never the
   centimetre bounce, a separate fit vertical ratio does not read.
 - Summary: the rhythm row's "Also:" reads "Also: Vertical ratio"; opened, the vertical ratio card
   carries the From line and the other two bounce cards sit in one nested collapsed disclosure

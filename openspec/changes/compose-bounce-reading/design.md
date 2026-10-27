@@ -43,7 +43,7 @@ area's own cm-before-relative rationale.
 
 - `computeVerticalRatio` = `fit.peakToPeakAmplitude / stride.strideLengthPx`: the MoveNet hip-bounce
   fit in px over the median same-side stride in px. Those are its only inputs, so the line cites
-  only them: "From hip bounce 15.3% of torso ÷ stride length 6.3 torsos (median of 3)".
+  only them: "From hip bounce 15.3% of torso ÷ stride length 6.30 torsos (median of 3)".
 - **Never VO_cm.** It is a separate MediaPipe fit (the scale pass), possibly of a different subject
   (`subjectAgreement`), and VR does not read it. The first version cited "bounce 7.2 cm" and
   switched to it in place when the graft landed; review round 1 removed that (a 🔴: it named an

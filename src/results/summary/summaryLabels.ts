@@ -40,7 +40,9 @@ function medianOf(count: number): string {
 
 /**
  * What vertical ratio was derived from: its own two inputs, in torso lengths so the division checks
- * (`15.3% ÷ 6.3 = 2.4%`), `From hip bounce 15.3% of torso ÷ stride length 6.3 torsos (median of 3)`.
+ * against the displayed ratio to within its rounding (`15.3% ÷ 6.30 ≈ 2.43%`),
+ * `From hip bounce 15.3% of torso ÷ stride length 6.30 torsos (median of 3)`. The stride prints to
+ * two decimals: at one decimal it is up to ~1.7% off at 3 torsos, which a two-decimal ratio shows.
  * Without same-clip figures it names the inputs alone: `From hip bounce ÷ stride length (median of 3)`.
  * "Stride" is only ever the length here; the count is "median of N".
  */
@@ -49,7 +51,7 @@ export function formatBounceDerivation(derivation: BounceDerivation): string {
   const count = `(${medianOf(strideCount)})`
   return figures === null
     ? `From hip bounce ÷ stride length ${count}`
-    : `From hip bounce ${(figures.bounceTorsoLengths * 100).toFixed(1)}% of torso ÷ stride length ${figures.strideTorsoLengths.toFixed(1)} torsos ${count}`
+    : `From hip bounce ${(figures.bounceTorsoLengths * 100).toFixed(1)}% of torso ÷ stride length ${figures.strideTorsoLengths.toFixed(2)} torsos ${count}`
 }
 
 /**

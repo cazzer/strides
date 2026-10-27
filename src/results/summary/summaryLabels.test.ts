@@ -37,10 +37,23 @@ describe('formatBounceDerivation', () => {
   it('cites the hip bounce and the stride length in torso lengths, and the median count', () => {
     expect(
       formatBounceDerivation({ figures: { bounceTorsoLengths: 0.153, strideTorsoLengths: 6.3 }, strideCount: 3 }),
-    ).toBe('From hip bounce 15.3% of torso ÷ stride length 6.3 torsos (median of 3)')
+    ).toBe('From hip bounce 15.3% of torso ÷ stride length 6.30 torsos (median of 3)')
     expect(
       formatBounceDerivation({ figures: { bounceTorsoLengths: 0.15, strideTorsoLengths: 3.75 }, strideCount: 1 }),
-    ).toBe('From hip bounce 15.0% of torso ÷ stride length 3.8 torsos (one measurement)')
+    ).toBe('From hip bounce 15.0% of torso ÷ stride length 3.75 torsos (one measurement)')
+  })
+
+  it('prints figures whose division agrees with the vertical ratio they derive', () => {
+    for (let ratio = 0.04; ratio <= 0.11; ratio += 0.0013) {
+      for (let stride = 3; stride <= 7; stride += 0.037) {
+        const line = formatBounceDerivation({
+          figures: { bounceTorsoLengths: ratio * stride, strideTorsoLengths: stride },
+          strideCount: 3,
+        })
+        const [, bounce, strideShown] = /hip bounce ([\d.]+)% of torso ÷ stride length ([\d.]+) torsos/.exec(line)!
+        expect(Math.abs(Number(bounce) / Number(strideShown) - ratio * 100)).toBeLessThan(0.05)
+      }
+    }
   })
 
   it('names the inputs alone when it has no same-clip figures', () => {

@@ -40,10 +40,11 @@ relative vertical oscillation, which reads the same hip-bounce fit) divided by t
 torso lengths (the relative vertical oscillation's value divided by vertical ratio's, which equals
 the median stride over the median torso length because both read that fit), and the number of
 strides the stride length is the median of (vertical ratio's sample size). Both figures are in
-torso lengths so the division checks. The figures SHALL be cited only when the relative vertical
+torso lengths, the stride to two decimals, so the division agrees with the displayed vertical
+ratio to within its rounding. The figures SHALL be cited only when the relative vertical
 oscillation is measured, comes from the same clip as vertical ratio, and was computed from the
 hip-midpoint signal; otherwise the line SHALL name the inputs with no figures. The line SHALL read
-"From hip bounce 15.3% of torso ÷ stride length 6.3 torsos (median of 3)", or "From hip bounce ÷
+"From hip bounce 15.3% of torso ÷ stride length 6.30 torsos (median of 3)", or "From hip bounce ÷
 stride length (median of 3)" without figures, with "(one measurement)" for a single stride, and
 SHALL use "stride" only for the length. It SHALL NOT cite vertical oscillation in centimetres,
 which is a separate fit (the scale pass) that vertical ratio does not read, and SHALL NOT change
@@ -53,8 +54,9 @@ such line.
 #### Scenario: One clip, everything measured
 
 - **WHEN** the bounce metrics are measured on one clip, with vertical ratio over 3 strides
-- **THEN** the line reads "From hip bounce <x.x>% of torso ÷ stride length <y.y> torsos (median of
-  3)", and x.x divided by y.y is vertical ratio
+- **THEN** the line reads "From hip bounce <x.x>% of torso ÷ stride length <y.yy> torsos (median of
+  3)", and x.x divided by y.yy agrees with the displayed vertical ratio to within 0.05 percentage
+  points
 
 #### Scenario: The scale pass lands
 

@@ -79,7 +79,7 @@ describe('FocusAreaRow', () => {
     const [headlineCard] = composite.querySelectorAll('article')
     expect(headlineCard).toHaveAttribute('data-metric', 'verticalRatio')
     const derived = headlineCard.querySelector('.guided-results__derived-from')!
-    expect(derived.textContent).toBe('From hip bounce 15.0% of torso ÷ stride length 3.8 torsos (median of 7)')
+    expect(derived.textContent).toBe('From hip bounce 15.0% of torso ÷ stride length 3.75 torsos (median of 7)')
     expect(derived.previousElementSibling).toHaveClass('guided-results__headline')
     // One nested disclosure, closed, naming the cards inside, which are mounted already.
     const more = composite.querySelectorAll<HTMLDetailsElement>('details.results-summary__composite-more')

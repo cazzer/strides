@@ -66,7 +66,7 @@ describe('AreaStop', () => {
     expect(values).toHaveLength(1)
     expect(values[0].firstElementChild).toHaveTextContent(/^Vertical ratio$/)
     const derivation = container.querySelector('.runner-tour__derivation')!
-    expect(derivation).toHaveTextContent('From hip bounce 15.0% of torso ÷ stride length 3.8 torsos (median of 7)')
+    expect(derivation).toHaveTextContent('From hip bounce 15.0% of torso ÷ stride length 3.75 torsos (median of 7)')
     expect(values[0].contains(derivation)).toBe(false)
     expect(container.querySelector('.runner-tour__panel-legend')!.compareDocumentPosition(derivation)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,

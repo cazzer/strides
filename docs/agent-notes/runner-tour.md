@@ -300,6 +300,12 @@ The round-0 phone cost (`strides-3v4t`: the VR block pushed the why line out of 
 is gone with the block moved after the prose; the bead is closed. Screenshots: scratchpad
 `xki9-live/r1-*.png`.
 
+**Review round 2: the stride now prints to two decimals** ("6.30 torsos", not "6.3"). At one
+decimal the printed division visibly missed the displayed ratio (the test fixture's 15.0 ÷ 3.8 =
+3.95 sat next to "4.00%"); a reviewer simulation put 31% of realistic cases ≥ 0.05 points off. Two
+decimals keeps every case inside 0.05 points, which `summaryLabels.test.ts` now sweeps. The live
+strings above were captured before this change and show one decimal.
+
 ### Live check before review round 1, 2026-10-27 (`strides-xki9`, `dc438980`; superseded where round 1 changed the copy)
 
 Real GPU (ANGLE Metal, M4 Pro), port 5231 (derived, `assertServesThisCheckout`), one browser
