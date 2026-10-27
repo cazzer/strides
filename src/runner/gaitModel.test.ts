@@ -3,8 +3,11 @@ import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import {
   CONTACT_PARAMS,
+  GAIT_PHASES,
   MODEL_PROPORTIONS,
+  PELVIS_HEIGHT,
   cyclesPerSecond,
+  pelvisHeight,
   poseAt,
   realizeParams,
 } from './gaitModel'
@@ -25,6 +28,7 @@ import {
   measureVerticalOscillation,
   torsoLength,
 } from './__fixtures__/measureModel'
+import { KEY_LEG_PHASE, phaseForLeg } from './runnerAnnotations'
 import { NEUTRAL_RUNNER_PARAMS, RUNNER_PARAM_SPECS } from './runnerParams'
 import type { Joint3D, RunnerParamId, RunnerParams } from './types'
 
@@ -90,15 +94,122 @@ describe('poseAt structure', () => {
     expect(hipWidth(pose)).toBeCloseTo(MODEL_PROPORTIONS.hipWidth, 12)
   })
 
-  it('puts the neutral runner on the ground: its lowest foot point over the cycle is y ≈ 0', () => {
-    const lowest = Math.min(
-      ...DENSE_PHASES.flatMap((p) =>
-        poseAt(p, NEUTRAL_RUNNER_PARAMS)
-          .filter((j) => /ankle|heel|foot_index/.test(j.name))
-          .map((j) => j.y),
-      ),
-    )
-    expect(Math.abs(lowest)).toBeLessThan(0.005)
+})
+
+/** The lowest point (ankle, heel or toe) of the left foot at cycle phase `phase`. */
+function lowestLeftFoot(params: RunnerParams, phase: number): number {
+  const pose = poseAt(phase, params)
+  return Math.min(
+    joint(pose, 'left_ankle').y,
+    joint(pose, 'left_heel').y,
+    joint(pose, 'left_foot_index').y,
+  )
+}
+
+/** The left foot's worst distance from the ground through stance, (0, stanceEnd] at 1/1000. */
+function stancePinError(params: RunnerParams): number {
+  let worst = 0
+  for (let i = 1; i <= GAIT_PHASES.stanceEnd * 1000; i += 1) {
+    worst = Math.max(worst, Math.abs(lowestLeftFoot(params, i / 1000)))
+  }
+  return worst
+}
+
+/** The left foot's lowest point through swing, (stanceEnd, 1) at 1/1000: negative is underground. */
+function swingClearance(params: RunnerParams): number {
+  let lowest = Infinity
+  for (let i = GAIT_PHASES.stanceEnd * 1000 + 1; i < 1000; i += 1) {
+    lowest = Math.min(lowest, lowestLeftFoot(params, i / 1000))
+  }
+  return lowest
+}
+
+function grid(axes: Partial<Record<RunnerParamId, readonly number[]>>): RunnerParams[] {
+  return Object.entries(axes).reduce<RunnerParams[]>(
+    (sets, [id, values]) => sets.flatMap((set) => (values ?? []).map((v) => ({ ...set, [id]: v }))),
+    [NEUTRAL_RUNNER_PARAMS],
+  )
+}
+
+/** The parameters that shape the legs or the figure's height, at their range ends. */
+const LEG_CORNERS = grid(
+  Object.fromEntries(
+    (
+      ['pelvisBounce', 'landingOffset', 'contactShankOffset', 'peakThighAngle', 'peakSwingKneeBend', 'stepWidth'] as const
+    ).map((id) => [id, RUNNER_PARAM_SPECS[id].range]),
+  ),
+).map((params) => realizeParams(params))
+
+/**
+ * The declared realistic domain the pin holds over (design.md D15): landing offsets up to 0.3
+ * torso lengths, everything else across its realistic spread.
+ */
+const PIN_DOMAIN = grid({
+  pelvisBounce: [0, 0.07, 0.14, 0.2, 0.3],
+  landingOffset: [-0.1, 0, 0.15, 0.3],
+  contactShankOffset: [-0.2, -0.05, 0.08, 0.2, 0.3],
+  peakThighAngle: [15, 40, 85],
+  peakSwingKneeBend: [60, 100, 150],
+  stepWidth: [-1, 0.3, 1.5],
+}).map((params) => realizeParams(params))
+
+describe('the stance foot stands on the ground', () => {
+  it('pins the neutral stance foot to y = 0 from contact to toe-off', () => {
+    expect(Math.abs(lowestLeftFoot(NEUTRAL_RUNNER_PARAMS, 0))).toBeLessThan(1e-12)
+    expect(stancePinError(NEUTRAL_RUNNER_PARAMS)).toBeLessThan(1e-9)
+  })
+
+  it('puts the contact foot exactly on the ground for every parameter set', () => {
+    for (const params of [...CORNERS, ...LEG_CORNERS]) {
+      expect(Math.abs(lowestLeftFoot(params, 0))).toBeLessThan(1e-12)
+    }
+  })
+
+  it('pins the stance foot to within 0.01 over the declared domain and at the back-landing corners', () => {
+    const backLanding = LEG_CORNERS.filter((params) => params.landingOffset < 0)
+    expect(backLanding).toHaveLength(32)
+    for (const params of [...PIN_DOMAIN, ...backLanding]) {
+      expect(stancePinError(params), JSON.stringify(params)).toBeLessThan(0.01)
+    }
+  })
+
+  it('keeps the swing foot off the ground over the declared domain', () => {
+    for (const params of PIN_DOMAIN) {
+      expect(swingClearance(params), JSON.stringify(params)).toBeGreaterThan(-0.01)
+    }
+  })
+
+  it('lets the foot give way, by a bounded amount, where the bindings cannot keep it down', () => {
+    // The 0.7 landing corners: pinning them needs a stance knee bend that would break kneeFlexion.
+    const farLanding = LEG_CORNERS.filter((params) => params.landingOffset > 0.5)
+    expect(farLanding).toHaveLength(32)
+    for (const params of farLanding) {
+      const label = JSON.stringify(params)
+      expect(Math.abs(lowestLeftFoot(params, 0)), label).toBeLessThan(1e-12)
+      expect(stancePinError(params), label).toBeLessThan(0.13)
+      expect(swingClearance(params), label).toBeGreaterThan(-0.18)
+      for (const id of PARAM_IDS) {
+        const { measure, tolerance } = MEASURE_PARAM[id]
+        expect(Math.abs(measure(params) - params[id]), `${id} ${label}`).toBeLessThanOrEqual(tolerance)
+      }
+    }
+  })
+
+  it('every still frame the renderer holds shows a foot on the ground at the neutral parameters', () => {
+    const legPhases = [GAIT_PHASES.midStance, ...Object.values(KEY_LEG_PHASE).filter((q) => q !== null)]
+    for (const q of legPhases) {
+      for (const side of ['left', 'right'] as const) {
+        const pose = poseAt(phaseForLeg(side, q), NEUTRAL_RUNNER_PARAMS)
+        const lowest = Math.min(
+          ...pose.filter((j) => /ankle|heel|foot_index/.test(j.name)).map((j) => j.y),
+        )
+        expect(Math.abs(lowest), `${side} ${q}`).toBeLessThan(1e-9)
+      }
+    }
+  })
+
+  it('stands the neutral runner at the nominal framing height', () => {
+    expect(Math.abs(pelvisHeight(NEUTRAL_RUNNER_PARAMS) - PELVIS_HEIGHT)).toBeLessThan(0.01)
   })
 })
 
@@ -165,10 +276,13 @@ const FOOT: JointFamily[] = ['ankle', 'heel', 'foot_index']
 
 /**
  * The joint families each binding moves — exactly these, no fewer and no more. Every other joint
- * stays bit-identical. `pelvisBounce` moves every joint by one vertical shift (tested separately).
+ * keeps its x and z bit-identical, and its height changes only by one vertical shift per phase
+ * shared by the whole figure (the height that keeps the runner standing on the ground; no metric
+ * reads absolute height). The parameters that do not shape the legs move nothing else at all.
  */
-const MOVED_JOINTS: Record<Exclude<RunnerParamId, 'pelvisBounce'>, JointFamily[]> = {
+const MOVED_JOINTS: Record<RunnerParamId, JointFamily[]> = {
   cadence: [],
+  pelvisBounce: LEG,
   torsoPitch: ['shoulder', 'elbow', 'wrist', 'ear', 'nose'],
   armSwing: ['elbow', 'wrist'],
   peakThighAngle: LEG,
@@ -178,6 +292,16 @@ const MOVED_JOINTS: Record<Exclude<RunnerParamId, 'pelvisBounce'>, JointFamily[]
   stepWidth: LEG,
   swingFootArc: FOOT,
 }
+
+/** The parameters the figure's height depends on; every other one leaves the figure bit-identical. */
+const SHAPES_THE_LEGS = new Set<RunnerParamId>([
+  'pelvisBounce',
+  'peakThighAngle',
+  'peakSwingKneeBend',
+  'landingOffset',
+  'contactShankOffset',
+  'stepWidth',
+])
 
 /**
  * Sweeps low → high with everything else neutral. Contact sweeps stay inside the conflict-free
@@ -214,29 +338,28 @@ describe('each binding moves only its own part, in the direction of its value', 
       }
     })
 
-    it(`${id}: moves exactly its own joints; every other joint is bit-identical`, () => {
+    it(`${id}: moves exactly its own joints; every other joint moves only with the whole figure`, () => {
       const low = withParams({ [id]: sweep[0] })
       const high = withParams({ [id]: sweep[sweep.length - 1] })
       const moved = new Set<JointFamily>()
       for (let i = 0; i < 48; i += 1) {
         const a = poseAt(i / 48, low)
         const b = poseAt(i / 48, high)
-        if (id === 'pelvisBounce') {
-          // Every joint, by the same vertical shift and nothing else.
-          const shift = b[0].y - a[0].y
-          a.forEach((j, k) => {
-            expect(b[k].x).toBe(j.x)
-            expect(b[k].z).toBe(j.z)
-            expect(b[k].y - j.y).toBeCloseTo(shift, 12)
-          })
-          continue
-        }
+        // The whole-figure vertical shift at this phase, read off a hip (no binding's own joint).
+        const shift = joint(b, 'left_hip').y - joint(a, 'left_hip').y
+        if (!SHAPES_THE_LEGS.has(id)) expect(shift).toBe(0)
         a.forEach((j, k) => {
-          if (Math.hypot(j.x - b[k].x, j.y - b[k].y, j.z - b[k].z) > 1e-6) moved.add(family(j.name))
-          if (!MOVED_JOINTS[id].includes(family(j.name))) expect(b[k]).toEqual(j)
+          if (Math.hypot(j.x - b[k].x, j.y + shift - b[k].y, j.z - b[k].z) > 1e-6) {
+            moved.add(family(j.name))
+          }
+          if (MOVED_JOINTS[id].includes(family(j.name))) return
+          expect(b[k].x).toBe(j.x)
+          expect(b[k].z).toBe(j.z)
+          if (SHAPES_THE_LEGS.has(id)) expect(Math.abs(b[k].y - j.y - shift)).toBeLessThan(1e-12)
+          else expect(b[k]).toEqual(j)
         })
       }
-      if (id !== 'pelvisBounce') expect([...moved].sort()).toEqual([...MOVED_JOINTS[id]].sort())
+      expect([...moved].sort()).toEqual([...MOVED_JOINTS[id]].sort())
     })
   }
 
