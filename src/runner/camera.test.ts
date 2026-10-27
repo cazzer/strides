@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import type { KeypointName } from '../pose/types'
+import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import {
   CAMERA_FRAME_HALF_HEIGHT,
   CAMERA_PRESETS,
+  LANDING_FRAME_ABOVE_HIP,
+  LANDING_PHASE_WINDOW,
+  LANDING_FRAME_BELOW_GROUND,
   interpolateCamera,
+  landingCamera,
   projectPoint,
   projectPose,
   resolveCamera,
 } from './camera'
-import { GAIT_PHASES, poseAt } from './gaitModel'
+import { GAIT_PHASES, GROUND_Y, poseAt } from './gaitModel'
 import { NEUTRAL_RUNNER_PARAMS, RUNNER_PARAM_SPECS } from './runnerParams'
+import { VIEW_HALF_WIDTH } from './runnerScene'
 import type { CameraPreset, CameraState, RunnerParamId, RunnerParams } from './types'
 
 const PRESETS = Object.keys(CAMERA_PRESETS) as CameraPreset[]
@@ -64,9 +69,17 @@ describe('projection', () => {
 })
 
 describe('presets', () => {
-  it('has the six presets, each finite with a positive zoom', () => {
+  it('has the seven presets, each finite with a positive zoom', () => {
     expect(PRESETS.sort()).toEqual(
-      ['feetFront', 'footSide', 'legsSide', 'torsoSide', 'upperFrontQuarter', 'wholeBodySide'],
+      [
+        'feetFront',
+        'footSide',
+        'landingSide',
+        'legsSide',
+        'torsoSide',
+        'upperFrontQuarter',
+        'wholeBodySide',
+      ],
     )
     for (const preset of PRESETS) {
       const camera = CAMERA_PRESETS[preset]
@@ -88,6 +101,7 @@ describe('presets', () => {
     legsSide: { joints: /hip|knee|ankle|heel|foot_index/, phases: [0, 0.2, 0.4, 0.6, 0.8] },
     footSide: { joints: /^left_(ankle|heel|foot_index)$/, phases: [GAIT_PHASES.leftContact] },
     feetFront: { joints: /^left_(ankle|heel|foot_index)$/, phases: [GAIT_PHASES.leftContact] },
+    landingSide: { joints: /hip|^right_(knee|ankle|heel|foot_index)$/, phases: [0.35, 0.5, 0.65] },
   }
 
   function corner(end: 0 | 1): RunnerParams {
@@ -127,6 +141,58 @@ describe('presets', () => {
       expect(Object.isFrozen(CAMERA_PRESETS[preset])).toBe(true)
       expect(Object.isFrozen(CAMERA_PRESETS[preset].target)).toBe(true)
     }
+  })
+
+  describe('landingCamera', () => {
+    const withLanding = (landingOffset: number): RunnerParams => ({ ...NEUTRAL_RUNNER_PARAMS, landingOffset })
+    const index = (name: KeypointName) => COMMON_KEYPOINT_NAMES.indexOf(name)
+    const cases = [NEUTRAL_RUNNER_PARAMS, ...[-0.3, 0.3, 0.512, 0.7].map(withLanding)]
+
+    it('frames hip-mid and the near leg through the landing window, at every landing offset', () => {
+      const { start, length } = LANDING_PHASE_WINDOW
+      const phases = Array.from({ length: 61 }, (_, i) => start + (length * i) / 60)
+      for (const values of cases) {
+        const camera = landingCamera(values)
+        for (const phase of phases) {
+          for (const j of projectPose(poseAt(phase, values), camera)) {
+            if (!/hip|^right_(knee|ankle|heel|foot_index)$/.test(j.name)) continue
+            const where = `${j.name} at ${phase}, landing ${values.landingOffset}`
+            expect(Math.abs(j.x), where).toBeLessThanOrEqual(VIEW_HALF_WIDTH)
+            expect(Math.abs(j.y), where).toBeLessThanOrEqual(CAMERA_FRAME_HALF_HEIGHT)
+          }
+        }
+      }
+    })
+
+    it('is side on and level, with the contact ankle and the hip-to-ground span in frame', () => {
+      const fills: boolean[] = []
+      for (const values of cases) {
+        const camera = landingCamera(values)
+        const pose = poseAt(GAIT_PHASES.rightContact, values)
+        const ankle = projectPoint(pose[index('right_ankle')], camera)
+        expect(Math.abs(ankle.x)).toBeLessThan(VIEW_HALF_WIDTH)
+        expect(camera.yawDeg).toBe(0)
+        expect(camera.pitchDeg).toBe(0)
+        // From just above hip-mid to below the ground fits the frame's height, centred; it fills
+        // it unless the window's horizontal reach needs the camera further out.
+        const hipY = (pose[index('left_hip')].y + pose[index('right_hip')].y) / 2
+        const top = projectPoint({ x: 0, y: hipY + LANDING_FRAME_ABOVE_HIP, z: 0 }, camera).y
+        const bottom = projectPoint({ x: 0, y: GROUND_Y - LANDING_FRAME_BELOW_GROUND, z: 0 }, camera).y
+        expect(top + bottom).toBeCloseTo(0, 12)
+        expect(bottom).toBeLessThanOrEqual(CAMERA_FRAME_HALF_HEIGHT + 1e-12)
+        fills.push(Math.abs(bottom - CAMERA_FRAME_HALF_HEIGHT) < 1e-12)
+      }
+      // The neutral figure's reach fits at the height-filling zoom.
+      expect(fills[0]).toBe(true)
+    })
+
+    it('is frozen, and the preset is the neutral figure’s landing frame', () => {
+      const camera = landingCamera(NEUTRAL_RUNNER_PARAMS)
+      expect(Object.isFrozen(camera) && Object.isFrozen(camera.target)).toBe(true)
+      expect(resolveCamera('landingSide')).toEqual(camera)
+      expect(camera.zoom).toBeGreaterThan(1.5)
+      expect(camera.zoom).toBeLessThan(2)
+    })
   })
 
   it('resolveCamera accepts a preset name or a state', () => {

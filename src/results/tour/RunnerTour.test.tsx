@@ -429,11 +429,11 @@ describe('RunnerTour — the runner follows the active stop', () => {
 
     const citation = stop(container, 'landing').querySelector('a')!
     act(() => citation.focus())
-    expect(rail(container)).toHaveAttribute('data-camera', 'legsSide')
+    expect(rail(container)).toHaveAttribute('data-camera', 'landingSide')
     expect(rail(container)).toHaveAttribute('data-active-stop', 'landing')
     expect(container.querySelector('.runner-tour__slow-motion')).toHaveTextContent('Slow motion')
     const props = await lastRunnerProps()
-    expect(props.camera).toBe('legsSide')
+    expect(props.camera).toBe('landingSide')
     expect(props.playbackRate).toBe(0.4)
     // The headline metric only: the stop states its value, and the figure labels nothing else.
     expect(props.focus?.metricIds).toEqual(['overstriding'])
@@ -591,7 +591,7 @@ describe('RunnerTour — the runner follows the active stop', () => {
     await act(async () => {})
     expect((await lastRunnerProps()).intro?.running).toBe(false)
     act(() => stop(container, 'landing').focus())
-    expect(rail(container)).toHaveAttribute('data-camera', 'legsSide')
+    expect(rail(container)).toHaveAttribute('data-camera', 'landingSide')
     expect(container.querySelector('.runner-tour__slow-motion')).toBeNull()
   })
 })

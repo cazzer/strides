@@ -11,8 +11,8 @@
  * **Annotations hang off the live figure, never a second one.** Each limb parameter is annotated
  * on the pose its metric reads (its key phase), and the renderer's still frame holds the first
  * annotated parameter's key phase, so that limb lies exactly on its mark. No limb-shaped guide is
- * drawn: a ghost leg beside the runner would read as a target pose. Guides are short reference
- * rays and extension ticks only. Pure: no React, no DOM.
+ * drawn: a ghost leg beside the runner would read as a target pose. Guides are reference rays,
+ * plumb lines from the joints a metric reads, and extension ticks only. Pure: no React, no DOM.
  */
 import { formatGuidedValue } from '../results/formatGuidedValue'
 import type { MetricResult } from '../heuristics/types'
@@ -109,6 +109,11 @@ export interface RunnerAnnotationLabel {
   /** World point the label hangs off. */
   anchor: Vec3
   side: LabelSide
+  /**
+   * Line pitches the block sits further out on `side`: a label stacked under the earlier labels
+   * of the ground lane (`planAnnotations`). Absent: not stacked.
+   */
+  offsetLines?: number
 }
 
 type LabelPlacement = Pick<RunnerAnnotationLabel, 'anchor' | 'side'>
@@ -145,6 +150,11 @@ export interface AnnotationInput {
   kind?: AnnotationKind
   /** The target camera's yaw: picks the near limb in a side view, the stance leg in a front one. */
   cameraYawDeg: number
+  /**
+   * The still frame without a keyed focus. Absent: mid-stance. The landing camera passes the near
+   * leg's contact, so its still frame shows the landing whatever the focus.
+   */
+  heldPhaseWithoutKey?: number
 }
 
 export interface AnnotationPlan {
@@ -348,10 +358,11 @@ const BUILDERS: Readonly<Record<Exclude<RunnerParamId, 'cadence'>, Builder>> = {
       marks: [[start, end]],
       fills: [],
       guides: [
-        // Short extension lines: up from the mark under hip-mid, and down from the ankle.
+        // The metric's two points, dropped to the mark: a plumb from hip-mid, and one from the
+        // contact ankle (the metric reads the ankle, not the heel).
         [
+          { x: hip.x, y: hip.y, z },
           { x: hip.x, y: y - EXTENSION_OVERHANG, z },
-          { x: hip.x, y: GROUND_Y + 0.25, z },
         ],
         [
           { x: ankle.x, y: ankle.y, z },
@@ -365,15 +376,23 @@ const BUILDERS: Readonly<Record<Exclude<RunnerParamId, 'cadence'>, Builder>> = {
     const pose = poseAt(phase, values)
     const knee = sideJoint(pose, side, 'knee')
     const ankle = sideJoint(pose, side, 'ankle')
-    const y = (knee.y + ankle.y) / 2
+    const heel = sideJoint(pose, side, 'heel')
+    const toe = sideJoint(pose, side, 'foot_index')
+    // The metric reads ankle.x − knee.x: the mark runs at ankle height from under the knee (a
+    // plumb drops to it) to the ankle itself.
+    const y = ankle.y
     const z = ankle.z
     const start = { x: knee.x, y, z }
     const end = { x: ankle.x, y, z }
     return {
       marks: [[start, end]],
       fills: [],
-      guides: [verticalTick(knee.x, y, z, 0.06), verticalTick(ankle.x, y, z, 0.06)],
-      label: { anchor: { x: Math.max(knee.x, ankle.x), y, z }, side: 'right' },
+      guides: [
+        [knee, { x: knee.x, y: y - EXTENSION_OVERHANG, z: knee.z }],
+        verticalTick(ankle.x, y, z, 0.06),
+      ],
+      // Under the point the foot lands on: the heel heel-down, the toe on a forefoot strike.
+      label: { anchor: toe.y < heel.y ? toe : heel, side: 'below' },
     }
   },
   stepWidth(_value, values, { side, phase }) {
@@ -448,6 +467,7 @@ export function planAnnotations({
   focusParams,
   kind,
   cameraYawDeg,
+  heldPhaseWithoutKey,
 }: AnnotationInput): AnnotationPlan {
   const eligible = focusParams.filter((paramId) => {
     const natural = PARAM_ANNOTATION_KIND[paramId]
@@ -464,7 +484,7 @@ export function planAnnotations({
   const keyed = eligible.find((paramId) => KEY_LEG_PHASE[paramId] !== null)
   const heldPhase =
     keyed === undefined
-      ? GAIT_PHASES.midStance
+      ? (heldPhaseWithoutKey ?? GAIT_PHASES.midStance)
       : phaseForLeg(near, KEY_LEG_PHASE[keyed] as number)
   const sideFor = (paramId: RunnerParamId): RunnerSide => {
     if (!frontal) return near
@@ -504,5 +524,30 @@ export function planAnnotations({
     }
     return [annotation]
   })
-  return { heldPhase, annotations }
+  return { heldPhase, annotations: stackGroundLane(annotations) }
+}
+
+/** A label hanging below a point on or under the ground sits in the ground lane. */
+function inGroundLane(label: RunnerAnnotationLabel): boolean {
+  return label.side === 'below' && label.anchor.y <= GROUND_Y + GROUND_LANE_TOLERANCE
+}
+
+const GROUND_LANE_TOLERANCE = 1e-9
+
+/**
+ * Two or more ground-lane labels (overstride under its mark, foot strike under the heel) would
+ * print over each other: they share the lane's lowest anchor height and stack in focus order, each
+ * below the lines of the ones before it. A lone ground-lane label keeps its own anchor.
+ */
+function stackGroundLane(annotations: RunnerAnnotation[]): RunnerAnnotation[] {
+  const lane = annotations.filter((a) => inGroundLane(a.label))
+  if (lane.length < 2) return annotations
+  const laneY = Math.min(...lane.map((a) => a.label.anchor.y))
+  let offsetLines = 0
+  return annotations.map((a) => {
+    if (!inGroundLane(a.label)) return a
+    const label = { ...a.label, anchor: { ...a.label.anchor, y: laneY }, offsetLines }
+    offsetLines += a.label.lines.length
+    return { ...a, label }
+  })
 }
