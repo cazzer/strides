@@ -292,7 +292,9 @@ node scripts/ab-person-selection.mjs \
   tour's animating runner does not perturb the scale pass. Two re-runs on the final commit agreed
   row for row with the first. One of them lost its very FIRST trial (side-landscape, tour arm) to
   the 300 s "never reached Analysis complete" timeout; 17 later tour trials, including a
-  side-landscape-only re-run, all completed, and the cause is not established. ⚠️ The primary `[analysis-diagnostics]`
+  side-landscape-only re-run, all completed, and the cause is not established.
+  After review round 1 (headline-only focus, intro gated on a 90%-visible rail, no coverage notice
+  above the tour) a side-landscape re-run, 3 trials per arm, was still identical to the first. ⚠️ The primary `[analysis-diagnostics]`
   line predates the graft (VO_cm/stepWidthCm read `null` there); only the `[evidence-coverage]` rows
   carry scale-pass output.
 - **Clips**: `side-landscape`, `side-portrait`, `front-approach` (the three bundled demo clips —
