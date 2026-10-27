@@ -261,6 +261,66 @@ Deviations from the ps19.2 plan:
   does not give a column-flex child a height when the figure has none, so the consumer must size
   it through `className` (documented on the component).
 
+### D14. Intro beat (ps19.3)
+
+`useRunnerIntro({ bound, resultKey, order, camera, active, onDone })` returns
+`{ overrides, running, skip }` and drives ModelRunner only through the D13 seam plus two props:
+`intro: { running, onSkip }` and `onActiveChange(active)`.
+
+**Plan.** `planIntro` orders the measured parameters (focus first via `paramForMetric`, then spec
+order; landing always before foot strike) and drops from the steps any whose change the camera
+cannot show (step width and swing-foot arc when |sin yaw| < 0.5); those are held neutral and
+arrive with the final state. Step length is 4500 / n within 450..1000 ms (the floor is 450, not
+500, so a front view's ten steps still fit 4.5 s). The plan (steps, bound values, flash texts,
+step length) is snapshotted when step 0 begins, so the scale-pass graft changing `bound`
+mid-intro cannot shift step indices: every parameter is drawn at its snapshot value (a newly
+measured one included) until the end, and the final state (`overrides` undefined) draws the live
+`bound`. A plan with no steps finishes at once, with no hold. `camera` is a required input, the
+same one ModelRunner gets, so the plan and the drawing can never disagree about the view.
+
+**Length (deliberate).** About 5 s in all: the 500 ms neutral hold, then at most 4.5 s of
+steps. The hold lets the reader see the neutral figure before anything changes; the 4.5 s keeps
+each step at or above 450 ms with all ten parameters visible.
+
+**Sequence.** A 500 ms fully neutral hold, then step i: `overrides.values` holds every parameter
+at its snapshot value, and every not-yet-applied measured parameter at its neutral constant, its
+own `sources` entry flipped to measured, and `valueTween = { from: neutral, to: value, durationMs,
+key: String(i) }`, which the loop moves on wall-clock time. Each step is armed from the previous
+step's actual start inside the timer callbacks (progress kept in a ref), never waiting on a React
+commit; a re-armed effect (a reduced-motion flip) resumes the current step where it is. A flash
+clears after 500 ms unless that would leave under 150 ms of its step, in which case it stays the
+whole step (no blink). About 2n + 1 commits per run.
+
+**Seen first.** The hold starts only once `active` (tab visible and figure on screen, from
+`onActiveChange`, which also reports false on unmount from an unmount-only cleanup); leaving
+during the hold restarts it. Once step 0 has begun the timers keep
+running while unseen, which matches the renderer's wall-clock tween.
+
+**Once per result.** `resultKey` is a string (an analysis-run or session id): the fused result
+object is rebuilt on every session render and when the scale pass lands. A module-level Set marks
+a key when step 0 begins, from the hold's timer, so StrictMode's simulated unmount (which clears
+it) and a runner never seen never mark it. A remount with a played key draws the final state and
+does not fire `onDone`: `onDone` is a one-shot side effect, and UI derives from `running`. Reduced
+motion never starts the intro; it marks the key and fires `onDone` once.
+
+**Legibility.** While a parameter tweens, its focus annotation is hidden and only its flash shows
+(no duplicate label, no arc drawn at the neutral geometry being left). The flash anchors on a
+fixed world point per parameter from the still-frame pose (`introFlash.ts`: near ankle for foot
+strike and swing arc, ground under the hip for landing, hip for bounce and step width, torso
+midpoint for lean, near shoulder for arms, near knee for thigh and knee bend, above the head for
+cadence). It starts a gap after its anchor, except the lean flash, which ends a gap before it on
+the torso's back side (opposite the projected direction of travel) so it never sits on the arms.
+It is moved below, or at the frame's foot above, any visible annotation label, mark or guide box,
+with half a line of clearance. The
+legend reads "Dashed: not applied yet" while the intro runs. Pause mid-intro skips it, so the
+still figure is the final one. The button reads "Skip intro".
+
+**Accepted transient.** Mid-intro values mix bound values and neutral constants, which
+`realizeParams` never resolved; `poseAt` resolves contact-leg conflicts in default order, so an
+applied foot strike or thigh peak can draw slightly off its label until the stronger contact
+parameters on its leg are applied. Landing before foot strike removes the foot-strike case when
+both are measured; the thigh-peak case remains. The end state is exact.
+
 ## Risks / Trade-offs
 
 - When two measured contact parameters conflict (D4), the weaker one is drawn away from its
