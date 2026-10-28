@@ -127,8 +127,9 @@ Unit tests mock the detector, so **verify UI/pipeline changes live** before call
   comparable to today's.
 - Footstrikes are timed from the fitted hip-bounce phase (`strides-cjl`); ankle detector is fallback.
 - The VO_cm anchor on today's default path is 4.4215 cm — on the retired Demo 1 footage.
-- `armSwingAmplitude` is searched at cadence/2 and reports per-stride travel; side view reads the near
-  arm (tolerated ×0.6). Arm-swing numbers before `strides-eiil` are fundamental p2p, not comparable.
+- `armSwingAmplitude` is searched within ±20% of hip-bounce freq/2 (clip time; anchored even where
+  cadence is withheld) and reports per-stride travel; side view reads the near arm (tolerated ×0.6).
+  Arm-swing numbers before `strides-eiil` are fundamental p2p, not comparable.
 
 ## Do not re-litigate (measured and closed — reasons in the notes)
 

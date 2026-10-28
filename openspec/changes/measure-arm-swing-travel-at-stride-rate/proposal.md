@@ -31,7 +31,8 @@ measurement defects instead, each of which the user approved fixing:
   including its sub-floor retimed-clip pass), trusted only when that fit clears `cadenceMinFitR2`.
   No such anchor → `null` with a caveat naming the missing running rhythm.
 - **Per-stride travel.** The reported per-side size is the median, over complete stride-length
-  windows, of the max−min of the trend-removed, 3-point-median-filtered scale-stabilized series.
+  sliding stride-length windows (`1/strideHz`), of the max−min of the trend-removed,
+  Hampel-guarded scale-stabilized series; fewer than two complete strides → no travel.
   Gating stays on the fundamental's R². `spectralFit.ts` gains one additive helper,
   `fitTrendAtFrequency`; no existing function or return type changes.
 - **Side view reads the near arm.** On a `'side'` clip the arm with strictly more directly-detected

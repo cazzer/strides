@@ -1207,7 +1207,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       wrongAngle:
         // Side-on is tolerated now (the near arm is read alone, strides-eiil.3); only an angled,
         // ambiguous view is unsuitable.
-        "Film square to the runner's line of travel, from in front, from behind or from the side. At an angle the arms overlap the body and neither swing can be measured cleanly.",
+        "Film square to the runner's line of travel — from in front or behind to read both arms; from the side only the near arm is read. At an angle the arms overlap the body and neither swing can be measured cleanly.",
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,

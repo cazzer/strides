@@ -1492,7 +1492,7 @@ describe('capture hints', () => {
 
   it('asks arm swing for any square-on angle — side-on reads the near arm, only an angle rules it out', () => {
     expect(METRIC_GUIDANCE.armSwingAmplitude.captureHints.wrongAngle).toBe(
-      "Film square to the runner's line of travel, from in front, from behind or from the side. At an angle the arms overlap the body and neither swing can be measured cleanly.",
+      "Film square to the runner's line of travel — from in front or behind to read both arms; from the side only the near arm is read. At an angle the arms overlap the body and neither swing can be measured cleanly.",
     )
   })
 

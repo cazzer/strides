@@ -281,7 +281,9 @@ describe('computeArmSwingAmplitude', () => {
     expect(trueTravelPx).toBeGreaterThan(44)
     expect(fit.ok && fit.peakToPeakAmplitude).toBeCloseTo(40, 0)
     expect(result.value! * TORSO_LENGTH_PX).toBeGreaterThan(0.97 * trueTravelPx)
-    expect(result.value! * TORSO_LENGTH_PX).toBeLessThanOrEqual(trueTravelPx + 1e-6)
+    // ≤ 0.5% over: the trend is fitted jointly with the FUNDAMENTAL, so a sliver of the harmonic
+    // shape leaks into the removed trend.
+    expect(result.value! * TORSO_LENGTH_PX).toBeLessThanOrEqual(trueTravelPx * 1.005)
   })
 
   it('a side-view clip reads the near arm alone: tolerated, capped near 0.6, one exemplar', () => {
@@ -343,6 +345,7 @@ describe('computeArmSwingAmplitude', () => {
     expect(result.value).toBe((left + right) / (2 * TORSO_LENGTH_PX))
     expect(result.viewFit).toBe('tolerated')
     expect(result.caveat ?? '').not.toContain('near arm only')
+    expect(result.caveat).toContain('the far arm may be partly hidden behind the body')
     expect(result.exemplars).toHaveLength(2)
 
     const noisyTie = computeArmSwingAmplitude(
@@ -357,6 +360,65 @@ describe('computeArmSwingAmplitude', () => {
     )
     expect(noisyTie.value).toBeNull()
     expect(noisyTie.caveat).toContain('too irregular to measure')
+  })
+
+  it('a MoveNet left/right label swap on a side clip: what the near-arm reading does with it', () => {
+    // Side-on, MoveNet can swap the two arms' labels for a run of frames. Here the near (left) arm
+    // swings 40 px and the far (right) arm 20 px in opposite phase; frames 40–47 (0.27 s, about
+    // 40% of a stride) carry each arm's keypoints under the OTHER label. Detection status is
+    // untouched by a swap, so the near-arm choice stands, and the swapped segment splices the far
+    // arm's trace into the near arm's series — a run of 8 frames, longer than the Hampel guard's
+    // two-sample reach, so it is NOT removed.
+    const occluded = (i: number) => i % 3 === 0
+    const clean = withInterpolated(
+      buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 20 }),
+      ['right_wrist'],
+      occluded,
+    )
+    const SWAP: Record<string, string> = {
+      left_wrist: 'right_wrist',
+      right_wrist: 'left_wrist',
+      left_shoulder: 'right_shoulder',
+      right_shoulder: 'left_shoulder',
+    }
+    const swapAt = (frames: RobustPoseFrame[]) => frames.map((frame, i) =>
+      i >= 40 && i < 48
+        ? {
+            ...frame,
+            keypoints: frame.keypoints.map((kp) => {
+              const other = SWAP[kp.name]
+              if (other === undefined) return kp
+              const source = frame.keypoints.find((candidate) => candidate.name === other)!
+              return { ...kp, x: source.x, y: source.y }
+            }),
+          }
+        : frame,
+    )
+    // A far arm that also hangs 30 px lower relative to its own shoulder: the swapped run then
+    // splices a 30 px step into the near arm's series.
+    const lowFar = clean.map((frame) => ({
+      ...frame,
+      keypoints: frame.keypoints.map((kp) =>
+        kp.name === 'right_wrist' && kp.y !== null ? { ...kp, y: kp.y + 30 } : kp,
+      ),
+    }))
+
+    const before = computeArmSwingAmplitude(clean, 'side')
+    const after = computeArmSwingAmplitude(swapAt(clean), 'side')
+    const lowBefore = computeArmSwingAmplitude(lowFar, 'side')
+    const lowAfter = computeArmSwingAmplitude(swapAt(lowFar), 'side')
+
+    // The near-arm choice stands, and the reading barely moves: a sliding-window MEDIAN only
+    // reports a swapped run if it falls in more than half the stride windows — here ~0.27 s of a
+    // 4 s clip touches about a quarter of them. Measured: −1.0% (same resting offset) and +3.4%
+    // (the 30 px step). A swap spanning most of the clip would be read as the far arm's swing.
+    for (const swappedClip of [after, lowAfter]) {
+      expect(swappedClip.value).not.toBeNull()
+      expect(swappedClip.exemplars![0].side).toBe('left')
+      expect(swappedClip.caveat).toContain('near arm only')
+    }
+    expect(Math.abs(after.value! - before.value!) / before.value!).toBeLessThan(0.02)
+    expect(Math.abs(lowAfter.value! - lowBefore.value!) / lowBefore.value!).toBeLessThan(0.05)
   })
 
   it('an ambiguous-view clip: still computed, viewFit unsuitable, confidence capped near the 0.2 multiplier', () => {
@@ -479,6 +541,39 @@ describe('computeArmSwingAmplitude', () => {
     expect(result.value).toBeNull()
     expect(result.confidence).toBe(0)
     expect(result.caveat).toContain('No resolvable body-scale reference')
+  })
+
+  it('a clip with no hips at all names the missing body scale, not the missing rhythm it also lacks', () => {
+    // No hips means no torso AND no hip-bounce anchor; the normalizer is checked first because it
+    // is the more fundamental cause.
+    const result = computeArmSwingAmplitude(
+      buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 20 }).map(
+        (frame) => ({
+          ...frame,
+          keypoints: frame.keypoints.map((kp) =>
+            kp.name === 'left_hip' || kp.name === 'right_hip'
+              ? { ...kp, x: null, y: null, score: 0, status: 'unrecoverable' as const }
+              : kp,
+          ),
+        }),
+      ),
+      'front',
+    )
+
+    expect(result.value).toBeNull()
+    expect(result.caveat).toContain('No resolvable body-scale reference')
+  })
+
+  it('a clip under two complete strides publishes nothing, and says why', () => {
+    const result = computeArmSwingAmplitude(
+      buildArmSwingFrames({ ...BASE_PARAMS, durationSec: 1.25, leftAmplitudePx: 40, rightAmplitudePx: 40 }),
+      'front',
+    )
+
+    expect(result.value).toBeNull()
+    expect(result.caveat).toBe(
+      'Arm positions were tracked, but the clip holds fewer than 2 complete arm swings, too few to measure their size from.',
+    )
   })
 
   it('a degenerate zero-length torso is guarded, not divided by', () => {

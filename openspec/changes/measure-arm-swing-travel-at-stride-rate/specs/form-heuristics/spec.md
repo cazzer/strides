@@ -6,10 +6,15 @@ The system SHALL expose arm swing amplitude as a `MetricId` (`armSwingAmplitude`
 last in `MetricId` and every enumeration of it (after `kneeDrive`). For each measured arm the
 system SHALL derive a per-stride TRAVEL from the shared per-side computation (`computeSideSwing`):
 over that arm's scale-stabilized wrist-relative-to-shoulder vertical series, the quadratic trend
-fitted jointly with the sinusoid at the fit's winning frequency is removed, a 3-point running
-median is applied over consecutive usable samples, the series is tiled into complete windows one
-fitted stride period long starting at the first usable sample, and the travel is the median over
-windows (each holding at least 3 samples) of the window's maximum minus its minimum. The value
+fitted jointly with the sinusoid at the fit's winning frequency is removed; a Hampel spike guard
+replaces a sample with its local median (over two consecutive usable samples either side) only
+when it deviates from that median by more than three scaled median absolute deviations, so a clean
+extremum is never altered; windows one STRIDE period long (`1/strideHz`, the hip-anchored stride
+rate rather than the fit's own weakly-determined frequency) slide by a quarter period across the
+usable span, each lying wholly inside it; and the travel is the median over windows (each holding
+at least 3 samples) of the window's maximum minus its minimum. No travel SHALL be derived from a
+usable span holding fewer than two complete stride periods, where a single window's range would
+carry every per-frame tracking excursion in it undiluted. The value
 SHALL be that travel divided by `estimateBodyScale`'s clip-median torso length — the mean of the
 two arms' travels for a both-arms reading, the near arm's travel alone for a near-arm reading (see
 the view requirement). The fitted sinusoid's peak-to-peak amplitude SHALL NOT be published as the
@@ -32,8 +37,9 @@ The metric SHALL report `value: null` with `confidence: 0` and a caveat naming t
 each of these distinct cases: no steady running rhythm to time the arm swing against (see the
 stride-rate requirement); no resolvable shoulder/wrist position for a measured arm; a per-side
 swing rhythm that could not be fitted (too few samples, too short a clip, or no oscillating
-motion — the shared per-side failure wording); a measured arm whose series yields no complete
-stride window (the too-short wording); a fitted rhythm on a measured arm below the shared R² gate;
+motion — the shared per-side failure wording); a measured arm whose usable span holds fewer than
+two complete stride periods, naming that the clip holds fewer than two complete arm swings to
+measure a size from; a fitted rhythm on a measured arm below the shared R² gate;
 for a both-arms reading, the two arms' fitted rhythms disagreeing past the shared bound, naming
 that what failed is the existence of one swing rhythm to size; and no resolvable body-scale
 reference (shoulders/hips) in the clip.
@@ -53,6 +59,20 @@ reference (shoulders/hips) in the clip.
   peak-to-trough travel exceeds the fundamental's peak-to-peak
 - **THEN** the reported travel tracks the trace's full peak-to-trough travel within one stride,
   not the fundamental's smaller peak-to-peak
+
+#### Scenario: Fewer than two complete strides publishes no travel
+
+- **WHEN** an arm's fit clears every gate but its usable span holds fewer than two complete stride
+  periods
+- **THEN** `value` is `null`, `confidence` is `0`, and the caveat says the clip holds fewer than
+  two complete arm swings to measure their size from — never that it is too short for one cycle
+
+#### Scenario: A clean sampled extremum is not clipped by the spike guard
+
+- **WHEN** a clean swing is sampled at the live operating point (~26 Hz) with a sample falling on
+  an extremum
+- **THEN** the reported travel equals the samples' own peak-to-trough range, not a range shrunk
+  toward the neighbouring samples
 
 #### Scenario: A single-frame spike does not inflate the travel
 
@@ -112,7 +132,8 @@ far arm is occluded by the body, and SHALL treat side as tolerated
 reading SHALL gate, take its confidence inputs and build its exemplar from the near arm only, SHALL
 NOT be nulled by the far arm, and SHALL carry a caveat saying it was measured from the near arm
 only because from the side the far arm is hidden behind the body. When the two arms' directly-
-detected counts tie, the side clip SHALL fall back to the both-arms rule. `'ambiguous'` SHALL be
+detected counts tie, the side clip SHALL fall back to the both-arms rule and SHALL carry a caveat
+saying the far arm may be partly hidden behind the body. `'ambiguous'` SHALL be
 treated as unsuitable (`multiplier: 0.2`) under the both-arms rule; the system SHALL still compute
 and return a value there when one would otherwise resolve, never substituting `null` purely
 because the view is unsuitable, and SHALL attach a caveat naming the unsuitable camera angle via
@@ -141,8 +162,9 @@ the shared view phrasing.
 #### Scenario: A detected-count tie on a side clip falls back to both arms
 
 - **WHEN** on a `'side'` clip both arms have exactly the same number of directly-detected frames
-- **THEN** the both-arms rule applies: the value is the mean of the two travels and either arm
-  failing a shared gate nulls it
+- **THEN** the both-arms rule applies: the value is the mean of the two travels, either arm
+  failing a shared gate nulls it, and the caveat says the far arm may be partly hidden behind the
+  body
 
 #### Scenario: An ambiguous-view clip is computed, not withheld, and capped at the ambiguous multiplier
 
@@ -234,6 +256,41 @@ spurious below-quality-gate one.
 - **THEN** the torso-length-stabilized series recovers the body-unit swing travel, where a
   shoulder-span-stabilized series — divided by a near-zero span that carries no trace of the
   growth — does not
+
+### Requirement: An arm-swing exemplar pair spans one fitted half-swing and names its instants by body position
+
+The system SHALL derive each side's ghosted arm-swing exemplar pair from that side's fitted PHASE —
+the two sampled frames nearest a fitted maximum and its adjacent fitted minimum — so the pair spans
+half a fitted swing period by construction, and SHALL NOT select it by scanning the raw trace for
+extrema. The picture is captioned as one swing, top against bottom, and a pair chosen off the raw
+trace depicts drift that the reported travel explicitly removes, and need not lie one half-swing
+apart. Because the pair sits at the fitted FUNDAMENTAL's extremes rather than at the travel's
+maximum and minimum, it MAY span somewhat less than the reported per-stride travel, which also
+counts the swing's harmonic shape. One pair is emitted per MEASURED arm: two for a both-arms
+reading, the near arm's alone for a near-arm reading.
+
+Because the fitted series is the scale-stabilized `wrist.y − shoulder.y` in image-y, which grows
+downward — the stabilizing divisor is positive by construction, so it preserves this sign
+convention — the fitted MAXIMUM is the wrist at its LOWEST on screen; the system SHALL name the
+pair by body position rather than by extremum kind, so that a caption cannot state the opposite of
+the truth.
+
+Both rules are stated of the shared per-side exemplar builder rather than of any one metric,
+because every consumer of that builder inherits them: a pair scanned off the raw trace contradicts
+the number printed beside it, and reading the extremum kind straight through produces a caption
+that says the exact opposite of what the image shows, while passing every type check.
+
+#### Scenario: The pair spans a half-cycle, not a sub-cycle wiggle
+
+- **WHEN** an arm-swing exemplar is emitted for a side on a clip with a fitted swing rhythm
+- **THEN** the interval between that exemplar's `timestamp` and its `pairedTimestamp` is half that
+  side's fitted swing period, to within the clip's own frame interval
+
+#### Scenario: The base instant is the wrist at its highest
+
+- **WHEN** an arm-swing exemplar is emitted for a side
+- **THEN** its `timestamp` names the frame where that side's wrist sits higher on screen relative
+  to its shoulder, and its `pairedTimestamp` the frame where it sits lower
 
 ## REMOVED Requirements
 

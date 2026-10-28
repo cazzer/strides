@@ -56,8 +56,10 @@ import {
  */
 
 /**
- * Minimum complete ARM-SWING cycles — one per STRIDE, so one cycle spans two footfalls — for the
- * fitted per-side amplitude to be trusted at full confidence.
+ * Minimum complete ARM-SWING cycles — one per STRIDE, so one cycle spans two footfalls — for a
+ * per-stride travel to be read at all (`perStrideTravel` returns `null` below it: one window's
+ * range carries every tracking excursion undiluted), and the floor of the confidence ramp above it.
+ * Counted in hip-anchored stride periods over the usable span (`SideSwing.strideCycles`).
  *
  * Two is deliberately the same real demand the previous estimator encoded as "at least 4
  * half-swings": swapping the estimator should not silently also raise the sample bar, so the
@@ -421,8 +423,15 @@ export interface SideSwing {
    * the shared gates read; its peak-to-peak is not the published size (see `travelPx`). */
   fit: SpectralFitResult
   /** The wrist's per-stride travel in the same px as `seriesY` — see `perStrideTravel`. `null`
-   * whenever `fit` failed, or no stride window held enough samples to read a range from. */
+   * whenever `fit` failed or the usable span holds fewer than `MIN_ARM_SWING_CYCLES` complete
+   * stride periods (`strideCycles`). */
   travelPx: number | null
+  /** Complete-or-partial stride periods in the usable span — `spanSeconds × strideHz`, fractional,
+   * `0` with fewer than two usable samples. The cycle count the travel's ≥ 2 floor and the
+   * metric's confidence read, rather than the fit's own `observedCycles`, because the hip anchor
+   * determines the stride period far better than a ±20% arm grid narrower than the window's own
+   * frequency resolution can. */
+  strideCycles: number
   /** Frames where this side's shoulder AND wrist both resolved. */
   resolvedCount: number
   /** Of resolvedCount, how many had either point flagged interpolated. `resolvedCount −
@@ -514,15 +523,41 @@ export function computeSideSwing(
     frequencyStepHz: ARM_SWING_BAND_STEP_FRACTION * strideHz,
   })
 
-  return { seriesY, fit, travelPx: perStrideTravel(samples, fit), resolvedCount, interpolatedCount }
+  const travel = perStrideTravel(samples, fit, strideHz)
+  return { seriesY, fit, ...travel, resolvedCount, interpolatedCount }
 }
 
-/** Fewest samples a stride window must hold for its max − min to be read at all — below three, a
- * 3-point median has nothing to compare against and the "range" is one or two raw samples. */
+/** Fewest samples a stride window must hold for its max − min to be read at all. */
 const MIN_TRAVEL_WINDOW_SAMPLES = 3
 
-function median3(a: number, b: number, c: number): number {
-  return Math.max(Math.min(a, b), Math.min(Math.max(a, b), c))
+/** Hampel spike guard: a sample is replaced by its local median only when it sits more than
+ * `HAMPEL_K` scaled MADs from it, over `±HAMPEL_HALF_WIDTH` consecutive usable samples. Half-width 2
+ * removes runs of up to two outlying samples; `k = 3` is the conventional outlier threshold, far
+ * enough out that a clean extremum — even sampled at ~26 Hz on a ~1.5 Hz swing — is never touched. */
+const HAMPEL_HALF_WIDTH = 2
+const HAMPEL_K = 3
+/** MAD → standard deviation for Gaussian noise, so `HAMPEL_K` reads in sigmas. */
+const MAD_TO_SIGMA = 1.4826
+
+/** Sliding stride windows start every quarter period, so the leftover fraction of a cycle past the
+ * last whole stride still contributes and the median runs over several overlapping looks at each
+ * swing rather than one or two disjoint ones. */
+const TRAVEL_WINDOW_STEP_FRACTION = 0.25
+
+/** Slack on "the window fits inside the span", for frame timestamps that are not exact binary
+ * fractions — same reasoning and quantum as `bodyScale.ts`'s window boundary. */
+const WINDOW_FIT_EPSILON_SECONDS = 1e-6
+
+function hampelFilter(values: readonly number[]): number[] {
+  return values.map((value, i) => {
+    const window = values.slice(
+      Math.max(0, i - HAMPEL_HALF_WIDTH),
+      Math.min(values.length, i + HAMPEL_HALF_WIDTH + 1),
+    )
+    const center = median(window)
+    const scale = MAD_TO_SIGMA * median(window.map((v) => Math.abs(v - center)))
+    return Math.abs(value - center) > HAMPEL_K * scale ? center : value
+  })
 }
 
 /**
@@ -537,46 +572,58 @@ function median3(a: number, b: number, c: number): number {
  *
  * 1. Remove the quadratic trend fitted JOINTLY with the sinusoid at `f*` (`fitTrendAtFrequency`) —
  *    exactly the drift the fit already refused to charge to the swing.
- * 2. 3-point running median over consecutive usable samples (endpoints kept as-is) — a spike guard:
- *    a single-frame glitch or left/right label swap would otherwise be reported in full by a range.
- * 3. Tile `floor(observedCycles)` complete windows of one fitted period `1/f*` from the first usable
- *    sample. `f*` is a stride rate by construction (the grid is anchored on it), so each window
- *    holds one full swing whatever its phase, and step-rate content inside it is real
- *    wrist-relative-to-shoulder travel (the torso's own step bounce cancels in wrist − shoulder) —
- *    counted on purpose.
- * 4. Median over windows of `max − min`, skipping windows under `MIN_TRAVEL_WINDOW_SAMPLES`.
+ * 2. Hampel spike guard over consecutive usable samples (`HAMPEL_HALF_WIDTH`, `HAMPEL_K`): a
+ *    single-frame glitch would otherwise be reported in full by a range, while a clean extremum —
+ *    which sits well inside its neighbours' spread — is left exactly as sampled.
+ * 3. Windows one STRIDE long, `1/strideHz` — the hip anchor's period, not the fit's `1/f*`: the ±20%
+ *    arm grid is narrower than the window's own `1/span` frequency resolution on every measured
+ *    clip, so `f*` is weakly determined inside it while the hip bounce is not. Windows slide by a
+ *    quarter period across the usable span, each lying wholly inside it. Each holds one full swing
+ *    whatever its phase, and step-rate content inside it is real wrist-relative-to-shoulder travel
+ *    (the torso's own step bounce cancels in wrist − shoulder) — counted on purpose.
+ * 4. Median over windows of `max − min`. `null` unless the span holds at least
+ *    `MIN_ARM_SWING_CYCLES` complete stride periods: with one, a single max − min carries every
+ *    per-frame tracking excursion in it undiluted (measured: `park-side-portrait.mp4`'s 1.9-stride
+ *    window read 0.43 torso against ~0.30 visible in keyframes).
  *
- * Known bias, stated rather than corrected: step 2 clips a sampled extremum to its higher
- * neighbour, so a sinusoid reads low by at most `1 − cos(2π f* / fs)` (4.9% at 20 samples per cycle,
- * 0.55% at 60) and a cusp by at most `4 f* / fs`; tracking jitter biases a range the other way.
- * Rejected: a multi-harmonic fit — a triangle needs harmonics to ~7–9 to come within 5%, i.e. 17–21
- * parameters over ~100 samples near Nyquist.
+ * Known bias, stated rather than corrected: a range over discrete samples reads a sinusoid low by
+ * at most `1 − cos(π f / fs)` (the extremum falling midway between two samples) and a cusp by at
+ * most `2 f / fs`; the Hampel guard adds nothing to either on a clean swing. Measured at the live
+ * operating point (~26 Hz effective, 1.45 Hz stride, 20 sampling phases): a sinusoid reads 0.2–0.7%
+ * low, a triangle 3.6–7.4% low. Tracking jitter biases a range the other way, upward. Rejected: a multi-harmonic fit — a triangle needs harmonics to ~7–9 to come
+ * within 5%, i.e. 17–21 parameters over ~100 samples near Nyquist.
  */
 function perStrideTravel(
   samples: ReadonlyArray<SpectralSample>,
   fit: SpectralFitResult,
-): number | null {
-  if (!fit.ok) return null
-  const trend = fitTrendAtFrequency(samples, fit.frequencyHz)
-  if (trend === null) return null
-
+  strideHz: number,
+): { travelPx: number | null; strideCycles: number } {
   const usable = samples
     .filter((sample) => Number.isFinite(sample.t) && Number.isFinite(sample.v))
     .sort((a, b) => a.t - b.t)
-  const residual = usable.map(({ t, v }) => {
-    const centered = t - trend.tMeanSeconds
-    return v - (trend.offset + trend.linear * centered + trend.quadratic * centered * centered)
-  })
-  const filtered = residual.map((v, i) =>
-    i === 0 || i === residual.length - 1 ? v : median3(residual[i - 1], v, residual[i + 1]),
+  const spanSeconds = usable.length < 2 ? 0 : usable[usable.length - 1].t - usable[0].t
+  const strideCycles = spanSeconds * strideHz
+  const none = { travelPx: null, strideCycles }
+
+  if (!fit.ok || strideCycles < MIN_ARM_SWING_CYCLES) return none
+  const trend = fitTrendAtFrequency(usable, fit.frequencyHz)
+  if (trend === null) return none
+
+  const filtered = hampelFilter(
+    usable.map(({ t, v }) => {
+      const centered = t - trend.tMeanSeconds
+      return v - (trend.offset + trend.linear * centered + trend.quadratic * centered * centered)
+    }),
   )
 
-  const periodSeconds = 1 / fit.frequencyHz
-  const windowCount = Math.floor(fit.observedCycles)
-  const firstT = usable[0].t
+  const periodSeconds = 1 / strideHz
+  const lastT = usable[usable.length - 1].t
   const travels: number[] = []
-  for (let k = 0; k < windowCount; k += 1) {
-    const start = firstT + k * periodSeconds
+  for (
+    let start = usable[0].t;
+    start + periodSeconds <= lastT + WINDOW_FIT_EPSILON_SECONDS;
+    start += TRAVEL_WINDOW_STEP_FRACTION * periodSeconds
+  ) {
     const end = start + periodSeconds
     let low = Infinity
     let high = -Infinity
@@ -590,10 +637,14 @@ function perStrideTravel(
     if (count >= MIN_TRAVEL_WINDOW_SAMPLES) travels.push(high - low)
   }
 
-  if (travels.length === 0) return null
-  const travel = median(travels)
-  return Number.isFinite(travel) ? travel : null
+  if (travels.length === 0) return none
+  const travelPx = median(travels)
+  return { travelPx: Number.isFinite(travelPx) ? travelPx : null, strideCycles }
 }
+
+/** The true cause when a fitted arm has no travel: the clip holds too few complete strides to size
+ * a swing from — not "too short for one cycle", which a 1.5-stride clip is not. */
+export const TOO_FEW_SWINGS_CAVEAT = `Arm positions were tracked, but the clip holds fewer than ${MIN_ARM_SWING_CYCLES} complete arm swings, too few to measure their size from.`
 
 export function caveatForFailure(reason: SpectralFitFailureReason, sampleCount: number): string {
   switch (reason) {
@@ -607,17 +658,18 @@ export function caveatForFailure(reason: SpectralFitFailureReason, sampleCount: 
 }
 
 /**
- * One ghosted pair per side: the wrist at the top and the bottom of ONE fitted half-swing, half a
- * fitted period apart by construction.
+ * One ghosted pair per MEASURED arm: the wrist at the top and the bottom of ONE fitted half-swing,
+ * half a fitted period apart by construction — two pairs for a both-arms reading, the near arm's
+ * alone from the side.
  *
- * Two of them, one per arm, is what makes the measurement legible as a picture — each pair spans
- * the very excursion the reported amplitude is taken over, so the whole two-exemplar budget goes
- * to one pair per arm rather than to two views of one arm.
+ * The pair sits at the FUNDAMENTAL's fitted extremes, not at the travel's max and min, so it can
+ * span somewhat less than the reported per-stride travel (`perStrideTravel`), which also counts the
+ * swing's harmonic shape. It depicts the swing; the number beside it is its full travel.
  *
  * **The instants come from the fitted PHASE, never from a scan of the raw trace**, and the pair is
  * resolved by the same `selectBounceInstants` the vertical-oscillation family uses — see that
- * module's doc for why (an exemplar scanned off the raw trace depicts drift and jitter the reported
- * amplitude explicitly excludes, so the picture would contradict the number printed beside it). It
+ * module's doc for why (an exemplar scanned off the raw trace depicts drift the reported travel
+ * explicitly removes, and a scan's extremum pair need not lie one half-swing apart). It
  * is also the whole point of this change: the previous exemplar was whichever raw extremum pair sat
  * nearest the median amplitude, which on Demo 2 put a *left* pair 0.5005 s apart — one and a half
  * half-cycles — under a caption promising one swing.

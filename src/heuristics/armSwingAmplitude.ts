@@ -3,6 +3,7 @@ import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { HeuristicsConfig, MetricExemplar, MetricResult, View } from './types'
 import { estimateBodyScale } from './bodyScale'
+import type { BodyScale } from './bodyScale'
 import { computeMetricConfidence } from './confidence'
 import { selectExemplars } from './exemplars'
 import { clamp01 } from './mathUtils'
@@ -11,6 +12,7 @@ import {
   MAX_SIDE_FREQUENCY_DISAGREEMENT,
   MIN_ARM_SWING_CYCLES,
   SIDE_FIT_QUALITY_DISPARITY_R2,
+  TOO_FEW_SWINGS_CAVEAT,
   buildSideExemplar,
   caveatForFailure,
   computeSideSwing,
@@ -27,6 +29,8 @@ const TOO_IRREGULAR_CAVEAT =
 const NO_BODY_SCALE_CAVEAT = 'No resolvable body-scale reference (shoulders/hips) in this clip.'
 const NEAR_ARM_CAVEAT =
   'Measured from the near arm only — from the side the far arm is hidden behind the body.'
+const SIDE_TIE_CAVEAT =
+  'Both arms were tracked equally well from the side, so both were measured — but the far arm may be partly hidden behind the body, which can make this overall swing size read off.'
 
 function nullResult(
   viewFit: MetricResult['viewFit'],
@@ -96,7 +100,14 @@ function nullResult(
  *
  * The torso normalizer is `estimateBodyScale`'s clip-median torso length — the pipeline's shared
  * normalizer — and the per-side travels arrive at the clip's reference (median) scale, so the two
- * pair naturally. It is an honest 2D movement-amplitude proxy: how far the wrists travel, saying
+ * pair naturally. It is checked FIRST, before the stride anchor: a clip with no resolvable hips has
+ * neither, and the missing normalizer is the more fundamental cause to name.
+ *
+ * ## Cycles are a hard floor, counted in strides
+ *
+ * A travel needs at least `MIN_ARM_SWING_CYCLES` complete stride periods (`armSwing.ts`,
+ * `perStrideTravel`), so no published value rests on fewer; confidence still ramps on the
+ * fractional count (`SideSwing.strideCycles`, span × the hip-anchored stride rate) above it. It is an honest 2D movement-amplitude proxy: how far the wrists travel, saying
  * nothing about what the swing contributes to the stride. Per "never a silent wrong number", an
  * unsuitable view still computes its value, capped low by the view-fit multiplier.
  */
@@ -106,6 +117,15 @@ export function computeArmSwingAmplitude(
   config: HeuristicsConfig = DEFAULT_HEURISTICS_CONFIG,
 ): MetricResult {
   const viewFitEntry = config.viewFitTable.armSwingAmplitude[view]
+
+  // Normalizer first: a clip with no resolvable hips has no stride anchor either, and the missing
+  // body-scale reference is the cause to name. The zero-torso arm of the guard is unreachable in
+  // practice (a median of distances is only 0 when shoulder-mid and hip-mid coincide) but guarded
+  // per the "never NaN" contract.
+  const bodyScale = estimateBodyScale(frames)
+  if (bodyScale === null || bodyScale.torsoLengthPx <= 0) {
+    return nullResult(viewFitEntry.fit, NO_BODY_SCALE_CAVEAT)
+  }
 
   // The arm swing is searched around the clip's stride rate, so without one there is nothing to
   // time it against — and no fallback band, because the shared bounce band is the defect the
@@ -119,17 +139,21 @@ export function computeArmSwingAmplitude(
     const leftDetected = left.resolvedCount - left.interpolatedCount
     const rightDetected = right.resolvedCount - right.interpolatedCount
     if (leftDetected > rightDetected) {
-      return measureNearArm(frames, 'left', left, viewFitEntry, config)
+      return measureNearArm(frames, 'left', left, bodyScale, viewFitEntry, config)
     }
     if (rightDetected > leftDetected) {
-      return measureNearArm(frames, 'right', right, viewFitEntry, config)
+      return measureNearArm(frames, 'right', right, bodyScale, viewFitEntry, config)
     }
-    return measureBothArms(frames, left, right, view, viewFitEntry, config)
+    // A tie — typically both arms detected on every frame — cannot say which arm is the near one,
+    // so both are measured, with the occlusion risk named rather than hidden.
+    return measureBothArms(frames, left, right, bodyScale, view, viewFitEntry, config, [
+      SIDE_TIE_CAVEAT,
+    ])
   }
 
   const left = computeSideSwing(frames, 'left', { strideHz, scaleProxy: 'shoulderSpan' })
   const right = computeSideSwing(frames, 'right', { strideHz, scaleProxy: 'shoulderSpan' })
-  return measureBothArms(frames, left, right, view, viewFitEntry, config)
+  return measureBothArms(frames, left, right, bodyScale, view, viewFitEntry, config, [])
 }
 
 /** Linear ramp from "just cleared the gate" (0) to "as good as a clean clip gets" (1) — the shared
@@ -138,12 +162,6 @@ function fitQualityOf(r2: number, minFitR2: number): number {
   return FIT_QUALITY_SATURATION_R2 > minFitR2
     ? clamp01((r2 - minFitR2) / (FIT_QUALITY_SATURATION_R2 - minFitR2))
     : 1
-}
-
-function cyclesCaveat(sampleSize: number): string | null {
-  return sampleSize < MIN_ARM_SWING_CYCLES
-    ? `Only ${sampleSize} complete arm-swing cycle(s) observed (recommend at least ${MIN_ARM_SWING_CYCLES}) — confidence reduced accordingly.`
-    : null
 }
 
 const UNSTEADY_CAVEAT =
@@ -179,6 +197,7 @@ function measureNearArm(
   frames: RobustPoseFrame[],
   side: 'left' | 'right',
   near: SideSwing,
+  bodyScale: BodyScale,
   viewFitEntry: ViewFitEntry,
   config: HeuristicsConfig,
 ): MetricResult {
@@ -198,30 +217,22 @@ function measureNearArm(
     return nullResult(viewFitEntry.fit, TOO_IRREGULAR_CAVEAT, frameCoverage)
   }
   if (near.travelPx === null) {
-    return nullResult(viewFitEntry.fit, caveatForFailure('insufficient-cycles', 0), frameCoverage)
-  }
-
-  const bodyScale = estimateBodyScale(frames)
-  if (bodyScale === null || bodyScale.torsoLengthPx <= 0) {
-    return nullResult(viewFitEntry.fit, NO_BODY_SCALE_CAVEAT, frameCoverage)
+    return nullResult(viewFitEntry.fit, TOO_FEW_SWINGS_CAVEAT, frameCoverage)
   }
 
   const interpolatedFraction = near.interpolatedCount / near.resolvedCount
-  const observedCycles = near.fit.observedCycles
-  const sampleSize = Math.floor(observedCycles)
+  const sampleSize = Math.floor(near.strideCycles)
   const confidence = computeMetricConfidence({
     viewFitMultiplier: viewFitEntry.multiplier,
     frameCoverage,
     interpolatedFraction,
-    sampleSize: observedCycles,
+    sampleSize: near.strideCycles,
     minRequiredSampleSize: MIN_ARM_SWING_CYCLES,
     fitQuality: fitQualityOf(near.fit.sinusoidR2, minFitR2),
     interpolationConfidencePenalty: config.interpolationConfidencePenalty,
   })
 
   const caveats = [NEAR_ARM_CAVEAT]
-  const cycles = cyclesCaveat(sampleSize)
-  if (cycles !== null) caveats.push(cycles)
   if (near.fit.sinusoidR2 < FIT_QUALITY_SATURATION_R2) caveats.push(UNSTEADY_CAVEAT)
 
   return finish(
@@ -246,9 +257,11 @@ function measureBothArms(
   frames: RobustPoseFrame[],
   left: SideSwing,
   right: SideSwing,
+  bodyScale: BodyScale,
   view: View,
   viewFitEntry: ViewFitEntry,
   config: HeuristicsConfig,
+  leadingCaveats: string[],
 ): MetricResult {
   const frameCoverage =
     frames.length === 0
@@ -301,25 +314,16 @@ function measureBothArms(
     )
   }
 
-  // A fit that completed a cycle almost always leaves a stride window to read; this is the guard
-  // for the one that did not, and its true cause is the clip's length.
+  // Fewer than two complete strides in either arm's span: the true cause is the clip's length.
   if (left.travelPx === null || right.travelPx === null) {
-    return nullResult(viewFitEntry.fit, caveatForFailure('insufficient-cycles', 0), frameCoverage)
-  }
-
-  const bodyScale = estimateBodyScale(frames)
-  if (bodyScale === null || bodyScale.torsoLengthPx <= 0) {
-    // Overstriding's exact wording — the true cause is the missing normalizer, not the arms. The
-    // zero-torso arm of the guard is unreachable in practice (a median of distances is only 0
-    // when shoulder-mid and hip-mid coincide) but guarded per the "never NaN" contract.
-    return nullResult(viewFitEntry.fit, NO_BODY_SCALE_CAVEAT, frameCoverage)
+    return nullResult(viewFitEntry.fit, TOO_FEW_SWINGS_CAVEAT, frameCoverage)
   }
 
   const interpolatedFraction = Math.max(
     left.interpolatedCount / left.resolvedCount,
     right.interpolatedCount / right.resolvedCount,
   )
-  const observedCycles = Math.min(left.fit.observedCycles, right.fit.observedCycles)
+  const observedCycles = Math.min(left.strideCycles, right.strideCycles)
   const sampleSize = Math.floor(observedCycles)
 
   const confidence = computeMetricConfidence({
@@ -337,14 +341,12 @@ function measureBothArms(
 
   // Each shortfall that applies is named rather than picking a winner — they are independent, they
   // each independently cost confidence, and a short clip is also a harder clip to fit.
-  const caveats: string[] = []
+  const caveats = [...leadingCaveats]
   if (viewFitEntry.fit === 'unsuitable') {
     caveats.push(
       `Arm swing amplitude needs both arms visible and separable, and is not reliable from ${viewPhrase(view)}.`,
     )
   }
-  const cycles = cyclesCaveat(sampleSize)
-  if (cycles !== null) caveats.push(cycles)
   if (Math.abs(left.fit.sinusoidR2 - right.fit.sinusoidR2) > SIDE_FIT_QUALITY_DISPARITY_R2) {
     caveats.push(
       "One arm's swing rhythm fit its trace much less cleanly than the other's in this clip, so part of this overall swing size may reflect measurement rather than form.",

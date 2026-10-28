@@ -44,12 +44,23 @@ Per side, over the scale-stabilized series and the fit at its winning frequency 
 1. Subtract the quadratic trend fitted JOINTLY with the sinusoid at `f*` (new
    `fitTrendAtFrequency`, the grid loop's own 5-column solve at one frequency) — the same drift the
    fit already refused to charge to the swing.
-2. 3-point running median over consecutive usable samples — a spike guard against single-frame
-   glitches and left/right label swaps, which a max−min statistic would otherwise report in full.
-3. Tile complete windows of length `T = 1/f*` from the first usable sample: `floor(observedCycles)`
-   windows (≥ 1 whenever the fit is `ok`).
-4. `travelPx` = median over windows of `max − min`; a window with fewer than 3 samples is skipped;
-   no window left → `null`.
+2. Hampel spike guard over consecutive usable samples (half-width 2, `k = 3` scaled MADs): a sample
+   is replaced by its local median only when it is an outlier against its neighbours, so a
+   single-frame glitch is removed while a clean extremum is left exactly as sampled. (Review round
+   1 replaced a 3-point running median, which clipped EVERY sampled extremum to its higher
+   neighbour — up to 4.9% low on a sinusoid at 20 samples per cycle and `4f/fs` on a cusp.)
+3. Windows one STRIDE long, `T = 1/strideHz` — the hip anchor's period, not the fit's `1/f*`. The
+   ±20% arm grid is narrower than the window's own `1/span` frequency resolution on every measured
+   clip, so `f*` is weakly determined inside it while the hip bounce is not. Windows slide by `T/4`
+   across the usable span, each wholly inside it, so the leftover part of a cycle still counts and
+   the median runs over several overlapping looks at each swing.
+4. `travelPx` = median over windows of `max − min`; a window with fewer than 3 samples is skipped.
+   **No travel unless the usable span holds at least `MIN_ARM_SWING_CYCLES` (2) complete stride
+   periods** — with one window the range carries every tracking excursion undiluted (side-portrait
+   at 1.9 strides read 0.43 torso against ~0.30 visible in keyframes). The caveat names that
+   shortfall ("fewer than 2 complete arm swings"), not "too short for one cycle". Confidence and
+   `sampleSize` now count these stride periods, so the old "Only N complete cycle(s)" caveat can no
+   longer accompany a value and was removed.
 
 Gating is unchanged: it stays on the fundamental's partial R², which answers "is there a stride
 rhythm here", the question a gate should ask. Only the published SIZE changes.
@@ -60,13 +71,24 @@ so step-rate content left in a stride window is real wrist travel relative to th
 retired spec scenario that treated a 2f component as contamination to be fitted around is replaced
 by one asserting its travel is counted.
 
-**Known estimator bias, stated rather than corrected.** The 3-point median clips a sampled extremum
-to its higher neighbour: for a sinusoid the travel reads low by at most `1 − cos(2π f*/fs)` (fs =
-sample rate; 4.9% at 20 samples per cycle, 0.55% at 60), and for a cusp-shaped (triangle) swing by
-at most `4 f*/fs`. Tracking jitter biases a range the other way, upward; the per-window median
-partially averages both. Neither is corrected for — there is no reference to correct toward.
-`buildSideExemplar` still picks its pair from the fundamental's fitted extremes, so the ghosted pair
-spans slightly less than the reported travel.
+**Known estimator bias, stated rather than corrected.** A range over discrete samples reads a
+sinusoid low by at most `1 − cos(π f/fs)` and a cusp by at most `2f/fs`; the Hampel guard adds
+nothing on a clean swing. Measured at the live operating point (~26 Hz effective — multiperson's
+103 detected frames over 3.88 s — on a 1.45 Hz stride, 20 sampling phases): a sinusoid reads
+0.2–0.7% low, a triangle 3.6–7.4% low. The trend is fitted jointly with the fundamental, so a sliver
+of a non-sinusoidal shape leaks into it (≤ 0.2% of travel on the test fixtures, either sign).
+Tracking jitter biases a range upward. Nothing is corrected for — there is no reference to correct
+toward. `buildSideExemplar` still picks its pair from the fundamental's fitted extremes, so the
+ghosted pair can span less than the reported travel (the exemplar requirement is MODIFIED to say
+so).
+
+**MoveNet left/right label swaps** (pinned by a fixture in `armSwingAmplitude.test.ts`). A swap
+changes no detection status, so the near-arm choice stands; the swapped run splices the far arm's
+trace into the near arm's series. A run longer than two samples is beyond the Hampel guard's
+reach, so it is NOT removed — but the sliding-window median only reports it if it falls in more
+than half the stride windows. Measured on an 8-frame (0.27 s) swap in a 4 s side clip: −1.0% when
+both arms hang at the same offset from their shoulders, +3.4% when the far arm hangs 30 px lower.
+A swap spanning most of a clip would be read as the far arm's swing.
 
 **`spectralFit.ts` stays behaviorally frozen.** `fitTrendAtFrequency(samples, frequencyHz)` is
 additive: same filtering/sorting/centering/solver as the grid loop, returning
@@ -102,10 +124,18 @@ Applies to `view === 'side'` only.
   `estimateBodyScale`'s doc). `torsoLengthAt` resolves midpoints tolerantly; side-on the
   single-shoulder stand-in sits where the midpoint would. The log-quadratic trend, evaluation-time
   clamp and exact-no-op fallback ladder are unchanged and shared by both proxies.
+- **Tie caveat**: a tie (typically both arms detected on every frame) is measured with both arms
+  and caveated that the far arm may be partly hidden behind the body.
 - **View fit**: `side → { fit: 'tolerated', multiplier: 0.6 }` (was `unsuitable`, 0.1) — D6 of the
   original arm-swing design reversed for side only, user approval 2026-10-27. Front stays primary;
   ambiguous stays unsuitable at 0.2 with the both-arms rule and shoulder-span proxy. Fusion code is
-  unchanged; at 0.6 the side clip is expected to win the 3-clip demo.
+  unchanged; at 0.6 the side clip is expected to win the 3-clip demo. One consequence for
+  `viewPlausibility`'s blended view-fit table: an ambiguous clip's arm-swing multiplier now mixes a
+  one-arm (side ×0.6) and a two-arm (front ×1.0, ambiguous ×0.2) computation — at plausibility
+  side/front/ambiguous 0.25/0.25/0.5 it rises from 0.375 to 0.5 — while the value itself is still
+  computed by the both-arms rule, since only `view === 'side'` selects the near arm.
+- **Body scale before the anchor**: `estimateBodyScale` is checked first, so a hipless clip names
+  the missing body-scale reference rather than the missing rhythm it also lacks.
 
 **Rejected:** picking the near arm by `travelDirection` + camera side (MoveNet swaps L/R side-on, so
 the label is the unreliable part); picking by R² (selects on the outcome being measured).

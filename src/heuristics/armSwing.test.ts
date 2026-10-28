@@ -407,74 +407,94 @@ function travelOf(frames: RobustPoseFrame[], strideHz: number): number {
 const TAU = 2 * Math.PI
 
 /**
+ * The live operating point: side-on clips are detected at ~26 Hz effective (multiperson: 103
+ * detected frames over 3.88 s), a ~1.45 Hz stride — ~18 samples per swing.
+ */
+const LIVE_FPS = 103 / 3.88
+const LIVE_STRIDE_HZ = 1.45
+
+/** Sampled at `fs`, a range reads a sinusoid at most `1 − cos(π f / fs)` low (an extremum falling
+ * midway between two samples) and a cusp at most `2 f / fs` low. */
+const sineSamplingFloor = (f: number, fs: number) => Math.cos((Math.PI * f) / fs)
+const cuspSamplingFloor = (f: number, fs: number) => 1 - (2 * f) / fs
+
+/**
+ * The trend is fitted jointly with the FUNDAMENTAL, so on a non-sinusoidal swing a sliver of its
+ * harmonic shape leaks into the removed trend — measured ≤ 0.2% of the travel on these fixtures.
+ */
+const TREND_LEAK = 1.005
+
+/**
  * The published size is the wrist's per-stride TRAVEL, not the fitted fundamental's peak-to-peak
- * (`strides-eiil.2`, design D2). Tolerances are the estimator's own stated bounds: the 3-point
- * spike-guard median clips a sampled extremum to its higher neighbour, at most `1 − cos(2π f/fs)`
- * low for a sinusoid and `4 f/fs` for a cusp.
+ * (`strides-eiil.2`, design D2): Hampel-guarded, windows one hip-anchored stride long sliding by a
+ * quarter period, median of max − min, and nothing at all under two complete strides.
  */
 describe('computeSideSwing — per-stride travel', () => {
-  it('a pure sinusoid reads its own peak-to-peak, within 1% at 60 fps', () => {
-    const frames = framesFromWave({ durationSec: 4, fps: 60, wave: (t) => 20 * Math.sin(TAU * t) })
+  for (const [label, fps, f] of [
+    ['60 fps', 60, 1.0],
+    ['the live ~26 Hz', LIVE_FPS, LIVE_STRIDE_HZ],
+  ] as const) {
+    it(`a pure sinusoid reads its own peak-to-peak at ${label}, within the sampling bound`, () => {
+      const frames = framesFromWave({ durationSec: 4, fps, wave: (t) => 20 * Math.sin(TAU * f * t) })
 
-    const travel = travelOf(frames, 1.0)
+      const travel = travelOf(frames, f)
 
-    expect(travel).toBeGreaterThan(40 * 0.99)
-    expect(travel).toBeLessThanOrEqual(40 + 1e-9)
-  })
-
-  it('at 20 samples per cycle the sinusoid reads low by no more than the stated sampling bound', () => {
-    // 1.5 Hz at 30 fps with a sample exactly on each extreme: the worst case, 1 − cos 18° = 4.9%.
-    const frames = framesFromWave({
-      durationSec: 4,
-      fps: 30,
-      wave: (t) => 20 * Math.sin(TAU * 1.5 * t),
+      expect(travel).toBeGreaterThanOrEqual(40 * sineSamplingFloor(f, fps) - 1e-9)
+      expect(travel).toBeLessThanOrEqual(40 + 1e-9)
     })
 
-    const travel = travelOf(frames, 1.5)
+    it(`a sampled extremum is NOT clipped by the spike guard at ${label}`, () => {
+      // A sample lands exactly on each extreme (phase 0 at t = 0, quarter period on a sample at
+      // 60 fps; at the live rate the nearest one), so any extremum clipping shows as a shortfall
+      // against the samples' own range — which is what the travel must equal here.
+      const wave = (t: number) => 20 * Math.sin(TAU * f * t)
+      const frames = framesFromWave({ durationSec: 4, fps, wave })
+      const values = frames.map((frame) => frame.timestamp).map(wave)
+      const sampledRange = Math.max(...values) - Math.min(...values)
 
-    expect(travel).toBeGreaterThanOrEqual(40 * Math.cos((TAU * 1.5) / 30) - 1e-9)
-    expect(travel).toBeLessThanOrEqual(40 + 1e-9)
-  })
-
-  it('a swing carrying a second harmonic reads its full travel, which the fundamental understates', () => {
-    // sin φ + 0.5·sin(2φ − π/2) peaks at +1.5 and troughs at −0.75: a travel of 2.25 per unit,
-    // against the fundamental's 2.
-    const frames = framesFromWave({
-      durationSec: 4,
-      fps: 60,
-      wave: (t) => 20 * (Math.sin(TAU * t) + 0.5 * Math.sin(2 * TAU * t - Math.PI / 2)),
+      expect(travelOf(frames, f)).toBeGreaterThan(sampledRange * 0.995)
     })
-    const swing = computeSideSwing(frames, 'left', { strideHz: 1.0, scaleProxy: 'shoulderSpan' })
 
-    expect(swing.fit.ok && swing.fit.peakToPeakAmplitude).toBeCloseTo(40, 0)
-    expect(swing.travelPx! / 45).toBeGreaterThan(0.98)
-    expect(swing.travelPx! / 45).toBeLessThanOrEqual(1 + 1e-9)
-  })
+    it(`a cusp-shaped (triangle) swing reads its travel within the cusp bound at ${label}`, () => {
+      // A triangle's fundamental is 8/π² ≈ 81% of its range.
+      const triangle = (t: number) => {
+        const p = (((t * f) % 1) + 1) % 1
+        return 20 * (p < 0.5 ? 4 * p - 1 : 3 - 4 * p)
+      }
+      const frames = framesFromWave({ durationSec: 4, fps, wave: triangle })
+      const swing = computeSideSwing(frames, 'left', { strideHz: f, scaleProxy: 'shoulderSpan' })
 
-  it('a cusp-shaped (triangle) swing reads its travel within the stated cusp bound', () => {
-    // A triangle's fundamental is 8/π² ≈ 81% of its range; the travel is within 4·f/fs (6.7%).
-    const triangle = (t: number) => {
-      const p = (((t * 1.0) % 1) + 1) % 1
-      return 20 * (p < 0.5 ? 4 * p - 1 : 3 - 4 * p)
-    }
-    const frames = framesFromWave({ durationSec: 4, fps: 60, wave: triangle })
-    const swing = computeSideSwing(frames, 'left', { strideHz: 1.0, scaleProxy: 'shoulderSpan' })
+      expect(swing.fit.ok && swing.fit.peakToPeakAmplitude / 40).toBeLessThan(0.84)
+      expect(swing.travelPx!).toBeGreaterThanOrEqual(40 * cuspSamplingFloor(f, fps) - 1e-9)
+      expect(swing.travelPx!).toBeLessThanOrEqual(40 * TREND_LEAK)
+    })
 
-    expect(swing.fit.ok && swing.fit.peakToPeakAmplitude).toBeCloseTo((8 / Math.PI ** 2) * 40, 0)
-    expect(swing.travelPx!).toBeGreaterThanOrEqual(40 * (1 - 4 / 60) - 1e-9)
-    expect(swing.travelPx!).toBeLessThanOrEqual(40 + 1e-9)
-  })
+    it(`a swing carrying a second harmonic reads its full travel at ${label}`, () => {
+      // sin φ + 0.5·sin(2φ − π/2) peaks at +1.5 and troughs at −0.75: a travel of 2.25 per unit,
+      // against the fundamental's 2.
+      const frames = framesFromWave({
+        durationSec: 4,
+        fps,
+        wave: (t) => 20 * (Math.sin(TAU * f * t) + 0.5 * Math.sin(2 * TAU * f * t - Math.PI / 2)),
+      })
+      const swing = computeSideSwing(frames, 'left', { strideHz: f, scaleProxy: 'shoulderSpan' })
+
+      expect(swing.fit.ok && swing.fit.peakToPeakAmplitude).toBeCloseTo(40, 0)
+      expect(swing.travelPx! / 45).toBeGreaterThan(sineSamplingFloor(2 * f, fps) - 0.01)
+      expect(swing.travelPx! / 45).toBeLessThanOrEqual(TREND_LEAK)
+    })
+  }
 
   it('a single-frame spike three swings tall moves the travel by no more than 3%', () => {
-    const wave = (t: number) => 20 * Math.sin(TAU * t)
-    const clean = travelOf(framesFromWave({ durationSec: 4, fps: 60, wave }), 1.0)
+    const wave = (t: number) => 20 * Math.sin(TAU * LIVE_STRIDE_HZ * t)
+    const clean = travelOf(framesFromWave({ durationSec: 4, fps: LIVE_FPS, wave }), LIVE_STRIDE_HZ)
     const spiked = travelOf(
       framesFromWave({
         durationSec: 4,
-        fps: 60,
-        wave: (t, i) => wave(t) + (i === 100 ? 3 * 40 : 0),
+        fps: LIVE_FPS,
+        wave: (t, i) => wave(t) + (i === 50 ? 3 * 40 : 0),
       }),
-      1.0,
+      LIVE_STRIDE_HZ,
     )
 
     expect(Math.abs(spiked - clean) / clean).toBeLessThanOrEqual(0.03)
@@ -484,11 +504,11 @@ describe('computeSideSwing — per-stride travel', () => {
     const jitter = makeJitter(20261027)
     const frames = framesFromWave({
       durationSec: 4,
-      fps: 30,
-      wave: (t) => 20 * Math.sin(TAU * 1.5 * t) + 4 * jitter(),
+      fps: LIVE_FPS,
+      wave: (t) => 20 * Math.sin(TAU * LIVE_STRIDE_HZ * t) + 4 * jitter(),
     })
 
-    const travel = travelOf(frames, 1.5)
+    const travel = travelOf(frames, LIVE_STRIDE_HZ)
 
     expect(travel).toBeLessThanOrEqual(40 * 1.1)
     expect(travel).toBeGreaterThan(40 * 0.9)
@@ -520,6 +540,40 @@ describe('computeSideSwing — per-stride travel', () => {
     if (!swing.fit.ok) return
     expect(swing.travelPx!).toBeGreaterThan(swing.fit.peakToPeakAmplitude)
     expect(Math.abs(swing.travelPx! - (high - low)) / (high - low)).toBeLessThan(0.1)
+  })
+
+  it('under two complete strides there is no travel, however well the swing fits', () => {
+    // 1.9 strides — side-portrait's shape: the fit completes a cycle and clears every gate, but a
+    // single stride window's max − min carries every tracking excursion in it undiluted.
+    const frames = framesFromWave({
+      durationSec: 1.9 / 1.5 + 1 / 30,
+      fps: 30,
+      wave: (t) => 20 * Math.sin(TAU * 1.5 * t),
+    })
+    const swing = computeSideSwing(frames, 'left', AT_STRIDE)
+
+    expect(swing.fit.ok).toBe(true)
+    expect(swing.strideCycles).toBeLessThan(2)
+    expect(swing.travelPx).toBeNull()
+
+    const longer = computeSideSwing(
+      framesFromWave({ durationSec: 2.2 / 1.5, fps: 30, wave: (t) => 20 * Math.sin(TAU * 1.5 * t) }),
+      'left',
+      AT_STRIDE,
+    )
+    expect(longer.strideCycles).toBeGreaterThanOrEqual(2)
+    expect(longer.travelPx).not.toBeNull()
+  })
+
+  it('the windows are one hip-anchored stride long, not one fitted period', () => {
+    // A stride anchor 15% off the arm's own rhythm: the fit lands near the arm's rate inside the
+    // ±20% band, but the travel windows follow the anchor — and a window ≥ 85% of a swing still
+    // spans its full travel on a sinusoid sampled densely.
+    const frames = framesFromWave({ durationSec: 4, fps: 60, wave: (t) => 20 * Math.sin(TAU * t) })
+    const swing = computeSideSwing(frames, 'left', { strideHz: 1.15, scaleProxy: 'shoulderSpan' })
+
+    expect(swing.strideCycles).toBeCloseTo((frames.at(-1)!.timestamp - frames[0].timestamp) * 1.15, 9)
+    expect(swing.travelPx!).toBeGreaterThan(40 * 0.97)
   })
 
   it('a failed fit has no travel', () => {
