@@ -35,3 +35,42 @@ below the bracket's foot, where a phone's stop panel overlays the figure.
 - **WHEN** the arms stop is shown at 390 px wide with arm swing bound to 0.5627
 - **THEN** the bracket spans 0.5627 torso lengths, and both lines of its label sit above the
   bracket's top end and clear of the stop panel
+
+## MODIFIED Requirements
+
+### Requirement: An orthographic camera turns, zooms and interpolates continuously
+
+The system SHALL project model joints orthographically through a camera with yaw, pitch, zoom and a
+target, into SVG-oriented screen coordinates with the target at the origin and a depth for draw
+order. Yaw 0 SHALL be the side view with travel toward screen right, and yaw 90 the front view with
+the runner's left on screen right. The system SHALL provide the presets `wholeBodySide`,
+`upperFrontQuarter`, `armsQuarter`, `torsoSide`, `legsSide`, `footSide`, `feetFront` and
+`landingSide`, and
+`interpolateCamera(a, b, t)` SHALL return `a` at t = 0 and `b` at t = 1, take yaw the shorter way
+round, and move every projected joint continuously in t.
+
+`landingSide` SHALL be a contact-tracking side view: `landingCamera(values)` frames, for one
+parameter set, hip-mid and the near (right) leg's knee, ankle, heel and toe through the landing
+phase window around that leg's contact, with the span from just above hip-mid's highest point in
+that window to below the ground (room for the ground-lane labels) inside the frame's height. The preset itself SHALL be
+the neutral parameters' landing frame; the renderer SHALL reframe it on the values it draws.
+
+#### Scenario: Side view
+- **WHEN** a point one torso length ahead in the direction of travel is projected at yaw 0, zoom 1
+- **THEN** it lands one unit to screen right of the target
+
+#### Scenario: Front view
+- **WHEN** a point on the runner's left is projected at yaw 90
+- **THEN** it lands to screen right of the target
+
+#### Scenario: Turning from 350° to 10°
+- **WHEN** the camera is interpolated halfway from yaw 350° to yaw 10°
+- **THEN** its yaw is 0°, not 180°
+
+#### Scenario: Each preset frames its subject
+- **WHEN** the neutral runner is projected through a preset
+- **THEN** the joints that preset focuses on lie within the documented frame half-height
+
+#### Scenario: The landing camera frames the landing at any landing offset
+- **WHEN** the runner, with its landing offset anywhere from −0.3 to 0.7 torso lengths or its bounce at the top of its range, is projected through `landingCamera` of its own values at any phase of the landing window
+- **THEN** hip-mid and the near knee, ankle, heel and toe lie inside the frame's half-width and half-height
