@@ -26,6 +26,13 @@ describe('AreaStop', () => {
     expect(value.children[1]).toHaveClass('text-4xl')
   })
 
+  it('labels the arms value as up-and-down wrist travel', () => {
+    const { container } = render(<AreaStop stop={areaStop('arms')} />)
+    const value = container.querySelector('.runner-tour__value')!
+    expect(value.firstElementChild).toHaveTextContent(/^Arm swing \(wrist up-and-down\)$/)
+    expect(value.children[1]).toHaveTextContent(/^25\.0% of torso length/)
+  })
+
   it('adds vertical ratio after cadence’s prose as a secondary value with its visible position, no bar, no From line', () => {
     const { container } = render(<AreaStop stop={areaStop('rhythm')} />)
     const [headline, secondary] = container.querySelectorAll('.runner-tour__value')

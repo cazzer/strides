@@ -33,8 +33,13 @@ export const MODEL_PROPORTIONS = {
   forearm: 0.55,
   /** Fixed elbow bend; the arm swings as a rigid unit about the shoulder. */
   elbowFlexionDeg: 80,
-  /** Mean forward angle of the arm unit, so the swing stays monotone over its whole range. */
-  armCentreDeg: 48,
+  /**
+   * Mean forward angle of the shoulder→wrist line. At 33° the upper arm hangs about 5° behind
+   * vertical, so a typical swing carries the elbow behind the trunk on the backswing, as in real
+   * bent-arm running (strides-eiil.4). A swing too large to stay symmetric about it pins its
+   * backswing with the wrist straight below the shoulder instead (see `armAt`).
+   */
+  armCentreDeg: 33,
   /** Heel and toe positions in the foot frame: `along` the sole, along its upward `normal`. */
   heel: { along: -0.15, normal: -0.1 },
   toe: { along: 0.45, normal: -0.1 },
@@ -797,8 +802,16 @@ interface ArmJoints {
 /**
  * The arm swings as a rigid bent unit about the shoulder, in the world sagittal plane (so trunk
  * lean translates the arm but never changes wrist-relative-to-shoulder height). The wrist's drop
- * below the shoulder is R·cos(θ + φ), and θ + φ swings sinusoidally about `armCentreDeg` with an
- * amplitude chosen so its peak-to-peak drop is exactly `armSwing`.
+ * below the shoulder is R·cos(ψ), ψ = θ + φ the shoulder→wrist line's forward angle, and ψ swings
+ * sinusoidally about a centre c with amplitude A, so the peak-to-peak drop is 2R·sin(c)·sin(A).
+ * A is chosen so that drop is exactly `armSwing` (v):
+ *
+ * - Up to v* = 2R·sin²(`armCentreDeg`), c = `armCentreDeg` and the swing is symmetric about it.
+ * - Above v*, a symmetric swing about `armCentreDeg` would carry ψ below 0 (wrist behind the
+ *   shoulder), where the drop stops falling and the readback would come up short. The backswing is
+ *   pinned at ψ = 0 instead: c = A = asin(√(v / 2R)), so the drop runs R(1 − cos 2c) = v.
+ *
+ * Both cases are one formula, c = max(`armCentreDeg`, asin(√(v / 2R))), continuous at v*.
  */
 function armAt(p: number, shoulder: Vec3, params: RunnerParams): ArmJoints {
   const { upperArm, forearm, elbowFlexionDeg, armCentreDeg } = MODEL_PROPORTIONS
@@ -807,7 +820,10 @@ function armAt(p: number, shoulder: Vec3, params: RunnerParams): ArmJoints {
   const im = forearm * Math.sin(bend)
   const reach = Math.hypot(re, im)
   const unitAngle = Math.atan2(im, re)
-  const centre = armCentreDeg * DEG
+  const centre = Math.max(
+    armCentreDeg * DEG,
+    Math.asin(Math.sqrt(clamp(params.armSwing / (2 * reach), 0, 1))),
+  )
   const amplitude = Math.asin(clamp(params.armSwing / (2 * reach * Math.sin(centre)), -1, 1))
   const armRad =
     centre - unitAngle + amplitude * Math.sin(2 * Math.PI * (p - ARM_SWING_PHASE_OFFSET))

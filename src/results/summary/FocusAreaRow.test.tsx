@@ -69,6 +69,13 @@ describe('FocusAreaRow', () => {
     expect(summary).toHaveClass('min-h-11')
   })
 
+  it('names the arms headline as up-and-down wrist travel, then its value', () => {
+    const { summary, row } = renderRow('arms')
+    const parts = guidedHeadlineParts(row.entries[0], { standalone: true })
+    const headline = summary.querySelector('.results-summary__row-headline')!.textContent!
+    expect(headline.startsWith(`Arm swing (wrist up-and-down) ${parts.value}`)).toBe(true)
+  })
+
   it('renders the bounce reading as vertical ratio with its From line, the other two collapsed inside', () => {
     const { details } = renderRow('rhythm')
     const composite = details.querySelector<HTMLElement>('div.results-summary__composite')!

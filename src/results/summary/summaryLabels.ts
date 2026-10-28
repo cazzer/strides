@@ -15,7 +15,8 @@ export const SHORT_METRIC_LABELS: Readonly<Partial<Record<MetricId, string>>> = 
   verticalOscillationCm: 'Bounce',
   verticalRatio: 'Vertical ratio',
   verticalOscillation: 'Bounce',
-  armSwingAmplitude: 'Arm swing',
+  // The value is vertical wrist travel only, not the fore-aft sweep the runner draws (strides-eiil.4).
+  armSwingAmplitude: 'Arm swing (wrist up-and-down)',
   trunkLean: 'Trunk lean',
   kneeFlexion: 'Knee flexion',
   kneeDrive: 'Knee drive',

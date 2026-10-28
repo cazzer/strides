@@ -12,6 +12,10 @@ describe('SHORT_METRIC_LABELS', () => {
     const ids = Object.keys(METRIC_GUIDANCE) as MetricId[]
     expect(ids.filter((id) => SHORT_METRIC_LABELS[id] === undefined)).toEqual(['footStrikePattern'])
   })
+
+  it('says arm swing is up-and-down wrist travel, the only thing its value measures', () => {
+    expect(SHORT_METRIC_LABELS.armSwingAmplitude).toBe('Arm swing (wrist up-and-down)')
+  })
 })
 
 function laterReadings(heuristics: FormHeuristicsResult, area: FocusAreaId) {

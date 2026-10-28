@@ -12,6 +12,7 @@ import {
   realizeParams,
 } from './gaitModel'
 import {
+  DENSE_PHASES,
   MEASURE_PARAM,
   hipWidth,
   joint,
@@ -597,6 +598,66 @@ describe('each binding moves only its own part, in the direction of its value', 
         const measured = measureSwingFootArc(withParams({ stepWidth, swingFootArc }))
         expect(Math.abs(measured - swingFootArc)).toBeLessThan(0.005)
       }
+    }
+  })
+})
+
+describe('arm swing sweeps fore and aft past the trunk', () => {
+  const SIDES = ['left', 'right'] as const
+
+  /** Degrees forward of straight down of the line from a shoulder to `name`, over one cycle. */
+  function forwardAngles(params: RunnerParams, side: 'left' | 'right', name: 'elbow' | 'wrist') {
+    return DENSE_PHASES.map((p) => {
+      const pose = poseAt(p, params)
+      const shoulder = joint(pose, `${side}_shoulder`)
+      const end = joint(pose, `${side}_${name}`)
+      return (Math.atan2(end.x - shoulder.x, shoulder.y - end.y) * 180) / Math.PI
+    })
+  }
+
+  // Upper-arm range (degrees from vertical, forward +) per wrist travel (torso lengths).
+  const UPPER_ARM_RANGE: [armSwing: number, min: number, max: number][] = [
+    [0.3, -23.1, 13.3],
+    [0.33, -25.0, 15.2],
+    [0.51, -37.0, 27.2],
+  ]
+
+  for (const [armSwing, min, max] of UPPER_ARM_RANGE) {
+    it(`armSwing ${armSwing}: the upper arm runs ${min}°…${max}°, its elbow crossing the trunk line`, () => {
+      const params = withParams({ armSwing })
+      const trunkLine = -params.torsoPitch
+      for (const side of SIDES) {
+        const angles = forwardAngles(params, side, 'elbow')
+        expect(Math.abs(Math.min(...angles) - min), side).toBeLessThan(0.5)
+        expect(Math.abs(Math.max(...angles) - max), side).toBeLessThan(0.5)
+        expect(Math.min(...angles), side).toBeLessThan(trunkLine)
+        expect(Math.max(...angles), side).toBeGreaterThan(trunkLine)
+      }
+    })
+  }
+
+  it('never carries the wrist behind the shoulder, even where the backswing is pinned', () => {
+    for (const armSwing of [...SWEEPS.armSwing, 0.9]) {
+      const params = withParams({ armSwing })
+      for (const p of DENSE_PHASES) {
+        const pose = poseAt(p, params)
+        for (const side of SIDES) {
+          const reach = joint(pose, `${side}_wrist`).x - joint(pose, `${side}_shoulder`).x
+          expect(reach, `${armSwing} ${side} ${p}`).toBeGreaterThanOrEqual(-1e-9)
+        }
+      }
+    }
+  })
+
+  it('is continuous where the pinned backswing takes over', () => {
+    const { upperArm, forearm, elbowFlexionDeg, armCentreDeg } = MODEL_PROPORTIONS
+    const bend = (elbowFlexionDeg * Math.PI) / 180
+    const reach = Math.hypot(upperArm + forearm * Math.cos(bend), forearm * Math.sin(bend))
+    const pinFrom = 2 * reach * Math.sin((armCentreDeg * Math.PI) / 180) ** 2
+    for (const p of [0, 0.15, 0.4, 0.65, 0.9]) {
+      const below = poseAt(p, withParams({ armSwing: pinFrom - 1e-7 }))
+      const above = poseAt(p, withParams({ armSwing: pinFrom + 1e-7 }))
+      expect(maxJointDistance(below, above)).toBeLessThan(1e-5)
     }
   })
 })
