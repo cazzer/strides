@@ -431,7 +431,11 @@ const BUILDERS: Readonly<Record<RunnerParamId, Builder>> = {
       marks: verticalBracket(x, shoulder.z, low, high, BRACKET_TICK_HALF),
       fills: [],
       guides: [],
-      label: { anchor: { x, y: low, z: shoulder.z }, side: 'below' },
+      // Above the bracket's top end, not under its foot: a large swing pins the wrist a full reach
+      // below the shoulder, and a label hung below that sat under a phone's stop panel. Not to the
+      // right of the top either: a pinned swing's bracket sits so far right that the frame clamp
+      // pulled that label back over the bracket's top tick (strides-eiil.4).
+      label: { anchor: { x, y: high, z: shoulder.z }, side: 'above' },
     }
   },
   landingOffset(_value, values, { side, phase }) {

@@ -23,7 +23,14 @@ import {
   type RunnerAnnotation,
 } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
-import { RUNNER_PARAM_IDS, RUNNER_PX, effectiveSources, stepPlayback } from './runnerScene'
+import {
+  LABEL_LINE_HEIGHT,
+  RUNNER_PARAM_IDS,
+  RUNNER_PX,
+  effectiveSources,
+  placeLabel,
+  stepPlayback,
+} from './runnerScene'
 import type {
   BoundRunnerParams,
   CameraState,
@@ -317,6 +324,33 @@ describe('the marks are the drawn values and lie on the live figure', () => {
     )
     expect(range.max - range.min).toBeCloseTo(values.armSwing, 4)
     expect(screenLength(span[0], span[1], SIDE)).toBeCloseTo(values.armSwing, 12)
+  })
+
+  it('arm swing: the label sits above the bracket’s top end, never on the bracket or under its foot', () => {
+    // A small swing, a front reading, a pinned side reading (above v* ≈ 0.523), the largest.
+    for (const armSwing of [0.05, 0.33, 0.5627, 0.9]) {
+      const arms = bindAll({ armSwingAmplitude: makeMetric('armSwingAmplitude', { value: armSwing }) })
+      const camera = CAMERA_PRESETS.upperFrontQuarter
+      const { marks, label } = only(arms, 'armSwing', camera.yawDeg)
+      const [[low, high]] = marks
+      // The bracket's extent is the value exactly; the label hangs off its upper end.
+      expect(high.y - low.y).toBeCloseTo(armSwing, 12)
+      expect(label.anchor).toEqual(high)
+      expect(label.side).toBe('above')
+      expect(label.offsetLines).toBeUndefined()
+      // Laid out as the arms stop draws it (font and gap in viewBox units at a phone stage's
+      // ~130 px per unit): centred on the bracket with no frame clamp, every line wholly above
+      // the top tick, so nothing covers the bracket and nothing hangs toward the panel below.
+      const unit = 1 / 130
+      const top = projectPoint(high, camera)
+      const foot = projectPoint(low, camera)
+      expect(foot.y).toBeGreaterThan(top.y)
+      const fontUnits = RUNNER_PX.label * unit
+      const layout = placeLabel(top, label.side, label.lines, fontUnits, RUNNER_PX.labelGap * unit)
+      expect(layout.x, `${armSwing}`).toBeCloseTo(top.x, 12)
+      const lineHalf = (fontUnits * LABEL_LINE_HEIGHT) / 2
+      for (const y of layout.ys) expect(y + lineHalf, `${armSwing}`).toBeLessThan(top.y)
+    }
   })
 
   it('landing: the offset runs from hip-mid to the live contact ankle, with plumbs from both', () => {

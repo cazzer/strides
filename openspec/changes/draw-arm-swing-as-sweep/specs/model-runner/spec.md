@@ -10,6 +10,10 @@ wrist SHALL never be behind the shoulder, and the peak-to-peak height of the wri
 shoulder SHALL be exactly the bound arm swing (the measurement's own formula read back to within
 1e-9 torso lengths). The fore-aft sweep is illustrative, never a measurement or a target.
 
+The arm swing's vertical bracket SHALL span exactly the drawn value, and its label SHALL sit above
+the bracket's top end, centred on it, so that the label never covers the bracket and never hangs
+below the bracket's foot, where a phone's stop panel overlays the figure.
+
 #### Scenario: A front-view reading
 
 - **WHEN** arm swing is bound to 0.33 at the neutral trunk lean
@@ -25,3 +29,9 @@ shoulder SHALL be exactly the bound arm swing (the measurement's own formula rea
 
 - **WHEN** arm swing is bound to 0.9
 - **THEN** the wrist is never behind the shoulder and travels 0.9 torso lengths
+
+#### Scenario: The arms stop on a phone with a pinned swing
+
+- **WHEN** the arms stop is shown at 390 px wide with arm swing bound to 0.5627
+- **THEN** the bracket spans 0.5627 torso lengths, and both lines of its label sit above the
+  bracket's top end and clear of the stop panel

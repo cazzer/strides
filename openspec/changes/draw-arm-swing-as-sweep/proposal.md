@@ -21,8 +21,11 @@ torso lengths (`strides-eiil.1`–`.3`). Two things undersell that:
   swing would carry the wrist behind the shoulder (where the drop stops falling and the readback
   would come up short); the backswing is pinned with the wrist straight below the shoulder instead.
   Wrist travel stays exactly the bound value in both cases.
-- Unchanged: the measurement, the binding (neutral 0.3, range [0, 0.9]), the annotation (vertical
-  bracket and its label), the elbow bend, segment lengths and phase offset, the word budgets.
+- The arm-swing bracket's label moves from under the bracket's foot to above its top end. A pinned
+  swing reaches lower, and at 390 px the label under the foot went behind the stop panel (design D4).
+- Unchanged: the measurement, the binding (neutral 0.3, range [0, 0.9]), the bracket (it spans
+  exactly the value), every other annotation, the elbow bend, segment lengths and phase offset, the
+  word budgets.
 
 ## Capabilities
 
@@ -41,5 +44,6 @@ name the headline label, and a second MODIFIED block would clobber it on archive
 
 ## Impact
 
-`src/runner/gaitModel.ts`, `src/results/summary/summaryLabels.ts`, their tests and the two label
-tests (`TourStop.test.tsx`, `FocusAreaRow.test.tsx`). No `src/heuristics/**` change.
+`src/runner/gaitModel.ts`, `src/runner/runnerAnnotations.ts` (arm-swing label only),
+`src/results/summary/summaryLabels.ts`, their tests and the two label tests (`TourStop.test.tsx`,
+`FocusAreaRow.test.tsx`). No `src/heuristics/**` change.

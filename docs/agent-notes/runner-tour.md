@@ -386,10 +386,37 @@ measurement branch's clip choice, untouched here.
   a full R below the shoulder and the bracket's label hangs below it. The value line ("56.3%")
   still shows; its second line "of torso length" is now hidden behind the panel (on base it
   showed, just). A front value (0.335, unpinned) shows both lines (585–605). 1280 is clear
-  (label 592–624 inside a stage ending at 658). Not fixed here (annotation placement was out of
-  scope).
+  (label 592–624 inside a stage ending at 658). **Fixed in review round 1, below.**
 - Screenshots: scratchpad `eiil4-live/*.png` (3 frames ~150 ms apart + paused per run; base
   comparison in `eiil4-live/base/`), not committed.
+
+### Review round 1: the arm label sits above the bracket (design D4)
+
+`runnerAnnotations.ts` armSwing: label anchored at the bracket's TOP end, `side: 'above'` (it was
+`below` the foot). The bracket itself is unchanged and spans exactly the value. Only this builder
+changed, so no other label moves (the trunk-lean label at 390 sits where it did before).
+
+- **Phone geometry at the arms stop (live, 390×844, side-landscape 0.5627):** the drawing renders
+  at 84.4 px per viewBox unit (the SVG is 338 px tall), the bracket runs y 0.347–1.300 at x 0.80,
+  and the panel edge (602 px) is at y 1.389. Only ~0.09 units (8 px) sit below the foot, so no
+  below-placement can clear the panel. Labels render at about 8 px there, not 13: `pxPerUnit`
+  comes from the stage box (130), not the drawn SVG (84). That predates this change and is not
+  fixed here.
+- **Rejected: right of the top end.** It clears the panel, but above about 0.45 the bracket sits
+  so far right that `clampLabelX` pulls the label back over it (live box 255–315 with the bracket
+  at 263), and its halo hides the top tick.
+- In the front-¾ view the forearm crosses the region above and right of the top end in some
+  phases, whichever upper placement is used. The halo keeps the label legible.
+
+Label boxes (CSS px, live, real GPU, port 5319, fresh context per run, no errors):
+
+| run | value | before (below foot) | after (above top) | panel top |
+|---|---|---|---|---|
+| side-landscape 390 dark | 0.5627 (pinned) | 233–293 × 598–618 (2nd line hidden) | 233–293 × 489–509 | 602 |
+| park-approach 390 dark | 0.3352 | 221–281 × 585–605 | 221–281 × 509–529 | 602 |
+| side-landscape 1280 light | 0.5627 | 338–430 × 592–624 | 338–430 × 452–484 | n/a (stage to 658) |
+
+Screenshots: scratchpad `eiil4-live/r1-*.png`.
 
 ## Gotchas
 

@@ -13,3 +13,9 @@
 
 - [x] 3.1 `tsc -b`, lint, full vitest, `vite build`
 - [x] 3.2 Live: demo session, arms stop at 1280×800 and 390×844; note entry in `docs/agent-notes/runner-tour.md`
+
+## 4. Review round 1: the arm label at phone width
+
+- [x] 4.1 `runnerAnnotations.ts` armSwing: label anchored at the bracket's top end, `side: 'above'` (was below its foot)
+- [x] 4.2 `runnerAnnotations.test.ts`: label anchor is the top end, laid out centred on the bracket, unclamped, wholly above the top tick, for 0.05 / 0.33 / 0.5627 / 0.9
+- [x] 4.3 Live re-check at 390 (side pinned, front) and 1280; another stop's label unmoved; note updated

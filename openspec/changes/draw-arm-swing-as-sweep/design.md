@@ -39,8 +39,26 @@ centre becomes c = asin(√(v / 2R)) with A = c, so ψ runs 0…2c and travel is
 the summary row's headline. Both sit outside the 25-word budget. The figure annotation (a vertical
 bracket labelled with the value) is unchanged: it already draws the vertical travel.
 
+### D4. The bracket's label sits above its top end
+
+The bracket hangs from the wrist's highest point, so a pinned swing's bracket reaches a full arm
+reach below the shoulder. On a phone the arms stop's panel overlays the rail from about 0.09 viewBox
+units below that foot, so the label hung under the foot went behind the panel (its second line, "of
+torso length", at 390 px). The label now hangs above the bracket's top end, centred on it.
+
+Measured alternatives (upper-front-quarter camera, 0.05–0.9):
+- **Below the foot** never meets the arm, but at 390 px no below-placement can clear the panel.
+- **Right of the top end** clears the panel, but above about 0.45 the bracket sits so far right that
+  the frame clamp pulls the label back over the bracket, and its halo hides the top tick.
+- **Above the top end** fits the frame without a clamp up to 0.9, never covers the bracket and
+  clears the panel.
+
+In the front-¾ view the forearm crosses the region above and right of the top end in some phases
+whichever upper placement is used. The label's halo keeps it legible, as for every other label.
+Only the arm-swing builder changed; no other annotation's label moves.
+
 ## Risks
 
 - The neutral figure now shows a visible backswing; it is dashed grey and illustrative, never a
   target (the honesty rules).
-- The arm bracket sits at the wrist's forward extreme plus a margin; checked live at 390 px.
+- The arm bracket sits at the wrist's forward extreme plus a margin; checked live at 390 px (D4).
