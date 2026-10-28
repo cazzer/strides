@@ -43,3 +43,13 @@
 - [x] 4.2 Arm value/confidence/viewFit/caveat per clip, base and after each fix
 - [x] 4.3 Keyframe sanity: near arm on side-landscape (left) and side-portrait (right)
 - [x] 4.4 `docs/agent-notes/mediapipe-front-view.md` table + rationale; CLAUDE.md "Current facts" line
+
+## 5. Review round 1
+
+- [x] 5.1 Travel needs ≥ 2 complete hip-anchored strides; caveat names "fewer than 2 complete arm swings"
+- [x] 5.2 Windows `1/strideHz`, sliding by a quarter period; median of max − min
+- [x] 5.3 Hampel spike guard (half-width 2, k = 3) replaces the 3-point median; tested at 60 fps and ~26 Hz
+- [x] 5.4 MoveNet L/R label-swap fixture; behaviour stated in design.md
+- [x] 5.5 Side-view tie caveat; body scale checked before the stride anchor
+- [x] 5.6 Wrong-angle hint copy; exemplar requirement MODIFIED; docs and CLAUDE.md line
+- [x] 5.7 Live A/B on the final commit: non-arm fields bit-identical to base; arm readings recorded

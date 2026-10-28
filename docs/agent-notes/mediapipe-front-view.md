@@ -264,9 +264,13 @@ measurement defects were, each fixed in its own commit:
    anchor → null ("No steady running rhythm…"), no fallback. This is NOT the rejected fixed 0.6–2.0 Hz
    "halved band" (that pinned side clips to its 0.60 floor; an anchored band cannot offer 0.6 Hz).
 2. **`.2` value** — published size was the fitted fundamental's p2p. Now per-stride travel: joint
-   trend removed (`fitTrendAtFrequency`), 3-point median, median over complete `1/f*` windows of
-   max−min. Gate unchanged (fundamental R²). Known bias: the median reads a sampled sinusoid up to
-   `1 − cos(2πf/fs)` low (4.9% at 20 samples/cycle); jitter biases a range up.
+   trend removed (`fitTrendAtFrequency`), Hampel spike guard (half-width 2, k = 3 MADs), median of
+   max−min over windows one HIP-ANCHORED stride long (`1/strideHz`) sliding by a quarter period;
+   **no travel under 2 complete strides** ("fewer than 2 complete arm swings"). Gate unchanged
+   (fundamental R²). Residual bias at the live ~26 Hz / 1.45 Hz operating point: sinusoid 0.2–0.7%
+   low, triangle 3.6–7.4% low; jitter biases a range up. (Review round 1 replaced the first cut —
+   a 3-point median that clipped every sampled extremum, `1/f*` windows tiled from the first
+   sample, single-window travel allowed; the "after `.2`/`.3`" columns below are that first cut.)
 3. **`.3` side view** — near arm = strictly more directly-detected frames (`resolved − interpolated`),
    scale-stabilized by per-frame torso length (shoulder span collapses side-on), gated/scored alone,
    tie → both-arms. `viewFit.side = tolerated ×0.6` (was unsuitable ×0.1). Front/ambiguous unchanged
@@ -276,20 +280,23 @@ measurement defects were, each fixed in its own commit:
 checkout on its own derived port (base = a detached worktree of main `10b3f54c`; B/C/D = this
 branch's phase commits `26639f05` / `d33b285a` / `c6211650`). Primary pass only:
 
-| clip (view) | base `10b3f54c` | after `.1` | after `.2` | after `.3` (final) |
-|---|---|---|---|---|
-| front-approach (front) | **0.23355** @ 0.4127 primary | 0.23326 @ 0.4126 | **0.33101** @ 0.4126 | 0.33101 @ 0.4126 primary |
-| side-landscape (side) | null, unsuitable | null | null | **0.51251** @ 0.4605 tolerated |
-| side-portrait (side, ~7× slow-mo) | null, unsuitable | null | null | **0.42595** @ 0.1424 tolerated, n=1 |
-| multiperson (side) | null, unsuitable | null | null | **0.54641** @ 0.3671 tolerated |
-| fused 3-clip demo | 0.234 (front) | — | — | **51.3%, Medium**, "Clip 1 of 3 · Side view" (side-landscape) |
+| clip (view) | base `10b3f54c` | after `.1` | after `.2` | after `.3` | **final, review round 1 `68d87c1d`** |
+|---|---|---|---|---|---|
+| front-approach (front) | **0.23355** @ 0.4127 primary | 0.23326 @ 0.4126 | 0.33101 @ 0.4126 | 0.33101 @ 0.4126 | **0.33522** @ 0.4126 primary |
+| side-landscape (side) | null, unsuitable | null | null | 0.51251 @ 0.4605 | **0.56275** @ 0.4605 tolerated |
+| side-portrait (side, ~7× slow-mo) | null, unsuitable | null | null | 0.42595 @ 0.1424, n=1 | **null** (1.91 strides < 2), tolerated |
+| multiperson (side) | null, unsuitable | null | null | 0.54641 @ 0.3671 | **0.57544** @ 0.3671 tolerated |
+| fused 3-clip demo | 0.234 (front) | — | — | 51.3%, Medium, side-landscape | (not re-driven; side-landscape still has the highest confidence) |
 
 Final caveats: front — side-fit disparity (L R² .776 / R .512); side-landscape and multiperson —
-near-arm-only + "wasn't perfectly steady"; side-portrait — near-arm-only + "Only 1 complete
-arm-swing cycle(s)" + steady. (The primary `[analysis-diagnostics]` line carries no arm caveat; the
-final ones come from a temporary probe, reverted.)
+near-arm-only + "wasn't perfectly steady"; side-portrait — "Arm positions were tracked, but the
+clip holds fewer than 2 complete arm swings, too few to measure their size from." (The primary
+`[analysis-diagnostics]` line carries no arm caveat. The `.3` caveats came from a temporary probe,
+reverted; the final ones are read off the code path — fits and gates are unchanged since `.3`, only
+the travel estimator moved.) Confidence did not move in round 1: its cycle ramp saturates at 2 on
+either count.
 
-**Gate: every non-arm field bit-identical** at every phase vs base, on all four clips (canonicalised,
+**Gate: every non-arm field bit-identical** at every phase vs base (including round 1), on all four clips (canonicalised,
 `elapsedMs` and every `armSwingAmplitude` key dropped; md5 + `rtk proxy diff`):
 side-landscape `c2e2aeef…`, side-portrait `5ecc4299…`, front-approach `0259053b…`, multiperson
 `46b16c55…` (413/399/381/414 fields). No aggregate evidence-coverage field moved. Cadence =
@@ -310,7 +317,10 @@ multiperson); side-portrait cadence is withheld (sub-floor) while its arm anchor
 | multiperson | R far (torso) | 69/103 | 1.537 | .217 | 2.61 | .086 | .183 | 2.14 |
 
 On side-landscape the shoulder-span proxy would have read the near arm at 0.705 T (fund .529) —
-the inflation the torso proxy exists to stop.
+the inflation the torso proxy exists to stop. (Travel columns in this table are the first-cut
+estimator.) **Travel ÷ fundamental rises as R² falls** — 1.23–1.28 at R² .65–.78, 1.67–1.78 at
+.46–.51, 2.1–2.9 on the far arms at .15–.22: the less of the trace the fundamental explains, the
+more of a max−min is tracking noise rather than swing. The gate keeps the worst of it out.
 
 **Keyframes** (ffmpeg crops, 1:1 px): side-landscape runner faces LEFT → camera sees the left side →
 near = left ✓; near wrist ~40 px below the shoulder at 1.85 s vs ~115 px at 2.15 s on a ~190 px
@@ -318,13 +328,19 @@ torso (≈0.4 T between two non-extreme instants), consistent with 0.51. side-po
 RIGHT → near = right (watch arm) ✓; at the exemplar's instants the near wrist sits ~75 px below the
 shoulder (2.667 s, back) and ~45 px (5.867 s, forward) on a ~100 px torso → **≈0.30 T visible
 vertical travel against 0.426 reported**. The swing is real and visible, R² .459 is not marginal,
-but treat side-portrait's number as soft: its fit sits ON the band floor (0.156 = 0.8 × 0.195 —
-with ~1.5 cycles in a 9.8 s window the frequency resolution, ~0.1 Hz, is wider than the whole band,
-so the edge is not a rhythm claim), and with one complete window the travel is a single max−min
-with no cross-window median, so per-frame tracking excursions land in it undiluted. Its confidence
-(0.142) already says so.
+but the `.3` number was soft: its fit sits ON the band floor (0.156 = 0.8 × 0.195 — with ~1.5
+cycles in a 9.8 s window the frequency resolution, ~0.1 Hz, is wider than the whole band, so the
+edge is not a rhythm claim), and with one complete window the travel was a single max−min with no
+cross-window median. Review round 1 made this a null: the usable span holds 1.91 hip-anchored
+strides, under the 2-stride floor.
 
-**Open, not fixed here:** side-landscape's near-arm exemplar is planned by the metric but the
+**MoveNet L/R swap** (fixture in `armSwingAmplitude.test.ts`): a swapped run keeps the near-arm
+choice (detection status is unchanged) and splices the far arm's trace into the near series; runs
+over 2 samples pass the Hampel guard, but the sliding-window median only reports a run that covers
+more than half the stride windows. 8 frames in 4 s: −1.0% (same arm offsets), +3.4% (far arm 30 px
+lower).
+
+**Open, not fixed here (`strides-eiil.5`):** side-landscape's near-arm exemplar is planned by the metric but the
 evidence planner returns `no-evidence: undrawable` (pair 2.583 → 2.950 s; cause NOT verified —
 the pair-crop growth gate is the suspect, since the runner travels across the frame between the two
 instants, and `EVIDENCE_MAX_PAIR_CROP_GROWTH` is a do-not-raise), so the demo's winning arm card
