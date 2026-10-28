@@ -352,7 +352,7 @@ the tour/summary headline requirements). `armSwingAmplitude` is the wrist's vert
   behind the trunk on the backswing (neutral 0.3: upper arm −23°…+13°; front 0.33: −25°…+15°;
   side 0.51: −37°…+27°). At 48° it ran −3°…+23° at 0.3 and the arm pumped in front of the chest.
 - **The pin:** above v* = 2R·sin²33° ≈ **0.523** a symmetric swing would take the wrist behind the
-  shoulder, where the drop R·cos ψ turns back up and the readback comes up short. `armAt` uses
+  shoulder, where the drop R·cos ψ shrinks again (the wrist rises) and the readback comes up short. `armAt` uses
   `centre = max(armCentreDeg, asin(√(v / 2R)))` (with A = c above v*), so ψ runs 0…2c, the wrist
   bottoms out straight below the shoulder, and travel is exactly v. Removing the `max` fails four
   existing readback tests plus the new wrist-behind-shoulder test. ⚠️ **Today's side-landscape
@@ -417,6 +417,35 @@ Label boxes (CSS px, live, real GPU, port 5319, fresh context per run, no errors
 | side-landscape 1280 light | 0.5627 | 338–430 × 592–624 | 338–430 × 452–484 | n/a (stage to 658) |
 
 Screenshots: scratchpad `eiil4-live/r1-*.png`.
+
+### Review round 2: the arms-stop camera reads as a crossover (open)
+
+UX review: at `upperFrontQuarter` (yaw 45, pitch 5) the near forearm crosses the chest and the two
+forearms form an X, which reads as "arms crossing the midline". Nothing measured says that.
+
+Yaw convention (`camera.ts`): yaw 0 puts the camera on the runner's RIGHT, travel to screen right;
+yaw 90 is the front. At 0 < yaw < 90 the right arm is near. A probe (pitch 5, zoom 1.7, neutral
+params, 200 phases) measured the closest approach of each joint to the projected shoulder–hip quad,
+in viewBox units; negative means inside.
+
+| yaw | near elbow, forward swing | near elbow, backswing | far wrist | shoulder separation |
+|---|---|---|---|---|
+| 0 | −0.010 / +0.010 (the quad is a sliver) | +0.016 / +0.018 | +0.42 / +0.10 | 0 |
+| 10 | −0.077 / −0.074 | +0.039 / +0.044 | +0.46 / +0.15 | 0.22 |
+| 20 | −0.150 / −0.145 | +0.067 / +0.072 | +0.49 / +0.19 | 0.44 |
+| 30 | −0.209 / −0.222 | +0.094 / +0.099 | +0.49 / +0.22 | 0.64 |
+| 45 (today) | −0.117 / −0.301 | +0.130 / +0.134 | +0.48 / +0.26 | 0.90 |
+
+(cells: v = 0.335 / v = 0.5627, neutral 4° lean)
+
+- **The near elbow's FORWARD swing projects over the chest at every yaw above 0.** The arm sits
+  at the near shoulder's depth, so the camera sees it in front of the torso. That is correct in
+  depth, and it shrinks as the yaw falls. Its backswing is always outside the quad. The far wrist
+  never enters at neutral lean; at a −15° lean it does at small yaws.
+- So "neither the near elbow nor the far wrist crosses the torso outline over a full cycle"
+  cannot hold at any yaw that still separates the arms in depth. At yaw 0 the arms superimpose.
+  The camera change waits on choosing a criterion (e.g. the backswing never inside, the forward
+  swing's overlap bounded, the X gone), not on a yaw.
 
 ## Gotchas
 

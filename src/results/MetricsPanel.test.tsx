@@ -255,7 +255,7 @@ describe('MetricsPanel', () => {
     expect(screen.getByText('Step width')).toBeInTheDocument()
     expect(screen.getByText('Step width (cm)')).toBeInTheDocument()
     expect(screen.getByText('Knee drive')).toBeInTheDocument()
-    expect(screen.getByText('Arm swing amplitude')).toBeInTheDocument()
+    expect(screen.getByText('Arm swing amplitude (wrist up-and-down)')).toBeInTheDocument()
   })
 
   it('renders formatted values and high-confidence labels for a clean (all tier-1) result', () => {
@@ -394,7 +394,7 @@ describe('MetricsPanel', () => {
       'Foot strike pattern',
       'Step width',
       'Step width (cm)',
-      'Arm swing amplitude',
+      'Arm swing amplitude (wrist up-and-down)',
       'Swing-foot lateral excursion',
     ])
   })
@@ -556,7 +556,7 @@ describe('MetricsPanel', () => {
 
     const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
     expect(within(excludedSection).getByText('Vertical oscillation (cm)')).toBeInTheDocument()
-    expect(within(excludedSection).getByText('Arm swing amplitude')).toBeInTheDocument()
+    expect(within(excludedSection).getByText('Arm swing amplitude (wrist up-and-down)')).toBeInTheDocument()
     expect(within(excludedSection).queryByText('Vertical oscillation')).not.toBeInTheDocument()
     expect(within(excludedSection).queryByText('Vertical ratio')).not.toBeInTheDocument()
     expect(within(excludedSection).queryByText('Cadence')).not.toBeInTheDocument()
@@ -575,14 +575,14 @@ describe('MetricsPanel', () => {
 
     render(<MetricsPanel heuristics={heuristics} />)
 
-    expect(screen.queryByLabelText('Arm swing amplitude')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Arm swing amplitude (wrist up-and-down)')).not.toBeInTheDocument()
     expect(screen.queryByText('88.0% of torso length')).not.toBeInTheDocument()
     const excludedSection = screen.getByRole('region', { name: /not measurable for this clip/i })
     // This metric IS the reason the section says "measurable" rather than "measured": its value
     // was computed (0.88) and then set aside for the camera angle. A heading reading "not
     // measured" would be false about the entry directly underneath it.
     expect(screen.queryByText('Not measured for this clip')).not.toBeInTheDocument()
-    expect(within(excludedSection).getByText('Arm swing amplitude')).toBeInTheDocument()
+    expect(within(excludedSection).getByText('Arm swing amplitude (wrist up-and-down)')).toBeInTheDocument()
     expect(
       within(excludedSection).getByText(/not reliable from a side view/i),
     ).toBeInTheDocument()

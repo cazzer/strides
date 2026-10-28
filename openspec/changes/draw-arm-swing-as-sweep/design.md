@@ -29,8 +29,8 @@ the side readings.
 ### D2. Pin the backswing at ψ = 0 above v*
 
 Travel 2R·sin c·sin A needs c − A ≥ 0: below ψ = 0 the wrist goes behind the shoulder and the drop
-R·cos ψ rises again, so the readback would come up short. For v > v* = 2R·sin²33° ≈ 0.523 the
-centre becomes c = asin(√(v / 2R)) with A = c, so ψ runs 0…2c and travel is R(1 − cos 2c) = v.
+R·cos ψ shrinks again (the wrist rises), so the readback would come up short. For
+v > v* = 2R·sin²33° ≈ 0.523 the centre becomes c = asin(√(v / 2R)) with A = c, so ψ runs 0…2c and travel is R(1 − cos 2c) = v.
 `c = max(33°, asin(√(v / 2R)))` is both cases in one formula and is continuous at v*.
 
 ### D3. Label the value as wrist up-and-down travel

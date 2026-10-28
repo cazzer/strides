@@ -27,7 +27,7 @@ describe('SessionCoverageNotice', () => {
     const region = screen.getByRole('region', { name: 'Camera views in this session' })
     expect(region).toHaveTextContent('This session has a side view only.')
     expect(region).toHaveTextContent(
-      '2 measurements need a front-view clip: step width and arm swing amplitude.',
+      '2 measurements need a front-view clip: step width and arm swing amplitude (wrist up-and-down).',
     )
     // Never a live region: the results view's status is the session's one announced line.
     expect(region.querySelector('[aria-live],[role="status"],[role="alert"]')).toBeNull()

@@ -14,12 +14,16 @@ torso lengths (`strides-eiil.1`–`.3`). Two things undersell that:
 ## What Changes
 
 - `SHORT_METRIC_LABELS.armSwingAmplitude`: `Arm swing` → `Arm swing (wrist up-and-down)`. The tour's
-  arms stop label and the summary's arms row both read it.
+  arms stop label and the summary's arms row both read it. `METRIC_LABELS.armSwingAmplitude`
+  (classic table, guided cards, "Also:" lists, the camera-coverage notice): `Arm swing amplitude` →
+  `Arm swing amplitude (wrist up-and-down)`. The metric description adds that the forward-and-back
+  sweep isn't measured.
 - `MODEL_PROPORTIONS.armCentreDeg`: 48° → 33°, so the upper arm hangs about 5° behind vertical and
   the swing carries the elbow behind the trunk.
 - `armAt` centre: `max(armCentreDeg, asin(√(v / 2R)))`. Above v* = 2R·sin²33° ≈ 0.523 a symmetric
-  swing would carry the wrist behind the shoulder (where the drop stops falling and the readback
-  would come up short); the backswing is pinned with the wrist straight below the shoulder instead.
+  swing would carry the wrist behind the shoulder (where the wrist stops falling and rises again,
+  so the readback would come up short); the backswing is pinned with the wrist straight below the
+  shoulder instead.
   Wrist travel stays exactly the bound value in both cases.
 - The arm-swing bracket's label moves from under the bracket's foot to above its top end. A pinned
   swing reaches lower, and at 390 px the label under the foot went behind the stop panel (design D4).

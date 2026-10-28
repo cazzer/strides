@@ -808,8 +808,9 @@ interface ArmJoints {
  *
  * - Up to v* = 2R·sin²(`armCentreDeg`), c = `armCentreDeg` and the swing is symmetric about it.
  * - Above v*, a symmetric swing about `armCentreDeg` would carry ψ below 0 (wrist behind the
- *   shoulder), where the drop stops falling and the readback would come up short. The backswing is
- *   pinned at ψ = 0 instead: c = A = asin(√(v / 2R)), so the drop runs R(1 − cos 2c) = v.
+ *   shoulder), where the wrist stops falling and rises again, so the readback would come up
+ *   short. The backswing is pinned at ψ = 0 instead: c = A = asin(√(v / 2R)), so the drop runs
+ *   R(1 − cos 2c) = v.
  *
  * Both cases are one formula, c = max(`armCentreDeg`, asin(√(v / 2R))), continuous at v*.
  */

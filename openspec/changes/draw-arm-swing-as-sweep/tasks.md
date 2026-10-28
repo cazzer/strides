@@ -19,3 +19,11 @@
 - [x] 4.1 `runnerAnnotations.ts` armSwing: label anchored at the bracket's top end, `side: 'above'` (was below its foot)
 - [x] 4.2 `runnerAnnotations.test.ts`: label anchor is the top end, laid out centred on the bracket, unclamped, wholly above the top tick, for 0.05 / 0.33 / 0.5627 / 0.9
 - [x] 4.3 Live re-check at 390 (side pinned, front) and 1280; another stop's label unmoved; note updated
+
+## 5. Review round 2
+
+- [x] 5.1 `METRIC_LABELS.armSwingAmplitude` → `Arm swing amplitude (wrist up-and-down)`; `MetricsPanel.test.tsx`, `SessionCoverageNotice.test.tsx`
+- [x] 5.2 `metricDescriptions.ts`: the forward-and-back sweep isn't measured
+- [x] 5.3 Direction words fixed (the wrist rises / the drop shrinks) in `gaitModel.ts`, proposal, design, note
+- [x] 5.4 `runnerAnnotations.test.ts`: the 130 px/unit constant tied to `strides-ikbu`
+- [ ] 5.5 Arms-stop camera (crossover reading): blocked on a criterion decision, see the review report

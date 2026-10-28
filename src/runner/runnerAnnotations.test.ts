@@ -341,6 +341,8 @@ describe('the marks are the drawn values and lie on the live figure', () => {
       // Laid out as the arms stop draws it (font and gap in viewBox units at a phone stage's
       // ~130 px per unit): centred on the bracket with no frame clamp, every line wholly above
       // the top tick, so nothing covers the bracket and nothing hangs toward the panel below.
+      // 130 px/unit is what ModelRunner sizes labels by today (the stage box). The phone SVG actually
+      // draws at ~84 px/unit, so live labels are smaller; strides-ikbu sizes them from the SVG.
       const unit = 1 / 130
       const top = projectPoint(high, camera)
       const foot = projectPoint(low, camera)
