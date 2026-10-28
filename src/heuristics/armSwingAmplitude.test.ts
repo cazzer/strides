@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { computeArmSwingAmplitude } from './armSwingAmplitude'
+import { computeSideSwing, resolveStrideRateHz } from './armSwing'
 import { buildFrame } from './__fixtures__/testFrames'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
@@ -11,7 +12,6 @@ import type { RobustPoseFrame } from '../pose/robustness/types'
  */
 const TORSO_LENGTH_PX = 150
 const SHOULDER_Y = 250
-const HIP_Y = SHOULDER_Y + TORSO_LENGTH_PX
 const LEFT_SHOULDER_X = 170
 const RIGHT_SHOULDER_X = 230
 const LEFT_HIP_X = 175
@@ -19,6 +19,9 @@ const RIGHT_HIP_X = 225
 /** Resting wrist-below-shoulder offset — an arbitrary but plausible carried-arm position; only
  * the OSCILLATION around it (see below) is what the metric measures. */
 const BASE_WRIST_OFFSET_Y = 80
+/** Whole-body vertical bounce, px peak-to-trough, the builder adds by default so the metric's own
+ * stride-rate anchor (`resolveStrideRateHz`) resolves — see the builder's `bounceAmplitudePx`. */
+const BODY_BOUNCE_PX = 10
 
 /**
  * Deterministic, seedable jitter, so a noise fixture is reproducible run to run — a randomly-seeded
@@ -62,6 +65,17 @@ function buildArmSwingFrames(params: {
    * trend captures it exactly (see `armSwing.test.ts`'s `scaleGrowthFactor` doc for the full
    * reasoning). `1` (the default) is bit-identical to the ungrown fixture. */
   scaleGrowthFactor?: number
+  /**
+   * Peak-to-trough whole-body vertical bounce, px, at TWICE `swingFreqHz` (one bounce per step, two
+   * steps per stride), added identically to EVERY keypoint — so wrist−shoulder, shoulder span and
+   * torso length are untouched by it, and the only thing it adds is a hip rhythm for
+   * `resolveStrideRateHz` to anchor the arm search on. `0` keeps the hips motionless. ON by
+   * default here, because the metric finds its own stride rate and has no anchor without it. */
+  bounceAmplitudePx?: number
+  /** Per-arm swing-frequency overrides, Hz — default `swingFreqHz`. The body bounce stays at
+   * `2 × swingFreqHz`, so the metric's stride anchor is unaffected by either override. */
+  leftSwingFreqHz?: number
+  rightSwingFreqHz?: number
   seed?: number
 }): RobustPoseFrame[] {
   const {
@@ -74,6 +88,9 @@ function buildArmSwingFrames(params: {
     rightJitterPx = 0,
     harmonicRatio = 0,
     scaleGrowthFactor = 1,
+    bounceAmplitudePx = BODY_BOUNCE_PX,
+    leftSwingFreqHz = swingFreqHz,
+    rightSwingFreqHz = swingFreqHz,
     seed = 1,
   } = params
   const frameCount = Math.round(durationSec * fps)
@@ -84,32 +101,40 @@ function buildArmSwingFrames(params: {
   for (let i = 0; i < frameCount; i += 1) {
     const t = i / fps
     const g = Math.pow(scaleGrowthFactor, t / durationSec)
-    const phase = 2 * Math.PI * swingFreqHz * t
+    const leftPhase = 2 * Math.PI * leftSwingFreqHz * t
+    const rightPhase = 2 * Math.PI * rightSwingFreqHz * t
     const harmonic = 2 * Math.PI * 2 * swingFreqHz * t
+    const bounceY = (bounceAmplitudePx / 2) * Math.sin(harmonic)
     const leftShoulderX = bodyCenterX - (bodyCenterX - LEFT_SHOULDER_X) * g
     const rightShoulderX = bodyCenterX + (RIGHT_SHOULDER_X - bodyCenterX) * g
     const leftWristY =
       SHOULDER_Y +
       BASE_WRIST_OFFSET_Y * g -
-      ((leftAmplitudePx * g) / 2) * Math.sin(phase) +
-      ((leftAmplitudePx * g * harmonicRatio) / 2) * Math.sin(harmonic) +
+      ((leftAmplitudePx * g) / 2) * Math.sin(leftPhase) +
+      ((leftAmplitudePx * g * harmonicRatio) / 2) * Math.sin(2 * leftPhase) +
       jitter() * leftJitterPx
     const rightWristY =
       SHOULDER_Y +
       BASE_WRIST_OFFSET_Y * g -
-      ((rightAmplitudePx * g) / 2) * Math.sin(phase + Math.PI) +
-      ((rightAmplitudePx * g * harmonicRatio) / 2) * Math.sin(harmonic) +
+      ((rightAmplitudePx * g) / 2) * Math.sin(rightPhase + Math.PI) +
+      ((rightAmplitudePx * g * harmonicRatio) / 2) * Math.sin(2 * rightPhase) +
       jitter() * rightJitterPx
 
     frames.push(
       buildFrame(
         {
-          left_shoulder: { x: leftShoulderX, y: SHOULDER_Y },
-          right_shoulder: { x: rightShoulderX, y: SHOULDER_Y },
-          left_hip: { x: bodyCenterX - (bodyCenterX - LEFT_HIP_X) * g, y: SHOULDER_Y + TORSO_LENGTH_PX * g },
-          right_hip: { x: bodyCenterX + (RIGHT_HIP_X - bodyCenterX) * g, y: SHOULDER_Y + TORSO_LENGTH_PX * g },
-          left_wrist: { x: leftShoulderX, y: leftWristY },
-          right_wrist: { x: rightShoulderX, y: rightWristY },
+          left_shoulder: { x: leftShoulderX, y: SHOULDER_Y + bounceY },
+          right_shoulder: { x: rightShoulderX, y: SHOULDER_Y + bounceY },
+          left_hip: {
+            x: bodyCenterX - (bodyCenterX - LEFT_HIP_X) * g,
+            y: SHOULDER_Y + TORSO_LENGTH_PX * g + bounceY,
+          },
+          right_hip: {
+            x: bodyCenterX + (RIGHT_HIP_X - bodyCenterX) * g,
+            y: SHOULDER_Y + TORSO_LENGTH_PX * g + bounceY,
+          },
+          left_wrist: { x: leftShoulderX, y: leftWristY + bounceY },
+          right_wrist: { x: rightShoulderX, y: rightWristY + bounceY },
         },
         t,
       ),
@@ -122,6 +147,43 @@ const BASE_PARAMS = {
   durationSec: 4,
   fps: 30,
   swingFreqHz: 1.5,
+}
+
+/**
+ * The 3-point spike-guard median in the shared travel estimator clips a sampled extremum to its
+ * higher neighbour, so an exact sinusoid sampled at `fps` reads at most `1 − cos(2π f / fps)` low
+ * (`armSwing.ts`, `perStrideTravel`). At this suite's 1.5 Hz / 30 fps that is 4.9%, and the
+ * fixtures' phase puts a sample exactly on each extreme — the worst case.
+ */
+const SAMPLING_FLOOR = Math.cos((2 * Math.PI * BASE_PARAMS.swingFreqHz) / BASE_PARAMS.fps)
+
+/** Each side's per-stride travel, in px, from the shared module — what the metric must average. */
+function sideTravelsPx(frames: RobustPoseFrame[]): { left: number; right: number } {
+  const strideHz = resolveStrideRateHz(frames, DEFAULT_HEURISTICS_CONFIG)
+  if (strideHz === null) throw new Error('fixture must carry a stride rhythm')
+  const left = computeSideSwing(frames, 'left', { strideHz, scaleProxy: 'shoulderSpan' }).travelPx
+  const right = computeSideSwing(frames, 'right', { strideHz, scaleProxy: 'shoulderSpan' }).travelPx
+  if (left === null || right === null) throw new Error('fixture must yield a travel on both sides')
+  return { left, right }
+}
+
+/** Flags the named keypoints `interpolated` on the frames `when` selects — positions untouched —
+ * which is how occlusion shows up on a side clip's far arm. */
+function withInterpolated(
+  frames: RobustPoseFrame[],
+  names: string[],
+  when: (index: number) => boolean,
+): RobustPoseFrame[] {
+  return frames.map((frame, i) =>
+    when(i)
+      ? {
+          ...frame,
+          keypoints: frame.keypoints.map((kp) =>
+            names.includes(kp.name) ? { ...kp, status: 'interpolated' as const } : kp,
+          ),
+        }
+      : frame,
+  )
 }
 
 /** The realistic fixture `armSwing.test.ts` uses for its shared-fit cases — stride-rate swing,
@@ -137,21 +199,51 @@ const REALISTIC = {
   seed: 20260829,
 }
 
+describe('buildArmSwingFrames — the default body bounce', () => {
+  it('moves every keypoint together, so wrist−shoulder and torso length are untouched by it', () => {
+    const bouncing = buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 20 })
+    const still = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 20,
+      bounceAmplitudePx: 0,
+    })
+    const y = (frame: RobustPoseFrame, name: string) =>
+      frame.keypoints.find((kp) => kp.name === name)!.y!
+
+    bouncing.forEach((frame, i) => {
+      for (const side of ['left', 'right']) {
+        expect(y(frame, `${side}_wrist`) - y(frame, `${side}_shoulder`)).toBeCloseTo(
+          y(still[i], `${side}_wrist`) - y(still[i], `${side}_shoulder`),
+          9,
+        )
+        expect(y(frame, `${side}_hip`) - y(frame, `${side}_shoulder`)).toBeCloseTo(
+          y(still[i], `${side}_hip`) - y(still[i], `${side}_shoulder`),
+          9,
+        )
+      }
+    })
+  })
+})
+
 describe('computeArmSwingAmplitude', () => {
-  it('a clean front-view clip reports the MEAN of the two sides over torso length, exactly', () => {
+  it('a clean front-view clip reports the MEAN of the two sides’ per-stride travel over torso length', () => {
     // Asymmetric on purpose: a mean of unequal sides is what distinguishes this metric's
-    // aggregation from min/max, and both inputs are exact by construction —
-    // (40 + 20) / (2 × 150) = 0.2.
+    // aggregation from min/max. The value is EXACTLY the mean of the shared module's two travels
+    // over the 150 px torso, and those travels track the fixture's own 40 px / 20 px excursions to
+    // within the estimator's stated sampling bias — (40 + 20) / (2 × 150) = 0.2 at most.
     const frames = buildArmSwingFrames({
       ...BASE_PARAMS,
       leftAmplitudePx: 40,
       rightAmplitudePx: 20,
     })
+    const travels = sideTravelsPx(frames)
 
     const result = computeArmSwingAmplitude(frames, 'front')
 
-    expect(result.value).not.toBeNull()
-    expect(result.value).toBeCloseTo((40 + 20) / (2 * TORSO_LENGTH_PX), 2)
+    expect(result.value).toBe((travels.left + travels.right) / (2 * TORSO_LENGTH_PX))
+    expect(result.value!).toBeGreaterThanOrEqual(0.2 * SAMPLING_FLOOR - 1e-9)
+    expect(result.value!).toBeLessThanOrEqual(0.2 + 1e-9)
     expect(result.unit).toBe('ratio')
     expect(result.viewFit).toBe('primary')
     expect(result.sampleSize).toBeGreaterThanOrEqual(4)
@@ -162,19 +254,171 @@ describe('computeArmSwingAmplitude', () => {
     expect(result.caveat).toBeNull()
   })
 
-  it('a side-view clip: still computed (never withheld), viewFit unsuitable, confidence capped near the 0.1 multiplier', () => {
+  it('reports the full travel of a swing carrying a second harmonic, not the fundamental’s size', () => {
+    // −sin φ + 0.4·sin 2φ (the REALISTIC shape, without its jitter): its peak-to-trough travel is
+    // larger than the fundamental's, and the published value is the travel.
     const frames = buildArmSwingFrames({
       ...BASE_PARAMS,
+      fps: 60,
       leftAmplitudePx: 40,
       rightAmplitudePx: 40,
+      harmonicRatio: 0.4,
     })
+    let high = -Infinity
+    let low = Infinity
+    for (let i = 0; i < 10000; i += 1) {
+      const phase = (2 * Math.PI * i) / 10000
+      const v = -20 * Math.sin(phase) + 8 * Math.sin(2 * phase)
+      high = Math.max(high, v)
+      low = Math.min(low, v)
+    }
+    const trueTravelPx = high - low
+
+    const result = computeArmSwingAmplitude(frames, 'front')
+    const strideHz = resolveStrideRateHz(frames, DEFAULT_HEURISTICS_CONFIG)!
+    const fit = computeSideSwing(frames, 'left', { strideHz, scaleProxy: 'shoulderSpan' }).fit
+
+    expect(trueTravelPx).toBeGreaterThan(44)
+    expect(fit.ok && fit.peakToPeakAmplitude).toBeCloseTo(40, 0)
+    expect(result.value! * TORSO_LENGTH_PX).toBeGreaterThan(0.97 * trueTravelPx)
+    // ≤ 0.5% over: the trend is fitted jointly with the FUNDAMENTAL, so a sliver of the harmonic
+    // shape leaks into the removed trend.
+    expect(result.value! * TORSO_LENGTH_PX).toBeLessThanOrEqual(trueTravelPx * 1.005)
+  })
+
+  it('a side-view clip reads the near arm alone: tolerated, capped near 0.6, one exemplar', () => {
+    // The right arm is occluded on a third of the frames (interpolated there), so the LEFT arm —
+    // more directly-detected frames — is the near arm, and its travel alone is the value.
+    const frames = withInterpolated(
+      buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 20 }),
+      ['right_wrist'],
+      (i) => i % 3 === 0,
+    )
+    const strideHz = resolveStrideRateHz(frames, DEFAULT_HEURISTICS_CONFIG)!
+    const near = computeSideSwing(frames, 'left', { strideHz, scaleProxy: 'torsoLength' })
 
     const result = computeArmSwingAmplitude(frames, 'side')
 
-    expect(result.value).not.toBeNull() // still computed, per "never a silent wrong number"
-    expect(result.viewFit).toBe('unsuitable')
-    expect(result.confidence).toBeLessThan(0.15)
-    expect(result.caveat).toContain('side view')
+    expect(result.value).toBe(near.travelPx! / TORSO_LENGTH_PX)
+    expect(result.value!).toBeGreaterThanOrEqual((40 / TORSO_LENGTH_PX) * SAMPLING_FLOOR - 1e-9)
+    expect(result.viewFit).toBe('tolerated')
+    expect(result.confidence).toBeGreaterThan(0.5)
+    expect(result.confidence).toBeLessThanOrEqual(0.6)
+    expect(result.interpolatedFraction).toBe(0)
+    expect(result.caveat).toContain('near arm only')
+    expect(result.caveat ?? '').not.toContain('fit its trace much less cleanly')
+    expect(result.exemplars).toHaveLength(1)
+    expect(result.exemplars![0].side).toBe('left')
+  })
+
+  it('a side-view far arm that fits only noise does not null the near-arm reading', () => {
+    // From the front this is the "one arm fitting only noise" null; side-on the far arm is not
+    // consulted at all.
+    const frames = withInterpolated(
+      buildArmSwingFrames({
+        ...BASE_PARAMS,
+        leftAmplitudePx: 40,
+        rightAmplitudePx: 0,
+        rightJitterPx: 20,
+        seed: 7,
+      }),
+      ['right_wrist'],
+      (i) => i % 4 === 0,
+    )
+
+    expect(computeArmSwingAmplitude(frames, 'front').value).toBeNull()
+    const side = computeArmSwingAmplitude(frames, 'side')
+    expect(side.value).not.toBeNull()
+    expect(side.caveat).toContain('near arm only')
+  })
+
+  it('a side-view detected-count tie falls back to the both-arms rule', () => {
+    // Nothing interpolated on either arm: a tie, so the side clip reads the mean of both arms
+    // (over the torso-stabilized fits) and a noise-only arm nulls it, exactly as from the front.
+    const tied = buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 20 })
+    const strideHz = resolveStrideRateHz(tied, DEFAULT_HEURISTICS_CONFIG)!
+    const left = computeSideSwing(tied, 'left', { strideHz, scaleProxy: 'torsoLength' }).travelPx!
+    const right = computeSideSwing(tied, 'right', { strideHz, scaleProxy: 'torsoLength' }).travelPx!
+
+    const result = computeArmSwingAmplitude(tied, 'side')
+
+    expect(result.value).toBe((left + right) / (2 * TORSO_LENGTH_PX))
+    expect(result.viewFit).toBe('tolerated')
+    expect(result.caveat ?? '').not.toContain('near arm only')
+    expect(result.caveat).toContain('the far arm may be partly hidden behind the body')
+    expect(result.exemplars).toHaveLength(2)
+
+    const noisyTie = computeArmSwingAmplitude(
+      buildArmSwingFrames({
+        ...BASE_PARAMS,
+        leftAmplitudePx: 40,
+        rightAmplitudePx: 0,
+        rightJitterPx: 20,
+        seed: 7,
+      }),
+      'side',
+    )
+    expect(noisyTie.value).toBeNull()
+    expect(noisyTie.caveat).toContain('too irregular to measure')
+  })
+
+  it('a MoveNet left/right label swap on a side clip: what the near-arm reading does with it', () => {
+    // Side-on, MoveNet can swap the two arms' labels for a run of frames. Here the near (left) arm
+    // swings 40 px and the far (right) arm 20 px in opposite phase; frames 40–47 (0.27 s, about
+    // 40% of a stride) carry each arm's keypoints under the OTHER label. Detection status is
+    // untouched by a swap, so the near-arm choice stands, and the swapped segment splices the far
+    // arm's trace into the near arm's series — a run of 8 frames, longer than the Hampel guard's
+    // two-sample reach, so it is NOT removed.
+    const occluded = (i: number) => i % 3 === 0
+    const clean = withInterpolated(
+      buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 20 }),
+      ['right_wrist'],
+      occluded,
+    )
+    const SWAP: Record<string, string> = {
+      left_wrist: 'right_wrist',
+      right_wrist: 'left_wrist',
+      left_shoulder: 'right_shoulder',
+      right_shoulder: 'left_shoulder',
+    }
+    const swapAt = (frames: RobustPoseFrame[]) => frames.map((frame, i) =>
+      i >= 40 && i < 48
+        ? {
+            ...frame,
+            keypoints: frame.keypoints.map((kp) => {
+              const other = SWAP[kp.name]
+              if (other === undefined) return kp
+              const source = frame.keypoints.find((candidate) => candidate.name === other)!
+              return { ...kp, x: source.x, y: source.y }
+            }),
+          }
+        : frame,
+    )
+    // A far arm that also hangs 30 px lower relative to its own shoulder: the swapped run then
+    // splices a 30 px step into the near arm's series.
+    const lowFar = clean.map((frame) => ({
+      ...frame,
+      keypoints: frame.keypoints.map((kp) =>
+        kp.name === 'right_wrist' && kp.y !== null ? { ...kp, y: kp.y + 30 } : kp,
+      ),
+    }))
+
+    const before = computeArmSwingAmplitude(clean, 'side')
+    const after = computeArmSwingAmplitude(swapAt(clean), 'side')
+    const lowBefore = computeArmSwingAmplitude(lowFar, 'side')
+    const lowAfter = computeArmSwingAmplitude(swapAt(lowFar), 'side')
+
+    // The near-arm choice stands, and the reading barely moves: a sliding-window MEDIAN only
+    // reports a swapped run if it falls in more than half the stride windows — here ~0.27 s of a
+    // 4 s clip touches about a quarter of them. Measured: −1.0% (same resting offset) and +3.4%
+    // (the 30 px step). A swap spanning most of the clip would be read as the far arm's swing.
+    for (const swappedClip of [after, lowAfter]) {
+      expect(swappedClip.value).not.toBeNull()
+      expect(swappedClip.exemplars![0].side).toBe('left')
+      expect(swappedClip.caveat).toContain('near arm only')
+    }
+    expect(Math.abs(after.value! - before.value!) / before.value!).toBeLessThan(0.02)
+    expect(Math.abs(lowAfter.value! - lowBefore.value!) / lowBefore.value!).toBeLessThan(0.05)
   })
 
   it('an ambiguous-view clip: still computed, viewFit unsuitable, confidence capped near the 0.2 multiplier', () => {
@@ -226,33 +470,40 @@ describe('computeArmSwingAmplitude', () => {
     expect(result.caveat).toContain('too irregular to measure')
   })
 
-  it('a rhythm mismatch between the two arms is not averaged into an amplitude', () => {
-    // The right arm oscillates at a different rate from the left — physically impossible for one
-    // body, so at least one fit found something that is not the arm swing (live: the multiperson
-    // clip's right arm latching onto the step rhythm at R² 0.324, CLEARING the 0.3 gate). A mean
-    // of an arm-swing amplitude and a step-bounce amplitude is not an arm-swing amplitude.
-    const left = buildArmSwingFrames({
-      ...BASE_PARAMS,
-      swingFreqHz: 1.5,
-      leftAmplitudePx: 40,
-      rightAmplitudePx: 0,
-    })
-    const right = buildArmSwingFrames({
-      ...BASE_PARAMS,
-      swingFreqHz: 3.0,
-      leftAmplitudePx: 0,
-      rightAmplitudePx: 40,
-    })
-    const merged = left.map((frame, i) => ({
-      ...frame,
-      keypoints: frame.keypoints.map((kp) =>
-        kp.name === 'right_wrist'
-          ? right[i].keypoints.find((other) => other.name === 'right_wrist')!
-          : kp,
-      ),
-    }))
+  it('an arm oscillating only at the STEP rate cannot be fitted to it — the step rate is off the grid', () => {
+    // The multiperson clip's live failure (2026-08-29): the right arm's fit latched onto the STEP
+    // rhythm at R² 0.324, clearing the 0.3 gate. Searched around the stride rate, the step rate is
+    // not a candidate at all, so that arm now fits only what little of its trace sits near the
+    // stride rate — nothing — and the metric publishes nothing rather than a mixed mean.
+    const result = computeArmSwingAmplitude(
+      buildArmSwingFrames({
+        ...BASE_PARAMS,
+        leftAmplitudePx: 40,
+        rightAmplitudePx: 40,
+        rightSwingFreqHz: 2 * BASE_PARAMS.swingFreqHz,
+      }),
+      'front',
+    )
 
-    const result = computeArmSwingAmplitude(merged, 'front')
+    expect(result.value).toBeNull()
+    expect(result.confidence).toBe(0)
+    expect(result.caveat).toContain('too irregular to measure')
+  })
+
+  it('a rhythm mismatch between the two arms is not averaged into an amplitude', () => {
+    // Both arms inside the ±20% stride band but on materially different rhythms — physically
+    // impossible for one body, so at least one fit found something that is not the arm swing.
+    // (1.75 − 1.25) / 1.25 = 0.4, past the shared 0.25 bound.
+    const result = computeArmSwingAmplitude(
+      buildArmSwingFrames({
+        ...BASE_PARAMS,
+        leftAmplitudePx: 40,
+        rightAmplitudePx: 40,
+        leftSwingFreqHz: 1.25,
+        rightSwingFreqHz: 1.75,
+      }),
+      'front',
+    )
 
     expect(result.value).toBeNull()
     expect(result.confidence).toBe(0)
@@ -262,20 +513,27 @@ describe('computeArmSwingAmplitude', () => {
   })
 
   it('no resolvable body scale: null with the missing-normalizer caveat, never a claim about the arms', () => {
-    // Shoulders and wrists resolve and fit cleanly; HIPS never do, so `estimateBodyScale` has
-    // nothing to measure. The per-side fits themselves succeed here; a torso-normalized
-    // amplitude still cannot be formed, and the caveat must name the true cause.
+    // Hips and shoulders never resolve in the SAME frame — hips on even frames, shoulders and wrists
+    // on odd ones — so the hip rhythm still anchors the arm search and both arms still fit, but
+    // `estimateBodyScale` (shoulder-mid AND hip-mid in one frame) has nothing to measure. A
+    // torso-normalized amplitude cannot be formed, and the caveat must name the true cause.
+    const unresolve = (kp: RobustPoseFrame['keypoints'][number]) => ({
+      ...kp,
+      x: null,
+      y: null,
+      score: 0,
+      status: 'unrecoverable' as const,
+    })
     const frames = buildArmSwingFrames({
       ...BASE_PARAMS,
       leftAmplitudePx: 40,
       rightAmplitudePx: 20,
-    }).map((frame) => ({
+    }).map((frame, i) => ({
       ...frame,
-      keypoints: frame.keypoints.map((kp) =>
-        kp.name === 'left_hip' || kp.name === 'right_hip'
-          ? { ...kp, x: null, y: null, score: 0, status: 'unrecoverable' as const }
-          : kp,
-      ),
+      keypoints: frame.keypoints.map((kp) => {
+        const isHip = kp.name === 'left_hip' || kp.name === 'right_hip'
+        return (i % 2 === 0) === isHip ? kp : unresolve(kp)
+      }),
     }))
 
     const result = computeArmSwingAmplitude(frames, 'front')
@@ -283,6 +541,39 @@ describe('computeArmSwingAmplitude', () => {
     expect(result.value).toBeNull()
     expect(result.confidence).toBe(0)
     expect(result.caveat).toContain('No resolvable body-scale reference')
+  })
+
+  it('a clip with no hips at all names the missing body scale, not the missing rhythm it also lacks', () => {
+    // No hips means no torso AND no hip-bounce anchor; the normalizer is checked first because it
+    // is the more fundamental cause.
+    const result = computeArmSwingAmplitude(
+      buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 20 }).map(
+        (frame) => ({
+          ...frame,
+          keypoints: frame.keypoints.map((kp) =>
+            kp.name === 'left_hip' || kp.name === 'right_hip'
+              ? { ...kp, x: null, y: null, score: 0, status: 'unrecoverable' as const }
+              : kp,
+          ),
+        }),
+      ),
+      'front',
+    )
+
+    expect(result.value).toBeNull()
+    expect(result.caveat).toContain('No resolvable body-scale reference')
+  })
+
+  it('a clip under two complete strides publishes nothing, and says why', () => {
+    const result = computeArmSwingAmplitude(
+      buildArmSwingFrames({ ...BASE_PARAMS, durationSec: 1.25, leftAmplitudePx: 40, rightAmplitudePx: 40 }),
+      'front',
+    )
+
+    expect(result.value).toBeNull()
+    expect(result.caveat).toBe(
+      'Arm positions were tracked, but the clip holds fewer than 2 complete arm swings, too few to measure their size from.',
+    )
   })
 
   it('a degenerate zero-length torso is guarded, not divided by', () => {
@@ -292,16 +583,20 @@ describe('computeArmSwingAmplitude', () => {
       ...BASE_PARAMS,
       leftAmplitudePx: 40,
       rightAmplitudePx: 20,
-    }).map((frame) => ({
-      ...frame,
-      keypoints: frame.keypoints.map((kp) =>
-        kp.name === 'left_hip'
-          ? { ...kp, x: LEFT_SHOULDER_X, y: SHOULDER_Y }
-          : kp.name === 'right_hip'
-            ? { ...kp, x: RIGHT_SHOULDER_X, y: SHOULDER_Y }
-            : kp,
-      ),
-    }))
+    }).map((frame) => {
+      // Each hip sits ON its shoulder, bounce and all — the hip rhythm still anchors the search.
+      const shoulderY = frame.keypoints.find((kp) => kp.name === 'left_shoulder')!.y
+      return {
+        ...frame,
+        keypoints: frame.keypoints.map((kp) =>
+          kp.name === 'left_hip'
+            ? { ...kp, x: LEFT_SHOULDER_X, y: shoulderY }
+            : kp.name === 'right_hip'
+              ? { ...kp, x: RIGHT_SHOULDER_X, y: shoulderY }
+              : kp,
+        ),
+      }
+    })
 
     const result = computeArmSwingAmplitude(frames, 'front')
 
@@ -311,13 +606,19 @@ describe('computeArmSwingAmplitude', () => {
   })
 
   it('no resolvable wrist position: null value, 0 confidence, no crash', () => {
-    const frame = buildFrame({
-      left_shoulder: { x: LEFT_SHOULDER_X, y: SHOULDER_Y },
-      right_shoulder: { x: RIGHT_SHOULDER_X, y: SHOULDER_Y },
-      left_hip: { x: LEFT_HIP_X, y: HIP_Y },
-      right_hip: { x: RIGHT_HIP_X, y: HIP_Y },
-    })
-    const frames = Array.from({ length: 10 }, () => frame)
+    // The body bounces (so the stride anchor resolves) but no wrist is ever detected.
+    const frames = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 40,
+    }).map((frame) => ({
+      ...frame,
+      keypoints: frame.keypoints.map((kp) =>
+        kp.name === 'left_wrist' || kp.name === 'right_wrist'
+          ? { ...kp, x: null, y: null, score: 0, status: 'unrecoverable' as const }
+          : kp,
+      ),
+    }))
 
     expect(() => computeArmSwingAmplitude(frames, 'front')).not.toThrow()
     const result = computeArmSwingAmplitude(frames, 'front')
@@ -326,6 +627,26 @@ describe('computeArmSwingAmplitude', () => {
     expect(result.confidence).toBe(0)
     expect(result.sampleSize).toBe(0)
     expect(result.caveat).toContain('No resolvable shoulder/wrist position')
+  })
+
+  it('no steady running rhythm: null with the rhythm caveat, never a fit over the bounce band', () => {
+    // Arms swing cleanly, but the body never bounces, so there is no hip rhythm to anchor the
+    // stride-rate search on — and deliberately no fallback to the shared bounce band.
+    const result = computeArmSwingAmplitude(
+      buildArmSwingFrames({
+        ...BASE_PARAMS,
+        leftAmplitudePx: 40,
+        rightAmplitudePx: 40,
+        bounceAmplitudePx: 0,
+      }),
+      'front',
+    )
+
+    expect(result.value).toBeNull()
+    expect(result.confidence).toBe(0)
+    expect(result.caveat).toBe(
+      'No steady running rhythm was found in this clip, so the arm swing could not be timed against it.',
+    )
   })
 
   it('an empty frame list produces a well-formed null result, without throwing', () => {
@@ -358,8 +679,7 @@ describe('computeArmSwingAmplitude', () => {
     // Whole-body exponential growth (strides-egw): the stabilized per-side amplitudes come out at
     // the clip's reference (median inter-shoulder) scale — i.e. ×g at the median-sample instant —
     // and `estimateBodyScale`'s clip-median torso is the same ×g at the same median instant, so
-    // the growth divides out exactly and the hand expectation is the STATIC one:
-    // (40 + 20) / (2 × 150) = 0.2.
+    // the growth divides out exactly and the expectation is the STATIC clip's own value.
     const growing = computeArmSwingAmplitude(
       buildArmSwingFrames({
         ...BASE_PARAMS,
@@ -370,8 +690,14 @@ describe('computeArmSwingAmplitude', () => {
       'front',
     )
 
+    const still = computeArmSwingAmplitude(
+      buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 20 }),
+      'front',
+    )
+
     expect(growing.value).not.toBeNull()
-    expect(growing.value).toBeCloseTo((40 + 20) / (2 * TORSO_LENGTH_PX), 3)
+    expect(growing.value).toBeCloseTo(still.value!, 3)
+    expect(growing.value!).toBeGreaterThanOrEqual(0.2 * SAMPLING_FLOOR - 1e-3)
   })
 
   it('never NaN: every degenerate input yields a finite number or null', () => {
@@ -386,6 +712,15 @@ describe('computeArmSwingAmplitude', () => {
       computeArmSwingAmplitude(
         buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 40 }),
         'ambiguous',
+      ),
+      computeArmSwingAmplitude(
+        buildArmSwingFrames({
+          ...BASE_PARAMS,
+          leftAmplitudePx: 40,
+          rightAmplitudePx: 40,
+          bounceAmplitudePx: 0,
+        }),
+        'front',
       ),
     ]
 

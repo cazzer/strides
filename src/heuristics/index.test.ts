@@ -85,13 +85,12 @@ describe('computeFormHeuristics', () => {
     expect(result.overstriding.viewFit).toBe('primary')
     expect(result.cadence.viewFit).toBe('primary')
     expect(result.footStrikePattern.viewFit).toBe('primary')
-    // stepWidth mirrors armSwingAmplitude's row exactly: front-primary, side-unsuitable.
+    // stepWidth is front-primary, side-unsuitable.
     expect(result.stepWidth.viewFit).toBe('unsuitable')
     // kneeDrive copies kneeFlexion's row: side-primary.
     expect(result.kneeDrive.viewFit).toBe('primary')
-    // armSwingAmplitude is the mirror image of trunkLean/overstriding: side is its unsuitable
-    // view, not its primary one.
-    expect(result.armSwingAmplitude.viewFit).toBe('unsuitable')
+    // armSwingAmplitude is front-primary; from the side it reads the near arm alone, tolerated.
+    expect(result.armSwingAmplitude.viewFit).toBe('tolerated')
 
     // footStrikePattern's caveat is non-null even here, in the fully-populated clean case — the
     // one metric where that's true by design (it's always a proxy, never a direct measurement).

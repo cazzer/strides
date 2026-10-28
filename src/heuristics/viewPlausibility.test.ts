@@ -196,9 +196,13 @@ describe('resolveViewFitTable', () => {
     // Side-primary and front-primary metrics land on the same multiplier: neither view is
     // favoured, and both stay excluded exactly as a flat ambiguous label leaves them today.
     expect(resolved.trunkLean.ambiguous.fit).toBe('unsuitable')
-    expect(resolved.armSwingAmplitude.ambiguous.fit).toBe('unsuitable')
+    expect(resolved.stepWidth.ambiguous.fit).toBe('unsuitable')
     expect(resolved.trunkLean.ambiguous.multiplier).toBeCloseTo(0.375, 10)
-    expect(resolved.armSwingAmplitude.ambiguous.multiplier).toBeCloseTo(0.375, 10)
+    expect(resolved.stepWidth.ambiguous.multiplier).toBeCloseTo(0.375, 10)
+    // armSwingAmplitude is front-primary but TOLERATED from the side (it reads the near arm
+    // there), so it keeps more: 0.25 × 1 + 0.25 × 0.6 + 0.5 × 0.2.
+    expect(resolved.armSwingAmplitude.ambiguous.fit).toBe('unsuitable')
+    expect(resolved.armSwingAmplitude.ambiguous.multiplier).toBeCloseTo(0.5, 10)
     // A view-tolerant metric keeps more than the flat 0.6 ambiguous row, because half the mass
     // does sit on views it is measurable from.
     expect(resolved.verticalOscillation.ambiguous.multiplier).toBeCloseTo(0.7625, 10)

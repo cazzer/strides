@@ -3,8 +3,14 @@ import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { HeuristicsConfig, MetricExemplar } from './types'
 import { resolveBilateralPair, resolvePoint } from './keypoints'
 import { distance, median } from './mathUtils'
-import { fitSpectralSinusoid } from './spectralFit'
-import type { SpectralFitFailureReason, SpectralFitResult } from './spectralFit'
+import { fitSpectralSinusoid, fitTrendAtFrequency } from './spectralFit'
+import type {
+  SpectralFitFailureReason,
+  SpectralFitResult,
+  SpectralSample,
+} from './spectralFit'
+import { analyzeHipBounce } from './hipBounce'
+import { torsoLengthAt } from './bodyScale'
 import { resolvedSpanCenter, selectBounceInstants } from './bounceInstants'
 import {
   cropKeypoints,
@@ -14,9 +20,9 @@ import {
 } from './exemplars'
 
 /**
- * The shared per-side arm-swing computation — the per-side fit, its gate/policy constants, and
- * the per-side exemplar builder. `armSwingAmplitude` (how BIG the swing is) is its consumer
- * today; it calls `computeSideSwing` itself and runs the fit, exactly as
+ * The shared per-side arm-swing computation — the stride-rate anchor, the per-side fit and
+ * per-stride travel, its gate/policy constants, and the per-side exemplar builder.
+ * `armSwingAmplitude` (how BIG the swing is) is its consumer today; it calls `computeSideSwing` itself and runs the fit, exactly as
  * `verticalOscillationCm`/`verticalRatio` each call the exported `analyzeHipBounce` — no
  * cross-metric memoization exists in `index.ts`, and the fit is one cheap linear least-squares per
  * side.
@@ -40,16 +46,20 @@ import {
  * early ones and each side's "amplitude" is mostly a reading of the clip's end.
  *
  * The fix divides every sample by a per-frame scale factor before the fit — see
- * `resolveScaleStabilizer` for the construction and the reasoning behind each piece of it (strict
- * bilateral proxy, whole-window log-quadratic trend, no clamp). The output stays in PIXELS, at the
- * clip's reference (median measured) scale, so downstream semantics are unchanged:
- * `armSwingAmplitude`'s division by the clip-median torso length still pairs a reference-scale
- * numerator with a clip-median denominator.
+ * `resolveScaleStabilizer` for the construction and the reasoning behind each piece of it (the
+ * body-length proxy, whole-window log-quadratic trend, no clamp). The proxy is the caller's
+ * choice of two (`ArmSwingScaleProxy`): the strictly bilateral inter-shoulder span for a
+ * front-on clip, the per-frame torso length for a side-on one, where the shoulders superimpose.
+ * The output stays in PIXELS, at the clip's reference (median measured) scale, so downstream
+ * semantics are unchanged: `armSwingAmplitude`'s division by the clip-median torso length still
+ * pairs a reference-scale numerator with a clip-median denominator.
  */
 
 /**
- * Minimum complete ARM-SWING cycles — one per STRIDE, so one cycle spans two footfalls — for the
- * fitted per-side amplitude to be trusted at full confidence.
+ * Minimum complete ARM-SWING cycles — one per STRIDE, so one cycle spans two footfalls — for a
+ * per-stride travel to be read at all (`perStrideTravel` returns `null` below it: one window's
+ * range carries every tracking excursion undiluted), and the floor of the confidence ramp above it.
+ * Counted in hip-anchored stride periods over the usable span (`SideSwing.strideCycles`).
  *
  * Two is deliberately the same real demand the previous estimator encoded as "at least 4
  * half-swings": swapping the estimator should not silently also raise the sample bar, so the
@@ -104,7 +114,52 @@ export const MAX_SIDE_FREQUENCY_DISAGREEMENT = 0.25
 export const SIDE_FIT_QUALITY_DISPARITY_R2 = 0.2
 
 /**
- * Minimum frames on which BOTH shoulders independently resolve for the scale trend to be fitted
+ * Half-width of the per-side frequency search, as a fraction of the clip's stride rate: the grid
+ * spans `[(1 − this), (1 + this)] × strideHz`.
+ *
+ * Wider than every arm-vs-stride gap measured live (side-landscape 1.40 vs 1.45 Hz, front-approach
+ * 1.50 vs 1.51, multiperson left 1.48 vs 1.45 — all under 4%) and far narrower than a 2×
+ * step-versus-stride confusion, which is therefore structurally off the grid rather than something
+ * a gate has to catch.
+ */
+export const ARM_SWING_BAND_HALF_WIDTH = 0.2
+
+/**
+ * Grid spacing as a fraction of the stride rate — 21 candidates across the band at ANY playback
+ * rate, so a ~7× slow-motion clip searched around 0.2 Hz gets the same relative resolution as a
+ * real-time one around 1.5 Hz. 0.02 × 1.5 Hz = 0.03 Hz, the same order as the shared bounce grid's
+ * 0.02 Hz step.
+ */
+export const ARM_SWING_BAND_STEP_FRACTION = 0.02
+
+/**
+ * The clip's STRIDE rate in clip-time Hz — half the hip-bounce frequency, because the hip bounces
+ * once per step and each arm swings once per stride — or `null` when the clip has no hip-bounce
+ * rhythm trustworthy enough to anchor the arm search to.
+ *
+ * Trusted on exactly the terms cadence trusts the same fit: `analyzeHipBounce`'s fit (including
+ * its sub-floor pass, which is how a retimed slow-motion clip gets an anchor at all) must be `ok`
+ * with `sinusoidR2 ≥ config.cadenceMinFitR2`. Unlike cadence this does NOT withhold on
+ * `subFloorRhythm`: cadence reports a real-time RATE, which a retimed clock gets wrong; the arm
+ * fit runs over the same clip-time samples the bounce was fitted on, so a clip-time anchor is the
+ * correct one for it.
+ *
+ * There is deliberately no fallback to the shared bounce band when this is `null`: searching the
+ * STEP band for a STRIDE-rate oscillation is the defect this anchor replaces.
+ */
+export function resolveStrideRateHz(
+  frames: RobustPoseFrame[],
+  config: HeuristicsConfig,
+): number | null {
+  const { fit } = analyzeHipBounce(frames, config)
+  if (!fit.ok || !(fit.sinusoidR2 >= config.cadenceMinFitR2)) return null
+  const strideHz = fit.frequencyHz / 2
+  return Number.isFinite(strideHz) && strideHz > 0 ? strideHz : null
+}
+
+/**
+ * Minimum frames on which the scale proxy resolves (for the shoulder span: BOTH shoulders
+ * independently) for the scale trend to be fitted
  * at all — deliberately the same bar `fitSpectralSinusoid` sets for its own smallest fit
  * (`MIN_SPECTRAL_FIT_SAMPLES`), for the same reason: a low-order model over a handful of points
  * chases noise rather than describing anything. Below it the factor is IDENTICALLY 1 for every
@@ -183,30 +238,60 @@ function solveTrendSystem(
 }
 
 /**
- * Builds the per-frame scale factor `f(t)` the swing series is divided by: a smoothed
- * inter-shoulder-span trend, normalized so `f` reads 1 at the clip's reference (median measured)
- * scale. Each piece is a deliberate choice:
+ * Which per-frame body length the swing series is scale-stabilized by.
  *
- * - **The proxy is the inter-shoulder distance, resolved STRICTLY bilaterally**
- *   (`resolveBilateralPair`, never `resolveMidpoint`'s single-side fallback). A scale needs two
- *   real points — a span measured against a fabricated stand-in point is a fabricated length, the
- *   exact bug class `estimateHipWidth` and view detection's bilateral-spread signal already refuse
- *   for the same reason. A frame whose proxy is missing still gets a factor (the trend evaluates
- *   at every timestamp), so no swing sample is ever dropped for it.
+ * - `'shoulderSpan'` — front/ambiguous clips: `shoulderSpanAt`, resolved STRICTLY bilaterally.
+ * - `'torsoLength'` — side clips: `torsoLengthAt` (`bodyScale.ts`). Side-on the two shoulders
+ *   superimpose, so their span collapses toward zero and jitters: measured median 37 px / p5 5 px
+ *   on `park-side-landscape.mp4` and 14 px / p5 3.4 px on `park-side-portrait.mp4`, where the
+ *   shoulder-stabilized series' range inflated to 171 px against a 33 px detrended raw range.
+ *   Torso length is the pipeline's own view-safe normalizer (see `estimateBodyScale`'s doc).
+ *   `torsoLengthAt` resolves its midpoints tolerantly; side-on a single-shoulder stand-in sits
+ *   where the midpoint would, so the strictness argument below does not carry over.
+ */
+export type ArmSwingScaleProxy = 'shoulderSpan' | 'torsoLength'
+
+/**
+ * The inter-shoulder distance, resolved STRICTLY bilaterally (`resolveBilateralPair`, never
+ * `resolveMidpoint`'s single-side fallback), or `null`. A scale needs two real points — a span
+ * measured against a fabricated stand-in point is a fabricated length, the exact bug class
+ * `estimateHipWidth` and view detection's bilateral-spread signal already refuse for the same
+ * reason.
+ */
+function shoulderSpanAt(frame: RobustPoseFrame): number | null {
+  const shoulders = resolveBilateralPair(frame, 'left_shoulder', 'right_shoulder')
+  if (shoulders === null) return null
+  return distance(shoulders.left, shoulders.right)
+}
+
+const SCALE_PROXY_AT: Record<ArmSwingScaleProxy, (frame: RobustPoseFrame) => number | null> = {
+  shoulderSpan: shoulderSpanAt,
+  torsoLength: torsoLengthAt,
+}
+
+/**
+ * Builds the per-frame scale factor `f(t)` the swing series is divided by: a smoothed trend of a
+ * per-frame body-length proxy (`ArmSwingScaleProxy`), normalized so `f` reads 1 at the clip's
+ * reference (median measured) scale. Each piece is a deliberate choice:
+ *
+ * - **The proxy is a real body length or nothing.** A frame whose proxy does not resolve (or is
+ *   non-finite or non-positive) contributes no trend sample, but still gets a factor (the trend
+ *   evaluates at every timestamp), so no swing sample is ever dropped for it.
  * - **The trend is a whole-window least-squares quadratic in LOG space**,
  *   `log(spanPx) ≈ c + d·t + e·t²` with time centered at the proxy samples' mean before the basis
  *   is built — the centering `spectralFit.ts`'s module doc describes as free conditioning
  *   insurance for normal equations. Log space because
  *   scale is multiplicative — a 2× approach costs the same trend budget at any distance — and
  *   because the exponentiated trend is positive by construction, so the divisor can never cross
- *   zero. Three degrees of freedom because a 3-dof polynomial cannot represent ANY frequency in
- *   the fitted band (1.2–4 Hz over a multi-second window): the stride-rate wobble the
- *   inter-shoulder span genuinely carries (trunk counter-rotation, ~5.8% rms measured on Demo 2)
- *   structurally cannot leak into the divisor, where it would multiply straight into the swing
- *   series as in-band noise. A per-frame or heavily-smoothed divisor has no such guarantee.
+ *   zero. Three degrees of freedom because a 3-dof polynomial cannot represent an oscillation
+ *   completing a cycle or more inside the window — which every fit this module accepts does: the
+ *   stride-rate wobble the inter-shoulder span genuinely carries (trunk counter-rotation, ~5.8% rms
+ *   measured on Demo 2), or the step-rate flex of the torso, structurally cannot leak into the
+ *   divisor, where it would multiply straight into the swing series as in-band noise. A per-frame
+ *   or heavily-smoothed divisor has no such guarantee.
  * - **`f(t) = exp(trend(t)) / referencePx`**, where `referencePx` is the median of the measured
  *   per-frame proxies — so the divided series stays in PIXELS, at the clip's reference scale,
- *   rather than becoming a dimensionless shoulder-span multiple with different downstream units.
+ *   rather than becoming a dimensionless body-length multiple with different downstream units.
  * - **Evaluation time is clamped into the fitted proxy window; the factor's VALUE is not.**
  *   Inside the window the exponentiated fit stays within the data's own range — but a frame whose
  *   own proxy is missing can sit OUTSIDE the window (a far shoulder unresolvable at the clip's
@@ -215,21 +300,22 @@ function solveTrendSystem(
  *   interpolation of measured data. There is still no clamp on `f(t)` itself: the fallback
  *   ladder below guards the degenerate cases a value clamp would otherwise paper over.
  *
- * Fallback ladder — every rung returns the CONSTANT 1 (an exact no-op, not an approximate one):
- * fewer than `MIN_SCALE_TREND_SAMPLES` frames with a usable bilateral proxy; a trend system too
+ * Fallback ladder — every rung returns the CONSTANT 1 (an exact no-op, not an approximate one),
+ * whichever proxy is in use: fewer than `MIN_SCALE_TREND_SAMPLES` frames with a usable proxy; a trend system too
  * singular to solve (e.g. all proxy samples at one timestamp); a fitted trend flat to within
  * `FLAT_TREND_LOG_RANGE` (see that constant for why this rung is what makes the constant-scale
  * no-op exact); a non-finite or non-positive factor at evaluation time (unreachable from a solved
  * fit over real input, guarded per the "never NaN" contract).
  */
-function resolveScaleStabilizer(frames: RobustPoseFrame[]): (timestampSeconds: number) => number {
+function resolveScaleStabilizer(
+  frames: RobustPoseFrame[],
+  proxyLengthAt: (frame: RobustPoseFrame) => number | null,
+): (timestampSeconds: number) => number {
   const times: number[] = []
   const spans: number[] = []
   for (const frame of frames) {
-    const shoulders = resolveBilateralPair(frame, 'left_shoulder', 'right_shoulder')
-    if (shoulders === null) continue
-    const span = distance(shoulders.left, shoulders.right)
-    if (!Number.isFinite(span) || span <= 0) continue
+    const span = proxyLengthAt(frame)
+    if (span === null || !Number.isFinite(span) || span <= 0) continue
     times.push(frame.timestamp)
     spans.push(span)
   }
@@ -333,18 +419,31 @@ export interface SideSwing {
    * reference scale (see `resolveScaleStabilizer`), `null` where it did not resolve, index-
    * parallel to `frames` — the shape `resolvedSpanCenter` reads. */
   seriesY: Array<number | null>
-  /** The spectral fit of that trace, over the shared bounce-frequency grid. */
+  /** The spectral fit of that trace, over the stride-rate-anchored grid. Its FUNDAMENTAL is what
+   * the shared gates read; its peak-to-peak is not the published size (see `travelPx`). */
   fit: SpectralFitResult
+  /** The wrist's per-stride travel in the same px as `seriesY` — see `perStrideTravel`. `null`
+   * whenever `fit` failed or the usable span holds fewer than `MIN_ARM_SWING_CYCLES` complete
+   * stride periods (`strideCycles`). */
+  travelPx: number | null
+  /** Complete-or-partial stride periods in the usable span — `spanSeconds × strideHz`, fractional,
+   * `0` with fewer than two usable samples. The cycle count the travel's ≥ 2 floor and the
+   * metric's confidence read, rather than the fit's own `observedCycles`, because the hip anchor
+   * determines the stride period far better than a ±20% arm grid narrower than the window's own
+   * frequency resolution can. */
+  strideCycles: number
   /** Frames where this side's shoulder AND wrist both resolved. */
   resolvedCount: number
-  /** Of resolvedCount, how many had either point flagged interpolated. */
+  /** Of resolvedCount, how many had either point flagged interpolated. `resolvedCount −
+   * interpolatedCount` is the side's directly-detected frame count, which is how a side-view
+   * caller tells the near arm from the occluded far one. */
   interpolatedCount: number
 }
 
 /**
  * Per-side wrist-relative-to-shoulder vertical (image-y) excursion, read as a spectral sinusoid
- * fit via the shared `fitSpectralSinusoid` primitive — the same estimator, over the same frequency
- * grid, that `verticalOscillation` and `cadence` read their own rhythms with.
+ * fit via the shared `fitSpectralSinusoid` primitive — the same estimator `verticalOscillation` and
+ * `cadence` read their own rhythms with, over a grid anchored on the clip's stride rate (below).
  *
  * Vertical, not horizontal or angular, and wrist rather than elbow, per design.md's original
  * reasoning: the sagittal shoulder-flexion rotation that drives arm swing is foreshortened face-on
@@ -353,8 +452,9 @@ export interface SideSwing {
  * most distal available point — inherits the largest version of it. That input signal is unchanged;
  * only how an amplitude is read off it changed.
  *
- * Each sample is divided by the clip's smoothed inter-shoulder scale trend before the fit — the
- * module doc's "Scale stabilization" section says why, `resolveScaleStabilizer` says how. The
+ * Each sample is divided by the clip's smoothed body-length scale trend before the fit, over the
+ * proxy the caller names (`options.scaleProxy`) — the module doc's "Scale stabilization" section
+ * says why, `resolveScaleStabilizer` says how. The
  * division changes sample VALUES only: the series' null pattern, `resolvedCount` and
  * `interpolatedCount` are exactly what the raw series produces, because the trend evaluates at
  * every timestamp whether or not that frame's own proxy resolved.
@@ -378,23 +478,29 @@ export interface SideSwing {
  * primitive: the trend terms absorb whole-body drift instead of charging it to the swing, and the
  * fitted frequency is a rhythm rather than a count of whichever wiggles cleared a threshold.
  *
- * The frequency grid is deliberately the SHARED bounce band, not a halved "stride band", even
- * though one arm swing spans one stride and therefore sits at half the step rate. Measured both
- * ways on all three clips: on Demo 2 — the only clip where this metric is primary — the two bands
- * agree to within one grid step (1.48/1.48 Hz left, 1.52/1.53 Hz right, amplitudes within 0.3%)
- * while the halved band's `secondPeakRatio` is strictly worse (0.13 -> 0.25 left, 0.31 -> 0.69
- * right); and on both side-view clips the halved band lands on its own grid FLOOR (0.60 Hz at 1.02
- * and 1.25 observed cycles) — a grid-edge artifact, not a rhythm. The real limitation this leaves
- * is recorded on the exported function below.
+ * ## The frequency grid is anchored on the clip's stride rate
+ *
+ * The grid is `[(1 − ARM_SWING_BAND_HALF_WIDTH), (1 + ARM_SWING_BAND_HALF_WIDTH)] × strideHz` at
+ * `ARM_SWING_BAND_STEP_FRACTION × strideHz` (`resolveStrideRateHz` supplies the anchor;
+ * `measure-arm-swing-travel-at-stride-rate` design D1). It used to be the SHARED bounce band
+ * (1.2–4.0 Hz) — the STEP band — which has no candidate for a runner below 144 spm, none at all
+ * for a retimed slow-motion clip (~0.2 Hz on `park-side-portrait.mp4`), and always offers the 2×
+ * step-rate component as a rival.
+ *
+ * A FIXED halved band (0.6–2.0 Hz) was measured and rejected on 2026-08-29: both side-view clips
+ * landed on its 0.60 Hz floor, a grid-edge artifact. That record does not transfer to an ANCHORED
+ * band, which cannot offer 0.6 Hz to a 1.45 Hz stride at all; nor does the `secondPeakRatio`
+ * comparison made then — nothing on the arm path reads it, and inside a ±20% band its exclusion
+ * zone covers most of the grid.
  */
 export function computeSideSwing(
   frames: RobustPoseFrame[],
   side: 'left' | 'right',
-  config: HeuristicsConfig,
+  options: { strideHz: number; scaleProxy: ArmSwingScaleProxy },
 ): SideSwing {
   let resolvedCount = 0
   let interpolatedCount = 0
-  const scaleFactorAt = resolveScaleStabilizer(frames)
+  const scaleFactorAt = resolveScaleStabilizer(frames, SCALE_PROXY_AT[options.scaleProxy])
 
   const seriesY = frames.map((frame) => {
     const shoulder = resolvePoint(frame, SHOULDER_NAME[side])
@@ -410,14 +516,135 @@ export function computeSideSwing(
     if (v !== null) samples.push({ t: frames[i].timestamp, v })
   })
 
+  const { strideHz } = options
   const fit = fitSpectralSinusoid(samples, {
-    minFrequencyHz: config.spectralFitMinFrequencyHz,
-    maxFrequencyHz: config.spectralFitMaxFrequencyHz,
-    frequencyStepHz: config.spectralFitFrequencyStepHz,
+    minFrequencyHz: (1 - ARM_SWING_BAND_HALF_WIDTH) * strideHz,
+    maxFrequencyHz: (1 + ARM_SWING_BAND_HALF_WIDTH) * strideHz,
+    frequencyStepHz: ARM_SWING_BAND_STEP_FRACTION * strideHz,
   })
 
-  return { seriesY, fit, resolvedCount, interpolatedCount }
+  const travel = perStrideTravel(samples, fit, strideHz)
+  return { seriesY, fit, ...travel, resolvedCount, interpolatedCount }
 }
+
+/** Fewest samples a stride window must hold for its max − min to be read at all. */
+const MIN_TRAVEL_WINDOW_SAMPLES = 3
+
+/** Hampel spike guard: a sample is replaced by its local median only when it sits more than
+ * `HAMPEL_K` scaled MADs from it, over `±HAMPEL_HALF_WIDTH` consecutive usable samples. Half-width 2
+ * removes runs of up to two outlying samples; `k = 3` is the conventional outlier threshold, far
+ * enough out that a clean extremum — even sampled at ~26 Hz on a ~1.5 Hz swing — is never touched. */
+const HAMPEL_HALF_WIDTH = 2
+const HAMPEL_K = 3
+/** MAD → standard deviation for Gaussian noise, so `HAMPEL_K` reads in sigmas. */
+const MAD_TO_SIGMA = 1.4826
+
+/** Sliding stride windows start every quarter period, so the leftover fraction of a cycle past the
+ * last whole stride still contributes and the median runs over several overlapping looks at each
+ * swing rather than one or two disjoint ones. */
+const TRAVEL_WINDOW_STEP_FRACTION = 0.25
+
+/** Slack on "the window fits inside the span", for frame timestamps that are not exact binary
+ * fractions — same reasoning and quantum as `bodyScale.ts`'s window boundary. */
+const WINDOW_FIT_EPSILON_SECONDS = 1e-6
+
+function hampelFilter(values: readonly number[]): number[] {
+  return values.map((value, i) => {
+    const window = values.slice(
+      Math.max(0, i - HAMPEL_HALF_WIDTH),
+      Math.min(values.length, i + HAMPEL_HALF_WIDTH + 1),
+    )
+    const center = median(window)
+    const scale = MAD_TO_SIGMA * median(window.map((v) => Math.abs(v - center)))
+    return Math.abs(value - center) > HAMPEL_K * scale ? center : value
+  })
+}
+
+/**
+ * How far the wrist travels in one stride — the published size — read off the series rather than
+ * off the fit's fundamental (`measure-arm-swing-travel-at-stride-rate` design D2).
+ *
+ * A real arm-swing trace is not a sinusoid: the wrist dwells near one end, or reverses at a cusp,
+ * and the fundamental of such a waveform carries only part of its range (a triangle's fundamental
+ * is `8/π²` ≈ 81% of it; on Demo 2 the right arm's fitted 0.159 torso sat against a detrended
+ * visible range of 0.218–0.300). The fit stays the right tool for FINDING the rhythm and gating on
+ * it; this is the size:
+ *
+ * 1. Remove the quadratic trend fitted JOINTLY with the sinusoid at `f*` (`fitTrendAtFrequency`) —
+ *    exactly the drift the fit already refused to charge to the swing.
+ * 2. Hampel spike guard over consecutive usable samples (`HAMPEL_HALF_WIDTH`, `HAMPEL_K`): a
+ *    single-frame glitch would otherwise be reported in full by a range, while a clean extremum —
+ *    which sits well inside its neighbours' spread — is left exactly as sampled.
+ * 3. Windows one STRIDE long, `1/strideHz` — the hip anchor's period, not the fit's `1/f*`: the ±20%
+ *    arm grid is narrower than the window's own `1/span` frequency resolution on every measured
+ *    clip, so `f*` is weakly determined inside it while the hip bounce is not. Windows slide by a
+ *    quarter period across the usable span, each lying wholly inside it. Each holds one full swing
+ *    whatever its phase, and step-rate content inside it is real wrist-relative-to-shoulder travel
+ *    (the torso's own step bounce cancels in wrist − shoulder) — counted on purpose.
+ * 4. Median over windows of `max − min`. `null` unless the span holds at least
+ *    `MIN_ARM_SWING_CYCLES` complete stride periods: with one, a single max − min carries every
+ *    per-frame tracking excursion in it undiluted (measured: `park-side-portrait.mp4`'s 1.9-stride
+ *    window read 0.43 torso against ~0.30 visible in keyframes).
+ *
+ * Known bias, stated rather than corrected: a range over discrete samples reads a sinusoid low by
+ * at most `1 − cos(π f / fs)` (the extremum falling midway between two samples) and a cusp by at
+ * most `2 f / fs`; the Hampel guard adds nothing to either on a clean swing. Measured at the live
+ * operating point (~26 Hz effective, 1.45 Hz stride, 20 sampling phases): a sinusoid reads 0.2–0.7%
+ * low, a triangle 3.6–7.4% low. Tracking jitter biases a range the other way, upward. Rejected: a multi-harmonic fit — a triangle needs harmonics to ~7–9 to come
+ * within 5%, i.e. 17–21 parameters over ~100 samples near Nyquist.
+ */
+function perStrideTravel(
+  samples: ReadonlyArray<SpectralSample>,
+  fit: SpectralFitResult,
+  strideHz: number,
+): { travelPx: number | null; strideCycles: number } {
+  const usable = samples
+    .filter((sample) => Number.isFinite(sample.t) && Number.isFinite(sample.v))
+    .sort((a, b) => a.t - b.t)
+  const spanSeconds = usable.length < 2 ? 0 : usable[usable.length - 1].t - usable[0].t
+  const strideCycles = spanSeconds * strideHz
+  const none = { travelPx: null, strideCycles }
+
+  if (!fit.ok || strideCycles < MIN_ARM_SWING_CYCLES) return none
+  const trend = fitTrendAtFrequency(usable, fit.frequencyHz)
+  if (trend === null) return none
+
+  const filtered = hampelFilter(
+    usable.map(({ t, v }) => {
+      const centered = t - trend.tMeanSeconds
+      return v - (trend.offset + trend.linear * centered + trend.quadratic * centered * centered)
+    }),
+  )
+
+  const periodSeconds = 1 / strideHz
+  const lastT = usable[usable.length - 1].t
+  const travels: number[] = []
+  for (
+    let start = usable[0].t;
+    start + periodSeconds <= lastT + WINDOW_FIT_EPSILON_SECONDS;
+    start += TRAVEL_WINDOW_STEP_FRACTION * periodSeconds
+  ) {
+    const end = start + periodSeconds
+    let low = Infinity
+    let high = -Infinity
+    let count = 0
+    usable.forEach(({ t }, i) => {
+      if (t < start || t >= end) return
+      count += 1
+      low = Math.min(low, filtered[i])
+      high = Math.max(high, filtered[i])
+    })
+    if (count >= MIN_TRAVEL_WINDOW_SAMPLES) travels.push(high - low)
+  }
+
+  if (travels.length === 0) return none
+  const travelPx = median(travels)
+  return { travelPx: Number.isFinite(travelPx) ? travelPx : null, strideCycles }
+}
+
+/** The true cause when a fitted arm has no travel: the clip holds too few complete strides to size
+ * a swing from — not "too short for one cycle", which a 1.5-stride clip is not. */
+export const TOO_FEW_SWINGS_CAVEAT = `Arm positions were tracked, but the clip holds fewer than ${MIN_ARM_SWING_CYCLES} complete arm swings, too few to measure their size from.`
 
 export function caveatForFailure(reason: SpectralFitFailureReason, sampleCount: number): string {
   switch (reason) {
@@ -431,17 +658,18 @@ export function caveatForFailure(reason: SpectralFitFailureReason, sampleCount: 
 }
 
 /**
- * One ghosted pair per side: the wrist at the top and the bottom of ONE fitted half-swing, half a
- * fitted period apart by construction.
+ * One ghosted pair per MEASURED arm: the wrist at the top and the bottom of ONE fitted half-swing,
+ * half a fitted period apart by construction — two pairs for a both-arms reading, the near arm's
+ * alone from the side.
  *
- * Two of them, one per arm, is what makes the measurement legible as a picture — each pair spans
- * the very excursion the reported amplitude is taken over, so the whole two-exemplar budget goes
- * to one pair per arm rather than to two views of one arm.
+ * The pair sits at the FUNDAMENTAL's fitted extremes, not at the travel's max and min, so it can
+ * span somewhat less than the reported per-stride travel (`perStrideTravel`), which also counts the
+ * swing's harmonic shape. It depicts the swing; the number beside it is its full travel.
  *
  * **The instants come from the fitted PHASE, never from a scan of the raw trace**, and the pair is
  * resolved by the same `selectBounceInstants` the vertical-oscillation family uses — see that
- * module's doc for why (an exemplar scanned off the raw trace depicts drift and jitter the reported
- * amplitude explicitly excludes, so the picture would contradict the number printed beside it). It
+ * module's doc for why (an exemplar scanned off the raw trace depicts drift the reported travel
+ * explicitly removes, and a scan's extremum pair need not lie one half-swing apart). It
  * is also the whole point of this change: the previous exemplar was whichever raw extremum pair sat
  * nearest the median amplitude, which on Demo 2 put a *left* pair 0.5005 s apart — one and a half
  * half-cycles — under a caption promising one swing.

@@ -1205,7 +1205,9 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     remediation: [],
     captureHints: {
       wrongAngle:
-        "Film from directly in front of or behind the runner. From the side, the far arm is hidden behind the body, so only one arm's swing can be seen.",
+        // Side-on is tolerated now (the near arm is read alone, strides-eiil.3); only an angled,
+        // ambiguous view is unsuitable.
+        "Film square to the runner's line of travel — from in front or behind to read both arms; from the side only the near arm is read. At an angle the arms overlap the body and neither swing can be measured cleanly.",
       notEnoughData: NOT_ENOUGH_DATA_HINT,
     },
     remediationIntro: null,

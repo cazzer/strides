@@ -489,3 +489,79 @@ export function fitSpectralSinusoidWithBandPower(
     },
   }
 }
+
+/**
+ * The polynomial trend of the fit at ONE frequency: `offset + linear·(t − tMeanSeconds) +
+ * quadratic·(t − tMeanSeconds)²`, in the input's own units and clock.
+ */
+export interface SpectralTrend {
+  tMeanSeconds: number
+  offset: number
+  linear: number
+  quadratic: number
+}
+
+/**
+ * The `c + d·t + e·t²` trend of the five-column model `fitSpectralSinusoid` solves, solved at the
+ * single given frequency — so a caller that wants the oscillation's own shape (not just the
+ * fundamental's amplitude) can remove exactly the drift the fit refused to charge to it. Same
+ * filtering, sorting, centering and solver as the grid loop: at a `frequencyHz` taken from a fit's
+ * own `frequencyHz`, the coefficients are the very ones that fit's winning candidate was solved
+ * with.
+ *
+ * A separate entry point rather than a field on `SpectralFitSuccess`, for the same reason
+ * `fitSpectralSinusoidWithBandPower` is one: every existing caller keeps the object it already
+ * had, byte for byte (`verticalOscillation` passes its whole fit into diagnostics).
+ *
+ * `null` — never a NaN-laden trend — whenever the fit itself would refuse to solve: fewer than
+ * `MIN_SPECTRAL_FIT_SAMPLES` usable samples, a zero time span, a non-positive or non-finite
+ * frequency, or a singular system.
+ */
+export function fitTrendAtFrequency(
+  samples: ReadonlyArray<SpectralSample>,
+  frequencyHz: number,
+): SpectralTrend | null {
+  const usable = samples
+    .filter((s) => Number.isFinite(s.t) && Number.isFinite(s.v))
+    .sort((a, b) => a.t - b.t)
+
+  const sampleCount = usable.length
+  if (sampleCount < MIN_SPECTRAL_FIT_SAMPLES) return null
+  if (!(usable[sampleCount - 1].t - usable[0].t > 0)) return null
+  if (!(frequencyHz > 0) || !Number.isFinite(frequencyHz)) return null
+
+  let tSum = 0
+  let vSum = 0
+  for (const sample of usable) {
+    tSum += sample.t
+    vSum += sample.v
+  }
+  const tMean = tSum / sampleCount
+  const vMean = vSum / sampleCount
+
+  const centeredValues = new Float64Array(sampleCount)
+  const ones = new Float64Array(sampleCount)
+  const linear = new Float64Array(sampleCount)
+  const quadratic = new Float64Array(sampleCount)
+  const sineColumn = new Float64Array(sampleCount)
+  const cosineColumn = new Float64Array(sampleCount)
+  const omega = 2 * Math.PI * frequencyHz
+  for (let i = 0; i < sampleCount; i += 1) {
+    const t = usable[i].t - tMean
+    centeredValues[i] = usable[i].v - vMean
+    ones[i] = 1
+    linear[i] = t
+    quadratic[i] = t * t
+    sineColumn[i] = Math.sin(omega * t)
+    cosineColumn[i] = Math.cos(omega * t)
+  }
+
+  const fit = solveLeastSquares(
+    [sineColumn, cosineColumn, ones, linear, quadratic],
+    centeredValues,
+  )
+  if (fit === null) return null
+
+  const [, , c, d, e] = fit.coefficients
+  return { tMeanSeconds: tMean, offset: vMean + c, linear: d, quadratic: e }
+}

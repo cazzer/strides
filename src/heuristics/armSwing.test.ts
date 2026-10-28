@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { buildSideExemplar, caveatForFailure, computeSideSwing } from './armSwing'
+import {
+  ARM_SWING_BAND_HALF_WIDTH,
+  ARM_SWING_BAND_STEP_FRACTION,
+  buildSideExemplar,
+  caveatForFailure,
+  computeSideSwing,
+  resolveStrideRateHz,
+} from './armSwing'
 import { buildFrame } from './__fixtures__/testFrames'
 import { findLocalExtrema } from './extrema'
 import { fitSpectralSinusoid } from './spectralFit'
@@ -89,6 +96,13 @@ function buildArmSwingFrames(params: {
    * hand-computable. `1` (the default) is bit-identical to the ungrown fixture.
    */
   scaleGrowthFactor?: number
+  /**
+   * Peak-to-trough whole-body vertical bounce, px, at TWICE `swingFreqHz` (one bounce per step, two
+   * steps per stride), added identically to EVERY keypoint — so wrist−shoulder, shoulder span and
+   * torso length are untouched by it, and the only thing it adds is a hip rhythm for
+   * `resolveStrideRateHz` to anchor the arm search on. `0` keeps the hips motionless. Default `0`
+   * here: this suite hands `computeSideSwing` its stride rate directly. */
+  bounceAmplitudePx?: number
   seed?: number
 }): RobustPoseFrame[] {
   const {
@@ -101,6 +115,7 @@ function buildArmSwingFrames(params: {
     rightJitterPx = 0,
     harmonicRatio = 0,
     scaleGrowthFactor = 1,
+    bounceAmplitudePx = 0,
     seed = 1,
   } = params
   const frameCount = Math.round(durationSec * fps)
@@ -113,6 +128,7 @@ function buildArmSwingFrames(params: {
     const g = Math.pow(scaleGrowthFactor, t / durationSec)
     const phase = 2 * Math.PI * swingFreqHz * t
     const harmonic = 2 * Math.PI * 2 * swingFreqHz * t
+    const bounceY = (bounceAmplitudePx / 2) * Math.sin(harmonic)
     const leftShoulderX = bodyCenterX - (bodyCenterX - LEFT_SHOULDER_X) * g
     const rightShoulderX = bodyCenterX + (RIGHT_SHOULDER_X - bodyCenterX) * g
     const leftWristY =
@@ -131,12 +147,18 @@ function buildArmSwingFrames(params: {
     frames.push(
       buildFrame(
         {
-          left_shoulder: { x: leftShoulderX, y: SHOULDER_Y },
-          right_shoulder: { x: rightShoulderX, y: SHOULDER_Y },
-          left_hip: { x: bodyCenterX - (bodyCenterX - LEFT_HIP_X) * g, y: SHOULDER_Y + TORSO_LENGTH_PX * g },
-          right_hip: { x: bodyCenterX + (RIGHT_HIP_X - bodyCenterX) * g, y: SHOULDER_Y + TORSO_LENGTH_PX * g },
-          left_wrist: { x: leftShoulderX, y: leftWristY },
-          right_wrist: { x: rightShoulderX, y: rightWristY },
+          left_shoulder: { x: leftShoulderX, y: SHOULDER_Y + bounceY },
+          right_shoulder: { x: rightShoulderX, y: SHOULDER_Y + bounceY },
+          left_hip: {
+            x: bodyCenterX - (bodyCenterX - LEFT_HIP_X) * g,
+            y: SHOULDER_Y + TORSO_LENGTH_PX * g + bounceY,
+          },
+          right_hip: {
+            x: bodyCenterX + (RIGHT_HIP_X - bodyCenterX) * g,
+            y: SHOULDER_Y + TORSO_LENGTH_PX * g + bounceY,
+          },
+          left_wrist: { x: leftShoulderX, y: leftWristY + bounceY },
+          right_wrist: { x: rightShoulderX, y: rightWristY + bounceY },
         },
         t,
       ),
@@ -153,8 +175,19 @@ const BASE_PARAMS = {
 
 const SIDES = ['left', 'right'] as const
 
+/** Every fixture below swings at `BASE_PARAMS.swingFreqHz` unless it says otherwise, so the stride
+ * rate `computeSideSwing` is anchored on is that same frequency. */
+const AT_STRIDE = { strideHz: BASE_PARAMS.swingFreqHz, scaleProxy: 'shoulderSpan' as const }
+
+/** The anchored grid `computeSideSwing` searches, restated for the raw-pixel reference fits. */
+const ANCHORED_GRID = {
+  minFrequencyHz: (1 - ARM_SWING_BAND_HALF_WIDTH) * AT_STRIDE.strideHz,
+  maxFrequencyHz: (1 + ARM_SWING_BAND_HALF_WIDTH) * AT_STRIDE.strideHz,
+  frequencyStepHz: ARM_SWING_BAND_STEP_FRACTION * AT_STRIDE.strideHz,
+}
+
 function fittedAmplitude(frames: RobustPoseFrame[], side: 'left' | 'right'): number {
-  const fit = computeSideSwing(frames, side, DEFAULT_HEURISTICS_CONFIG).fit
+  const fit = computeSideSwing(frames, side, AT_STRIDE).fit
   if (!fit.ok) throw new Error(`fixture must fit on the ${side} side`)
   return fit.peakToPeakAmplitude
 }
@@ -174,17 +207,13 @@ function rawPixelAmplitude(frames: RobustPoseFrame[], side: 'left' | 'right'): n
     if (shoulder.y === null || wrist.y === null) return []
     return [{ t: frame.timestamp, v: wrist.y - shoulder.y }]
   })
-  const fit = fitSpectralSinusoid(samples, {
-    minFrequencyHz: DEFAULT_HEURISTICS_CONFIG.spectralFitMinFrequencyHz,
-    maxFrequencyHz: DEFAULT_HEURISTICS_CONFIG.spectralFitMaxFrequencyHz,
-    frequencyStepHz: DEFAULT_HEURISTICS_CONFIG.spectralFitFrequencyStepHz,
-  })
+  const fit = fitSpectralSinusoid(samples, ANCHORED_GRID)
   if (!fit.ok) throw new Error(`fixture must fit on the ${side} side`)
   return fit.peakToPeakAmplitude
 }
 
 function sideExemplar(frames: RobustPoseFrame[], side: 'left' | 'right'): MetricExemplar {
-  const swing = computeSideSwing(frames, side, DEFAULT_HEURISTICS_CONFIG)
+  const swing = computeSideSwing(frames, side, AT_STRIDE)
   const exemplars = buildSideExemplar(side, swing, frames)
   expect(exemplars).toHaveLength(1)
   return exemplars[0]
@@ -206,6 +235,354 @@ function wristBelowShoulderPx(
   return at(`${side}_wrist`) - at(`${side}_shoulder`)
 }
 
+/**
+ * The grid is anchored on the clip's stride rate (`strides-eiil.1`, design D1): the shared bounce
+ * band (1.2–4.0 Hz) is the STEP band, which has no candidate for a slow-cadence or retimed clip's
+ * arm swing and always offers the step rate as a rival.
+ */
+describe('computeSideSwing — searched around the stride rate', () => {
+  for (const swingFreqHz of [1.0, 1.1]) {
+    it(`recovers a ${swingFreqHz} Hz swing — below the bounce band's 1.2 Hz floor`, () => {
+      const frames = buildArmSwingFrames({
+        ...BASE_PARAMS,
+        swingFreqHz,
+        leftAmplitudePx: 40,
+        rightAmplitudePx: 40,
+      })
+
+      for (const side of SIDES) {
+        const { fit } = computeSideSwing(frames, side, { strideHz: swingFreqHz, scaleProxy: 'shoulderSpan' })
+        expect(fit.ok).toBe(true)
+        if (fit.ok) {
+          expect(Math.abs(fit.frequencyHz - swingFreqHz)).toBeLessThanOrEqual(
+            ARM_SWING_BAND_STEP_FRACTION * swingFreqHz + 1e-9,
+          )
+          expect(fit.peakToPeakAmplitude).toBeCloseTo(40, 0)
+        }
+      }
+    })
+  }
+
+  it('recovers a retimed clip’s 0.2 Hz swing over 12 s, at the same relative grid resolution', () => {
+    const frames = buildArmSwingFrames({
+      durationSec: 12,
+      fps: 30,
+      swingFreqHz: 0.2,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 40,
+    })
+
+    const { fit } = computeSideSwing(frames, 'left', { strideHz: 0.2, scaleProxy: 'shoulderSpan' })
+    expect(fit.ok).toBe(true)
+    if (fit.ok) {
+      expect(Math.abs(fit.frequencyHz - 0.2)).toBeLessThanOrEqual(
+        ARM_SWING_BAND_STEP_FRACTION * 0.2 + 1e-9,
+      )
+      expect(fit.peakToPeakAmplitude).toBeCloseTo(40, 0)
+    }
+  })
+
+  it('cannot choose a larger step-rate component — the step rate is off the grid', () => {
+    // A small stride-rate swing under a component at twice that rate, twice its size. The old
+    // bounce-band grid takes the step rate; the anchored one cannot offer it.
+    const frames = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 10,
+      rightAmplitudePx: 10,
+      harmonicRatio: 2,
+    })
+    const samples = frames.map((frame) => {
+      const at = (name: string) => frame.keypoints.find((kp) => kp.name === name)!.y!
+      return { t: frame.timestamp, v: at('left_wrist') - at('left_shoulder') }
+    })
+    const bounceBand = fitSpectralSinusoid(samples, {
+      minFrequencyHz: DEFAULT_HEURISTICS_CONFIG.spectralFitMinFrequencyHz,
+      maxFrequencyHz: DEFAULT_HEURISTICS_CONFIG.spectralFitMaxFrequencyHz,
+      frequencyStepHz: DEFAULT_HEURISTICS_CONFIG.spectralFitFrequencyStepHz,
+    })
+    const anchored = computeSideSwing(frames, 'left', AT_STRIDE).fit
+
+    expect(bounceBand.ok && bounceBand.frequencyHz).toBeCloseTo(2 * BASE_PARAMS.swingFreqHz, 1)
+    expect(anchored.ok).toBe(true)
+    if (anchored.ok) {
+      expect(anchored.frequencyHz).toBeGreaterThanOrEqual(
+        (1 - ARM_SWING_BAND_HALF_WIDTH) * BASE_PARAMS.swingFreqHz - 1e-9,
+      )
+      expect(anchored.frequencyHz).toBeLessThanOrEqual(
+        (1 + ARM_SWING_BAND_HALF_WIDTH) * BASE_PARAMS.swingFreqHz + 1e-9,
+      )
+    }
+  })
+})
+
+describe('resolveStrideRateHz', () => {
+  it('is half the hip-bounce frequency', () => {
+    const frames = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 40,
+      bounceAmplitudePx: 10,
+    })
+
+    // The bounce grid steps 0.02 Hz, so half of it lands within 0.01 Hz of the true stride rate.
+    expect(resolveStrideRateHz(frames, DEFAULT_HEURISTICS_CONFIG)).toBeCloseTo(
+      BASE_PARAMS.swingFreqHz,
+      1,
+    )
+  })
+
+  it('follows a retimed clip below the human-gait floor, via the sub-floor bounce pass', () => {
+    const frames = buildArmSwingFrames({
+      durationSec: 12,
+      fps: 30,
+      swingFreqHz: 0.2,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 40,
+      bounceAmplitudePx: 10,
+    })
+
+    const strideHz = resolveStrideRateHz(frames, DEFAULT_HEURISTICS_CONFIG)
+    expect(strideHz).not.toBeNull()
+    expect(Math.abs(strideHz! - 0.2)).toBeLessThan(0.02)
+  })
+
+  it('is null when the hips never bounce — no rhythm to anchor on', () => {
+    const frames = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 40,
+    })
+
+    expect(resolveStrideRateHz(frames, DEFAULT_HEURISTICS_CONFIG)).toBeNull()
+  })
+
+  it('is null below cadenceMinFitR2 — the gate cadence trusts the same fit on', () => {
+    const frames = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 40,
+      bounceAmplitudePx: 10,
+    })
+
+    expect(
+      resolveStrideRateHz(frames, { ...DEFAULT_HEURISTICS_CONFIG, cadenceMinFitR2: 1.01 }),
+    ).toBeNull()
+  })
+})
+
+/**
+ * Both wrists following an arbitrary wrist-below-shoulder waveform under a fixed-size body, so the
+ * scale stabilizer is an exact no-op and `travelPx` can be compared with the waveform's own
+ * peak-to-trough travel directly.
+ */
+function framesFromWave(params: {
+  durationSec: number
+  fps: number
+  wave: (t: number, i: number) => number
+}): RobustPoseFrame[] {
+  const frameCount = Math.round(params.durationSec * params.fps)
+  return Array.from({ length: frameCount }, (_, i) => {
+    const t = i / params.fps
+    const wristY = SHOULDER_Y + BASE_WRIST_OFFSET_Y + params.wave(t, i)
+    return buildFrame(
+      {
+        left_shoulder: { x: LEFT_SHOULDER_X, y: SHOULDER_Y },
+        right_shoulder: { x: RIGHT_SHOULDER_X, y: SHOULDER_Y },
+        left_hip: { x: LEFT_HIP_X, y: SHOULDER_Y + TORSO_LENGTH_PX },
+        right_hip: { x: RIGHT_HIP_X, y: SHOULDER_Y + TORSO_LENGTH_PX },
+        left_wrist: { x: LEFT_SHOULDER_X, y: wristY },
+        right_wrist: { x: RIGHT_SHOULDER_X, y: wristY },
+      },
+      t,
+    )
+  })
+}
+
+function travelOf(frames: RobustPoseFrame[], strideHz: number): number {
+  const swing = computeSideSwing(frames, 'left', { strideHz, scaleProxy: 'shoulderSpan' })
+  if (swing.travelPx === null) throw new Error('fixture must yield a travel')
+  return swing.travelPx
+}
+
+const TAU = 2 * Math.PI
+
+/**
+ * The live operating point: side-on clips are detected at ~26 Hz effective (multiperson: 103
+ * detected frames over 3.88 s), a ~1.45 Hz stride — ~18 samples per swing.
+ */
+const LIVE_FPS = 103 / 3.88
+const LIVE_STRIDE_HZ = 1.45
+
+/** Sampled at `fs`, a range reads a sinusoid at most `1 − cos(π f / fs)` low (an extremum falling
+ * midway between two samples) and a cusp at most `2 f / fs` low. */
+const sineSamplingFloor = (f: number, fs: number) => Math.cos((Math.PI * f) / fs)
+const cuspSamplingFloor = (f: number, fs: number) => 1 - (2 * f) / fs
+
+/**
+ * The trend is fitted jointly with the FUNDAMENTAL, so on a non-sinusoidal swing a sliver of its
+ * harmonic shape leaks into the removed trend — measured ≤ 0.2% of the travel on these fixtures.
+ */
+const TREND_LEAK = 1.005
+
+/**
+ * The published size is the wrist's per-stride TRAVEL, not the fitted fundamental's peak-to-peak
+ * (`strides-eiil.2`, design D2): Hampel-guarded, windows one hip-anchored stride long sliding by a
+ * quarter period, median of max − min, and nothing at all under two complete strides.
+ */
+describe('computeSideSwing — per-stride travel', () => {
+  for (const [label, fps, f] of [
+    ['60 fps', 60, 1.0],
+    ['the live ~26 Hz', LIVE_FPS, LIVE_STRIDE_HZ],
+  ] as const) {
+    it(`a pure sinusoid reads its own peak-to-peak at ${label}, within the sampling bound`, () => {
+      const frames = framesFromWave({ durationSec: 4, fps, wave: (t) => 20 * Math.sin(TAU * f * t) })
+
+      const travel = travelOf(frames, f)
+
+      expect(travel).toBeGreaterThanOrEqual(40 * sineSamplingFloor(f, fps) - 1e-9)
+      expect(travel).toBeLessThanOrEqual(40 + 1e-9)
+    })
+
+    it(`a sampled extremum is NOT clipped by the spike guard at ${label}`, () => {
+      // A sample lands exactly on each extreme (phase 0 at t = 0, quarter period on a sample at
+      // 60 fps; at the live rate the nearest one), so any extremum clipping shows as a shortfall
+      // against the samples' own range — which is what the travel must equal here.
+      const wave = (t: number) => 20 * Math.sin(TAU * f * t)
+      const frames = framesFromWave({ durationSec: 4, fps, wave })
+      const values = frames.map((frame) => frame.timestamp).map(wave)
+      const sampledRange = Math.max(...values) - Math.min(...values)
+
+      expect(travelOf(frames, f)).toBeGreaterThan(sampledRange * 0.995)
+    })
+
+    it(`a cusp-shaped (triangle) swing reads its travel within the cusp bound at ${label}`, () => {
+      // A triangle's fundamental is 8/π² ≈ 81% of its range.
+      const triangle = (t: number) => {
+        const p = (((t * f) % 1) + 1) % 1
+        return 20 * (p < 0.5 ? 4 * p - 1 : 3 - 4 * p)
+      }
+      const frames = framesFromWave({ durationSec: 4, fps, wave: triangle })
+      const swing = computeSideSwing(frames, 'left', { strideHz: f, scaleProxy: 'shoulderSpan' })
+
+      expect(swing.fit.ok && swing.fit.peakToPeakAmplitude / 40).toBeLessThan(0.84)
+      expect(swing.travelPx!).toBeGreaterThanOrEqual(40 * cuspSamplingFloor(f, fps) - 1e-9)
+      expect(swing.travelPx!).toBeLessThanOrEqual(40 * TREND_LEAK)
+    })
+
+    it(`a swing carrying a second harmonic reads its full travel at ${label}`, () => {
+      // sin φ + 0.5·sin(2φ − π/2) peaks at +1.5 and troughs at −0.75: a travel of 2.25 per unit,
+      // against the fundamental's 2.
+      const frames = framesFromWave({
+        durationSec: 4,
+        fps,
+        wave: (t) => 20 * (Math.sin(TAU * f * t) + 0.5 * Math.sin(2 * TAU * f * t - Math.PI / 2)),
+      })
+      const swing = computeSideSwing(frames, 'left', { strideHz: f, scaleProxy: 'shoulderSpan' })
+
+      expect(swing.fit.ok && swing.fit.peakToPeakAmplitude).toBeCloseTo(40, 0)
+      expect(swing.travelPx! / 45).toBeGreaterThan(sineSamplingFloor(2 * f, fps) - 0.01)
+      expect(swing.travelPx! / 45).toBeLessThanOrEqual(TREND_LEAK)
+    })
+  }
+
+  it('a single-frame spike three swings tall moves the travel by no more than 3%', () => {
+    const wave = (t: number) => 20 * Math.sin(TAU * LIVE_STRIDE_HZ * t)
+    const clean = travelOf(framesFromWave({ durationSec: 4, fps: LIVE_FPS, wave }), LIVE_STRIDE_HZ)
+    const spiked = travelOf(
+      framesFromWave({
+        durationSec: 4,
+        fps: LIVE_FPS,
+        wave: (t, i) => wave(t) + (i === 50 ? 3 * 40 : 0),
+      }),
+      LIVE_STRIDE_HZ,
+    )
+
+    expect(Math.abs(spiked - clean) / clean).toBeLessThanOrEqual(0.03)
+  })
+
+  it('±10% uniform per-frame jitter inflates the travel by no more than 10%', () => {
+    const jitter = makeJitter(20261027)
+    const frames = framesFromWave({
+      durationSec: 4,
+      fps: LIVE_FPS,
+      wave: (t) => 20 * Math.sin(TAU * LIVE_STRIDE_HZ * t) + 4 * jitter(),
+    })
+
+    const travel = travelOf(frames, LIVE_STRIDE_HZ)
+
+    expect(travel).toBeLessThanOrEqual(40 * 1.1)
+    expect(travel).toBeGreaterThan(40 * 0.9)
+  })
+
+  it('the realistic fixture reads its real excursion, above the fundamental’s size', () => {
+    // The step-harmonic, jittered shape the gate tests use: −20·sin φ + 8·sin 2φ on the left arm.
+    const frames = buildArmSwingFrames({
+      durationSec: 4,
+      fps: 30,
+      swingFreqHz: 1.5,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 20,
+      leftJitterPx: 4,
+      rightJitterPx: 4,
+      harmonicRatio: 0.4,
+      seed: 20260829,
+    })
+    let high = -Infinity
+    let low = Infinity
+    for (let i = 0; i < 10000; i += 1) {
+      const v = -20 * Math.sin((TAU * i) / 10000) + 8 * Math.sin((2 * TAU * i) / 10000)
+      high = Math.max(high, v)
+      low = Math.min(low, v)
+    }
+    const swing = computeSideSwing(frames, 'left', AT_STRIDE)
+
+    expect(swing.fit.ok).toBe(true)
+    if (!swing.fit.ok) return
+    expect(swing.travelPx!).toBeGreaterThan(swing.fit.peakToPeakAmplitude)
+    expect(Math.abs(swing.travelPx! - (high - low)) / (high - low)).toBeLessThan(0.1)
+  })
+
+  it('under two complete strides there is no travel, however well the swing fits', () => {
+    // 1.9 strides — side-portrait's shape: the fit completes a cycle and clears every gate, but a
+    // single stride window's max − min carries every tracking excursion in it undiluted.
+    const frames = framesFromWave({
+      durationSec: 1.9 / 1.5 + 1 / 30,
+      fps: 30,
+      wave: (t) => 20 * Math.sin(TAU * 1.5 * t),
+    })
+    const swing = computeSideSwing(frames, 'left', AT_STRIDE)
+
+    expect(swing.fit.ok).toBe(true)
+    expect(swing.strideCycles).toBeLessThan(2)
+    expect(swing.travelPx).toBeNull()
+
+    const longer = computeSideSwing(
+      framesFromWave({ durationSec: 2.2 / 1.5, fps: 30, wave: (t) => 20 * Math.sin(TAU * 1.5 * t) }),
+      'left',
+      AT_STRIDE,
+    )
+    expect(longer.strideCycles).toBeGreaterThanOrEqual(2)
+    expect(longer.travelPx).not.toBeNull()
+  })
+
+  it('the windows are one hip-anchored stride long, not one fitted period', () => {
+    // A stride anchor 15% off the arm's own rhythm: the fit lands near the arm's rate inside the
+    // ±20% band, but the travel windows follow the anchor — and a window ≥ 85% of a swing still
+    // spans its full travel on a sinusoid sampled densely.
+    const frames = framesFromWave({ durationSec: 4, fps: 60, wave: (t) => 20 * Math.sin(TAU * t) })
+    const swing = computeSideSwing(frames, 'left', { strideHz: 1.15, scaleProxy: 'shoulderSpan' })
+
+    expect(swing.strideCycles).toBeCloseTo((frames.at(-1)!.timestamp - frames[0].timestamp) * 1.15, 9)
+    expect(swing.travelPx!).toBeGreaterThan(40 * 0.97)
+  })
+
+  it('a failed fit has no travel', () => {
+    const frames = buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 0, rightAmplitudePx: 0 })
+
+    expect(computeSideSwing(frames, 'left', AT_STRIDE).travelPx).toBeNull()
+  })
+})
+
 describe('computeSideSwing — fit failures', () => {
   it('tracked but motionless arms: degenerate-signal, and the caveat names the missing motion', () => {
     // Wrists resolve every frame but never move relative to the shoulder, so there is no
@@ -217,7 +594,7 @@ describe('computeSideSwing — fit failures', () => {
     })
 
     for (const side of SIDES) {
-      const swing = computeSideSwing(frames, side, DEFAULT_HEURISTICS_CONFIG)
+      const swing = computeSideSwing(frames, side, AT_STRIDE)
 
       expect(swing.resolvedCount).toBe(frames.length)
       expect(swing.fit.ok).toBe(false)
@@ -344,12 +721,8 @@ describe('computeSideSwing — scale stabilization (strides-egw)', () => {
       const at = (name: string) => frame.keypoints.find((kp) => kp.name === name)!.y!
       return { t: frame.timestamp, v: at('left_wrist') - at('left_shoulder') }
     })
-    const rawFit = fitSpectralSinusoid(samples, {
-      minFrequencyHz: DEFAULT_HEURISTICS_CONFIG.spectralFitMinFrequencyHz,
-      maxFrequencyHz: DEFAULT_HEURISTICS_CONFIG.spectralFitMaxFrequencyHz,
-      frequencyStepHz: DEFAULT_HEURISTICS_CONFIG.spectralFitFrequencyStepHz,
-    })
-    const stabilizedFit = computeSideSwing(frames, 'left', DEFAULT_HEURISTICS_CONFIG).fit
+    const rawFit = fitSpectralSinusoid(samples, ANCHORED_GRID)
+    const stabilizedFit = computeSideSwing(frames, 'left', AT_STRIDE).fit
 
     expect(rawFit.ok).toBe(true)
     expect(stabilizedFit.ok).toBe(true)
@@ -415,8 +788,8 @@ describe('computeSideSwing — scale stabilization (strides-egw)', () => {
 
     // Identical per-side accounting: losing the proxy on six frames dropped nothing.
     for (const side of SIDES) {
-      const proxylessSide = computeSideSwing(proxyless, side, DEFAULT_HEURISTICS_CONFIG)
-      const baseSide = computeSideSwing(base, side, DEFAULT_HEURISTICS_CONFIG)
+      const proxylessSide = computeSideSwing(proxyless, side, AT_STRIDE)
+      const baseSide = computeSideSwing(base, side, AT_STRIDE)
 
       expect(proxylessSide.resolvedCount).toBe(baseSide.resolvedCount)
       expect(proxylessSide.interpolatedCount).toBe(baseSide.interpolatedCount)
@@ -445,6 +818,104 @@ describe('computeSideSwing — scale stabilization (strides-egw)', () => {
       // merely within an epsilon of it — deleting that rung would leave a 1±1e-15 factor that
       // still passes any toBeCloseTo.
       expect(fittedAmplitude(frames, side)).toBe(rawPixelAmplitude(frames, side))
+    }
+  })
+})
+
+/**
+ * Side-on, the two shoulders superimpose: the inter-shoulder span collapses to a few jittering
+ * pixels (live: median 37 px / p5 5 px on side-landscape, 14 px / p5 3.4 px on side-portrait), so
+ * a side clip is stabilized by per-frame torso length instead (`strides-eiil.3`).
+ */
+describe('computeSideSwing — side-on scale proxy (torso length)', () => {
+  /** A side-on subject growing `growth`× on screen, swinging 40 px (body units, at g = 1) on the
+   * left wrist, whose shoulders sit 0–5 px apart with jitter. */
+  function sideOnFrames(growth: number, seed = 3): RobustPoseFrame[] {
+    const jitter = makeJitter(seed)
+    const fps = 30
+    const durationSec = 4
+    return Array.from({ length: fps * durationSec }, (_, i) => {
+      const t = i / fps
+      const g = Math.pow(growth, t / durationSec)
+      const centerX = 200
+      const spread = 2.5 + 2.5 * jitter()
+      const wristOffset = (BASE_WRIST_OFFSET_Y - 20 * Math.sin(TAU * 1.5 * t)) * g
+      return buildFrame(
+        {
+          left_shoulder: { x: centerX - spread / 2, y: SHOULDER_Y },
+          right_shoulder: { x: centerX + spread / 2, y: SHOULDER_Y },
+          left_hip: { x: centerX, y: SHOULDER_Y + TORSO_LENGTH_PX * g },
+          right_hip: { x: centerX, y: SHOULDER_Y + TORSO_LENGTH_PX * g },
+          left_wrist: { x: centerX, y: SHOULDER_Y + wristOffset },
+          right_wrist: { x: centerX, y: SHOULDER_Y + wristOffset },
+        },
+        t,
+      )
+    })
+  }
+  const SIDE_ON = { strideHz: 1.5, scaleProxy: 'torsoLength' } as const
+  const SHOULDER = { strideHz: 1.5, scaleProxy: 'shoulderSpan' } as const
+
+  it('recovers the body-unit travel of a growing subject, where the shoulder span inflates it', () => {
+    const grown = sideOnFrames(3)
+    const torsoTravel = computeSideSwing(grown, 'left', SIDE_ON).travelPx!
+    const torsoRef = (() => {
+      // The stabilized series is at the clip's MEDIAN torso, so express the travel in torso units.
+      const lengths = grown.map((frame) => {
+        const at = (name: string) => frame.keypoints.find((kp) => kp.name === name)!.y!
+        return at('left_hip') - at('left_shoulder')
+      })
+      return [...lengths].sort((a, b) => a - b)[Math.floor(lengths.length / 2)]
+    })()
+    const shoulderFit = computeSideSwing(grown, 'left', SHOULDER).fit
+    const torsoFit = computeSideSwing(grown, 'left', SIDE_ON).fit
+    const still = computeSideSwing(sideOnFrames(1), 'left', SIDE_ON).travelPx!
+
+    // Body units: the static clip reads 40 / 150, and so must the growing one.
+    expect(torsoTravel / torsoRef).toBeCloseTo(still / TORSO_LENGTH_PX, 2)
+    expect(still / TORSO_LENGTH_PX).toBeGreaterThan((40 / TORSO_LENGTH_PX) * 0.95)
+    // The superimposed shoulders carry no trace of the growth, so the shoulder-span "stabilized"
+    // series still has its amplitude modulated 1× → 3× across the window — the constant-amplitude
+    // premise the fit assumes is violated — while the torso-stabilized one is a sinusoid again.
+    expect(shoulderFit.ok && torsoFit.ok).toBe(true)
+    if (shoulderFit.ok && torsoFit.ok) {
+      expect(shoulderFit.sinusoidR2).toBeLessThan(0.95)
+      expect(torsoFit.sinusoidR2).toBeGreaterThan(0.999)
+    }
+  })
+
+  it('a constant-scale side-on clip is the raw-pixel computation exactly — the no-op holds for both proxies', () => {
+    const frames = buildArmSwingFrames({ ...BASE_PARAMS, leftAmplitudePx: 40, rightAmplitudePx: 20 })
+
+    for (const side of SIDES) {
+      const torsoFit = computeSideSwing(frames, side, { ...AT_STRIDE, scaleProxy: 'torsoLength' }).fit
+      expect(torsoFit.ok && torsoFit.peakToPeakAmplitude).toBe(rawPixelAmplitude(frames, side))
+    }
+  })
+
+  it('with too few torso frames the torso stabilization is an exact no-op', () => {
+    // Hips resolve on only 8 frames — below MIN_SCALE_TREND_SAMPLES — on a genuinely growing clip.
+    const frames = buildArmSwingFrames({
+      ...BASE_PARAMS,
+      leftAmplitudePx: 40,
+      rightAmplitudePx: 20,
+      scaleGrowthFactor: 3,
+    }).map((frame, i) =>
+      i % 15 === 0
+        ? frame
+        : {
+            ...frame,
+            keypoints: frame.keypoints.map((kp) =>
+              kp.name === 'left_hip' || kp.name === 'right_hip'
+                ? { ...kp, x: null, y: null, score: 0, status: 'unrecoverable' as const }
+                : kp,
+            ),
+          },
+    )
+
+    for (const side of SIDES) {
+      const torsoFit = computeSideSwing(frames, side, { ...AT_STRIDE, scaleProxy: 'torsoLength' }).fit
+      expect(torsoFit.ok && torsoFit.peakToPeakAmplitude).toBe(rawPixelAmplitude(frames, side))
     }
   })
 })
