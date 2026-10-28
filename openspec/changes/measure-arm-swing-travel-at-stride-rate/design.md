@@ -58,9 +58,13 @@ Per side, over the scale-stabilized series and the fit at its winning frequency 
    **No travel unless the usable span holds at least `MIN_ARM_SWING_CYCLES` (2) complete stride
    periods** — with one window the range carries every tracking excursion undiluted (side-portrait
    at 1.9 strides read 0.43 torso against ~0.30 visible in keyframes). The caveat names that
-   shortfall ("fewer than 2 complete arm swings"), not "too short for one cycle". Confidence and
-   `sampleSize` now count these stride periods, so the old "Only N complete cycle(s)" caveat can no
-   longer accompany a value and was removed.
+   shortfall ("fewer than 2 complete arm swings"), not "too short for one cycle". `sampleSize` now
+   counts these stride periods, so the old "Only N complete cycle(s)" caveat can no longer
+   accompany a value and was removed. The stride count is a **hard floor only**: it is still passed
+   to `computeMetricConfidence`, but every published value already meets `minRequiredSampleSize`,
+   so it never ramps confidence (review round 2 decision: confidence values unchanged). If a
+   fitted arm has enough strides but no window holds ≥ 3 samples, the caveat says the swings were
+   tracked too sparsely, not that there were too few.
 
 Gating is unchanged: it stays on the fundamental's partial R², which answers "is there a stride
 rhythm here", the question a gate should ask. Only the published SIZE changes.

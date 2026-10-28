@@ -561,7 +561,8 @@ describe('computeArmSwingAmplitude', () => {
     )
 
     expect(result.value).toBeNull()
-    expect(result.caveat).toContain('No resolvable body-scale reference')
+    expect(result.caveat).toBe('No resolvable body-scale reference (shoulders/hips) in this clip.')
+    expect(result.caveat).not.toContain('No steady running rhythm')
   })
 
   it('a clip under two complete strides publishes nothing, and says why', () => {

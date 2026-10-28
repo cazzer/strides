@@ -25,10 +25,11 @@ the stride.
 
 The metric's trust gates SHALL be the SHARED arm-swing gates applied to the fitted fundamental —
 the measured arm's (for both arms, the weaker arm's) sinusoid partial R² against
-`armSwingMinFitR2`, the shared minimum-cycle floor, and for a both-arms reading the shared
-cross-side fitted-frequency disagreement bound — never a second, separately-tunable gate on the
-same fitted signal. For a both-arms reading its confidence inputs SHALL each be the WORSE side's
-(frame coverage, interpolated fraction, observed cycles, fit quality), never an average, and when
+`armSwingMinFitR2`, the two-complete-stride floor on the travel, and for a both-arms reading the
+shared cross-side fitted-frequency disagreement bound — never a second, separately-tunable gate on
+the same fitted signal. The stride count is a hard floor only: it SHALL NOT ramp confidence above
+that floor. For a both-arms reading its confidence inputs SHALL each be the WORSE side's (frame
+coverage, interpolated fraction, fit quality), never an average, and when
 the two sides' fit qualities diverge past the shared disparity bound the result SHALL carry a
 caveat saying one arm's swing rhythm fit its trace much less cleanly than the other's and that
 part of the overall swing size may reflect measurement rather than form.
@@ -51,7 +52,7 @@ reference (shoulders/hips) in the clip.
   and a torso length resolves
 - **THEN** `value` equals the mean of the two arms' per-stride travels divided by the clip-median
   torso length, `unit` is `'ratio'`, and `confidence` reflects view fit, worse-side coverage,
-  worse-side interpolation, worse-side observed cycles and worse-side fit quality
+  worse-side interpolation and worse-side fit quality
 
 #### Scenario: A swing carrying a second harmonic is reported at its full travel
 

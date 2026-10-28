@@ -5,7 +5,10 @@ import {
   buildSideExemplar,
   caveatForFailure,
   computeSideSwing,
+  TOO_FEW_SWINGS_CAVEAT,
+  TOO_SPARSE_SWINGS_CAVEAT,
   resolveStrideRateHz,
+  travelFailureCaveat,
 } from './armSwing'
 import { buildFrame } from './__fixtures__/testFrames'
 import { findLocalExtrema } from './extrema'
@@ -563,6 +566,52 @@ describe('computeSideSwing — per-stride travel', () => {
     )
     expect(longer.strideCycles).toBeGreaterThanOrEqual(2)
     expect(longer.travelPx).not.toBeNull()
+  })
+
+  it('a span of exactly two strides counts as two, with the window loop’s own boundary slack', () => {
+    // 41 frames at 30 fps span 40/30 s; two strides at 1.5 Hz are 2/1.5 s — equal in exact
+    // arithmetic, not necessarily in floating point.
+    const frames = framesFromWave({
+      durationSec: 41 / 30,
+      fps: 30,
+      wave: (t) => 20 * Math.sin(TAU * 1.5 * t),
+    })
+    const swing = computeSideSwing(frames, 'left', AT_STRIDE)
+
+    expect(swing.strideCycles).toBeCloseTo(2, 9)
+    expect(swing.travelPx).not.toBeNull()
+    expect(swing.travelFailure).toBeNull()
+  })
+
+  it('a peak beside a sampled plateau survives the spike guard (MAD = 0 is floored)', () => {
+    // Every crest dwells on a plateau at ±16 px with ONE sample at the true ±20 px extreme (1.5 Hz at
+    // 30 fps puts a crest exactly on frames 5, 25, … and a trough on 15, 35, …). Each extreme's
+    // five-sample window is [16, 16, 20, 16, 16]: local MAD 0, so an unfloored Hampel guard would
+    // call every real extreme an outlier and read the travel as 32 px, not 40.
+    const frames = framesFromWave({
+      durationSec: 4,
+      fps: 30,
+      wave: (t, i) =>
+        i % 20 === 5 ? 20 : i % 20 === 15 ? -20 : Math.max(-16, Math.min(16, 20 * Math.sin(TAU * 1.5 * t))),
+    })
+
+    expect(travelOf(frames, 1.5)).toBeGreaterThan(39)
+  })
+
+  it('names the true cause of a missing travel', () => {
+    const fitted = computeSideSwing(
+      framesFromWave({ durationSec: 1.2, fps: 30, wave: (t) => 20 * Math.sin(TAU * 1.5 * t) }),
+      'left',
+      AT_STRIDE,
+    )
+
+    expect(fitted.travelFailure).toBe('too-few-strides')
+    expect(travelFailureCaveat(fitted)).toBe(TOO_FEW_SWINGS_CAVEAT)
+    // Unreachable through a successful fit on real input (a fit's own samples always populate its
+    // first stride window), so the mapping is pinned directly.
+    expect(travelFailureCaveat({ ...fitted, travelFailure: 'too-sparse' })).toBe(
+      TOO_SPARSE_SWINGS_CAVEAT,
+    )
   })
 
   it('the windows are one hip-anchored stride long, not one fitted period', () => {
