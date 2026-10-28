@@ -28,12 +28,24 @@ SHALL get no stop. Each stop SHALL be a section labelled by its own heading and 
 
 An area stop SHALL show only: the headline metric's value on a line of its own under a small label
 naming the metric (with its confidence when that is not normal), a decorative compact band bar when the headline is banded, the area's cited why line,
-and either the area's cue or its non-point, never both. Each cited line SHALL say beside its source
-how strong its evidence is. A stop SHALL carry no description, no disclosure and no metric card.
+and either the area's cue or its non-point, never both; plus, at the rhythm stop only, vertical
+ratio's "From …" derivation line or its secondary value block, as below. Each cited line SHALL say
+beside its source how strong its evidence is. A stop SHALL carry no description, no disclosure and
+no metric card.
+
+The headline SHALL be the area's own headline (runner-feedback's first non-excluded metric), the
+metric its feedback is keyed on. When that headline is vertical ratio, the stop SHALL show vertical
+ratio's "From …" line (runner-feedback) after the bar and its legend. When it is not, and the
+area's bounce reading is headed by a measured vertical ratio, the stop SHALL show one secondary
+value block after the why line and the cue or non-point: the label "Vertical ratio", its value
+with its band position as visible text, and its confidence when that is not normal; no bar, no
+legend and no "From …" line. No other secondary block SHALL be shown.
 
 The visible words of every stop SHALL be at most 25, counting the heading and the lines' text and
 excluding the value line, text for assistive technology only, the citations, the band legend
 under a narrow layout's bar, and the end of the tour, which SHALL be at most 25 words on its own.
+The secondary value block SHALL be excluded like the value line, and the "From …" line SHALL be
+excluded and at most 14 words on its own.
 
 #### Scenario: A banded headline
 
@@ -44,6 +56,24 @@ under a narrow layout's bar, and the end of the tour, which SHALL be at most 25 
 
 - **WHEN** the tour renders for any result, including a cue at every stop that can carry one
 - **THEN** every stop's counted words are at most 25
+
+#### Scenario: The rhythm stop with cadence and vertical ratio measured
+
+- **WHEN** cadence and vertical ratio are both measured
+- **THEN** the rhythm stop shows cadence as its headline with its bar, its why line and cue or
+  non-point, then a secondary block "Vertical ratio" with its value and band position, and no
+  second bar and no "From …" line
+
+#### Scenario: Vertical ratio heads the rhythm stop
+
+- **WHEN** cadence and vertical oscillation in centimetres are excluded and vertical ratio is measured
+- **THEN** the rhythm stop's headline is vertical ratio, with its bar, then its "From …" line after
+  the bar and legend, and no secondary block
+
+#### Scenario: Vertical ratio not measured
+
+- **WHEN** vertical ratio is excluded
+- **THEN** the rhythm stop shows its headline and feedback only, with no secondary block
 
 ### Requirement: The active stop points the one runner's camera
 
@@ -60,12 +90,19 @@ panel under its compact bar, and only in a panel that has one.
 | stop | camera | rate |
 |---|---|---|
 | rhythm | whole body, side | 1 |
-| arms | upper body, front quarter | 1 |
+| arms | upper body, 15° off the side (`armsQuarter`) | 1 |
 | posture | torso, side | 1 |
 | knees | legs, side | 1 |
 | landing | legs, side (a stopgap until a contact-tracking camera) | 0.4, labelled "Slow motion" |
 | foot path | feet, front | 0.4, labelled "Slow motion" |
 | one thing | whole body, side | 1 |
+
+The arms camera SHALL sit close to the side, so the measured swing reads fore-and-aft and the two
+arms never read as crossing the body's midline, while still far enough round for the two shoulders
+to separate in depth. The near elbow's backswing SHALL stay outside the projected shoulder–hip
+outline, and its forward swing, drawn in front of the trunk, SHALL overlap it by at most 0.15
+viewBox units. A front-quarter view drew the near forearm across the chest and the two forearms as
+an X, which read as a crossover arm swing that nothing measured says.
 
 With no stop active the runner SHALL show the whole figure from the side at full speed.
 
@@ -84,6 +121,13 @@ With no stop active the runner SHALL show the whole figure from the side at full
 
 - **WHEN** the address changes to `#tour-knees`
 - **THEN** the knees stop is focused and the runner frames the legs from the side
+
+#### Scenario: The arms stop's camera
+
+- **WHEN** the arms stop is active with arm swing measured at 0.335 or 0.5627
+- **THEN** the runner frames the upper body 15° off the side, the near arm is painted over the
+  trunk, its backswing stays outside the torso outline, and the far wrist stays outside it at the
+  neutral lean
 
 ### Requirement: The tour opens with the runner's intro
 
@@ -270,4 +314,15 @@ still mount no evidence canvas: the runner copies the pixels.
 #### Scenario: The intro
 - **WHEN** the intro is running
 - **THEN** the runner is handed no footage
+
+### Requirement: The arms stop says its value is up-and-down wrist travel
+
+The arms stop's value label SHALL read "Arm swing (wrist up-and-down)", so the reader knows the
+value is the wrist's vertical travel and not the arm's fore-and-aft sweep. The label SHALL be
+excluded from the stop's word budget, like the value line it names.
+
+#### Scenario: The arms stop
+
+- **WHEN** the tour reaches the arms stop with arm swing measured
+- **THEN** the small label above its value reads "Arm swing (wrist up-and-down)"
 
