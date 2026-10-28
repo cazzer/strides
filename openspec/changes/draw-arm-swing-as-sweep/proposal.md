@@ -27,6 +27,9 @@ torso lengths (`strides-eiil.1`–`.3`). Two things undersell that:
   Wrist travel stays exactly the bound value in both cases.
 - The arm-swing bracket's label moves from under the bracket's foot to above its top end. A pinned
   swing reaches lower, and at 390 px the label under the foot went behind the stop panel (design D4).
+- The arms stop's camera: a new `armsQuarter` preset, 15° off the side, replaces the 45°
+  `upperFrontQuarter` there. At 45° the arms read as crossing the midline (design D5). Runner-tour's
+  camera requirement is MODIFIED (the arms row only).
 - Unchanged: the measurement, the binding (neutral 0.3, range [0, 0.9]), the bracket (it spans
   exactly the value), every other annotation, the elbow bend, segment lengths and phase offset, the
   word budgets.

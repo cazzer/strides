@@ -143,6 +143,23 @@ describe('drawOrder', () => {
     expect([...order.joints].sort((a, b) => a - b)).toEqual(COMMON_KEYPOINT_NAMES.map((_, i) => i))
   })
 
+  it('paints the near arm over the trunk through the arms stop’s camera, at every phase', () => {
+    const trunk = [
+      edgeIndex('left_shoulder', 'right_shoulder'),
+      edgeIndex('left_hip', 'right_hip'),
+      edgeIndex('left_shoulder', 'left_hip'),
+      edgeIndex('right_shoulder', 'right_hip'),
+    ]
+    const nearArm = [edgeIndex('right_shoulder', 'right_elbow'), edgeIndex('right_elbow', 'right_wrist')]
+    for (const armSwing of [0.335, 0.5627]) {
+      for (let i = 0; i < 20; i += 1) {
+        const { edges } = drawOrder({ ...values, armSwing }, CAMERA_PRESETS.armsQuarter, i / 20)
+        const lastTrunk = Math.max(...trunk.map((edge) => edges.indexOf(edge)))
+        for (const edge of nearArm) expect(edges.indexOf(edge), `${armSwing} ${i / 20}`).toBeGreaterThan(lastTrunk)
+      }
+    }
+  })
+
   it('flips when viewed from the other side', () => {
     const order = drawOrder(values, { ...CAMERA_PRESETS.wholeBodySide, yawDeg: 180 })
     expect(order.farEdge[edgeIndex('right_hip', 'right_knee')]).toBe(true)

@@ -57,6 +57,34 @@ In the front-¾ view the forearm crosses the region above and right of the top e
 whichever upper placement is used. The label's halo keeps it legible, as for every other label.
 Only the arm-swing builder changed; no other annotation's label moves.
 
+### D5. The arms stop looks from 15° off the side (`armsQuarter`)
+
+With the arm centre behind vertical, `upperFrontQuarter` (yaw 45) drew the near forearm across the
+chest and the two forearms as an X, which read as arms crossing the midline. A new preset,
+`armsQuarter` (yaw 15, pitch 5, zoom 1.7, target 0.4 forward of hip-mid), serves the arms stop only.
+`upperFrontQuarter` stays for the dev sandbox and the footage-plate tests.
+
+Measured over a full cycle (shoulder–hip outline, viewBox units, negative inside):
+- **The near elbow's backswing** is outside the outline at every yaw ≥ 10°.
+- **The near elbow's forward swing** is drawn over the chest at every yaw above 0, because the arm
+  swings at the near shoulder's depth. Its worst overlap (v 0.335/0.5627, lean 4° and −15°) is
+  0.123 at 15°, 0.162 at 20° and 0.30 at 45°. 20° fails the 0.15 bound, so 15° it is. The near
+  arm is painted over the trunk by depth order.
+- **The far wrist** stays outside at the neutral lean. The exception is a pinned swing at a −15°
+  (backward) lean: the pinned wrist hangs straight under a shoulder the hips have moved ahead of,
+  so it lies inside the far half of the outline at any yaw off the side (−0.10 at 15°). That is
+  the lean's geometry, not the camera, and the test excludes it with that reason.
+- **Yaw 0** would overlap the arms on each other and lose the depth separation.
+
+Framing: the side-on view puts a full forward reach further right. The target sits 0.4 forward, so
+the neutral arms (x −1.31…0.97 at 0.5627) and the bracket's label fit ±1.5 unclamped on a phone up
+to 0.9.
+
+Under this camera the near upper arm never enters the arm label above the bracket, at phone or
+desktop label scale, so D4's placement stands everywhere. The far forearm's wrist, which projects
+about 0.08 right of the bracket at its forward peak, does reach the label's lower line in some
+phases (about 11–15 of 60 at realistic values). The halo keeps the label legible.
+
 ## Risks
 
 - The neutral figure now shows a visible backswing; it is dashed grey and illustrative, never a

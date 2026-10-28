@@ -21,7 +21,7 @@ export const FOCUS_AREA_CAMERA: Readonly<
   Record<FocusAreaId, { camera: CameraPreset; playbackRate: number }>
 > = {
   rhythm: { camera: 'wholeBodySide', playbackRate: 1 },
-  arms: { camera: 'upperFrontQuarter', playbackRate: 1 },
+  arms: { camera: 'armsQuarter', playbackRate: 1 },
   posture: { camera: 'torsoSide', playbackRate: 1 },
   knees: { camera: 'legsSide', playbackRate: 1 },
   landing: { camera: 'landingSide', playbackRate: 0.4 },

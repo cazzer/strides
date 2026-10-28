@@ -69,9 +69,10 @@ describe('projection', () => {
 })
 
 describe('presets', () => {
-  it('has the seven presets, each finite with a positive zoom', () => {
+  it('has the eight presets, each finite with a positive zoom', () => {
     expect(PRESETS.sort()).toEqual(
       [
+        'armsQuarter',
         'feetFront',
         'footSide',
         'landingSide',
@@ -91,12 +92,14 @@ describe('presets', () => {
     expect(CAMERA_PRESETS.wholeBodySide.yawDeg).toBe(0)
     expect(CAMERA_PRESETS.feetFront.yawDeg).toBe(90)
     expect(CAMERA_PRESETS.upperFrontQuarter.yawDeg).toBe(45)
+    expect(CAMERA_PRESETS.armsQuarter.yawDeg).toBe(15)
   })
 
   /** The joints each preset frames, and the phases they must stay framed at. */
   const FOCUS: Record<CameraPreset, { joints: RegExp; phases: number[] }> = {
     wholeBodySide: { joints: /.*/, phases: [0, 0.2, 0.4, 0.6, 0.8] },
     upperFrontQuarter: { joints: /shoulder|elbow|wrist|hip|ear|nose/, phases: [0, 0.2, 0.4, 0.6, 0.8] },
+    armsQuarter: { joints: /shoulder|elbow|wrist|hip|ear|nose/, phases: [0, 0.2, 0.4, 0.6, 0.8] },
     torsoSide: { joints: /shoulder|hip|ear|nose/, phases: [0, 0.2, 0.4, 0.6, 0.8] },
     legsSide: { joints: /hip|knee|ankle|heel|foot_index/, phases: [0, 0.2, 0.4, 0.6, 0.8] },
     footSide: { joints: /^left_(ankle|heel|foot_index)$/, phases: [GAIT_PHASES.leftContact] },

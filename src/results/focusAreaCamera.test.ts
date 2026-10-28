@@ -19,7 +19,7 @@ describe('FOCUS_AREA_CAMERA', () => {
   it('frames the planned preset per area', () => {
     expect(FOCUS_AREA_CAMERA).toEqual({
       rhythm: { camera: 'wholeBodySide', playbackRate: 1 },
-      arms: { camera: 'upperFrontQuarter', playbackRate: 1 },
+      arms: { camera: 'armsQuarter', playbackRate: 1 },
       posture: { camera: 'torsoSide', playbackRate: 1 },
       knees: { camera: 'legsSide', playbackRate: 1 },
       landing: { camera: 'landingSide', playbackRate: 0.4 },

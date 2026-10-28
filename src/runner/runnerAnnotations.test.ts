@@ -24,6 +24,7 @@ import {
 } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
 import {
+  LABEL_CHAR_WIDTH_EM,
   LABEL_LINE_HEIGHT,
   RUNNER_PARAM_IDS,
   RUNNER_PX,
@@ -326,11 +327,18 @@ describe('the marks are the drawn values and lie on the live figure', () => {
     expect(screenLength(span[0], span[1], SIDE)).toBeCloseTo(values.armSwing, 12)
   })
 
-  it('arm swing: the label sits above the bracket’s top end, never on the bracket or under its foot', () => {
+  it('arm swing: the label sits above the bracket’s top end, never on the bracket, under its foot or on the near upper arm', () => {
+    const camera = CAMERA_PRESETS.armsQuarter
+    // Label scales as ModelRunner sizes them today, from the stage box: a 390 px phone (130 px per
+    // unit) and the 1280 layout's ~401×404 stage (101). The phone SVG actually draws at ~84 px/unit,
+    // so live phone labels are smaller still; strides-ikbu sizes them from the SVG.
+    const SCALES = [
+      { name: 'phone', pxPerUnit: 130 },
+      { name: 'desktop', pxPerUnit: 101 },
+    ]
     // A small swing, a front reading, a pinned side reading (above v* ≈ 0.523), the largest.
     for (const armSwing of [0.05, 0.33, 0.5627, 0.9]) {
       const arms = bindAll({ armSwingAmplitude: makeMetric('armSwingAmplitude', { value: armSwing }) })
-      const camera = CAMERA_PRESETS.upperFrontQuarter
       const { marks, label } = only(arms, 'armSwing', camera.yawDeg)
       const [[low, high]] = marks
       // The bracket's extent is the value exactly; the label hangs off its upper end.
@@ -338,20 +346,37 @@ describe('the marks are the drawn values and lie on the live figure', () => {
       expect(label.anchor).toEqual(high)
       expect(label.side).toBe('above')
       expect(label.offsetLines).toBeUndefined()
-      // Laid out as the arms stop draws it (font and gap in viewBox units at a phone stage's
-      // ~130 px per unit): centred on the bracket with no frame clamp, every line wholly above
-      // the top tick, so nothing covers the bracket and nothing hangs toward the panel below.
-      // 130 px/unit is what ModelRunner sizes labels by today (the stage box). The phone SVG actually
-      // draws at ~84 px/unit, so live labels are smaller; strides-ikbu sizes them from the SVG.
-      const unit = 1 / 130
       const top = projectPoint(high, camera)
       const foot = projectPoint(low, camera)
       expect(foot.y).toBeGreaterThan(top.y)
-      const fontUnits = RUNNER_PX.label * unit
-      const layout = placeLabel(top, label.side, label.lines, fontUnits, RUNNER_PX.labelGap * unit)
-      expect(layout.x, `${armSwing}`).toBeCloseTo(top.x, 12)
-      const lineHalf = (fontUnits * LABEL_LINE_HEIGHT) / 2
-      for (const y of layout.ys) expect(y + lineHalf, `${armSwing}`).toBeLessThan(top.y)
+      for (const { name, pxPerUnit } of SCALES) {
+        const unit = 1 / pxPerUnit
+        const fontUnits = RUNNER_PX.label * unit
+        const layout = placeLabel(top, label.side, label.lines, fontUnits, RUNNER_PX.labelGap * unit)
+        // On a phone it is centred on the bracket, unclamped, up to the largest swing.
+        if (name === 'phone') expect(layout.x, `${armSwing}`).toBeCloseTo(top.x, 12)
+        // Every line wholly above the top tick: nothing covers the bracket or hangs toward a panel.
+        const lineHalf = (fontUnits * LABEL_LINE_HEIGHT) / 2
+        for (const y of layout.ys) expect(y + lineHalf, `${armSwing} ${name}`).toBeLessThan(top.y)
+        // The near (camera-side, right) upper arm never runs through the label over the cycle.
+        const halfWidth = (Math.max(...label.lines.map((l) => l.length)) * fontUnits * LABEL_CHAR_WIDTH_EM) / 2
+        const box = {
+          left: layout.x - halfWidth,
+          right: layout.x + halfWidth,
+          top: layout.ys[0] - lineHalf,
+          bottom: layout.ys[layout.ys.length - 1] + lineHalf,
+        }
+        for (let i = 0; i < 120; i += 1) {
+          const shoulder = projectPoint(liveJoint(i / 120, arms, 'right_shoulder'), camera)
+          const elbow = projectPoint(liveJoint(i / 120, arms, 'right_elbow'), camera)
+          for (let k = 0; k <= 40; k += 1) {
+            const x = shoulder.x + ((elbow.x - shoulder.x) * k) / 40
+            const y = shoulder.y + ((elbow.y - shoulder.y) * k) / 40
+            const inBox = x >= box.left && x <= box.right && y >= box.top && y <= box.bottom
+            expect(inBox, `${armSwing} ${name} phase ${i / 120}`).toBe(false)
+          }
+        }
+      }
     }
   })
 

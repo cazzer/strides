@@ -444,8 +444,41 @@ in viewBox units; negative means inside.
   never enters at neutral lean; at a −15° lean it does at small yaws.
 - So "neither the near elbow nor the far wrist crosses the torso outline over a full cycle"
   cannot hold at any yaw that still separates the arms in depth. At yaw 0 the arms superimpose.
-  The camera change waits on choosing a criterion (e.g. the backswing never inside, the forward
-  swing's overlap bounded, the X gone), not on a yaw.
+
+**Resolved (design D5):** a new `armsQuarter` preset (yaw **15**, pitch 5, zoom 1.7, target x 0.4)
+for the arms stop only. `upperFrontQuarter` stays for the sandbox and the footage-plate test.
+- **Why 15 and not the asked-for 20:** the forward-swing overlap bound of 0.15 holds at every lean
+  at 15° (worst 0.123) but not at 20° (0.154 at a 0° lean, 0.162 at −15°).
+- **The far wrist at a −15° lean with a pinned swing** enters the outline at every yaw off the side
+  (−0.10 at 15°). It also crosses the projected midline there (−0.34 at 15°). The pinned wrist
+  hangs under a shoulder the hips have moved ahead of. `armsCamera.test.ts` excludes that one
+  case with the reason; every other case is asserted.
+- Target x 0.4 keeps the side-on forward reach and the label inside ±1.5.
+- Tests: `armsCamera.test.ts` (backswing and far wrist outside, forward overlap ≤ 0.15, arms
+  inside ±1.5), `runnerScene.test.ts` (near arm painted after every trunk edge at 20 phases),
+  `camera.test.ts` (joints in frame). Mutation: yaw 45 fails the overlap test.
+
+Live r2 (real GPU, port 5319, fresh context per run, no errors, one "Analysis complete" each):
+
+| run | value | arm label box (px) | panel top |
+|---|---|---|---|
+| side-landscape 390 dark | 0.5627 | 241–300 × 483–503 | 602 |
+| side-landscape 1280 light | 0.5627 | 347–439 × 445–477 | n/a |
+| park-approach 390 dark | 0.3352 | 224–284 × 503–523 | 602 |
+| park-approach 1280 light | 0.3352 | 327–419 × 469–501 | n/a |
+
+What the frames show:
+- **Near arm back, far arm forward** (half the cycle; `r2-*-arms-0`, `-paused`): reads cleanly
+  fore-and-aft. The near (saturated) arm reaches behind the trunk and the far (lighter) arm is
+  forward. Nothing crosses.
+- **Near arm forward, far arm back** (`r2-*-arms-1`, `-2`): the two UPPER arms cross just below
+  the shoulders, a scissor seen slightly from the front. This is intrinsic to any yaw off the side,
+  but it is now near the shoulder line, not the forearms crossing in front of the chest at 45°. At
+  390 px it is a tight cluster between the shoulders and the hips, readable but busy.
+- **The far forearm's wrist** reaches the bracket's top at its forward peak and runs under the
+  label's lower line in some frames (`r2-land-1280-light-arms-0`, `r2-approach-1280-light-arms-2`).
+  The near upper arm never does (tested), so the label stays above the top end everywhere.
+- Screenshots: scratchpad `eiil4-live/r2-*.png`.
 
 ## Gotchas
 

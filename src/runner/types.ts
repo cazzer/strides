@@ -94,6 +94,7 @@ export type BoundRunnerParams = Readonly<Record<RunnerParamId, BoundRunnerParam>
 export type CameraPreset =
   | 'wholeBodySide'
   | 'upperFrontQuarter'
+  | 'armsQuarter'
   | 'torsoSide'
   | 'legsSide'
   | 'footSide'

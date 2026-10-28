@@ -144,6 +144,14 @@ export function landingCamera(values: RunnerParams): CameraState {
 export const CAMERA_PRESETS: Readonly<Record<CameraPreset, CameraState>> = Object.freeze({
   wholeBodySide: preset(0, 0, 1, { x: 0, y: HEAD_TOP / 2, z: 0 }),
   upperFrontQuarter: preset(45, 5, 1.7, { x: 0, y: PELVIS_HEIGHT + 0.6, z: 0 }),
+  /**
+   * The arms stop: 15° off the side, so the sagittal arm swing reads fore-and-aft while the two
+   * shoulders still separate in depth. At 45° the near forearm's forward swing was drawn across the
+   * chest and the forearms formed an X, which read as arms crossing the midline (strides-eiil.4).
+   * 20° failed the forward-overlap bound at a 0° or backward lean. The target sits 0.4 forward so a
+   * full forward reach, its bracket and the label above it fit the frame.
+   */
+  armsQuarter: preset(15, 5, 1.7, { x: 0.4, y: PELVIS_HEIGHT + 0.6, z: 0 }),
   torsoSide: preset(0, 0, 1.8, { x: 0, y: PELVIS_HEIGHT + 0.5, z: 0 }),
   legsSide: preset(0, 0, 1.4, { x: 0, y: PELVIS_HEIGHT / 2, z: 0 }),
   /**

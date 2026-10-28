@@ -26,4 +26,5 @@
 - [x] 5.2 `metricDescriptions.ts`: the forward-and-back sweep isn't measured
 - [x] 5.3 Direction words fixed (the wrist rises / the drop shrinks) in `gaitModel.ts`, proposal, design, note
 - [x] 5.4 `runnerAnnotations.test.ts`: the 130 px/unit constant tied to `strides-ikbu`
-- [ ] 5.5 Arms-stop camera (crossover reading): blocked on a criterion decision, see the review report
+- [x] 5.5 Arms-stop camera: new `armsQuarter` preset (yaw 15, pitch 5, zoom 1.7, target 0.4 forward), used only by the arms stop; `armsCamera.test.ts` (backswing and far wrist outside the outline, forward overlap ≤ 0.15, arms framed), paint order in `runnerScene.test.ts`, joints-in-frame in `camera.test.ts`; runner-tour camera requirement MODIFIED
+- [x] 5.6 Arm label re-checked under `armsQuarter`: the near upper arm never runs through it at phone or desktop scale (tested), so it stays above the top end everywhere; live r2 at 1280 and 390, side and front clips
