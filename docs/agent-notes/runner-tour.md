@@ -340,6 +340,57 @@ across both checkouts and all three arms**, the same three hashes as the `stride
 cross-clip control differed). One branch trial (side-portrait / tour) stalled with the
 `strides-qg86` shape (video `readyState` 0, no status); its re-run hashed identically.
 
+## Arm swing drawn as a sweep (`strides-eiil.4`)
+
+Change: `openspec/changes/draw-arm-swing-as-sweep` (ADDED only; `compose-bounce-reading` MODIFIES
+the tour/summary headline requirements). `armSwingAmplitude` is the wrist's vertical travel only
+(`strides-eiil.1`–`.3`), so:
+
+- **Label:** `SHORT_METRIC_LABELS.armSwingAmplitude` = `Arm swing (wrist up-and-down)`; the tour's
+  arms stop (rendered uppercase) and the summary's arms row both read it. Outside the word budget.
+- **Figure:** `armCentreDeg` 48 → 33 (upper arm centred ≈ 5° behind vertical), so the elbow passes
+  behind the trunk on the backswing (neutral 0.3: upper arm −23°…+13°; front 0.33: −25°…+15°;
+  side 0.51: −37°…+27°). At 48° it ran −3°…+23° at 0.3 and the arm pumped in front of the chest.
+- **The pin:** above v* = 2R·sin²33° ≈ **0.523** a symmetric swing would take the wrist behind the
+  shoulder, where the drop R·cos ψ turns back up and the readback comes up short. `armAt` uses
+  `centre = max(armCentreDeg, asin(√(v / 2R)))` (with A = c above v*), so ψ runs 0…2c, the wrist
+  bottoms out straight below the shoulder, and travel is exactly v. Removing the `max` fails four
+  existing readback tests plus the new wrist-behind-shoulder test. ⚠️ **Today's side-landscape
+  readings (0.546–0.563) are above v*, so the pinned branch is what a side clip shows live.**
+
+### Live check, 2026-10-27 (`19deaf39`)
+
+Real GPU (ANGLE Metal, M4 Pro), port 5319 (derived, `assertServesThisCheckout`), one browser
+process, fresh context per run, no page or console errors, one "Analysis complete." each run.
+
+| run | `[analysis-diagnostics]` armSwingAmplitude (side / side / front) | stop label + value | figure label | summary headline |
+|---|---|---|---|---|
+| Demo 1280 light (1st context) | 0.56275 / null / 0.33522 | ARM SWING (WRIST UP-AND-DOWN), 56.3% of torso length | 56.3% of torso length | Arm swing (wrist up-and-down) 56.3% of torso length |
+| Demo 390 dark | 0.54619 / null / 0.33695 | same label, 54.6% | 54.6% | same, 54.6% |
+| side-landscape 1280 light | 0.54619 | same label, 54.6% | 54.6% | same, 54.6% |
+| side-landscape 390 dark (cold) | 0.56275 | same label, 56.3% | 56.3% | — |
+| park-approach 390 dark | 0.33522 (front) | same label, 33.5% | 33.5% | — |
+
+The 0.5627 / 0.5462 split is the cold/warm browser-process mixture (`harness.md`), not this change.
+The demo's arms value is the SIDE clip's (56.3%), not the front clip's 33.5%: that is the
+measurement branch's clip choice, untouched here.
+
+- **Elbow behind the trunk:** checked on the side-camera stops (rhythm `wholeBodySide`, posture
+  `torsoSide`; orthographic along z, so the screen test is the sagittal one). Over ~40 frames the
+  elbow's signed side of the shoulder→hip line spans both signs on both arms (−0.34…+0.33 and
+  −1.12…+1.08 SVG units), and the wrist's forward reach of the shoulder bottoms out at 0.000–0.003
+  (the pinned backswing, never behind). Visible in `*-posture-*.png`. The arms stop's front-¾
+  camera does not show it clearly.
+- **390 px label:** at the arms stop the phone panel overlays the rail from y = 602. Same clip,
+  same value (0.5627): base label box 588–608, branch 598–618, because the pinned wrist now reaches
+  a full R below the shoulder and the bracket's label hangs below it. The value line ("56.3%")
+  still shows; its second line "of torso length" is now hidden behind the panel (on base it
+  showed, just). A front value (0.335, unpinned) shows both lines (585–605). 1280 is clear
+  (label 592–624 inside a stage ending at 658). Not fixed here (annotation placement was out of
+  scope).
+- Screenshots: scratchpad `eiil4-live/*.png` (3 frames ~150 ms apart + paused per run; base
+  comparison in `eiil4-live/base/`), not committed.
+
 ## Gotchas
 
 - **One mounted runner per view, never keyed per stop or row.** A stop or an opened row changes only

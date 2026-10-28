@@ -11,5 +11,5 @@
 
 ## 3. Verification
 
-- [ ] 3.1 `tsc -b`, lint, full vitest, `vite build`
-- [ ] 3.2 Live: demo session, arms stop at 1280×800 and 390×844; note entry in `docs/agent-notes/runner-tour.md`
+- [x] 3.1 `tsc -b`, lint, full vitest, `vite build`
+- [x] 3.2 Live: demo session, arms stop at 1280×800 and 390×844; note entry in `docs/agent-notes/runner-tour.md`
