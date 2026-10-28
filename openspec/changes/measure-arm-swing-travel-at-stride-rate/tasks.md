@@ -53,3 +53,11 @@
 - [x] 5.5 Side-view tie caveat; body scale checked before the stride anchor
 - [x] 5.6 Wrong-angle hint copy; exemplar requirement MODIFIED; docs and CLAUDE.md line
 - [x] 5.7 Live A/B on the final commit: non-arm fields bit-identical to base; arm readings recorded
+
+## 6. Review round 2
+
+- [x] 6.1 Stride count documented as a hard floor only (confidence values unchanged)
+- [x] 6.2 Hampel scale floored at 0.1 × the series' own MAD; plateau-beside-peak test
+- [x] 6.3 A non-stride travel failure gets its own caveat (`TOO_SPARSE_SWINGS_CAVEAT`)
+- [x] 6.4 The two-stride check uses the window loop's boundary slack
+- [x] 6.5 Hipless clip asserts the body-scale caveat, not the rhythm one

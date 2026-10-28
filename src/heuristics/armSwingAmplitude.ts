@@ -12,11 +12,11 @@ import {
   MAX_SIDE_FREQUENCY_DISAGREEMENT,
   MIN_ARM_SWING_CYCLES,
   SIDE_FIT_QUALITY_DISPARITY_R2,
-  TOO_FEW_SWINGS_CAVEAT,
   buildSideExemplar,
   caveatForFailure,
   computeSideSwing,
   resolveStrideRateHz,
+  travelFailureCaveat,
 } from './armSwing'
 import type { SideSwing } from './armSwing'
 
@@ -106,10 +106,16 @@ function nullResult(
  * ## Cycles are a hard floor, counted in strides
  *
  * A travel needs at least `MIN_ARM_SWING_CYCLES` complete stride periods (`armSwing.ts`,
- * `perStrideTravel`), so no published value rests on fewer; confidence still ramps on the
- * fractional count (`SideSwing.strideCycles`, span × the hip-anchored stride rate) above it. It is an honest 2D movement-amplitude proxy: how far the wrists travel, saying
- * nothing about what the swing contributes to the stride. Per "never a silent wrong number", an
- * unsuitable view still computes its value, capped low by the view-fit multiplier.
+ * `perStrideTravel`), so no published value rests on fewer. The stride count is a HARD FLOOR ONLY:
+ * it is still handed to `computeMetricConfidence` as the sample size, but every value that clears
+ * the floor already meets `minRequiredSampleSize`, so it never ramps confidence. Confidence varies
+ * with view fit, coverage, interpolation and fit quality alone.
+ *
+ * ## What it claims
+ *
+ * It is an honest 2D movement-amplitude proxy: how far the wrists travel, saying nothing about what
+ * the swing contributes to the stride. Per "never a silent wrong number", an unsuitable view still
+ * computes its value, capped low by the view-fit multiplier.
  */
 export function computeArmSwingAmplitude(
   frames: RobustPoseFrame[],
@@ -217,7 +223,7 @@ function measureNearArm(
     return nullResult(viewFitEntry.fit, TOO_IRREGULAR_CAVEAT, frameCoverage)
   }
   if (near.travelPx === null) {
-    return nullResult(viewFitEntry.fit, TOO_FEW_SWINGS_CAVEAT, frameCoverage)
+    return nullResult(viewFitEntry.fit, travelFailureCaveat(near), frameCoverage)
   }
 
   const interpolatedFraction = near.interpolatedCount / near.resolvedCount
@@ -314,9 +320,12 @@ function measureBothArms(
     )
   }
 
-  // Fewer than two complete strides in either arm's span: the true cause is the clip's length.
-  if (left.travelPx === null || right.travelPx === null) {
-    return nullResult(viewFitEntry.fit, TOO_FEW_SWINGS_CAVEAT, frameCoverage)
+  // Either arm without a travel: usually fewer than two complete strides in its span.
+  if (left.travelPx === null) {
+    return nullResult(viewFitEntry.fit, travelFailureCaveat(left), frameCoverage)
+  }
+  if (right.travelPx === null) {
+    return nullResult(viewFitEntry.fit, travelFailureCaveat(right), frameCoverage)
   }
 
   const interpolatedFraction = Math.max(

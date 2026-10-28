@@ -58,8 +58,10 @@ import {
 /**
  * Minimum complete ARM-SWING cycles — one per STRIDE, so one cycle spans two footfalls — for a
  * per-stride travel to be read at all (`perStrideTravel` returns `null` below it: one window's
- * range carries every tracking excursion undiluted), and the floor of the confidence ramp above it.
- * Counted in hip-anchored stride periods over the usable span (`SideSwing.strideCycles`).
+ * range carries every tracking excursion undiluted). Counted in hip-anchored stride periods over
+ * the usable span (`SideSwing.strideCycles`). A HARD FLOOR ONLY: it is also the confidence
+ * function's `minRequiredSampleSize`, but every published value already clears it, so the stride
+ * count never ramps confidence.
  *
  * Two is deliberately the same real demand the previous estimator encoded as "at least 4
  * half-swings": swapping the estimator should not silently also raise the sample bar, so the
@@ -414,6 +416,11 @@ export const ELBOW_NAME: Record<'left' | 'right', KeypointName> = {
   right: 'right_elbow',
 }
 
+/** `'too-few-strides'`: under `MIN_ARM_SWING_CYCLES` complete stride periods in the usable span.
+ * `'too-sparse'`: enough strides, but no stride window held enough samples (or the fit's own trend
+ * solve could not be reproduced). */
+export type TravelFailure = 'too-few-strides' | 'too-sparse'
+
 export interface SideSwing {
   /** The side's own scale-stabilized wrist-relative-to-shoulder-y trace, in px at the clip's
    * reference scale (see `resolveScaleStabilizer`), `null` where it did not resolve, index-
@@ -427,11 +434,15 @@ export interface SideSwing {
    * stride periods (`strideCycles`). */
   travelPx: number | null
   /** Complete-or-partial stride periods in the usable span — `spanSeconds × strideHz`, fractional,
-   * `0` with fewer than two usable samples. The cycle count the travel's ≥ 2 floor and the
-   * metric's confidence read, rather than the fit's own `observedCycles`, because the hip anchor
+   * `0` with fewer than two usable samples. The cycle count the travel's ≥ 2 floor reads (and the
+   * metric hands confidence, where it is inert above that floor), rather than the fit's own
+   * `observedCycles`, because the hip anchor
    * determines the stride period far better than a ±20% arm grid narrower than the window's own
    * frequency resolution can. */
   strideCycles: number
+  /** Why `travelPx` is `null` on a fitted side — `null` when there is a travel or the fit itself
+   * failed (the fit's own reason then applies). Lets a caller name the true cause. */
+  travelFailure: TravelFailure | null
   /** Frames where this side's shoulder AND wrist both resolved. */
   resolvedCount: number
   /** Of resolvedCount, how many had either point flagged interpolated. `resolvedCount −
@@ -538,6 +549,11 @@ const HAMPEL_HALF_WIDTH = 2
 const HAMPEL_K = 3
 /** MAD → standard deviation for Gaussian noise, so `HAMPEL_K` reads in sigmas. */
 const MAD_TO_SIGMA = 1.4826
+/** Floor on the Hampel scale, relative to the whole series' own MAD. A window whose MAD is 0 — three
+ * of its five samples equal, as on a sampled plateau — would otherwise call ANY deviation an
+ * outlier and flatten the peak beside it. 0.1 of the series-wide spread keeps a real outlier (many
+ * times that spread) caught while leaving a plateau's neighbours alone. */
+const HAMPEL_SCALE_FLOOR_FRACTION = 0.1
 
 /** Sliding stride windows start every quarter period, so the leftover fraction of a cycle past the
  * last whole stride still contributes and the median runs over several overlapping looks at each
@@ -549,13 +565,21 @@ const TRAVEL_WINDOW_STEP_FRACTION = 0.25
 const WINDOW_FIT_EPSILON_SECONDS = 1e-6
 
 function hampelFilter(values: readonly number[]): number[] {
+  const seriesCenter = median([...values])
+  const scaleFloor =
+    HAMPEL_SCALE_FLOOR_FRACTION *
+    MAD_TO_SIGMA *
+    median(values.map((v) => Math.abs(v - seriesCenter)))
   return values.map((value, i) => {
     const window = values.slice(
       Math.max(0, i - HAMPEL_HALF_WIDTH),
       Math.min(values.length, i + HAMPEL_HALF_WIDTH + 1),
     )
     const center = median(window)
-    const scale = MAD_TO_SIGMA * median(window.map((v) => Math.abs(v - center)))
+    const scale = Math.max(
+      scaleFloor,
+      MAD_TO_SIGMA * median(window.map((v) => Math.abs(v - center))),
+    )
     return Math.abs(value - center) > HAMPEL_K * scale ? center : value
   })
 }
@@ -586,26 +610,30 @@ function hampelFilter(values: readonly number[]): number[] {
  *    per-frame tracking excursion in it undiluted (measured: `park-side-portrait.mp4`'s 1.9-stride
  *    window read 0.43 torso against ~0.30 visible in keyframes).
  *
- * Known bias, stated rather than corrected: a range over discrete samples reads a sinusoid low by
- * at most `1 − cos(π f / fs)` (the extremum falling midway between two samples) and a cusp by at
- * most `2 f / fs`; the Hampel guard adds nothing to either on a clean swing. Measured at the live
- * operating point (~26 Hz effective, 1.45 Hz stride, 20 sampling phases): a sinusoid reads 0.2–0.7%
- * low, a triangle 3.6–7.4% low. Tracking jitter biases a range the other way, upward. Rejected: a multi-harmonic fit — a triangle needs harmonics to ~7–9 to come
+ * Known bias, stated rather than corrected: a range over discrete samples reads a sinusoid low
+ * by at most `1 − cos(π f / fs)` (the extremum falling midway between two samples) and a cusp by
+ * at most `2 f / fs`; the Hampel guard adds nothing to either on a clean swing. Measured at the
+ * live operating point (~26 Hz effective, 1.45 Hz stride, 20 sampling phases): a sinusoid reads
+ * 0.2–0.7% low, a triangle 3.6–7.4% low. Tracking jitter biases a range the other way, upward. Rejected: a multi-harmonic fit — a triangle needs harmonics to ~7–9 to come
  * within 5%, i.e. 17–21 parameters over ~100 samples near Nyquist.
  */
 function perStrideTravel(
   samples: ReadonlyArray<SpectralSample>,
   fit: SpectralFitResult,
   strideHz: number,
-): { travelPx: number | null; strideCycles: number } {
+): Pick<SideSwing, 'travelPx' | 'strideCycles' | 'travelFailure'> {
   const usable = samples
     .filter((sample) => Number.isFinite(sample.t) && Number.isFinite(sample.v))
     .sort((a, b) => a.t - b.t)
   const spanSeconds = usable.length < 2 ? 0 : usable[usable.length - 1].t - usable[0].t
   const strideCycles = spanSeconds * strideHz
-  const none = { travelPx: null, strideCycles }
+  const none = { travelPx: null, strideCycles, travelFailure: 'too-sparse' as const }
 
-  if (!fit.ok || strideCycles < MIN_ARM_SWING_CYCLES) return none
+  // The same boundary slack the window loop below uses, so a span of exactly two strides at a
+  // frame rate whose timestamps are not exact binary fractions still counts as two.
+  const enoughStrides = spanSeconds + WINDOW_FIT_EPSILON_SECONDS >= MIN_ARM_SWING_CYCLES / strideHz
+  if (!fit.ok) return { ...none, travelFailure: null }
+  if (!enoughStrides) return { ...none, travelFailure: 'too-few-strides' }
   const trend = fitTrendAtFrequency(usable, fit.frequencyHz)
   if (trend === null) return none
 
@@ -639,12 +667,22 @@ function perStrideTravel(
 
   if (travels.length === 0) return none
   const travelPx = median(travels)
-  return { travelPx: Number.isFinite(travelPx) ? travelPx : null, strideCycles }
+  return Number.isFinite(travelPx) ? { travelPx, strideCycles, travelFailure: null } : none
 }
 
-/** The true cause when a fitted arm has no travel: the clip holds too few complete strides to size
+/** The usual cause when a fitted arm has no travel: the clip holds too few complete strides to size
  * a swing from — not "too short for one cycle", which a 1.5-stride clip is not. */
 export const TOO_FEW_SWINGS_CAVEAT = `Arm positions were tracked, but the clip holds fewer than ${MIN_ARM_SWING_CYCLES} complete arm swings, too few to measure their size from.`
+
+/** The other cause: enough strides, but too few samples inside every stride window (or a trend the
+ * fit's own solve could not reproduce) to read a range from. */
+export const TOO_SPARSE_SWINGS_CAVEAT =
+  'Arm positions were tracked, but too sparsely within each arm swing to measure its size.'
+
+/** The true caveat for a fitted side whose `travelPx` is `null`. */
+export function travelFailureCaveat(swing: SideSwing): string {
+  return swing.travelFailure === 'too-sparse' ? TOO_SPARSE_SWINGS_CAVEAT : TOO_FEW_SWINGS_CAVEAT
+}
 
 export function caveatForFailure(reason: SpectralFitFailureReason, sampleCount: number): string {
   switch (reason) {
