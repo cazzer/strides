@@ -1,6 +1,6 @@
 import type { FormHeuristicsResult, MetricId, MetricResult } from '../../heuristics/types'
 import { areaReadings, bounceDerivation } from '../../guidance/compositeReadings'
-import type { AreaReading, BounceDerivation, RatioClipBounce } from '../../guidance/compositeReadings'
+import type { AreaReading, BounceDerivation } from '../../guidance/compositeReadings'
 import { FOCUS_AREA_ORDER, focusAreaView } from '../../guidance/focusAreas'
 import type { FocusAreaView } from '../../guidance/focusAreas'
 import { METRIC_GUIDANCE } from '../../guidance/metricGuidance'
@@ -28,7 +28,7 @@ export interface SummaryRowsOptions {
   /** Which clip each fused metric came from (`computeFusionSourceIndices`); null means one clip. */
   sourceIndices?: Readonly<Record<MetricId, number>> | null
   /** The relative bounce on vertical ratio's own clip (a multi-clip session); see `bounceDerivation`. */
-  ratioClipBounce?: RatioClipBounce | null
+  ratioClipBounce?: MetricResult | null
 }
 
 export interface SummaryRows {
@@ -68,7 +68,13 @@ export function summaryRows(
   ) as Record<MetricId, MetricTier>
 
   const views = FOCUS_AREA_ORDER.map((area) => focusAreaView(area, heuristics, tiers))
-  const derivation = bounceDerivation(heuristics, tiers, sourceIndices, undefined, ratioClipBounce)
+  const derivation = bounceDerivation(
+    heuristics,
+    tiers,
+    sourceIndices,
+    undefined,
+    ratioClipBounce === null ? null : { value: ratioClipBounce.value, tier: metricTier(ratioClipBounce) },
+  )
   const areas = views
     .filter((view) => view.measured)
     .map((view) => {

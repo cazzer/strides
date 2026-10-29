@@ -1,6 +1,5 @@
 import type { AggregateAnalysisState } from './types'
-import type { MetricId, View } from '../heuristics/types'
-import type { RatioClipBounce } from '../guidance/compositeReadings'
+import type { MetricId, MetricResult, View } from '../heuristics/types'
 import { MetricsPanel } from './MetricsPanel'
 import type { MetricCardEvidence } from './MetricsPanel'
 import { metricTier } from './metricConfidence'
@@ -37,7 +36,7 @@ export interface ResultsViewProps {
    * until fused, or with one clip). Presentation only: what vertical ratio's derivation and the
    * runner's stride cite, never a fused value.
    */
-  ratioClipBounce?: RatioClipBounce | null
+  ratioClipBounce?: MetricResult | null
   onOpenEvidenceVideo?: (clipIndex: number, timestamp: number, returnFocus: HTMLButtonElement | null) => void
 }
 

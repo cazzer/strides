@@ -266,9 +266,9 @@ describe('ModelRunner drawing', () => {
   it('draws vertical ratio as one stride and the magnified bounce, labelled with its value and the factor', () => {
     const { container } = setup({
       camera: 'strideSide',
-      focus: { metricIds: ['verticalOscillation', 'verticalRatio'] },
+      focus: { metricIds: ['verticalRatio', 'verticalOscillation'] },
     })
-    // The bounce's own bracket is the same bracket: drawn once, by vertical ratio.
+    // The bounce's own true-scale bracket gives way to the inset when the bounce does not head the focus.
     expect(Array.from(container.querySelectorAll('[data-annotation]'), (el) => el.getAttribute('data-annotation'))).toEqual([
       'strideLength',
     ])
@@ -282,6 +282,21 @@ describe('ModelRunner drawing', () => {
     expect(Array.from(tags, (tag) => tag.textContent)).toEqual(['hip bounce ×10', 'stride'])
     for (const tag of tags) expect(tag.querySelector('tspan')?.getAttribute('x')).not.toBeNull()
     for (const path of annotation.querySelectorAll('path')) expect(path.getAttribute('d')).toMatch(/^M-?\d/)
+  })
+
+  it('keeps the bounce’s own bracket beside the inset when the bounce heads the focus', () => {
+    // A cadence-less rhythm stop: the centimetre bounce is the headline, vertical ratio secondary.
+    const { container } = setup({
+      camera: 'strideSide',
+      focus: { metricIds: ['verticalOscillationCm', 'verticalRatio'] },
+    })
+    expect(Array.from(container.querySelectorAll('[data-annotation]'), (el) => el.getAttribute('data-annotation'))).toEqual([
+      'pelvisBounce',
+      'strideLength',
+    ])
+    expect(container.querySelector('[data-annotation="pelvisBounce"] text')?.textContent).toBe(
+      '15.0%of torso length',
+    )
   })
 
   it('marks a clamped focus value as shown approximately', () => {

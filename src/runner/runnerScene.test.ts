@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { makeMetric } from '../results/__fixtures__/metricResult'
+import { makeMetric, makeVerticalOscillation } from '../results/__fixtures__/metricResult'
 import { METRIC_LABELS } from '../results/metricConfidence'
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
@@ -188,6 +188,22 @@ describe('describeRunner', () => {
     const text = describeRunner(bound, ['torsoPitch', 'contactShankOffset'])
     expect(text).toContain('Shown: Trunk lean 5.0°; Foot strike pattern Heel first (estimate), drawn at a limit of the figure, not at the measured value.')
     expect(describeRunner(bindOnly(['cadence']), ['torsoPitch'])).not.toContain('Shown:')
+  })
+
+  it('never lists the undrawn neutral stride as a fixed setting: vertical ratio is not "not measured"', () => {
+    const fixedPart = (text: string) => text.split('Fixed illustrative settings, not measured: ')[1] ?? ''
+    // Vertical ratio measured, but its stride unsaid: the relative bounce is excluded.
+    const strideUnsaid = bindAll({ verticalOscillation: makeVerticalOscillation({ viewFit: 'unsuitable' }) })
+    expect(strideUnsaid.strideLength.source).toBe('neutral')
+    expect(fixedPart(describeRunner(strideUnsaid, []))).not.toContain(METRIC_LABELS.verticalRatio)
+    // Vertical ratio excluded (a front-only session, say), with other parts neutral.
+    const ratioExcluded = bindOnly(['cadence', 'trunkLean'])
+    expect(ratioExcluded.strideLength.source).toBe('neutral')
+    const text = describeRunner(ratioExcluded, [])
+    expect(fixedPart(text)).toContain(METRIC_LABELS.kneeDrive)
+    expect(text).not.toContain(METRIC_LABELS.verticalRatio)
+    // A measured stride is listed as measured.
+    expect(describeRunner(bindAll(), []).split('.')[0]).toContain(METRIC_LABELS.verticalRatio)
   })
 
   it('states a cadence focus as its steps per minute', () => {

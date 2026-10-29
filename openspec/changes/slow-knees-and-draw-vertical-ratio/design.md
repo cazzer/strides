@@ -63,6 +63,15 @@ which is the measured bounce on vertical ratio's clip whenever the stride is unc
 it can differ from the figure's (fused) hip range, and the bounce is drawn once. The stride camera
 frames the inset's top as well.
 
+**D9. Review round 1.** The text alternative never lists the neutral stride among the fixed
+settings (`drawnWhenNeutral: false`): nothing draws it, so a measured-but-unsaid or excluded vertical
+ratio is not "not measured". Where the bounce heads the focus (cadence excluded), its true-scale
+bracket stays beside the inset: two marks at two scales, and the headline keeps its mark; the stride
+frame keeps room for that bracket's label. The inset is capped at 3 torso lengths and says "shown
+approximately" past it. The per-clip bounce is a plain `MetricResult` tiered by each reader's own
+tier function. Non-finite bounces give no figures. The one-thing stop takes the stride camera when
+its cue is vertical ratio with a stride.
+
 ## Risks
 
 - The inset is not a reading of the figure's hips: where fusion took the relative bounce from another

@@ -11,7 +11,7 @@
  */
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { GAIT_PHASES, GROUND_Y, MODEL_PROPORTIONS, PELVIS_HEIGHT, poseAt } from './gaitModel'
-import { STRIDE_BRACKET_DEPTH, bounceInset, strideSpan } from './runnerAnnotations'
+import { BOUNCE_BRACKET_X, STRIDE_BRACKET_DEPTH, bounceInset, strideSpan } from './runnerAnnotations'
 import { NEUTRAL_RUNNER_PARAMS } from './runnerParams'
 import type {
   CameraPreset,
@@ -144,10 +144,10 @@ export function landingCamera(values: RunnerParams): CameraState {
 
 /**
  * Room the stride frame keeps beyond what it frames, in PROJECTED units (labels are sized on
- * screen, not in the world): the cadence label above the head, and vertical ratio's two-line label
- * under the stride bracket.
+ * screen, not in the world): the bounce's own label left of its bracket (drawn when the bounce heads
+ * the stop), the cadence label above the head, and vertical ratio's two-line label under the stride.
  */
-export const STRIDE_FRAME_PAD = Object.freeze({ left: 0.1, right: 0.1, top: 0.4, bottom: 0.45 })
+export const STRIDE_FRAME_PAD = Object.freeze({ left: 0.45, right: 0.1, top: 0.4, bottom: 0.45 })
 const STRIDE_SAMPLES = 30
 
 /**
@@ -162,7 +162,7 @@ export function strideCamera(
   ratio: number = NEUTRAL_RUNNER_PARAMS.pelvisBounce / NEUTRAL_RUNNER_PARAMS.strideLength,
 ): CameraState {
   const { end } = strideSpan(values, 'right')
-  let left = Infinity
+  let left = BOUNCE_BRACKET_X
   let right = end
   let top = bounceInset(values, 'right', ratio).high
   for (let i = 0; i < STRIDE_SAMPLES; i += 1) {

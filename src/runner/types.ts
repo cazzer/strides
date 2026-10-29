@@ -43,7 +43,8 @@ export type RunnerParamId =
   /**
    * Ground covered over one gait cycle (one stride: a foot's contact to its next), torso lengths.
    * Moves no joint (the model is a treadmill: hip-mid stays at x = 0); it is drawn only as the
-   * stride bracket under vertical ratio, so `pelvisBounce / strideLength` is the drawn ratio.
+   * stride bracket under vertical ratio, where the bounce inset ÷ its factor ÷ the stride is the
+   * drawn ratio (`bounceInset`).
    */
   | 'strideLength'
 

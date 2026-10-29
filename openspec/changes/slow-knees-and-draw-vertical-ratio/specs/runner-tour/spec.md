@@ -23,7 +23,7 @@ its compact bar, and only in a panel that has one.
 | knees | legs, side | 0.4, labelled "Slow motion" |
 | landing | legs, side (a stopgap until a contact-tracking camera) | 0.4, labelled "Slow motion" |
 | foot path | feet, front | 0.4, labelled "Slow motion" |
-| one thing | whole body, side | 1 |
+| one thing | whole body, side; the stride camera when its cue is vertical ratio with a measured stride | 1 |
 
 The arms camera SHALL sit close to the side, so the measured swing reads fore-and-aft and the two
 arms never read as crossing the body's midline, while still far enough round for the two shoulders
@@ -40,6 +40,14 @@ With no stop active the runner SHALL show the whole figure from the side at full
   secondary value, its stride measured
 - **THEN** the runner's focus is cadence and vertical ratio, the camera is the stride camera at full
   speed, and no bounce or stride value is labelled on the figure, only vertical ratio's
+
+#### Scenario: A bounce-headlined rhythm stop keeps its headline's mark
+
+- **WHEN** cadence is excluded, so the bounce in centimetres heads the rhythm stop with vertical
+  ratio as its secondary value, its stride measured
+- **THEN** the runner's focus is the bounce and vertical ratio on the stride camera, and the figure
+  draws both the bounce's own true-scale bracket, labelled with the headline value, and vertical
+  ratio's stride and ×10 inset
 
 #### Scenario: The rhythm stop without vertical ratio
 

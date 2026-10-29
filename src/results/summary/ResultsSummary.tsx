@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
-import type { FormHeuristicsResult, MetricId, View } from '../../heuristics/types'
+import type { FormHeuristicsResult, MetricId, MetricResult, View } from '../../heuristics/types'
 import { feedbackFor } from '../../guidance/feedbackPoints'
-import { readingHeadline, type RatioClipBounce } from '../../guidance/compositeReadings'
+import { readingHeadline } from '../../guidance/compositeReadings'
 import { FOCUS_AREAS } from '../../guidance/focusAreas'
 import type { FocusAreaId } from '../../guidance/focusAreas'
 import { ModelRunner } from '../../runner/ModelRunner'
@@ -95,7 +95,7 @@ interface SummaryBodyProps {
   clipViews: readonly string[]
   clipViewKinds: readonly (View | null)[]
   sourceIndices: Record<MetricId, number> | null
-  ratioClipBounce: RatioClipBounce | null
+  ratioClipBounce: MetricResult | null
   onOpenEvidenceVideo?: GuidedResultsViewProps['onOpenEvidenceVideo']
 }
 

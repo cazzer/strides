@@ -130,7 +130,7 @@ import type {
 } from './types'
 
 export interface RunnerFocus {
-  /** Mapped through `paramForMetric`; `verticalRatio` and `stepWidthCm` drive nothing. */
+  /** Mapped through `paramForMetric`; `stepWidthCm` drives nothing, `verticalRatio` the stride. */
   metricIds: readonly MetricId[]
   /** Keep only this kind of annotation. Absent: each focus parameter's natural kind. */
   annotation?: AnnotationKind

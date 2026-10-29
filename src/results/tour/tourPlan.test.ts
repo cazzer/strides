@@ -169,12 +169,17 @@ describe('stopFocusMetrics and stopView', () => {
       playbackRate: 1,
     })
     expect(stopView('rhythm', runnerFocusFor(['cadence']), params)).toEqual(FOCUS_AREA_CAMERA.rhythm)
-    expect(stopView('oneThing', runnerFocusFor(['verticalRatio']), params)).toBe(NO_FOCUS_CAMERA)
+    // The one-thing stop sees the whole figure, unless its cue is vertical ratio with a stride.
+    expect(stopView('oneThing', runnerFocusFor(['verticalRatio']), params)).toEqual({
+      camera: 'strideSide',
+      playbackRate: NO_FOCUS_CAMERA.playbackRate,
+    })
+    expect(stopView('oneThing', runnerFocusFor(['trunkLean']), params)).toEqual(NO_FOCUS_CAMERA)
+    expect(stopView('oneThing', undefined, params)).toEqual(NO_FOCUS_CAMERA)
   })
 })
 
 describe('tourStopDomId', () => {
-
   it('ids a stop as tour-<id>', () => {
     expect(tourStopDomId('knees')).toBe('tour-knees')
     expect(tourStopDomId('oneThing')).toBe('tour-oneThing')

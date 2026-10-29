@@ -1,9 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
-import type { FormHeuristicsResult, MetricId, View } from '../../heuristics/types'
+import type { FormHeuristicsResult, MetricId, MetricResult, View } from '../../heuristics/types'
 import { FOCUS_AREAS, FOCUS_AREA_ORDER } from '../../guidance/focusAreas'
 import type { TourStopId } from '../../guidance/focusAreas'
-import type { RatioClipBounce } from '../../guidance/compositeReadings'
 import { ONE_THING_LABEL } from '../../guidance/feedbackPoints'
 import { ModelRunner } from '../../runner/ModelRunner'
 import type { RunnerFocus } from '../../runner/ModelRunner'
@@ -533,7 +532,7 @@ interface TourBodyProps {
   evidence: readonly MetricCardEvidence[]
   sourceIndices: Record<MetricId, number> | null
   /** The relative bounce on vertical ratio's own clip, for the runner's stride. */
-  ratioClipBounce: RatioClipBounce | null
+  ratioClipBounce: MetricResult | null
   clipViewKinds: readonly (View | null)[]
 }
 

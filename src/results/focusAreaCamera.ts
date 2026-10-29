@@ -54,18 +54,17 @@ export function focusDrawsStride(focus: RunnerFocus | undefined, params: BoundRu
 }
 
 /**
- * The runner's view for an area (null: none) with the focus it shows: the area's own, except that a
- * focus drawing vertical ratio's stride takes the stride camera, which frames the whole figure and
- * one stride along the ground at one scale (a stride is several figures long, so the area's own
- * framing would cut it off). The rate stays the area's.
+ * The runner's view for an area (null: none, the whole figure) with the focus it shows: the area's
+ * own, except that a focus drawing vertical ratio's stride takes the stride camera, which frames the
+ * whole figure and one stride along the ground at one scale (a stride is several figures long, so
+ * any other framing would cut it off). The rate stays the area's.
  */
 export function runnerViewFor(
   area: FocusAreaId | null,
   focus: RunnerFocus | undefined,
   params: BoundRunnerParams,
 ): RunnerView {
-  if (area === null) return NO_FOCUS_CAMERA
-  const view = FOCUS_AREA_CAMERA[area]
+  const view = area === null ? NO_FOCUS_CAMERA : FOCUS_AREA_CAMERA[area]
   return focusDrawsStride(focus, params) ? { ...view, camera: 'strideSide' } : view
 }
 

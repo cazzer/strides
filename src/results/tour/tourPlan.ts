@@ -1,7 +1,6 @@
-import type { FormHeuristicsResult, MetricId } from '../../heuristics/types'
+import type { FormHeuristicsResult, MetricId, MetricResult } from '../../heuristics/types'
 import { feedbackFor, selectOneThing } from '../../guidance/feedbackPoints'
 import type { AreaFeedback, OneThing } from '../../guidance/feedbackPoints'
-import type { RatioClipBounce } from '../../guidance/compositeReadings'
 import { FOCUS_AREAS } from '../../guidance/focusAreas'
 import type { FocusAreaId, TourStopId } from '../../guidance/focusAreas'
 import type { RunnerFocus } from '../../runner/ModelRunner'
@@ -87,7 +86,7 @@ export function tourPlan(
   scalePassStatus: ScalePassStatus,
   coverage: SessionCoverage | null,
   sourceIndices: Readonly<Record<MetricId, number>> | null = null,
-  ratioClipBounce: RatioClipBounce | null = null,
+  ratioClipBounce: MetricResult | null = null,
 ): TourPlan {
   const { areas, views } = summaryRows(heuristics, { sourceIndices, ratioClipBounce })
   const unmeasured = views.filter((view) => !view.measured).map((view) => view.area)
@@ -113,7 +112,7 @@ export function stopView(
   focus: RunnerFocus | undefined,
   params: BoundRunnerParams,
 ): RunnerView {
-  return id === 'oneThing' ? NO_FOCUS_CAMERA : runnerViewFor(id, focus, params)
+  return runnerViewFor(id === 'oneThing' ? null : id, focus, params)
 }
 
 /**

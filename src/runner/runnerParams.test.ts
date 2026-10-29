@@ -237,6 +237,22 @@ describe('bindRunnerParams', () => {
       expectNeutral(bindRunnerParams(makeHeuristics(), undefined, { sourceIndices: other }), 'strideLength')
     })
 
+    it('is neutral for a non-finite bounce, never a NaN stride', () => {
+      const bound = bindRunnerParams(makeHeuristics(), undefined, {
+        ratioClipBounce: makeMetric('verticalOscillation', { value: Number.NaN }),
+      })
+      expectNeutral(bound, 'strideLength')
+    })
+
+    it("tiers vertical ratio's clip's bounce with the tier function it is given", () => {
+      const clipBounce = makeMetric('verticalOscillation', { value: 0.154 })
+      const tierOf = (metric: { metric: string }) => (metric.metric === 'verticalOscillation' ? 'excluded' : 'normal')
+      expectNeutral(bindRunnerParams(makeHeuristics(), tierOf, { ratioClipBounce: clipBounce }), 'strideLength')
+      expect(bindRunnerParams(makeHeuristics(), undefined, { ratioClipBounce: clipBounce }).strideLength.source).toBe(
+        'measured',
+      )
+    })
+
     it('is clamped to its drawable range, and says so', () => {
       const bound = bindRunnerParams(
         makeHeuristics({ verticalRatio: makeMetric('verticalRatio', { value: 0.01 }) }),
@@ -254,7 +270,7 @@ describe('bindRunnerParams', () => {
       expectNeutral(bindRunnerParams(heuristics, undefined, { sourceIndices }), 'strideLength')
       const bound = bindRunnerParams(heuristics, undefined, {
         sourceIndices,
-        ratioClipBounce: { value: 0.154, tier: 'normal' },
+        ratioClipBounce: makeMetric('verticalOscillation', { value: 0.154 }),
       })
       expect(bound.strideLength).toEqual({
         source: 'measured',
@@ -266,7 +282,10 @@ describe('bindRunnerParams', () => {
       // The figure's own bounce is still the fused one: nothing fused moves.
       expect(bound.pelvisBounce).toMatchObject({ metricId: 'verticalOscillation', value: 0.15 })
       expectNeutral(
-        bindRunnerParams(heuristics, undefined, { sourceIndices, ratioClipBounce: { value: 0.154, tier: 'excluded' } }),
+        bindRunnerParams(heuristics, undefined, {
+          sourceIndices,
+          ratioClipBounce: makeMetric('verticalOscillation', { value: 0.154, viewFit: 'unsuitable' }),
+        }),
         'strideLength',
       )
     })

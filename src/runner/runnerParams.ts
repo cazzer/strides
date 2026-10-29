@@ -15,7 +15,7 @@
  *   denominator, the stride, which the bounce reading derives in torso lengths (`bounceDerivation`).
  * - There are no per-side or variability parameters, because no metric reports either.
  */
-import { bounceDerivation, type RatioClipBounce } from '../guidance/compositeReadings'
+import { bounceDerivation } from '../guidance/compositeReadings'
 import { metricTier, type MetricTier } from '../results/metricConfidence'
 import type { FormHeuristicsResult, MetricResult } from '../heuristics/types'
 import { MODEL_TORSO_LENGTH_CM, realizeParams } from './gaitModel'
@@ -32,10 +32,10 @@ import type {
 /**
  * A candidate metric. `value = metric × scale`, except the stride candidate: vertical ratio bound as
  * the stride it was computed over, in torso lengths. The bounce reading derives that stride
- * (`bounceDerivation`: `verticalOscillation / verticalRatio`, only where the relative bounce is
- * measured on vertical ratio's own clip from the same hip fit), so the drawn
- * `pelvisBounce / strideLength` is vertical ratio itself, and the stride is the very figure the
- * reading's "From …" line prints.
+ * (`bounceDerivation`: the relative bounce on vertical ratio's own clip, from the same hip fit,
+ * over vertical ratio), so the stride is the very figure the reading's "From …" line prints, and
+ * the drawing's bounce inset ÷ its factor ÷ the drawn stride is vertical ratio itself
+ * (`bounceInset`). `pelvisBounce` (the fused bounce the figure's hips move by) need not be it.
  */
 export type RunnerParamCandidate =
   | { metric: RunnerMetricId; scale: number }
@@ -51,6 +51,12 @@ export interface RunnerParamSpec {
    * adjusted by `realizeParams` to fit a measured partner may fall outside it.
    */
   range: readonly [min: number, max: number]
+  /**
+   * `false` for a parameter nothing draws while it is neutral (the stride: only a measured stride
+   * gets its bracket). The text alternative then never lists it among the fixed settings, since
+   * no fixed setting of it is on screen. Absent: drawn either way.
+   */
+  drawnWhenNeutral?: false
 }
 
 export const RUNNER_PARAM_SPECS: Readonly<Record<RunnerParamId, RunnerParamSpec>> = {
@@ -97,6 +103,7 @@ export const RUNNER_PARAM_SPECS: Readonly<Record<RunnerParamId, RunnerParamSpec>
     metrics: [{ metric: 'verticalRatio', stride: true }],
     neutral: 5,
     range: [2, 10],
+    drawnWhenNeutral: false,
   },
 }
 
@@ -120,7 +127,7 @@ export type RunnerMetrics = Pick<FormHeuristicsResult, RunnerMetricId>
  */
 export interface StrideSource {
   sourceIndices?: Readonly<Record<MetricId, number>> | null
-  ratioClipBounce?: RatioClipBounce | null
+  ratioClipBounce?: MetricResult | null
 }
 
 /** The stride, in torso lengths, that vertical ratio was computed over, or null where unsaid. */
@@ -133,8 +140,11 @@ function measuredStride(
     verticalRatio: tierOf(metrics.verticalRatio),
     verticalOscillation: tierOf(metrics.verticalOscillation),
   }
+  // The per-clip bounce is tiered by the same function as the fused metrics.
+  const clipBounce =
+    ratioClipBounce === null ? null : { value: ratioClipBounce.value, tier: tierOf(ratioClipBounce) }
   return (
-    bounceDerivation(metrics, tiers, sourceIndices, undefined, ratioClipBounce)?.figures
+    bounceDerivation(metrics, tiers, sourceIndices, undefined, clipBounce)?.figures
       ?.strideTorsoLengths ?? null
   )
 }
@@ -153,7 +163,7 @@ function bindOne(
       'stride' in candidate
         ? measuredStride(metrics, tierOf, strideSource)
         : result.value * candidate.scale
-    if (scaled === null) continue
+    if (scaled === null || !Number.isFinite(scaled)) continue
     const [min, max] = spec.range
     const value = Math.min(max, Math.max(min, scaled))
     return {

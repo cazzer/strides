@@ -15,7 +15,7 @@ import {
   strideCamera,
 } from './camera'
 import { GAIT_PHASES, GROUND_Y, poseAt } from './gaitModel'
-import { STRIDE_BRACKET_DEPTH, bounceInset, strideSpan } from './runnerAnnotations'
+import { BOUNCE_BRACKET_X, BOUNCE_INSET_MAX_HEIGHT, STRIDE_BRACKET_DEPTH, bounceInset, strideSpan } from './runnerAnnotations'
 import { NEUTRAL_RUNNER_PARAMS, RUNNER_PARAM_SPECS } from './runnerParams'
 import { VIEW_HALF_WIDTH } from './runnerScene'
 import type { CameraPreset, CameraState, RunnerParamId, RunnerParams } from './types'
@@ -226,16 +226,20 @@ describe('presets', () => {
     ])
 
     it('frames the whole figure, the whole stride and the bounce inset, with the label pads clear, at every stride', () => {
-      for (const values of cases) {
-        // The bounce the inset magnifies: this case's own, up to the drawable limit (0.5).
-        const ratio = values.pelvisBounce / values.strideLength
+      // The bounce the inset magnifies: each case's own, up to its drawable limit (0.5), and past
+      // it (1 torso length: a capped inset).
+      const framed = cases.flatMap((values) => [
+        { values, ratio: values.pelvisBounce / values.strideLength },
+        { values, ratio: 1 / values.strideLength },
+      ])
+      for (const { values, ratio } of framed) {
         const camera = strideCamera(values, ratio)
         expect(camera.yawDeg).toBe(0)
         expect(camera.pitchDeg).toBe(0)
         const { start, end } = strideSpan(values, 'right')
         const below = GROUND_Y - STRIDE_BRACKET_DEPTH
         const ends = [start, end].map((x) => projectPoint({ x, y: below, z: 0 }, camera))
-        const where = `stride ${values.strideLength}, landing ${values.landingOffset}`
+        const where = `stride ${values.strideLength}, landing ${values.landingOffset}, ratio ${ratio}`
         expect(ends[1].x, where).toBeLessThanOrEqual(VIEW_HALF_WIDTH - STRIDE_FRAME_PAD.right + 1e-9)
         for (const p of ends) {
           expect(p.y, where).toBeLessThanOrEqual(CAMERA_FRAME_HALF_HEIGHT - STRIDE_FRAME_PAD.bottom + 1e-9)
@@ -244,6 +248,10 @@ describe('presets', () => {
         const inset = bounceInset(values, 'right', ratio)
         const top = projectPoint({ x: inset.x, y: inset.high, z: 0 }, camera)
         expect(top.y, where).toBeGreaterThanOrEqual(-CAMERA_FRAME_HALF_HEIGHT + STRIDE_FRAME_PAD.top - 1e-9)
+        expect(inset.high - inset.low, where).toBeLessThanOrEqual(BOUNCE_INSET_MAX_HEIGHT)
+        // Room left of the bounce's own bracket for its label (a bounce-headlined stop draws it).
+        const bounce = projectPoint({ x: BOUNCE_BRACKET_X, y: 1, z: 0 }, camera)
+        expect(bounce.x, where).toBeGreaterThanOrEqual(-VIEW_HALF_WIDTH + STRIDE_FRAME_PAD.left - 1e-9)
         for (let i = 0; i < 40; i += 1) {
           for (const j of projectPose(poseAt(i / 40, values), camera)) {
             expect(Math.abs(j.x), `${j.name} ${where}`).toBeLessThanOrEqual(VIEW_HALF_WIDTH)

@@ -323,6 +323,8 @@ interface Built {
   label: LabelPlacement
   /** A line printed under the value, above any clamp note. */
   caption?: string
+  /** The mark could not be drawn at the value (a capped inset): say "shown approximately". */
+  approximate?: boolean
   tags?: RunnerAnnotationLabel[]
   pulses?: BeatPulse[]
 }
@@ -391,6 +393,12 @@ export const BOUNCE_INSET_TAG = `hip bounce ×${BOUNCE_INSET_FACTOR}`
 export const BOUNCE_INSET_BASE = 0.6
 /** Where along the stride the inset stands, as a fraction of it: clear of the figure and the tag. */
 const BOUNCE_INSET_ALONG = 0.75
+/**
+ * The tallest inset drawn, torso lengths (a 0.3-torso bounce at ×10, about 15 cm on the model's
+ * 50 cm torso, far above any running bounce measured here). A taller one is drawn at this height and
+ * marked "shown approximately", like a clamped parameter.
+ */
+export const BOUNCE_INSET_MAX_HEIGHT = 3
 
 /**
  * Vertical ratio's bounce as a magnified inset over the stride: a vertical bracket
@@ -402,14 +410,17 @@ export function bounceInset(
   values: RunnerParams,
   side: RunnerSide,
   ratio: number,
-): { x: number; low: number; high: number; bounce: number } {
+): { x: number; low: number; high: number; bounce: number; capped: boolean } {
   const { start, end } = strideSpan(values, side)
   const bounce = ratio * values.strideLength
+  const height = bounce * BOUNCE_INSET_FACTOR
+  const capped = height > BOUNCE_INSET_MAX_HEIGHT
   return {
     x: start + BOUNCE_INSET_ALONG * (end - start),
     low: BOUNCE_INSET_BASE,
-    high: BOUNCE_INSET_BASE + bounce * BOUNCE_INSET_FACTOR,
+    high: BOUNCE_INSET_BASE + (capped ? BOUNCE_INSET_MAX_HEIGHT : height),
     bounce,
+    capped,
   }
 }
 
@@ -531,6 +542,7 @@ const BUILDERS: Readonly<Record<RunnerParamId, Builder>> = {
       ],
       label: { anchor: middle, side: 'below' },
       caption: STRIDE_RATIO_CAPTION,
+      approximate: inset.capped,
       tags: [
         {
           text: BOUNCE_INSET_TAG,
@@ -708,10 +720,13 @@ export function planAnnotations({
       (kind === undefined || natural === kind)
     )
   })
-  // Vertical ratio draws the bounce itself, as its magnified inset: one bounce mark on the figure.
-  const eligible = annotatable.includes('strideLength')
-    ? annotatable.filter((paramId) => paramId !== 'pelvisBounce')
-    : annotatable
+  // Vertical ratio draws the bounce itself, as its magnified inset, so the bounce's own true-scale
+  // bracket gives way, unless the bounce heads the focus (a stop whose headline is the bounce keeps
+  // its headline's mark; the inset is a different mark at another scale).
+  const eligible =
+    annotatable.includes('strideLength') && focusParams[0] !== 'pelvisBounce'
+      ? annotatable.filter((paramId) => paramId !== 'pelvisBounce')
+      : annotatable
   const cosYaw = Math.cos(cameraYawDeg * DEG)
   const frontal = Math.abs(cosYaw) < 0.5
   const near: RunnerSide = cosYaw >= 0 ? 'right' : 'left'
@@ -739,6 +754,7 @@ export function planAnnotations({
     const built = BUILDERS[paramId](values[paramId], values, { side, phase, metricValue: param.metricValue })
     const value = formatRunnerValue(param.metricId, param.metricValue)
     const valueLines = labelLines(value, false)
+    const clamped = param.clamped || built.approximate === true
     const annotation: RunnerAnnotation = {
       paramId,
       kind: PARAM_ANNOTATION_KIND[paramId] as AnnotationKind,
@@ -749,16 +765,16 @@ export function planAnnotations({
         text:
           value +
           (built.caption === undefined ? '' : ` ${built.caption}`) +
-          (param.clamped ? CLAMPED_LABEL_SUFFIX : ''),
+          (clamped ? CLAMPED_LABEL_SUFFIX : ''),
         lines: [
           ...valueLines,
           ...(built.caption === undefined ? [] : [built.caption]),
-          ...(param.clamped ? [CLAMPED_LINE] : []),
+          ...(clamped ? [CLAMPED_LINE] : []),
         ],
         ...built.label,
       },
       ...(built.tags ? { tags: built.tags } : {}),
-      clamped: param.clamped,
+      clamped,
       side,
       keyPhase: q === null ? null : phase,
       ...(built.pulses ? { pulses: built.pulses } : {}),

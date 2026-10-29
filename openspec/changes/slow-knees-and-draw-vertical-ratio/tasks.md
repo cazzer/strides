@@ -27,3 +27,11 @@
 - [x] 5.2 Presentation-only proof: frozen-input unit test (`ratioClipBounce.test.ts`) and live base-vs-branch fused equality on the demo
 - [x] 5.3 Magnified bounce inset (×10, tagged), true-scale bounce bracket gives way; readback tests (inset = bounce × factor)
 - [x] 5.4 Live check: demo and one side clip at 1280×800 and 390×844
+
+## 6. Review round 1
+
+- [x] 6.1 Text alternative: undrawn neutral stride not a fixed setting (`drawnWhenNeutral: false`), tests
+- [x] 6.2 MODIFIED camera, focus-annotation and text-alternative requirements
+- [x] 6.3 Bounce-headlined focus keeps the bounce bracket; runner-tour scenario; tests
+- [x] 6.4 Stale comments; per-clip bounce tiered by `tierOf`; NaN guards; one-thing stride camera; inset cap
+- [x] 6.5 Re-shoot demo rhythm at 1280 and 390 (stride frame's left room changed)

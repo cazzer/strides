@@ -210,7 +210,10 @@ export function describeRunner(
   focusParams: readonly RunnerParamId[],
 ): string {
   const measured = RUNNER_PARAM_IDS.filter((id) => bound[id].source === 'measured')
-  const neutral = RUNNER_PARAM_IDS.filter((id) => bound[id].source === 'neutral')
+  // A neutral parameter nothing draws (the stride) is no "fixed setting" the reader can see.
+  const neutral = RUNNER_PARAM_IDS.filter(
+    (id) => bound[id].source === 'neutral' && RUNNER_PARAM_SPECS[id].drawnWhenNeutral !== false,
+  )
   const sentences = [
     measured.length > 0
       ? `Measured from your clip: ${measured.map((id) => paramLabel(bound, id)).join(', ')}.`

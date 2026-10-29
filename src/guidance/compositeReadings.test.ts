@@ -160,6 +160,17 @@ describe('bounceDerivation', () => {
     ).toBeNull()
   })
 
+  it('cites no figures for a non-finite bounce, rather than NaN', () => {
+    const heuristics = makeHeuristics()
+    const mixed = { ...ONE_CLIP, verticalOscillation: 1 }
+    expect(
+      bounceDerivation(heuristics, tiersOf(heuristics), mixed, 'hipMid', { value: Number.NaN, tier: 'normal' })!
+        .figures,
+    ).toBeNull()
+    const nanFused = makeHeuristics({ verticalOscillation: makeVerticalOscillation({ value: Number.NaN }) })
+    expect(bounceDerivation(nanFused, { verticalRatio: 'normal', verticalOscillation: 'normal' }, ONE_CLIP)!.figures).toBeNull()
+  })
+
   it('drops the figures unless vertical oscillation reads the same hip fit (hipMid)', () => {
     const heuristics = makeHeuristics()
     expect(bounceDerivation(heuristics, tiersOf(heuristics), ONE_CLIP, 'earMid')).toEqual({

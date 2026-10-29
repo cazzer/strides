@@ -63,6 +63,10 @@ describe('runnerViewFor', () => {
     )
     expect(runnerViewFor('knees', runnerFocusFor(['kneeFlexion']), measured)).toEqual(FOCUS_AREA_CAMERA.knees)
     expect(runnerViewFor(null, undefined, measured)).toEqual(NO_FOCUS_CAMERA)
+    expect(runnerViewFor(null, runnerFocusFor(['verticalRatio']), measured)).toEqual({
+      camera: 'strideSide',
+      playbackRate: 1,
+    })
   })
 })
 

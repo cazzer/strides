@@ -317,7 +317,7 @@ complete." status in tour and summary every time.
 | side-landscape 1280 light/dark, 390 light/dark, 375×667 dark, 1280 reduced motion | Cadence 174 + secondary VR 2.40–2.46%; From line "bounce 15.2–15.4% of torso length …" before the scale pass, "bounce 7.2 cm and stride 6.3 torso lengths (3 strides)" after it; one bar | Cadence headline, "Also: Vertical ratio"; VR card with bar + From line; "Also: Vertical oscillation (cm), Vertical oscillation" closed (44 px at 1280, 56 px at 390), two evidence canvases render when opened; the row stays open |
 | park-approach 1280 light | Cadence 181 (Medium) + secondary "Bounce 10.5 cm" (Low confidence), no From line (VR excluded) | Also: Vertical oscillation (cm); VO_cm card with Malisoux bar, no From line; nested holds VO |
 | side-portrait 1280 light, 390 dark | cadence excluded: VR 3.00% is the stop headline, Medium confidence, bar, From "bounce 17.2% of torso length and stride 5.7 torso lengths (2 strides)" (VO_cm absent on this clip, so it never switches to cm) | VR headline, no Also line; nested holds VO |
-| Demo (3 clips) 1280 light | as side-landscape | every rhythm card "Measured from Clip 1 of 3 · Side view": the VO family and VR share clip 1, so the same-clip guard did not bite live (it is unit-tested) |
+| Demo (3 clips) 1280 light | as side-landscape | every rhythm card "Measured from Clip 1 of 3 · Side view": the VO family and VR share clip 1, so the same-clip guard did not bite live (it is unit-tested). ⚠️ **Superseded:** on today's fusion (after `strides-eiil`/`strides-xki9`, checked live 2026-10-29) the demo's relative VO wins on clip 2 while VR stays on clip 1; see the `strides-trn2.10` section |
 
 - The From line switched from relative to cm in place when the scale pass grafted VO_cm, in every
   side-landscape run.
@@ -510,6 +510,14 @@ Change: `openspec/changes/slow-knees-and-draw-vertical-ratio` (design D1–D8).
   464–509, "stride" 206–230 × 517–527; drawing 316–654; nothing overlaps or clips. Labels read 2.46%
   in the first context and 2.40% later (the known cold/warm mix of a reused browser process).
   Screenshots: scratchpad `tour-tweaks-live/*.png`.
+- **Review round 1 (`strides-trn2.10`):** the neutral stride is never listed as a "fixed setting" in
+  the text alternative (`drawnWhenNeutral: false`); a bounce-HEADLINED focus (cadence excluded, VO_cm
+  heads rhythm) keeps the bounce's true-scale bracket beside the inset; the inset is capped at 3
+  torso lengths ("shown approximately" beyond); the per-clip bounce is tiered by the binding's own
+  tier function (`ratioClipBounce` is now the plain per-clip `MetricResult`); non-finite bounces
+  give no figures; the one-thing stop takes the stride camera when its cue is VR. The stride frame
+  keeps 0.45 of left room for the bounce's own label again, so the demo figure is a little smaller
+  than in the first follow-up shots (re-shot).
 
 ## Gotchas
 

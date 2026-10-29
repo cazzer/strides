@@ -11,6 +11,7 @@ import {
   BEAT_DECAY_CYCLES,
   BOUNCE_INSET_BASE,
   BOUNCE_INSET_FACTOR,
+  BOUNCE_INSET_MAX_HEIGHT,
   CLAMPED_LABEL_SUFFIX,
   KEY_LEG_PHASE,
   PARAM_ANNOTATION_KIND,
@@ -371,7 +372,7 @@ describe('the marks are the drawn values and lie on the live figure', () => {
       const mixed = bindRunnerParams(
         makeHeuristics({ verticalRatio: makeMetric('verticalRatio', { value: ratio }) }),
         undefined,
-        { sourceIndices: { ...sourceIndices, verticalOscillation: 1 }, ratioClipBounce: { value: 0.172, tier: 'normal' } },
+        { sourceIndices: { ...sourceIndices, verticalOscillation: 1 }, ratioClipBounce: makeMetric('verticalOscillation', { value: 0.172 }) },
       )
       const [mixedStride, , , mixedInset] = only(mixed, 'strideLength').marks
       expect(screenLength(mixedInset[0], mixedInset[1], SIDE)).toBeCloseTo(0.172 * BOUNCE_INSET_FACTOR, 12)
@@ -397,7 +398,11 @@ describe('the marks are the drawn values and lie on the live figure', () => {
     })
 
     it('draws the bounce once: the bounce’s own true-scale bracket gives way to the inset', () => {
-      expect(annotate(vr, ['pelvisBounce', 'strideLength']).map((a) => a.paramId)).toEqual(['strideLength'])
+      expect(annotate(vr, ['strideLength', 'pelvisBounce']).map((a) => a.paramId)).toEqual(['strideLength'])
+      expect(annotate(vr, ['cadence', 'pelvisBounce', 'strideLength']).map((a) => a.paramId)).toEqual([
+        'cadence',
+        'strideLength',
+      ])
       expect(annotate(vr, ['pelvisBounce']).map((a) => a.paramId)).toEqual(['pelvisBounce'])
       // No mark of the stride's annotation is the true-scale bounce bracket.
       const [bounceBracket] = only(vr, 'pelvisBounce').marks
@@ -414,6 +419,34 @@ describe('the marks are the drawn values and lie on the live figure', () => {
       )
       expect(clamped.clamped).toBe(true)
       expect(clamped.label.lines.slice(-2)).toEqual(['bounce ÷ stride', 'shown approximately'])
+    })
+
+    it('keeps the bounce’s own bracket when the bounce heads the focus (a bounce-headlined rhythm stop)', () => {
+      // Cadence excluded: the centimetre bounce heads the stop and vertical ratio is its secondary value.
+      const both = annotate(vr, ['pelvisBounce', 'strideLength'])
+      expect(both.map((a) => a.paramId)).toEqual(['pelvisBounce', 'strideLength'])
+      // The true-scale bracket at the hips and the ×10 inset: two marks at two scales.
+      const [bracket] = both[0].marks
+      const [, , , inset] = both[1].marks
+      expect(screenLength(bracket[0], bracket[1], SIDE)).toBeCloseTo(v.pelvisBounce, 12)
+      expect(screenLength(inset[0], inset[1], SIDE)).toBeCloseTo(v.pelvisBounce * BOUNCE_INSET_FACTOR, 12)
+    })
+
+    it('caps a very tall inset and says "shown approximately"', () => {
+      // A bounce of 0.4 torso lengths would stand 4 tall at ×10: drawn at the cap instead.
+      const tall = only(
+        bindAll({
+          verticalOscillation: makeVerticalOscillation({ value: 0.4 }),
+          verticalRatio: makeMetric('verticalRatio', { value: 0.08 }),
+        }),
+        'strideLength',
+      )
+      const [, , , tallInset] = tall.marks
+      expect(screenLength(tallInset[0], tallInset[1], SIDE)).toBeCloseTo(BOUNCE_INSET_MAX_HEIGHT, 12)
+      expect(tall.clamped).toBe(true)
+      expect(tall.label.lines.slice(-2)).toEqual(['bounce ÷ stride', 'shown approximately'])
+      // Below the cap the inset is exact and nothing is approximate.
+      expect(annotation.clamped).toBe(false)
     })
 
     it('is not drawn without a measured stride (the bounce known only in centimetres)', () => {

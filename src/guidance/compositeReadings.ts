@@ -154,7 +154,12 @@ export function bounceDerivation(
     ratioClipBounce !== null ||
     sourceIndices === null ||
     sourceIndices.verticalOscillation === sourceIndices.verticalRatio
-  const usable = voSignal === 'hipMid' && relative !== null && bounce.tier !== 'excluded' && sameClip
+  const usable =
+    voSignal === 'hipMid' &&
+    relative !== null &&
+    Number.isFinite(relative) &&
+    bounce.tier !== 'excluded' &&
+    sameClip
   return {
     figures: usable ? { bounceTorsoLengths: relative, strideTorsoLengths: relative / ratio.value } : null,
     strideCount: ratio.sampleSize,

@@ -38,15 +38,17 @@ function deepFreeze<T>(value: T): T {
 }
 
 describe('ratioClipBounceFor', () => {
-  it("reads the relative bounce off vertical ratio's winning clip, with that result's tier", () => {
+  it("reads the relative bounce off vertical ratio's winning clip, as a plain result", () => {
     const clips = demoShapedClips()
     const sourceIndices = fusionSourceIndices(clips)
     expect(sourceIndices.verticalRatio).toBe(0)
     expect(sourceIndices.verticalOscillation).toBe(1)
-    expect(ratioClipBounceFor(clips, sourceIndices)).toEqual({
-      value: 0.154,
-      tier: metricTier(clips[0].verticalOscillation),
-    })
+    const bounce = ratioClipBounceFor(clips, sourceIndices)!
+    expect(bounce).toMatchObject({ metric: 'verticalOscillation', value: 0.154 })
+    expect(metricTier(bounce)).toBe(metricTier(clips[0].verticalOscillation))
+    // The plain result: no series, fit or exemplars to carry around.
+    expect(Object.keys(bounce)).not.toContain('series')
+    expect(Object.keys(bounce)).not.toContain('fit')
   })
 
   it('is null until fused, or when that clip has no result', () => {
@@ -68,7 +70,10 @@ describe('ratioClipBounceFor', () => {
     const tiers = Object.fromEntries(
       (Object.keys(sourceIndices) as MetricId[]).map((id) => [id, metricTier(fused[id] as MetricResult)]),
     ) as Record<MetricId, ReturnType<typeof metricTier>>
-    const derivation = bounceDerivation(fused, tiers, sourceIndices, 'hipMid', ratioClipBounce)
+    const derivation = bounceDerivation(fused, tiers, sourceIndices, 'hipMid', {
+      value: ratioClipBounce!.value,
+      tier: metricTier(ratioClipBounce!),
+    })
     const rows = summaryRows(fused, { sourceIndices, ratioClipBounce })
     const bound = bindRunnerParams(fused, undefined, { sourceIndices, ratioClipBounce })
 
