@@ -253,7 +253,7 @@ describe('ModelRunner drawing', () => {
     }
     expect(annotation?.querySelector('[data-role="fill"]')?.getAttribute('d')).toMatch(/Z$/)
 
-    rerenderWith({ focus: { metricIds: ['verticalRatio', 'stepWidthCm'] } })
+    rerenderWith({ focus: { metricIds: ['stepWidthCm'] } })
     expect(container.querySelector('[data-annotation]')).toBeNull()
 
     rerenderWith({ params: bindOnly(['cadence']), focus: { metricIds: ['trunkLean'] } })
@@ -261,6 +261,27 @@ describe('ModelRunner drawing', () => {
 
     rerenderWith({ focus: { metricIds: ['trunkLean', 'verticalOscillation'], annotation: 'bracket' } })
     expect(Array.from(container.querySelectorAll('[data-annotation]'), (el) => el.getAttribute('data-annotation'))).toEqual(['pelvisBounce'])
+  })
+
+  it('draws vertical ratio as the bounce and one stride, labelled with its value and both brackets named', () => {
+    const { container } = setup({
+      camera: 'strideSide',
+      focus: { metricIds: ['verticalOscillation', 'verticalRatio'] },
+    })
+    // The bounce's own bracket is the same bracket: drawn once, by vertical ratio.
+    expect(Array.from(container.querySelectorAll('[data-annotation]'), (el) => el.getAttribute('data-annotation'))).toEqual([
+      'strideLength',
+    ])
+    const annotation = container.querySelector('[data-annotation="strideLength"]')!
+    const label = annotation.querySelector('text[data-label-index]')!
+    expect(Array.from(label.querySelectorAll('tspan'), (line) => line.textContent)).toEqual([
+      '4.00%',
+      'bounce ÷ stride',
+    ])
+    const tags = annotation.querySelectorAll('text[data-tag-index]')
+    expect(Array.from(tags, (tag) => tag.textContent)).toEqual(['bounce', 'stride'])
+    for (const tag of tags) expect(tag.querySelector('tspan')?.getAttribute('x')).not.toBeNull()
+    for (const path of annotation.querySelectorAll('path')) expect(path.getAttribute('d')).toMatch(/^M-?\d/)
   })
 
   it('marks a clamped focus value as shown approximately', () => {

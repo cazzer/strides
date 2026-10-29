@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest'
 import type { MetricId } from '../../heuristics/types'
 import { FOCUS_AREA_ORDER } from '../../guidance/focusAreas'
 import { makeHeuristics, makeMetric, makeVerticalOscillationCm } from '../__fixtures__/metricResult'
-import { FOCUS_AREA_CAMERA, NO_FOCUS_CAMERA } from '../focusAreaCamera'
+import { bindRunnerParams } from '../../runner/runnerParams'
+import { FOCUS_AREA_CAMERA, NO_FOCUS_CAMERA, runnerFocusFor } from '../focusAreaCamera'
 import type { SessionCoverage } from '../sessionCoverage'
 import {
   BOTH_VIEWS_HINT,
   STEADY_RUNNING_HINT,
   introCamera,
   stopCamera,
+  stopFocusMetrics,
+  stopView,
   tourCaptureHint,
   tourPlan,
   tourStopDomId,
@@ -121,6 +124,56 @@ describe('stopCamera and tourStopDomId', () => {
     expect(stopCamera('landing')).toEqual({ camera: 'landingSide', playbackRate: 0.4 })
     expect(stopCamera('footPath')).toEqual({ camera: 'feetFront', playbackRate: 0.4 })
   })
+
+  it('plays the knee-flexion stop slowed, at the slowed stops’ one rate', () => {
+    const plan = tourPlan(makeHeuristics(), 'done', NO_NEEDS)
+    const kneeStop = plan.areaStops.find((stop) => stop.entries[0].metric.metric === 'kneeFlexion')!
+    expect(kneeStop.view.area).toBe('knees')
+    const params = bindRunnerParams(makeHeuristics())
+    const view = stopView('knees', runnerFocusFor(stopFocusMetrics(kneeStop)), params)
+    expect(view).toEqual({ camera: 'legsSide', playbackRate: 0.4 })
+    expect(view.playbackRate).toBe(stopCamera('landing').playbackRate)
+    for (const area of FOCUS_AREA_ORDER) {
+      expect([1, 0.4], area).toContain(stopCamera(area).playbackRate)
+    }
+  })
+})
+
+describe('stopFocusMetrics and stopView', () => {
+  const rhythmOf = (overrides: Parameters<typeof makeHeuristics>[0] = {}) =>
+    tourPlan(makeHeuristics(overrides), 'done', NO_NEEDS).areaStops.find((stop) => stop.view.area === 'rhythm')!
+
+  it('is the headline, plus vertical ratio where the rhythm stop states it as its secondary value', () => {
+    expect(stopFocusMetrics(rhythmOf())).toEqual(['cadence', 'verticalRatio'])
+    const noCadence = rhythmOf({ cadence: makeMetric('cadence', { value: null, confidence: 0 }) })
+    expect(stopFocusMetrics(noCadence)).toEqual(['verticalOscillationCm', 'verticalRatio'])
+  })
+
+  it('is vertical ratio alone where it is the headline, and the headline alone without it', () => {
+    const ratioHeadline = rhythmOf({
+      cadence: makeMetric('cadence', { value: null, confidence: 0 }),
+      verticalOscillationCm: makeVerticalOscillationCm({ value: null, calibration: null }),
+    })
+    expect(stopFocusMetrics(ratioHeadline)).toEqual(['verticalRatio'])
+    const noRatio = rhythmOf({ verticalRatio: makeMetric('verticalRatio', { value: null, confidence: 0 }) })
+    expect(stopFocusMetrics(noRatio)).toEqual(['cadence'])
+    for (const stop of tourPlan(makeHeuristics(), 'done', NO_NEEDS).areaStops) {
+      if (stop.view.area !== 'rhythm') expect(stopFocusMetrics(stop)).toEqual([stop.entries[0].metric.metric])
+    }
+  })
+
+  it('takes the stride camera where the focus draws vertical ratio’s stride', () => {
+    const params = bindRunnerParams(makeHeuristics())
+    expect(stopView('rhythm', runnerFocusFor(stopFocusMetrics(rhythmOf())), params)).toEqual({
+      camera: 'strideSide',
+      playbackRate: 1,
+    })
+    expect(stopView('rhythm', runnerFocusFor(['cadence']), params)).toEqual(FOCUS_AREA_CAMERA.rhythm)
+    expect(stopView('oneThing', runnerFocusFor(['verticalRatio']), params)).toBe(NO_FOCUS_CAMERA)
+  })
+})
+
+describe('tourStopDomId', () => {
 
   it('ids a stop as tour-<id>', () => {
     expect(tourStopDomId('knees')).toBe('tour-knees')

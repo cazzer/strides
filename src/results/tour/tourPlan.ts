@@ -3,8 +3,10 @@ import { feedbackFor, selectOneThing } from '../../guidance/feedbackPoints'
 import type { AreaFeedback, OneThing } from '../../guidance/feedbackPoints'
 import { FOCUS_AREAS } from '../../guidance/focusAreas'
 import type { FocusAreaId, TourStopId } from '../../guidance/focusAreas'
-import type { CameraPreset } from '../../runner/types'
-import { FOCUS_AREA_CAMERA, NO_FOCUS_CAMERA } from '../focusAreaCamera'
+import type { RunnerFocus } from '../../runner/ModelRunner'
+import type { BoundRunnerParams, CameraPreset } from '../../runner/types'
+import { FOCUS_AREA_CAMERA, NO_FOCUS_CAMERA, runnerViewFor } from '../focusAreaCamera'
+import type { RunnerView } from '../focusAreaCamera'
 import type { CommittedView, SessionCoverage } from '../sessionCoverage'
 import { summaryRows } from '../summary/summaryRows'
 import type { SummaryArea } from '../summary/summaryRows'
@@ -95,8 +97,34 @@ export function tourPlan(
 }
 
 /** Where the runner looks, and how fast it plays, at each stop. The one-thing stop sees it whole. */
-export function stopCamera(id: TourStopId): { camera: CameraPreset; playbackRate: number } {
+export function stopCamera(id: TourStopId): RunnerView {
   return id === 'oneThing' ? NO_FOCUS_CAMERA : FOCUS_AREA_CAMERA[id]
+}
+
+/**
+ * A stop's runner view with the focus it shows: `stopCamera`, except that a focus drawing vertical
+ * ratio's stride takes the stride camera (`runnerViewFor`).
+ */
+export function stopView(
+  id: TourStopId,
+  focus: RunnerFocus | undefined,
+  params: BoundRunnerParams,
+): RunnerView {
+  return id === 'oneThing' ? NO_FOCUS_CAMERA : runnerViewFor(id, focus, params)
+}
+
+/**
+ * The metrics a stop puts on the runner: its headline, and vertical ratio where the stop states it
+ * as its secondary value (the rhythm stop whose bounce reading vertical ratio heads, under another
+ * headline). Never a number the stop does not state: the bounce and stride the figure draws for
+ * vertical ratio are named on it, not given values.
+ */
+export function stopFocusMetrics(stop: SummaryArea): MetricId[] {
+  const headline = stop.entries[0].metric.metric
+  const statesRatio = stop.readings.some(
+    (reading) => reading.kind === 'composite' && reading.headline.metric.metric === 'verticalRatio',
+  )
+  return statesRatio && headline !== 'verticalRatio' ? [headline, 'verticalRatio'] : [headline]
 }
 
 /** A stop's element id, and the fragment that selects it (`#tour-knees`). */

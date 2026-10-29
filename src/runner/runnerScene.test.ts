@@ -103,10 +103,10 @@ describe('effectiveSources', () => {
 })
 
 describe('focusParamsOf', () => {
-  it('maps metrics to parameters, de-duplicated, ignoring the two that drive nothing', () => {
+  it('maps metrics to parameters, de-duplicated, ignoring the one that drives nothing', () => {
     expect(
       focusParamsOf(['verticalOscillation', 'verticalOscillationCm', 'verticalRatio', 'stepWidthCm', 'trunkLean']),
-    ).toEqual(['pelvisBounce', 'torsoPitch'])
+    ).toEqual(['pelvisBounce', 'strideLength', 'torsoPitch'])
     expect(focusParamsOf([])).toEqual([])
   })
 })

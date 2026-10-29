@@ -122,8 +122,8 @@ export interface BounceDerivation {
  * from vertical ratio's hip fit, and its quotient would not be the stride (strides-xki9 design D3).
  */
 export function bounceDerivation(
-  fused: FormHeuristicsResult,
-  tiers: Readonly<Record<MetricId, MetricTier>>,
+  fused: Pick<FormHeuristicsResult, 'verticalRatio' | 'verticalOscillation'>,
+  tiers: Readonly<Pick<Record<MetricId, MetricTier>, 'verticalRatio' | 'verticalOscillation'>>,
   sourceIndices: Readonly<Record<MetricId, number>> | null,
   voSignal: VerticalOscillationSignal = DEFAULT_HEURISTICS_CONFIG.verticalOscillationSignal,
 ): BounceDerivation | null {

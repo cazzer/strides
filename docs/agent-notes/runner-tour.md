@@ -13,7 +13,7 @@
 | `src/runner/` | The model runner. Pure core: `gaitModel.ts` (`poseAt(phase, params)`, the procedural cycle over the 19 joints, stance foot pinned to y = 0), `runnerParams.ts` (`bindRunnerParams(metrics)`, `realizeParams`, neutral constants), `camera.ts` (orthographic presets and tweens), `runnerScene.ts` / `runnerAnnotations.ts` (styles, draw order, text alternative, annotation geometry). React: `ModelRunner.tsx` (one SVG, one rAF loop, ≤ 30 fps), `useRunnerIntro.ts` + `introFlash.ts` (the adopt-your-gait intro). Dev sandbox: `src/runner/dev/sandbox.html`. **Owned by the Epic A follow-ups (`strides-ps19.5`–`.7`).** |
 | `src/guidance/focusAreas.ts` | Six focus areas (rhythm, arms, posture, knees, landing, footPath), fixed metric membership in headline-preference order, `focusAreaView` (headline = first non-excluded metric). `TourStopId` adds `oneThing`. |
 | `src/guidance/feedbackPoints.ts` | `WHY_LINES`, `NON_POINTS` (each cited, verbatim sentence in design D2), `feedbackFor` (area cue or non-point), `selectOneThing` (`cue` / `nothingToChange` / `unclear` with a reason), `ONE_THING_PRIORITY`, word-budget constants. No import from `src/results` or `src/runner`. |
-| `src/results/focusAreaCamera.ts` | `FOCUS_AREA_CAMERA` (camera preset + playback rate per area; landing and foot path at 0.4×), `NO_FOCUS_CAMERA`, `runnerFocusFor` (one key phase per still beat, below). Shared by tour and summary. |
+| `src/results/focusAreaCamera.ts` | `FOCUS_AREA_CAMERA` (camera preset + playback rate per area; knees, landing and foot path at 0.4×), `NO_FOCUS_CAMERA`, `runnerViewFor` (the stride camera for a vertical-ratio focus), `runnerFocusFor` (one key phase per still beat, below). Shared by tour and summary. |
 | `src/results/tour/` | `RunnerTour.tsx` (sticky bar with heading, progress dots and Skip; one rail with ONE `ModelRunner`; the stop column; phone CSS), `tourPlan.ts` (pure stop plan + capture hint), `TourStop.tsx`, `useActiveStop.ts` (42% reading line, `focusin`), `useMostlyVisible.ts` (90% gate for the intro). |
 | `src/results/summary/` | `ResultsSummary.tsx` (runner beside one `<details>` row per measured area, a final Not measured row, Replay tour / Classic table footer), `FocusAreaRow.tsx` (opens to full card depth with inline evidence), `summaryRows.ts` (pure; also returns all six `views` for `selectOneThing`), `useWideLayout.ts`. |
 | `src/results/resultsViewMode.ts`, `resultsLanding.ts` | View routing and the remembered landing (below). Wiring: `MultiClipVideoSession.tsx`. |
@@ -479,6 +479,26 @@ What the frames show:
   label's lower line in some frames (`r2-land-1280-light-arms-0`, `r2-approach-1280-light-arms-2`).
   The near upper arm never does (tested), so the label stays above the top end everywhere.
 - Screenshots: scratchpad `eiil4-live/r2-*.png`.
+
+## Knees slowed, vertical ratio drawn as bounce over one stride (`strides-trn2.10`)
+
+Change: `openspec/changes/slow-knees-and-draw-vertical-ratio` (design D1–D6).
+
+- **Knees at 0.4×** (`SLOW_MOTION_RATE`, the landing/foot-path rate), tour and wide summary.
+- **`strideLength`** (torso lengths) binds from vertical ratio through `bounceDerivation`: VO / VR,
+  only on VR's clip and the hip fit, i.e. exactly when the From line has figures. It moves no joint
+  (treadmill model; the stance foot's slide is NOT tied to it) and gets no intro step.
+- **Drawing:** bounce bracket + stride bracket 0.15 under the ground, from the near foot's contact
+  forward by the stride; label "2.46%" / "bounce ÷ stride", tags "bounce" / "stride". Replaces the
+  bounce's own bracket when both are in focus. Camera `strideSide` = `strideCamera(values)`.
+- **Tour focus** is now headline + VR where the rhythm stop states VR (secondary block).
+- ⚠️ **The 3-clip demo shows no stride drawing:** fusion takes VR from clip 1 and VO from clip 2
+  (live, 2026-10-29), so the same-clip guard leaves the stride neutral (the summary's From line has
+  no figures there either). Single side clips draw it (side-landscape 2.46%, side-portrait 3.00%).
+- Live 2026-10-29 (port 5263, ANGLE Metal, fresh context per run, no errors): label boxes at 390×844
+  side-landscape: VR label 198–262 × 530–550, tags "bounce" 89–120 × 472–482, "stride"
+  218–242 × 512–522; drawing 316–654, the panel's opaque box starts lower, nothing clipped.
+  Screenshots: scratchpad `tour-tweaks-live/*.png`.
 
 ## Gotchas
 

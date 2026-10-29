@@ -17,8 +17,17 @@
  * **Cadence moves no geometry, so it is drawn as time: a footfall beat.** Its label sits above the
  * head and a ring pulses out from each foot's contact point at that foot's contact phase, so the
  * rings beat exactly as often as the figure's feet land (`beatEnvelope`).
+ *
+ * **Vertical ratio is drawn as its two inputs** (`strideLength`): the hip-bounce bracket and, along
+ * the ground, one stride from the near foot's contact to where that foot lands next. Bounce ÷
+ * stride is the drawn ratio, so the two brackets ARE the measurement's quotient; the label prints
+ * vertical ratio, and two small tags name the brackets. It replaces the bounce's own bracket when
+ * both are in focus (the same bracket, drawn once).
  */
 import { classifyFootStrike, type FootStrikeClass } from '../heuristics/footStrikePattern'
+import { formatMeasuredBandValue } from '../guidance/bandPosition'
+import { renderableBand } from '../guidance/bandApplicability'
+import { METRIC_GUIDANCE } from '../guidance/metricGuidance'
 import { formatGuidedValue } from '../results/formatGuidedValue'
 import { DEFAULT_HEURISTICS_CONFIG, type MetricResult } from '../heuristics/types'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
@@ -47,6 +56,7 @@ export const PARAM_ANNOTATION_KIND: Readonly<Record<RunnerParamId, AnnotationKin
   contactShankOffset: 'offset',
   stepWidth: 'offset',
   swingFootArc: 'offset',
+  strideLength: 'bracket',
 }
 
 /**
@@ -67,6 +77,7 @@ export const KEY_LEG_PHASE: Readonly<Record<RunnerParamId, number | null>> = {
   stepWidth: GAIT_PHASES.leftContact,
   /** Mid-arc: the swing-foot bump peaks halfway through its window. */
   swingFootArc: (GAIT_PHASES.swingArcStart + GAIT_PHASES.swingArcEnd) / 2,
+  strideLength: null,
 }
 
 /** Each binding metric's `unit`, as its producing module in `src/heuristics/` reports it. */
@@ -74,6 +85,7 @@ export const RUNNER_METRIC_UNITS: Readonly<Record<RunnerMetricId, MetricResult['
   cadence: 'stepsPerMinute',
   verticalOscillation: 'ratio',
   verticalOscillationCm: 'centimeters',
+  verticalRatio: 'percent',
   trunkLean: 'degrees',
   armSwingAmplitude: 'ratio',
   kneeDrive: 'degrees',
@@ -97,12 +109,18 @@ const FOOT_STRIKE_RUNNER_LABELS: Readonly<Record<FootStrikeClass, string>> = {
 
 /**
  * A metric's value as the guided cards print it, except foot strike, which names its class as
- * the part of the foot that lands first ("Heel first (estimate)").
+ * the part of the foot that lands first ("Heel first (estimate)"), and vertical ratio, which prints
+ * at its band's precision as every stop and card headline does ("2.46%"), so the figure and the
+ * stop beside it never print the same ratio two ways.
  */
 export function formatRunnerValue(metricId: RunnerMetricId, metricValue: number): string {
   if (metricId === 'footStrikePattern') {
     const cls = classifyFootStrike(metricValue, DEFAULT_HEURISTICS_CONFIG.footStrikeMidfootBandRatio)
     return `${FOOT_STRIKE_RUNNER_LABELS[cls]} (estimate)`
+  }
+  if (metricId === 'verticalRatio') {
+    const band = renderableBand(METRIC_GUIDANCE.verticalRatio)
+    if (band !== null) return formatMeasuredBandValue(band, metricValue)
   }
   return formatGuidedValue({ metric: metricId, value: metricValue, unit: RUNNER_METRIC_UNITS[metricId] })
 }
@@ -121,6 +139,12 @@ export function labelLines(value: string, clamped: boolean): string[] {
     : [value]
   return clamped ? [...lines, CLAMPED_LINE] : lines
 }
+
+/** Vertical ratio's label names its own arithmetic under the value. */
+export const STRIDE_RATIO_CAPTION = 'bounce ÷ stride'
+/** The small words naming vertical ratio's two brackets. */
+export const BOUNCE_TAG = 'bounce'
+export const STRIDE_TAG = 'stride'
 
 /** Which side of its projected anchor a label's block sits on. */
 export type LabelSide = 'above' | 'below' | 'left' | 'right'
@@ -160,6 +184,11 @@ export interface RunnerAnnotation {
   /** Short reference rays and extension ticks, drawn thin and solid. Never limb-shaped. */
   guides: readonly (readonly Vec3[])[]
   label: RunnerAnnotationLabel
+  /**
+   * Small words naming parts of the mark, with no value of their own (vertical ratio's "bounce"
+   * and "stride"). Absent: none.
+   */
+  tags?: readonly RunnerAnnotationLabel[]
   clamped: boolean
   /** The leg (or arm) the annotation sits on. */
   side: RunnerSide
@@ -293,6 +322,9 @@ interface Built {
   fills: Vec3[][]
   guides: Vec3[][]
   label: LabelPlacement
+  /** A line printed under the value, above any clamp note. */
+  caption?: string
+  tags?: RunnerAnnotationLabel[]
   pulses?: BeatPulse[]
 }
 
@@ -313,6 +345,39 @@ function contactPoint(values: RunnerParams, side: RunnerSide): Vec3 {
   const toe = sideJoint(pose, side, 'foot_index')
   const first = toe.y < heel.y ? toe : heel
   return { x: first.x, y: GROUND_Y, z: first.z }
+}
+
+/** Where the bounce bracket stands: behind the hips, clear of the trailing arm and thigh. */
+export const BOUNCE_BRACKET_X = -0.4
+
+/** Hip-mid's height runs exactly `pelvisHeight ± bounce / 2` over the cycle: the bounce bracket. */
+function bounceBracket(values: RunnerParams): { marks: Vec3[][]; anchor: Vec3 } {
+  const centre = pelvisHeight(values)
+  return {
+    marks: verticalBracket(
+      BOUNCE_BRACKET_X,
+      0,
+      centre - values.pelvisBounce / 2,
+      centre + values.pelvisBounce / 2,
+      BRACKET_TICK_HALF,
+    ),
+    anchor: { x: BOUNCE_BRACKET_X, y: centre, z: 0 },
+  }
+}
+
+/** How far under the ground the stride bracket runs: below the footfall ticks. */
+export const STRIDE_BRACKET_DEPTH = 0.15
+const STRIDE_TICK_HALF = 0.06
+
+/**
+ * One stride along the ground: from `side`'s contact point to where that foot lands next, the
+ * drawn stride ahead. The model is a treadmill (hip-mid stays at x = 0), so "ahead" is the ground
+ * the body covers over one cycle. Its start is illustrative (that foot's contact); its length is
+ * exactly `strideLength`.
+ */
+export function strideSpan(values: RunnerParams, side: RunnerSide): { start: number; end: number } {
+  const start = contactPoint(values, side).x
+  return { start, end: start + values.strideLength }
 }
 
 /** How far below the ground a footfall's tick reaches. Each tick is its pulse's guide, in order. */
@@ -399,17 +464,41 @@ const BUILDERS: Readonly<Record<RunnerParamId, Builder>> = {
       label: { anchor: ray(knee, thighDeg, radius), side: value >= 0 ? 'right' : 'left' },
     }
   },
-  pelvisBounce(value, values) {
-    // Hip-mid's height runs exactly pelvisHeight ± bounce / 2 over the cycle.
-    const x = -0.4
-    const centre = pelvisHeight(values)
-    const low = centre - value / 2
-    const high = centre + value / 2
+  pelvisBounce(_value, values) {
+    const { marks, anchor } = bounceBracket(values)
+    return { marks, fills: [], guides: [], label: { anchor, side: 'left' } }
+  },
+  strideLength(_value, values, { side }) {
+    // Vertical ratio's two inputs at one scale: the bounce bracket, and one stride along the ground.
+    const bounce = bounceBracket(values)
+    const { start, end } = strideSpan(values, side)
+    const y = GROUND_Y - STRIDE_BRACKET_DEPTH
+    const { z } = contactPoint(values, side)
+    const middle = { x: (start + end) / 2, y, z }
     return {
-      marks: verticalBracket(x, 0, low, high, BRACKET_TICK_HALF),
+      marks: [
+        ...bounce.marks,
+        [
+          { x: start, y, z },
+          { x: end, y, z },
+        ],
+        verticalTick(start, y, z, STRIDE_TICK_HALF),
+        verticalTick(end, y, z, STRIDE_TICK_HALF),
+      ],
       fills: [],
-      guides: [],
-      label: { anchor: { x, y: centre, z: 0 }, side: 'left' },
+      // From the foot's contact on the ground down to the bracket's start: the stride starts here.
+      guides: [
+        [
+          { x: start, y: GROUND_Y, z },
+          { x: start, y: y - EXTENSION_OVERHANG, z },
+        ],
+      ],
+      label: { anchor: middle, side: 'below' },
+      caption: STRIDE_RATIO_CAPTION,
+      tags: [
+        { text: BOUNCE_TAG, lines: [BOUNCE_TAG], anchor: bounce.anchor, side: 'left' },
+        { text: STRIDE_TAG, lines: [STRIDE_TAG], anchor: middle, side: 'above' },
+      ],
     }
   },
   armSwing(value, values, { side, phase }) {
@@ -569,7 +658,7 @@ export function planAnnotations({
   cameraYawDeg,
   heldPhaseWithoutKey,
 }: AnnotationInput): AnnotationPlan {
-  const eligible = focusParams.filter((paramId) => {
+  const annotatable = focusParams.filter((paramId) => {
     const natural = PARAM_ANNOTATION_KIND[paramId]
     return (
       natural !== null &&
@@ -578,6 +667,10 @@ export function planAnnotations({
       (kind === undefined || natural === kind)
     )
   })
+  // Vertical ratio draws the bounce bracket itself; the bounce's own would be the same bracket.
+  const eligible = annotatable.includes('strideLength')
+    ? annotatable.filter((paramId) => paramId !== 'pelvisBounce')
+    : annotatable
   const cosYaw = Math.cos(cameraYawDeg * DEG)
   const frontal = Math.abs(cosYaw) < 0.5
   const near: RunnerSide = cosYaw >= 0 ? 'right' : 'left'
@@ -604,6 +697,7 @@ export function planAnnotations({
     const phase = q === null ? heldPhase : phaseForLeg(side, q)
     const built = BUILDERS[paramId](values[paramId], values, { side, phase })
     const value = formatRunnerValue(param.metricId, param.metricValue)
+    const valueLines = labelLines(value, false)
     const annotation: RunnerAnnotation = {
       paramId,
       kind: PARAM_ANNOTATION_KIND[paramId] as AnnotationKind,
@@ -611,10 +705,18 @@ export function planAnnotations({
       fills: built.fills,
       guides: built.guides,
       label: {
-        text: value + (param.clamped ? CLAMPED_LABEL_SUFFIX : ''),
-        lines: labelLines(value, param.clamped),
+        text:
+          value +
+          (built.caption === undefined ? '' : ` ${built.caption}`) +
+          (param.clamped ? CLAMPED_LABEL_SUFFIX : ''),
+        lines: [
+          ...valueLines,
+          ...(built.caption === undefined ? [] : [built.caption]),
+          ...(param.clamped ? [CLAMPED_LINE] : []),
+        ],
         ...built.label,
       },
+      ...(built.tags ? { tags: built.tags } : {}),
       clamped: param.clamped,
       side,
       keyPhase: q === null ? null : phase,

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { makeMetric } from '../results/__fixtures__/metricResult'
+import { makeMetric, makeVerticalOscillation } from '../results/__fixtures__/metricResult'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { bindAll, bindOnly } from './__fixtures__/boundParams'
+import { measureStrideBracket, measureVerticalOscillation } from './__fixtures__/measureModel'
 import { CAMERA_PRESETS, projectPoint, resolveCamera } from './camera'
 import { GAIT_PHASES, GROUND_Y, MODEL_PROPORTIONS, cyclesPerSecond, pelvisHeight, poseAt } from './gaitModel'
 import { flashAnchor } from './introFlash'
@@ -316,6 +317,83 @@ describe('the marks are the drawn values and lie on the live figure', () => {
     expect(Math.max(span[0].y, span[1].y)).toBeCloseTo(range.max, 6)
     expect(screenLength(span[0], span[1], SIDE)).toBeCloseTo(values.pelvisBounce, 12)
     expect((span[0].y + span[1].y) / 2).toBe(pelvisHeight(values))
+  })
+
+  describe('vertical ratio: the bounce over one stride', () => {
+    // side-landscape's live reading: hip bounce 15.4% of torso over a 6.26-torso stride.
+    const ratio = 0.0246
+    const vr = bindAll({
+      verticalOscillation: makeVerticalOscillation({ value: 0.154 }),
+      verticalRatio: makeMetric('verticalRatio', { value: ratio }),
+    })
+    const v = runnerParamValues(vr)
+    const annotation = only(vr, 'strideLength')
+    const [bounceSpan, , , stride, startTick, endTick] = annotation.marks
+
+    it('the bounce bracket is hip-mid’s measured height range, the bound bounce exactly', () => {
+      const range = sampleCycle((p) => hipMid(p, vr).y)
+      expect(Math.min(bounceSpan[0].y, bounceSpan[1].y)).toBeCloseTo(range.min, 6)
+      expect(Math.max(bounceSpan[0].y, bounceSpan[1].y)).toBeCloseTo(range.max, 6)
+      expect(screenLength(bounceSpan[0], bounceSpan[1], SIDE)).toBeCloseTo(v.pelvisBounce, 12)
+      expect(v.pelvisBounce).toBe(0.154)
+      // The model's own bounce, read with the metric's formula, is the same number.
+      expect(measureVerticalOscillation(v)).toBeCloseTo(0.154, 9)
+    })
+
+    it('the stride bracket runs along the ground from the near foot’s contact, the bound stride exactly', () => {
+      expect(stride[0].y).toBe(stride[1].y)
+      expect(stride[0].y).toBeLessThan(GROUND_Y)
+      expect(screenLength(stride[0], stride[1], SIDE)).toBeCloseTo(v.strideLength, 12)
+      expect(v.strideLength).toBe(0.154 / ratio)
+      expect(measureStrideBracket(v)).toBeCloseTo(v.strideLength, 12)
+      // It starts under the near foot's first contact point at that foot's contact.
+      const contact = poseAt(phaseForLeg('right', GAIT_PHASES.leftContact), v)
+      const heel = contact[COMMON_KEYPOINT_NAMES.indexOf('right_heel')]
+      const toe = contact[COMMON_KEYPOINT_NAMES.indexOf('right_foot_index')]
+      expect(stride[0].x).toBe((toe.y < heel.y ? toe : heel).x)
+      expect(stride[1].x).toBeGreaterThan(stride[0].x)
+      // An end tick at each end, crossing the bracket.
+      expect(startTick.map((p) => p.x)).toEqual([stride[0].x, stride[0].x])
+      expect(endTick.map((p) => p.x)).toEqual([stride[1].x, stride[1].x])
+    })
+
+    it('bounce ÷ stride as drawn is vertical ratio, and the label prints vertical ratio', () => {
+      const drawn =
+        screenLength(bounceSpan[0], bounceSpan[1], SIDE) / screenLength(stride[0], stride[1], SIDE)
+      expect(drawn).toBeCloseTo(ratio, 12)
+      expect(measureVerticalOscillation(v) / measureStrideBracket(v)).toBeCloseTo(ratio, 9)
+      expect(annotation.clamped).toBe(false)
+      expect(annotation.label.lines).toEqual([formatRunnerValue('verticalRatio', ratio), 'bounce ÷ stride'])
+      expect(annotation.label.lines[0]).toBe('2.46%')
+      expect(annotation.label.side).toBe('below')
+      expect(annotation.tags?.map((tag) => [tag.text, tag.side])).toEqual([
+        ['bounce', 'left'],
+        ['stride', 'above'],
+      ])
+    })
+
+    it('draws the bounce bracket once: the bounce’s own annotation gives way to vertical ratio', () => {
+      expect(annotate(vr, ['pelvisBounce', 'strideLength']).map((a) => a.paramId)).toEqual(['strideLength'])
+      expect(annotate(vr, ['pelvisBounce']).map((a) => a.paramId)).toEqual(['pelvisBounce'])
+      expect(only(vr, 'pelvisBounce').marks).toEqual(annotation.marks.slice(0, 3))
+    })
+
+    it('says "shown approximately" when the drawn ratio is not the measured one', () => {
+      const clamped = only(
+        bindAll({
+          verticalOscillation: makeVerticalOscillation({ value: 0.6 }),
+          verticalRatio: makeMetric('verticalRatio', { value: 0.1 }),
+        }),
+        'strideLength',
+      )
+      expect(clamped.clamped).toBe(true)
+      expect(clamped.label.lines.slice(-2)).toEqual(['bounce ÷ stride', 'shown approximately'])
+    })
+
+    it('is not drawn without a measured stride (the bounce known only in centimetres)', () => {
+      const cmOnly = bindAll({ verticalOscillation: makeVerticalOscillation({ viewFit: 'unsuitable' }) })
+      expect(annotate(cmOnly, ['pelvisBounce', 'strideLength']).map((a) => a.paramId)).toEqual(['pelvisBounce'])
+    })
   })
 
   it('arm swing: the bracket spans the wrist’s travel below the shoulder', () => {

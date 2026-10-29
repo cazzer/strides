@@ -46,9 +46,15 @@ function maxJointDistance(a: Joint3D[], b: Joint3D[]): number {
   return Math.max(...a.map((j, i) => Math.hypot(j.x - b[i].x, j.y - b[i].y, j.z - b[i].z)))
 }
 
+/**
+ * The parameters the corners sweep: all but the stride, which moves no joint (it is drawn only as
+ * vertical ratio's bracket), so its corners would repeat every pose and double the set.
+ */
+const CORNER_PARAM_IDS = PARAM_IDS.filter((id) => id !== 'strideLength')
+
 /** Every combination of each parameter's range ends. */
 function rangeCorners(): RunnerParams[] {
-  return PARAM_IDS.reduce<RunnerParams[]>(
+  return CORNER_PARAM_IDS.reduce<RunnerParams[]>(
     (sets, id) =>
       sets.flatMap((set) => RUNNER_PARAM_SPECS[id].range.map((end) => ({ ...set, [id]: end }))),
     [NEUTRAL_RUNNER_PARAMS],
@@ -65,7 +71,7 @@ describe('poseAt structure', () => {
   })
 
   it('is finite at the neutral parameters and every range corner', () => {
-    expect(CORNERS).toHaveLength(2 ** PARAM_IDS.length)
+    expect(CORNERS).toHaveLength(2 ** CORNER_PARAM_IDS.length)
     for (const params of [NEUTRAL_RUNNER_PARAMS, ...CORNERS]) {
       for (const p of [0, 0.1, 0.25, 0.4, 0.55, 0.62, 0.85, 0.95]) {
         for (const j of poseAt(p, params)) {
@@ -489,6 +495,7 @@ const MOVED_JOINTS: Record<RunnerParamId, JointFamily[]> = {
   contactShankOffset: LEG,
   stepWidth: LEG,
   swingFootArc: FOOT,
+  strideLength: [],
 }
 
 /** The parameters the figure's height depends on; every other one leaves the figure bit-identical. */
@@ -514,6 +521,7 @@ const SWEEPS: Record<RunnerParamId, number[]> = {
   contactShankOffset: [-0.05, 0, 0.04, 0.08, 0.12],
   stepWidth: [-1.5, -0.5, 0, 0.5, 1.5],
   swingFootArc: [0, 0.1, 0.3, 0.5, 0.8],
+  strideLength: [2, 4, 6, 8, 10],
 }
 
 describe('each binding moves only its own part, in the direction of its value', () => {

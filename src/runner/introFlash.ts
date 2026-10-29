@@ -28,10 +28,11 @@ function mid(a: Vec3, b: Vec3): Vec3 {
 
 /**
  * The world point a parameter's flash sits beside: the near ankle (foot strike, swing arc), the
- * ground under the hip (landing), the hip (bounce, step width), the torso midpoint (lean), the
- * near shoulder (arms), the near knee (thigh, knee bend), and just above the head (cadence, which
- * has no part of its own). Taken from the pose at `heldPhase`, so it does not move with the
- * stride; "near" is the leg a side view shows nearer, as for the held phase.
+ * ground under the hip (landing), the hip (bounce, step width, stride), the torso midpoint (lean),
+ * the near shoulder (arms), the near knee (thigh, knee bend), and just above the head (cadence,
+ * which has no part of its own). Taken from the pose at `heldPhase`, so it does not move with the
+ * stride; "near" is the leg a side view shows nearer, as for the held phase. The stride never
+ * flashes (the intro gives it no step), but every parameter has an anchor.
  */
 export function flashAnchor(
   paramId: RunnerParamId,
@@ -48,6 +49,7 @@ export function flashAnchor(
       return headTopAnchor(pose)
     case 'pelvisBounce':
     case 'stepWidth':
+    case 'strideLength':
       return hip
     case 'torsoPitch':
       return mid(hip, shoulder)

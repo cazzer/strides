@@ -8,7 +8,7 @@ import { ModelRunner } from '../../runner/ModelRunner'
 import { bindRunnerParams } from '../../runner/runnerParams'
 import { BandLegend } from '../BandLegend'
 import { clipSourceLabel } from '../clipProvenance'
-import { FOCUS_AREA_CAMERA, NO_FOCUS_CAMERA, runnerFocusFor } from '../focusAreaCamera'
+import { runnerFocusFor, runnerViewFor } from '../focusAreaCamera'
 import { GuidedResultsView } from '../GuidedResultsView'
 import type { GuidedResultsViewProps } from '../GuidedResultsView'
 import type { MetricCardEvidence } from '../MetricsPanel'
@@ -130,7 +130,10 @@ function SummaryBody({
       notMeasured,
     }
   }, [heuristics, sourceIndices])
-  const params = useMemo(() => bindRunnerParams(heuristics), [heuristics])
+  const params = useMemo(
+    () => bindRunnerParams(heuristics, undefined, sourceIndices),
+    [heuristics, sourceIndices],
+  )
   const activeRow = rows.find((row) => row.view.area === activeArea) ?? null
   const focus = useMemo(
     () =>
@@ -139,8 +142,8 @@ function SummaryBody({
         : runnerFocusFor(activeRow.entries.map((entry) => entry.metric.metric)),
     [activeRow],
   )
-  const { camera, playbackRate } =
-    activeRow === null ? NO_FOCUS_CAMERA : FOCUS_AREA_CAMERA[activeRow.view.area]
+  // A rhythm row drawing vertical ratio's stride takes the stride camera (`runnerViewFor`).
+  const { camera, playbackRate } = runnerViewFor(activeRow?.view.area ?? null, focus, params)
   // The opened side row's headline frame, faintly behind the still figure. Below lg the camera
   // stays on the whole figure with no focus, so there is none.
   const footage = useMemo(

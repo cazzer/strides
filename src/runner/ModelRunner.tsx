@@ -19,7 +19,9 @@
  * it, tweened like any camera change), holds the near leg's contact when still, and while playing
  * loops `LANDING_PHASE_WINDOW` around that contact, resting on its holds (`stepPlayback`). Entering
  * the window plays on into it; leaving the camera lets the phase run round the whole cycle again
- * from where it is. Paused on the landing camera, the figure stands at the held phase too.
+ * from where it is. Paused on the landing camera, the figure stands at the held phase too. The
+ * stride camera (`camera="strideSide"`) is framed the same way, on `strideCamera(values)`, and
+ * plays the whole cycle.
  *
  * **Cadence beats at the footfalls.** A cadence focus is labelled above the head with ground ticks
  * under the feet; while the figure plays (and motion is allowed) a ring flashes at each foot
@@ -63,6 +65,7 @@ import {
   landingCamera,
   projectPoint,
   projectPose,
+  strideCamera,
   type PhaseWindow,
 } from './camera'
 import {
@@ -454,14 +457,20 @@ function collectTargets(
     const list = role === 'm' ? source.marks : role === 'f' ? source.fills : source.guides
     return { el, points: list[Number(index)], closed: role === 'f', lifts: pathLiftsWithFigure(source) }
   })
-  const labels = Array.from(svg.querySelectorAll<SVGTextElement>('text[data-label-index]'), (el) => {
-    const source = annotations[Number(el.dataset.labelIndex)]
-    return {
-      lines: Array.from(el.querySelectorAll('tspan')),
-      label: source.label,
-      lifts: labelLiftsWithFigure(source),
-    }
-  })
+  const labels = Array.from(
+    svg.querySelectorAll<SVGTextElement>('text[data-label-index], text[data-tag-index]'),
+    (el) => {
+      const [annotation, tag] = (el.dataset.labelIndex ?? el.dataset.tagIndex ?? '')
+        .split(':')
+        .map(Number)
+      const source = annotations[annotation]
+      return {
+        lines: Array.from(el.querySelectorAll('tspan')),
+        label: tag === undefined ? source.label : (source.tags ?? [])[tag],
+        lifts: labelLiftsWithFigure(source),
+      }
+    },
+  )
   const pulses = Array.from(svg.querySelectorAll<SVGCircleElement>('circle[data-pulse]'), (el) => {
     const [annotation, index] = (el.dataset.pulse ?? '').split(':').map(Number)
     const source = annotations[annotation]
@@ -534,14 +543,16 @@ export function ModelRunner({
     ) as Record<RunnerParamId, number>
   }, [params, overrideValues])
 
-  // The landing camera is framed on the static values, so its key changes only when they do.
+  // The landing and stride cameras are framed on the static values, so their keys change only
+  // when they do.
   const tracksContact = camera === 'landingSide'
   const presetKey = cameraKey(camera)
-  const landingKey = useMemo(
-    () => (tracksContact ? cameraKey(landingCamera(values)) : null),
-    [tracksContact, values],
-  )
-  const targetKey = landingKey ?? presetKey
+  const framedKey = useMemo(() => {
+    if (camera === 'landingSide') return cameraKey(landingCamera(values))
+    if (camera === 'strideSide') return cameraKey(strideCamera(values))
+    return null
+  }, [camera, values])
+  const targetKey = framedKey ?? presetKey
   const target = useMemo(() => cameraFromKey(targetKey), [targetKey])
   const phaseWindow = tracksContact ? LANDING_PHASE_WINDOW : null
   const overrideSources = overrides?.sources
@@ -1071,6 +1082,23 @@ export function ModelRunner({
                     <tspan key={i}>{line}</tspan>
                   ))}
                 </text>
+                {(annotation.tags ?? []).map((tag, k) => (
+                  <text
+                    key={`tag-${k}`}
+                    data-tag-index={`${a}:${k}`}
+                    textAnchor={labelAlign(tag.side)}
+                    dominantBaseline="middle"
+                    paintOrder="stroke"
+                    className={LABEL_CLASS}
+                    fontSize={RUNNER_PX.label * unit}
+                    strokeWidth={RUNNER_PX.labelHalo * unit}
+                    strokeLinejoin="round"
+                  >
+                    {tag.lines.map((line, i) => (
+                      <tspan key={i}>{line}</tspan>
+                    ))}
+                  </text>
+                ))}
                 {showPulses &&
                   (annotation.pulses ?? []).map((_, i) => (
                     <g key={`pulse-${i}`}>

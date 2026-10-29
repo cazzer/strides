@@ -6,13 +6,16 @@ import {
   LANDING_FRAME_ABOVE_HIP,
   LANDING_PHASE_WINDOW,
   LANDING_FRAME_BELOW_GROUND,
+  STRIDE_FRAME_PAD,
   interpolateCamera,
   landingCamera,
   projectPoint,
   projectPose,
   resolveCamera,
+  strideCamera,
 } from './camera'
 import { GAIT_PHASES, GROUND_Y, poseAt } from './gaitModel'
+import { BOUNCE_BRACKET_X, STRIDE_BRACKET_DEPTH, strideSpan } from './runnerAnnotations'
 import { NEUTRAL_RUNNER_PARAMS, RUNNER_PARAM_SPECS } from './runnerParams'
 import { VIEW_HALF_WIDTH } from './runnerScene'
 import type { CameraPreset, CameraState, RunnerParamId, RunnerParams } from './types'
@@ -69,7 +72,7 @@ describe('projection', () => {
 })
 
 describe('presets', () => {
-  it('has the eight presets, each finite with a positive zoom', () => {
+  it('has the nine presets, each finite with a positive zoom', () => {
     expect(PRESETS.sort()).toEqual(
       [
         'armsQuarter',
@@ -77,6 +80,7 @@ describe('presets', () => {
         'footSide',
         'landingSide',
         'legsSide',
+        'strideSide',
         'torsoSide',
         'upperFrontQuarter',
         'wholeBodySide',
@@ -105,6 +109,7 @@ describe('presets', () => {
     footSide: { joints: /^left_(ankle|heel|foot_index)$/, phases: [GAIT_PHASES.leftContact] },
     feetFront: { joints: /^left_(ankle|heel|foot_index)$/, phases: [GAIT_PHASES.leftContact] },
     landingSide: { joints: /hip|^right_(knee|ankle|heel|foot_index)$/, phases: [0.35, 0.5, 0.6] },
+    strideSide: { joints: /.*/, phases: [0, 0.2, 0.4, 0.6, 0.8] },
   }
 
   function corner(end: 0 | 1): RunnerParams {
@@ -213,6 +218,53 @@ describe('presets', () => {
     })
   })
 
+  describe('strideCamera', () => {
+    const [shortest, longest] = RUNNER_PARAM_SPECS.strideLength.range
+    const cases = [shortest, 3.75, 5.7, 6.3, longest].flatMap((strideLength) => [
+      { ...NEUTRAL_RUNNER_PARAMS, strideLength },
+      { ...NEUTRAL_RUNNER_PARAMS, strideLength, landingOffset: 0.7, pelvisBounce: 0.5, torsoPitch: 35 },
+    ])
+
+    it('frames the whole figure and the whole stride, with the label pads clear, at every stride', () => {
+      for (const values of cases) {
+        const camera = strideCamera(values)
+        expect(camera.yawDeg).toBe(0)
+        expect(camera.pitchDeg).toBe(0)
+        const { start, end } = strideSpan(values, 'right')
+        const below = GROUND_Y - STRIDE_BRACKET_DEPTH
+        const ends = [start, end].map((x) => projectPoint({ x, y: below, z: 0 }, camera))
+        const where = `stride ${values.strideLength}, landing ${values.landingOffset}`
+        expect(ends[1].x, where).toBeLessThanOrEqual(VIEW_HALF_WIDTH - STRIDE_FRAME_PAD.right + 1e-9)
+        for (const p of ends) {
+          expect(p.y, where).toBeLessThanOrEqual(CAMERA_FRAME_HALF_HEIGHT - STRIDE_FRAME_PAD.bottom + 1e-9)
+        }
+        const bounce = projectPoint({ x: BOUNCE_BRACKET_X, y: 1, z: 0 }, camera)
+        expect(bounce.x, where).toBeGreaterThanOrEqual(-VIEW_HALF_WIDTH + STRIDE_FRAME_PAD.left - 1e-9)
+        for (let i = 0; i < 40; i += 1) {
+          for (const j of projectPose(poseAt(i / 40, values), camera)) {
+            expect(Math.abs(j.x), `${j.name} ${where}`).toBeLessThanOrEqual(VIEW_HALF_WIDTH)
+            expect(j.y, `${j.name} ${where}`).toBeGreaterThanOrEqual(
+              -CAMERA_FRAME_HALF_HEIGHT + STRIDE_FRAME_PAD.top - 1e-3,
+            )
+          }
+        }
+      }
+    })
+
+    it('zooms out as the stride grows: one scale for the figure and its stride', () => {
+      const zooms = [shortest, 4, 6, 8, longest].map(
+        (strideLength) => strideCamera({ ...NEUTRAL_RUNNER_PARAMS, strideLength }).zoom,
+      )
+      for (let i = 1; i < zooms.length; i += 1) expect(zooms[i]).toBeLessThan(zooms[i - 1])
+    })
+
+    it('is frozen, and the preset is the neutral figure’s stride frame', () => {
+      const camera = strideCamera(NEUTRAL_RUNNER_PARAMS)
+      expect(Object.isFrozen(camera) && Object.isFrozen(camera.target)).toBe(true)
+      expect(resolveCamera('strideSide')).toEqual(camera)
+    })
+  })
+
   it('resolveCamera accepts a preset name or a state', () => {
     expect(resolveCamera('legsSide')).toBe(CAMERA_PRESETS.legsSide)
     const state = at(12, 3, 2)
@@ -260,9 +312,13 @@ describe('interpolateCamera', () => {
 
   it('moves every projected joint continuously between every pair of presets', () => {
     const pose = poseAt(0.3, NEUTRAL_RUNNER_PARAMS)
-    const steps = 200
+    // The sandbox-only 3× foot frame and the stride frame (a third of the zoom, a few torso lengths
+    // ahead) are the furthest apart: their tween covers 0.109 per 1/200 step, so it gets 400.
+    const farApart = (a: CameraPreset, b: CameraPreset) =>
+      (a === 'footSide' && b === 'strideSide') || (a === 'strideSide' && b === 'footSide')
     for (const from of PRESETS) {
       for (const to of PRESETS) {
+        const steps = farApart(from, to) ? 400 : 200
         let previous = projectPose(pose, interpolateCamera(from, to, 0))
         for (let i = 1; i <= steps; i += 1) {
           const current = projectPose(pose, interpolateCamera(from, to, i / steps))

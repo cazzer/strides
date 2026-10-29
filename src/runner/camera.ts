@@ -11,6 +11,7 @@
  */
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { GAIT_PHASES, GROUND_Y, MODEL_PROPORTIONS, PELVIS_HEIGHT, poseAt } from './gaitModel'
+import { BOUNCE_BRACKET_X, STRIDE_BRACKET_DEPTH, strideSpan } from './runnerAnnotations'
 import { NEUTRAL_RUNNER_PARAMS } from './runnerParams'
 import type {
   CameraPreset,
@@ -141,6 +142,46 @@ export function landingCamera(values: RunnerParams): CameraState {
   return preset(0, 0, zoom, { x: (left + right) / 2, y: (top + bottom) / 2, z: 0 })
 }
 
+/**
+ * Room the stride frame keeps beyond what it frames, in PROJECTED units (labels are sized on
+ * screen, not in the world): the "bounce" tag left of the bounce bracket, the cadence label above
+ * the head, and vertical ratio's two-line label under the stride bracket.
+ */
+export const STRIDE_FRAME_PAD = Object.freeze({ left: 0.45, right: 0.1, top: 0.4, bottom: 0.45 })
+const STRIDE_SAMPLES = 30
+
+/**
+ * The stride camera for one parameter set: from the side, the whole figure and one drawn stride
+ * along the ground ahead of the near (right) foot's contact, at one scale, so vertical ratio's two
+ * brackets (bounce and stride) are seen at their true proportion. Framed on the values it draws, as
+ * the landing camera is: a stride several figures long fixes the zoom, so the figure is small.
+ */
+export function strideCamera(values: RunnerParams): CameraState {
+  const { end } = strideSpan(values, 'right')
+  let left = BOUNCE_BRACKET_X
+  let right = end
+  let top = -Infinity
+  for (let i = 0; i < STRIDE_SAMPLES; i += 1) {
+    for (const j of poseAt(i / STRIDE_SAMPLES, values)) {
+      left = Math.min(left, j.x)
+      right = Math.max(right, j.x)
+      top = Math.max(top, j.y)
+    }
+  }
+  const bottom = GROUND_Y - STRIDE_BRACKET_DEPTH
+  const pad = STRIDE_FRAME_PAD
+  const zoom = Math.min(
+    (2 * CAMERA_FRAME_HALF_WIDTH - pad.left - pad.right) / (right - left),
+    (2 * CAMERA_FRAME_HALF_HEIGHT - pad.top - pad.bottom) / (top - bottom),
+  )
+  // Centre the framed span in the frame less its pads (screen y runs down, world y up).
+  return preset(0, 0, zoom, {
+    x: (left + right) / 2 - (pad.left - pad.right) / (2 * zoom),
+    y: (top + bottom) / 2 + (pad.top - pad.bottom) / (2 * zoom),
+    z: 0,
+  })
+}
+
 export const CAMERA_PRESETS: Readonly<Record<CameraPreset, CameraState>> = Object.freeze({
   wholeBodySide: preset(0, 0, 1, { x: 0, y: HEAD_TOP / 2, z: 0 }),
   upperFrontQuarter: preset(45, 5, 1.7, { x: 0, y: PELVIS_HEIGHT + 0.6, z: 0 }),
@@ -165,6 +206,11 @@ export const CAMERA_PRESETS: Readonly<Record<CameraPreset, CameraState>> = Objec
    * (`landingCamera(values)`); a bare `resolveCamera('landingSide')` gets this one.
    */
   landingSide: landingCamera(NEUTRAL_RUNNER_PARAMS),
+  /**
+   * The neutral figure's stride frame. ModelRunner reframes it on the values it draws
+   * (`strideCamera(values)`); a bare `resolveCamera('strideSide')` gets this one.
+   */
+  strideSide: strideCamera(NEUTRAL_RUNNER_PARAMS),
 })
 
 export function resolveCamera(camera: CameraPreset | CameraState): CameraState {

@@ -11,9 +11,11 @@
  *   only keep an unmeasured part of the figure drawable, and the renderer draws such parts dashed.
  * - Each parameter is stored in its metric's own unit, so binding is the identity (plus a clamp to
  *   what the figure can draw). The one conversion is `verticalOscillationCm`, divided by
- *   `MODEL_TORSO_LENGTH_CM`.
+ *   `MODEL_TORSO_LENGTH_CM`. The one derived binding is `strideLength`: vertical ratio's own
+ *   denominator, the stride, which the bounce reading derives in torso lengths (`bounceDerivation`).
  * - There are no per-side or variability parameters, because no metric reports either.
  */
+import { bounceDerivation } from '../guidance/compositeReadings'
 import { metricTier, type MetricTier } from '../results/metricConfidence'
 import type { FormHeuristicsResult, MetricResult } from '../heuristics/types'
 import { MODEL_TORSO_LENGTH_CM, realizeParams } from './gaitModel'
@@ -27,9 +29,21 @@ import type {
   SkeletonEdge,
 } from './types'
 
+/**
+ * A candidate metric. `value = metric × scale`, except the stride candidate: vertical ratio bound as
+ * the stride it was computed over, in torso lengths. The bounce reading derives that stride
+ * (`bounceDerivation`: `verticalOscillation / verticalRatio`, only where the relative bounce is
+ * measured on vertical ratio's own clip from the same hip fit), so the drawn
+ * `pelvisBounce / strideLength` is vertical ratio itself, and the stride is the very figure the
+ * reading's "From …" line prints.
+ */
+export type RunnerParamCandidate =
+  | { metric: RunnerMetricId; scale: number }
+  | { metric: 'verticalRatio'; stride: true }
+
 export interface RunnerParamSpec {
-  /** Candidate metrics in priority order; the first measured one binds. `value = metric × scale`. */
-  metrics: readonly { metric: RunnerMetricId; scale: number }[]
+  /** Candidate metrics in priority order; the first measured one binds. */
+  metrics: readonly RunnerParamCandidate[]
   /** Illustrative constant used while no candidate is measured. Never a band midpoint. */
   neutral: number
   /**
@@ -77,6 +91,13 @@ export const RUNNER_PARAM_SPECS: Readonly<Record<RunnerParamId, RunnerParamSpec>
     neutral: 0.15,
     range: [0, 0.8],
   },
+  // 2 to 10 torso lengths is 1 to 5 m at the model's 50 cm torso. The neutral is never drawn: only
+  // a measured stride gets its bracket.
+  strideLength: {
+    metrics: [{ metric: 'verticalRatio', stride: true }],
+    neutral: 5,
+    range: [2, 10],
+  },
 }
 
 const RUNNER_PARAM_IDS = Object.keys(RUNNER_PARAM_SPECS) as RunnerParamId[]
@@ -92,16 +113,37 @@ export const NEUTRAL_RUNNER_PARAMS: RunnerParams = mapParams((id) => RUNNER_PARA
 
 export type RunnerMetrics = Pick<FormHeuristicsResult, RunnerMetricId>
 
+type SourceIndices = Readonly<Record<MetricId, number>> | null
+
+/** The stride, in torso lengths, that vertical ratio was computed over, or null where unsaid. */
+function measuredStride(
+  metrics: RunnerMetrics,
+  tierOf: (metric: MetricResult) => MetricTier,
+  sourceIndices: SourceIndices,
+): number | null {
+  const tiers = {
+    verticalRatio: tierOf(metrics.verticalRatio),
+    verticalOscillation: tierOf(metrics.verticalOscillation),
+  }
+  return bounceDerivation(metrics, tiers, sourceIndices)?.figures?.strideTorsoLengths ?? null
+}
+
 function bindOne(
   spec: RunnerParamSpec,
   metrics: RunnerMetrics,
   tierOf: (metric: MetricResult) => MetricTier,
+  sourceIndices: SourceIndices,
 ): BoundRunnerParam {
-  for (const { metric, scale } of spec.metrics) {
+  for (const candidate of spec.metrics) {
+    const { metric } = candidate
     const result = metrics[metric]
     if (result.value === null || tierOf(result) === 'excluded') continue
+    const scaled =
+      'stride' in candidate
+        ? measuredStride(metrics, tierOf, sourceIndices)
+        : result.value * candidate.scale
+    if (scaled === null) continue
     const [min, max] = spec.range
-    const scaled = result.value * scale
     const value = Math.min(max, Math.max(min, scaled))
     return {
       source: 'measured',
@@ -117,22 +159,29 @@ function bindOne(
 /**
  * Binds every parameter to its first measured candidate metric, or to its neutral constant when
  * every candidate is null or tiered `'excluded'`. A `'caveated'` metric binds: low confidence is
- * still a measurement.
+ * still a measurement. `sourceIndices` (null: one clip) says which clip won each metric, so the
+ * stride binds only where the bounce reading can derive it (both inputs from vertical ratio's clip).
  *
  * Every bound `value` is what the model draws. The contact parameters are passed through
  * `realizeParams`, so where they conflict the weaker one is redrawn: a measured one then carries
  * the drawn `value` with `clamped: true` (its `metricValue` stays the truth), and a neutral one
- * carries its constant adjusted to fit.
+ * carries its constant adjusted to fit. A measured stride is also marked clamped when the bounce
+ * it divides was clamped: `clamped` there means "the drawn ratio is not vertical ratio".
  */
 export function bindRunnerParams(
   metrics: RunnerMetrics,
   tierOf: (metric: MetricResult) => MetricTier = metricTier,
+  sourceIndices: SourceIndices = null,
 ): BoundRunnerParams {
-  const bound = mapParams((id) => bindOne(RUNNER_PARAM_SPECS[id], metrics, tierOf))
+  const bound = mapParams((id) => bindOne(RUNNER_PARAM_SPECS[id], metrics, tierOf, sourceIndices))
   const measured = new Set(RUNNER_PARAM_IDS.filter((id) => bound[id].source === 'measured'))
   const drawn = realizeParams(runnerParamValues(bound), measured)
+  const bounceClamped = bound.pelvisBounce.source === 'measured' && bound.pelvisBounce.clamped
   return mapParams((id): BoundRunnerParam => {
     const param = bound[id]
+    if (id === 'strideLength' && param.source === 'measured' && bounceClamped) {
+      return { ...param, clamped: true }
+    }
     if (drawn[id] === param.value) return param
     return param.source === 'measured'
       ? { ...param, value: drawn[id], clamped: true }
@@ -196,6 +245,7 @@ export const RUNNER_PARAM_SEGMENTS: Readonly<Record<RunnerParamId, readonly Skel
   contactShankOffset: [...SHANKS, ...FEET],
   stepWidth: [...THIGHS, ...SHANKS],
   swingFootArc: [...SHANKS, ...FEET],
+  strideLength: [],
 }
 
 function sameEdge(a: SkeletonEdge, b: SkeletonEdge): boolean {

@@ -10,6 +10,7 @@ import { median } from '../../heuristics/mathUtils'
 import { DEFAULT_HEURISTICS_CONFIG } from '../../heuristics/types'
 import type { KeypointName } from '../../pose/types'
 import { GAIT_PHASES, cyclesPerSecond, poseAt } from '../gaitModel'
+import { strideSpan } from '../runnerAnnotations'
 import type { Joint3D, RunnerParamId, RunnerParams, Vec3 } from '../types'
 
 const DEG = 180 / Math.PI
@@ -194,4 +195,12 @@ export const MEASURE_PARAM: Record<
   contactShankOffset: { measure: measureFootStrike, tolerance: 1e-9 },
   stepWidth: { measure: measureStepWidth, tolerance: 1e-9 },
   swingFootArc: { measure: measureSwingFootArc, tolerance: 0.005 },
+  // The stride moves no joint: it is the drawn stride bracket's length, contact to next contact.
+  strideLength: { measure: measureStrideBracket, tolerance: 1e-12 },
+}
+
+/** The drawn stride: the stride bracket's length along the ground. */
+export function measureStrideBracket(params: RunnerParams): number {
+  const { start, end } = strideSpan(params, 'right')
+  return end - start
 }

@@ -149,6 +149,16 @@ describe('introOrder, introStepMs and planIntro', () => {
     expect(front.steps).toEqual(['stepWidth', 'torsoPitch', 'swingFootArc'])
     expect(front.deferred).toEqual([])
   })
+
+  it('gives the stride no step from any view: it moves no joint, so a step would tween nothing', () => {
+    const bound = bindOnly(['trunkLean', 'verticalOscillation', 'verticalRatio'])
+    expect(bound.strideLength.source).toBe('measured')
+    for (const yaw of [0, 90]) {
+      const plan = planIntro(bound, ['verticalRatio'], yaw)
+      expect(plan.steps).toEqual(['pelvisBounce', 'torsoPitch'])
+      expect(plan.deferred).toEqual(['strideLength'])
+    }
+  })
 })
 
 describe('useRunnerIntro sequence', () => {

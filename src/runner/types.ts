@@ -40,17 +40,24 @@ export type RunnerParamId =
   | 'stepWidth'
   /** Lateral (ankle − same-side knee) P80−P20 range over early-to-mid swing, in hip widths. */
   | 'swingFootArc'
+  /**
+   * Ground covered over one gait cycle (one stride: a foot's contact to its next), torso lengths.
+   * Moves no joint (the model is a treadmill: hip-mid stays at x = 0); it is drawn only as the
+   * stride bracket under vertical ratio, so `pelvisBounce / strideLength` is the drawn ratio.
+   */
+  | 'strideLength'
 
 export type RunnerParams = Readonly<Record<RunnerParamId, number>>
 
 /**
- * The metrics that can bind a runner parameter: eleven of the thirteen. `verticalRatio` and
- * `stepWidthCm` never bind (the former has no degree of freedom of its own; the latter would be a
- * second metric driving `stepWidth`).
+ * The metrics that can bind a runner parameter: twelve of the thirteen. `stepWidthCm` never binds
+ * (it would be a second metric driving `stepWidth`). `verticalRatio` binds `strideLength` through
+ * the stride its bounce reading derives (`bindRunnerParams`), never as metric × scale.
  */
 export type RunnerMetricId =
   | 'cadence'
   | 'verticalOscillation'
+  | 'verticalRatio'
   | 'verticalOscillationCm'
   | 'trunkLean'
   | 'armSwingAmplitude'
@@ -104,6 +111,11 @@ export type CameraPreset =
    * ankle at contact (`landingCamera`), and played over a window of the cycle around that contact.
    */
   | 'landingSide'
+  /**
+   * The whole figure and one drawn stride along the ground, from the side, at one scale: vertical
+   * ratio's two inputs (`strideCamera`), framed per parameter set on the drawn stride.
+   */
+  | 'strideSide'
 
 /** Orthographic camera. Yaw 0 = viewed from the runner's right side; yaw 90 = from the front. */
 export interface CameraState {

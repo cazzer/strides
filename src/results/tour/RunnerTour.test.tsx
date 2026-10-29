@@ -459,12 +459,45 @@ describe('RunnerTour — the runner follows the active stop', () => {
     expect(runner.unmounts).toBe(0)
   })
 
-  it('focuses the rhythm stop on cadence alone, and shows the legend only for a banded headline', async () => {
+  it('plays the knees stop slowed, and says so', async () => {
+    const { container } = renderTour({ resultKey: nextKey() })
+    await skipIntro()
+    act(() => stop(container, 'knees').focus())
+    const props = await lastRunnerProps()
+    expect(props.focus?.metricIds).toEqual(['kneeFlexion'])
+    expect(props.camera).toBe('legsSide')
+    expect(props.playbackRate).toBe(0.4)
+    expect(container.querySelector('.runner-tour__slow-motion')).toHaveTextContent('Slow motion')
+  })
+
+  it('focuses the rhythm stop on cadence and the vertical ratio it states, on the stride camera', async () => {
     const { container } = renderTour({ resultKey: nextKey() })
     await skipIntro()
     expect(container.querySelector('.runner-tour__legend')).toBeNull()
     act(() => stop(container, 'rhythm').focus())
-    expect((await lastRunnerProps()).focus?.metricIds).toEqual(['cadence'])
+    const props = await lastRunnerProps()
+    expect(props.focus?.metricIds).toEqual(['cadence', 'verticalRatio'])
+    expect(props.camera).toBe('strideSide')
+    expect(props.playbackRate).toBe(1)
+    expect(rail(container)).toHaveAttribute('data-camera', 'strideSide')
+  })
+
+  it('focuses the rhythm stop on cadence alone when vertical ratio is not measured', async () => {
+    const { container } = renderTour({
+      resultKey: nextKey(),
+      heuristics: makeHeuristics({ verticalRatio: makeMetric('verticalRatio', { value: null, confidence: 0 }) }),
+    })
+    await skipIntro()
+    act(() => stop(container, 'rhythm').focus())
+    const props = await lastRunnerProps()
+    expect(props.focus?.metricIds).toEqual(['cadence'])
+    expect(props.camera).toBe('wholeBodySide')
+  })
+
+  it('shows the legend only for a banded headline', async () => {
+    const { container } = renderTour({ resultKey: nextKey() })
+    await skipIntro()
+    expect(container.querySelector('.runner-tour__legend')).toBeNull()
     const plan = tourPlan(makeHeuristics(), 'done', null)
     for (const area of plan.areaStops) {
       act(() => stop(container, area.view.area).focus())
@@ -476,15 +509,30 @@ describe('RunnerTour — the runner follows the active stop', () => {
     expect(container.querySelector('.runner-tour__legend')).toBeNull()
   })
 
-  it('focuses a cadence-less rhythm stop on its area headline, never on the secondary vertical ratio', async () => {
+  it('focuses a cadence-less rhythm stop on its area headline and the secondary vertical ratio it states', async () => {
     const { container } = renderTour({
       resultKey: nextKey(),
       heuristics: makeHeuristics({ cadence: makeMetric('cadence', { value: null, confidence: 0 }) }),
     })
     await skipIntro()
     act(() => stop(container, 'rhythm').focus())
-    expect((await lastRunnerProps()).focus?.metricIds).toEqual(['verticalOscillationCm'])
+    expect((await lastRunnerProps()).focus?.metricIds).toEqual(['verticalOscillationCm', 'verticalRatio'])
     expect(stop(container, 'rhythm').querySelector('.runner-tour__value--secondary')).not.toBeNull()
+  })
+
+  it('focuses a rhythm stop headed by vertical ratio on vertical ratio alone', async () => {
+    const { container } = renderTour({
+      resultKey: nextKey(),
+      heuristics: makeHeuristics({
+        cadence: makeMetric('cadence', { value: null, confidence: 0 }),
+        verticalOscillationCm: makeVerticalOscillationCm({ value: null, calibration: null }),
+      }),
+    })
+    await skipIntro()
+    act(() => stop(container, 'rhythm').focus())
+    const props = await lastRunnerProps()
+    expect(props.focus?.metricIds).toEqual(['verticalRatio'])
+    expect(props.camera).toBe('strideSide')
   })
 
   it('introduces a front-only session from the front, on the camera the runner gets', async () => {

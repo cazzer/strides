@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { METRIC_GUIDANCE } from '../guidance/metricGuidance'
 import { referenceBandEnvelope } from '../guidance/types'
-import type { FormHeuristicsResult, MetricId, MetricResult } from '../heuristics/types'
+import type { FormHeuristicsResult, MetricId } from '../heuristics/types'
 import {
   makeHeuristics,
   makeMetric,
@@ -36,6 +36,17 @@ const EXPECTED_BINDING: Record<RunnerParamId, RunnerMetricId> = {
   contactShankOffset: 'footStrikePattern',
   stepWidth: 'stepWidth',
   swingFootArc: 'swingFootLateralExcursion',
+  strideLength: 'verticalRatio',
+}
+
+/**
+ * What a measured parameter draws when nothing clamps it: metric × scale, or for the stride, the
+ * stride vertical ratio was computed over (relative bounce ÷ vertical ratio).
+ */
+function unclampedValue(heuristics: FormHeuristicsResult, id: RunnerParamId, metricId: RunnerMetricId): number {
+  const candidate = RUNNER_PARAM_SPECS[id].metrics.find((m) => m.metric === metricId)!
+  const value = heuristics[metricId].value!
+  return 'stride' in candidate ? heuristics.verticalOscillation.value! / value : value * candidate.scale
 }
 
 function expectNeutral(bound: BoundRunnerParams, id: RunnerParamId): void {
@@ -60,7 +71,7 @@ describe('bindRunnerParams', () => {
       const metricValue = heuristics[metricId].value
       expect(bound[id]).toEqual({
         source: 'measured',
-        value: metricValue,
+        value: unclampedValue(heuristics, id, metricId),
         metricId,
         metricValue,
         clamped: false,
@@ -175,20 +186,74 @@ describe('bindRunnerParams', () => {
     expect(bound.stepWidth).toMatchObject({ value: -1.5, metricValue: -3, clamped: true })
   })
 
-  it('verticalRatio and stepWidthCm never change anything', () => {
+  it('stepWidthCm never changes anything; verticalRatio changes only the stride', () => {
     const base = bindRunnerParams(makeHeuristics())
     const changed = bindRunnerParams(
       makeHeuristics({
-        verticalRatio: makeMetric('verticalRatio', { value: 0.09 }),
+        verticalRatio: makeMetric('verticalRatio', { value: 0.05 }),
         stepWidthCm: makeMetric('stepWidthCm', { value: 12 }),
       }),
     )
-    expect(changed).toEqual(base)
+    expect({ ...changed, strideLength: base.strideLength }).toEqual(base)
+    expect(changed.strideLength).toMatchObject({ value: 0.15 / 0.05, metricValue: 0.05 })
     const stepWidthNull = bindRunnerParams(
       makeHeuristics({ stepWidth: makeMetric('stepWidth', { value: null }) }),
     )
     // No stepWidthCm fallback: a measured centimetre width does not stand in for the ratio.
     expectNeutral(stepWidthNull, 'stepWidth')
+  })
+
+  describe('the stride binds from vertical ratio as the stride it was computed over', () => {
+    it('is relative bounce ÷ vertical ratio, in torso lengths, labelled with vertical ratio', () => {
+      const bound = bindRunnerParams(
+        makeHeuristics({
+          verticalOscillation: makeVerticalOscillation({ value: 0.154 }),
+          verticalRatio: makeMetric('verticalRatio', { value: 0.0246 }),
+        }),
+      )
+      expect(bound.strideLength).toEqual({
+        source: 'measured',
+        value: 0.154 / 0.0246,
+        metricId: 'verticalRatio',
+        metricValue: 0.0246,
+        clamped: false,
+      })
+      // The drawn ratio is vertical ratio itself.
+      expect(bound.pelvisBounce.value / bound.strideLength.value).toBeCloseTo(0.0246, 15)
+    })
+
+    it('is neutral when the bounce is only known in centimetres (no stride in torso lengths)', () => {
+      const bound = bindRunnerParams(
+        makeHeuristics({ verticalOscillation: makeVerticalOscillation({ viewFit: 'unsuitable' }) }),
+      )
+      expect(bound.pelvisBounce).toMatchObject({ metricId: 'verticalOscillationCm' })
+      expectNeutral(bound, 'strideLength')
+    })
+
+    it("is neutral when the relative bounce came from another clip than vertical ratio's", () => {
+      const sourceIndices = Object.fromEntries(ALL_METRICS.map((id) => [id, 0])) as Record<MetricId, number>
+      const other = { ...sourceIndices, verticalOscillation: 1 }
+      expect(bindRunnerParams(makeHeuristics(), undefined, sourceIndices).strideLength.source).toBe('measured')
+      expectNeutral(bindRunnerParams(makeHeuristics(), undefined, other), 'strideLength')
+    })
+
+    it('is clamped to its drawable range, and says so', () => {
+      const bound = bindRunnerParams(
+        makeHeuristics({ verticalRatio: makeMetric('verticalRatio', { value: 0.01 }) }),
+      )
+      expect(bound.strideLength).toMatchObject({ value: 10, metricValue: 0.01, clamped: true })
+    })
+
+    it('is marked clamped when the bounce it divides was clamped: the drawn ratio is not the measured one', () => {
+      const bound = bindRunnerParams(
+        makeHeuristics({
+          verticalOscillation: makeVerticalOscillation({ value: 0.6 }),
+          verticalRatio: makeMetric('verticalRatio', { value: 0.1 }),
+        }),
+      )
+      expect(bound.pelvisBounce).toMatchObject({ value: 0.5, clamped: true })
+      expect(bound.strideLength).toMatchObject({ value: 0.6 / 0.1, clamped: true })
+    })
   })
 
   it('runnerParamValues extracts the drawn values', () => {
@@ -247,8 +312,7 @@ describe('every bound value is what the model draws', () => {
         expect(Math.abs(measure(drawn) - bound[id].value), id).toBeLessThanOrEqual(tolerance)
         const param = bound[id]
         if (param.source === 'measured') {
-          const scale = RUNNER_PARAM_SPECS[id].metrics.find((m) => m.metric === param.metricId)!.scale
-          if (param.value !== param.metricValue * scale) expect(param.clamped, id).toBe(true)
+          if (param.value !== unclampedValue(heuristics, id, param.metricId)) expect(param.clamped, id).toBe(true)
           else expect(param.clamped, id).toBe(false)
         }
       }
@@ -293,13 +357,13 @@ describe('one metric per degree of freedom', () => {
         seen.set(metric, id)
       }
     }
-    expect(seen.size).toBe(11)
+    expect(seen.size).toBe(12)
   })
 
   it('paramForMetric names the parameter each metric drives, or null', () => {
     for (const metric of ALL_METRICS) {
       const expected =
-        metric === 'verticalRatio' || metric === 'stepWidthCm'
+        metric === 'stepWidthCm'
           ? null
           : metric === 'verticalOscillationCm'
             ? 'pelvisBounce'
@@ -333,8 +397,11 @@ describe('neutral constants are illustrative, never a target', () => {
     let checked = 0
     for (const id of PARAM_IDS) {
       const { neutral, metrics } = RUNNER_PARAM_SPECS[id]
-      for (const { metric, scale } of metrics) {
-        const inMetricUnits = neutral / scale
+      for (const candidate of metrics) {
+        const { metric } = candidate
+        // The stride's neutral, in vertical ratio's units, is the ratio the neutral figure draws.
+        const inMetricUnits =
+          'stride' in candidate ? NEUTRAL_RUNNER_PARAMS.pelvisBounce / neutral : neutral / candidate.scale
         for (const centre of bandCentres(metric)) {
           checked += 1
           expect(Math.abs(inMetricUnits - centre) / Math.abs(centre), `${id} vs ${metric}`)
@@ -349,8 +416,8 @@ describe('neutral constants are illustrative, never a target', () => {
   it('each neutral differs from the fixture defaults, so a measured bind is distinguishable', () => {
     const heuristics = makeHeuristics()
     for (const id of PARAM_IDS) {
-      const { metric, scale } = RUNNER_PARAM_SPECS[id].metrics[0]
-      expect(RUNNER_PARAM_SPECS[id].neutral).not.toBe((heuristics[metric] as MetricResult).value! * scale)
+      const { metric } = RUNNER_PARAM_SPECS[id].metrics[0]
+      expect(RUNNER_PARAM_SPECS[id].neutral).not.toBe(unclampedValue(heuristics, id, metric))
     }
   })
 

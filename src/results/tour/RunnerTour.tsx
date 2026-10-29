@@ -19,7 +19,7 @@ import { useRevealFragment } from '../revealFragment'
 import { runnerFootageFor } from '../runnerFootagePlate'
 import type { SessionCoverage } from '../sessionCoverage'
 import { hasCompactBar } from '../summary/summaryLabels'
-import { introCamera, stopCamera, tourPlan, tourStopDomId } from './tourPlan'
+import { introCamera, stopFocusMetrics, stopView, tourPlan, tourStopDomId } from './tourPlan'
 import type { TourPlan } from './tourPlan'
 import { AreaStop, OneThingStop } from './TourStop'
 import { useActiveStop } from './useActiveStop'
@@ -500,11 +500,15 @@ function TourProgress({
 }
 
 /**
- * `runnerFocusFor` over a metric id, memoised on the id: the result is rebuilt on every session
- * render, and a focus on the same metric must stay the same object.
+ * `runnerFocusFor` over metric ids, memoised on the ids: the result is rebuilt on every session
+ * render, and a focus on the same metrics must stay the same object.
  */
-function useRunnerFocus(metric: MetricId | null): RunnerFocus | undefined {
-  return useMemo(() => (metric === null ? undefined : runnerFocusFor([metric])), [metric])
+function useRunnerFocus(metrics: readonly MetricId[] | null): RunnerFocus | undefined {
+  const key = metrics === null ? null : metrics.join(' ')
+  return useMemo(
+    () => (key === null ? undefined : runnerFocusFor(key.split(' ') as MetricId[])),
+    [key],
+  )
 }
 
 interface TourBodyProps {
@@ -537,9 +541,9 @@ interface TourBodyProps {
  * only once the runner's figure (its drawing) is at least 90% on screen as well as seen by the
  * runner, so it never plays out below the fold. Reading on past the first stop ends it.
  *
- * The runner's focus is the shown stop's HEADLINE metric only, so the figure never labels a number
- * the stop's text does not state. The rhythm stop's secondary vertical-ratio block is not the
- * headline, so it never reaches the figure.
+ * The runner's focus is the shown stop's headline metric, plus vertical ratio where the rhythm stop
+ * states it as its secondary value (`stopFocusMetrics`), so the figure never labels a number the
+ * stop's text does not state. A focus drawing vertical ratio's stride takes the stride camera.
  */
 function TourBody({
   heuristics,
@@ -565,7 +569,10 @@ function TourBody({
   const reducedMotion = usePrefersReducedMotion()
   const activeIndex = active === null ? -1 : stopIds.indexOf(active)
 
-  const params = useMemo(() => bindRunnerParams(heuristics), [heuristics])
+  const params = useMemo(
+    () => bindRunnerParams(heuristics, undefined, sourceIndices),
+    [heuristics, sourceIndices],
+  )
   const [runnerSeen, setRunnerSeen] = useState(false)
   // The figure, not the whole rail: its caption, Pause row and legend may sit below the fold.
   const figureVisible = useMostlyVisible(railRef, RUNNER_FIGURE_SELECTOR)
@@ -583,18 +590,18 @@ function TourBody({
 
   const shown = introRunning ? null : active
   const shownArea = plan.areaStops.find((stop) => stop.view.area === shown) ?? null
-  const focusMetric: MetricId | null =
+  const focusMetrics: MetricId[] | null =
     shownArea !== null
-      ? shownArea.entries[0].metric.metric
+      ? stopFocusMetrics(shownArea)
       : shown === 'oneThing' && plan.oneThing.kind === 'cue'
-        ? plan.oneThing.metric
+        ? [plan.oneThing.metric]
         : null
-  const focus = useRunnerFocus(focusMetric)
+  const focus = useRunnerFocus(focusMetrics)
   const { camera, playbackRate } = introRunning
     ? { camera: introPreset, playbackRate: NO_FOCUS_CAMERA.playbackRate }
     : shown === null
       ? NO_FOCUS_CAMERA
-      : stopCamera(shown)
+      : stopView(shown, focus, params)
   // None while the intro runs: no stop is shown then, and the figure is still adopting the gait.
   const footage = useMemo(
     () =>

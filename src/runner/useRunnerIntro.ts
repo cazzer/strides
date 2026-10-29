@@ -66,6 +66,12 @@ export const INTRO_FLASH_MIN_REMAINDER_MS = 150
 /** Below this |sin yaw| a lateral parameter's change cannot be seen, so it gets no step. */
 export const LATERAL_VISIBLE_SIN = 0.5
 const LATERAL_PARAMS: readonly RunnerParamId[] = ['stepWidth', 'swingFootArc']
+/**
+ * Parameters with nothing to see while the intro runs: the stride moves no joint (it is drawn only
+ * as vertical ratio's bracket, at a stop), so a step for it would tween nothing. Applied with the
+ * final state, like a lateral parameter a side view cannot show.
+ */
+const UNSEEN_PARAMS: readonly RunnerParamId[] = ['strideLength']
 
 const played = new Set<string>()
 
@@ -125,7 +131,9 @@ export function planIntro(
 ): IntroPlan {
   const lateralVisible = Math.abs(Math.sin((cameraYawDeg * Math.PI) / 180)) >= LATERAL_VISIBLE_SIN
   const all = introOrder(bound, order)
-  const steps = all.filter((id) => lateralVisible || !LATERAL_PARAMS.includes(id))
+  const steps = all.filter(
+    (id) => !UNSEEN_PARAMS.includes(id) && (lateralVisible || !LATERAL_PARAMS.includes(id)),
+  )
   const flashes: Partial<Record<RunnerParamId, string>> = {}
   for (const id of steps) {
     const param = bound[id]
