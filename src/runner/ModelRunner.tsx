@@ -86,6 +86,8 @@ import {
   circularDistance,
   planAnnotations,
   shownWhileStill,
+  inGroundLane,
+  strideLabelLineCount,
   STACK_GAP_LINES,
   type AnnotationKind,
   type RunnerAnnotationLabel,
@@ -237,6 +239,12 @@ export interface ModelRunnerProps {
    * and with false on unmount.
    */
   onActiveChange?: (active: boolean) => void
+  /**
+   * Called when the camera comes to rest on a new target: a tween finishing, or a cut (reduced
+   * motion, offscreen, the first measurement of the drawing). The argument names the `camera` prop
+   * it rests on (`cameraKey`: the preset's name for a preset).
+   */
+  onCameraRest?: (camera: string) => void
   /** The footage plate's source; absent or null: no plate. */
   footage?: RunnerFootage | null
   className?: string
@@ -264,10 +272,9 @@ const MARK_CLASS = 'stroke-cyan-700 dark:stroke-cyan-300 forced-colors:stroke-[c
 const FILL_CLASS = 'fill-cyan-700/15 dark:fill-cyan-300/20 forced-colors:fill-none'
 const GUIDE_CLASS =
   'stroke-neutral-500 dark:stroke-neutral-400 forced-colors:stroke-[color:CanvasText]'
-// A reference line the value is read from (knee flexion's straight leg): darker than a ray, so its
-// dashes read against the figure, never the accent (it is not a measured part).
-const REFERENCE_CLASS =
-  'stroke-neutral-700 dark:stroke-neutral-300 forced-colors:stroke-[color:CanvasText]'
+// A reference line the value is read from (knee flexion's straight leg): dotted in the annotation's
+// own accent, so it reads as part of the mark, never as a dashed grey (unmeasured) limb.
+const REFERENCE_CLASS = MARK_CLASS
 const GROUND_CLASS =
   'stroke-neutral-300 dark:stroke-neutral-700 forced-colors:stroke-[color:GrayText]'
 // The footage plate: hidden until the loop marks it shown, then faded in to a faint 0.26, also on
@@ -332,6 +339,8 @@ interface CameraTween {
   from: CameraState
   to: CameraState
   elapsedMs: number
+  /** The `camera` prop it is heading for, reported when it rests. */
+  restKey: string
 }
 
 interface ValueTweenState {
@@ -400,14 +409,22 @@ function useOnScreen(ref: RefObject<Element | null>): boolean {
 /** CSS pixels per viewBox unit of the `meet`-fitted drawing, from a ResizeObserver. */
 function useSvgPixelScale(ref: RefObject<Element | null>): number {
   const [scale, setScale] = useState(DEFAULT_PX_PER_UNIT)
-  useEffect(() => {
+  // Measured in a layout effect as well, alongside the drawing's frame (`useDrawingFrame`), so the
+  // framed cameras' label room is sized at the real scale before the first paint, not reframed (and
+  // tweened) once the observer first reports.
+  useLayoutEffect(() => {
     const el = ref.current
-    if (!el || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver((entries) => {
-      const box = entries[entries.length - 1]?.contentRect
-      if (!box) return
-      const next = Math.min(box.width / (2 * VIEW_HALF_WIDTH), box.height / (2 * VIEW_HALF_HEIGHT))
+    if (!el) return
+    const measure = (width: number, height: number) => {
+      const next = Math.min(width / (2 * VIEW_HALF_WIDTH), height / (2 * VIEW_HALF_HEIGHT))
       if (next > 0) setScale(Math.round(next * 10) / 10)
+    }
+    const box = el.getBoundingClientRect()
+    measure(box.width, box.height)
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[entries.length - 1]?.contentRect
+      if (rect) measure(rect.width, rect.height)
     })
     observer.observe(el)
     return () => observer.disconnect()
@@ -428,16 +445,18 @@ export const CLEAR_BOTTOM_PROPERTY = '--runner-clear-bottom'
  */
 function useDrawingFrame(ref: RefObject<Element | null>): DrawingFrame | null {
   const [frame, setFrame] = useState<DrawingFrame | null>(null)
-  useEffect(() => {
+  // Measured in a layout effect as well as by the observer, so the first framed camera is in place
+  // before the first paint (the camera effect cuts to it, never tweens from the bare preset).
+  useLayoutEffect(() => {
     const el = ref.current
-    if (!el || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver((entries) => {
-      const box = entries[entries.length - 1]?.contentRect
-      if (!box) return
+    if (!el) return
+    const measure = (width: number, height: number) => {
+      // An unlaid-out drawing (no box yet, or jsdom) is not a measurement.
+      if (!(width > 0) || !(height > 0)) return
       // How much of the drawing's bottom the page may cover: a layout sets the
       // `--runner-clear-bottom` property (the phone tour), so the runner carries no layout code.
       const clear = Number.parseFloat(getComputedStyle(el).getPropertyValue(CLEAR_BOTTOM_PROPERTY))
-      const next = drawingFrame(box.width, box.height, Number.isFinite(clear) ? clear : 0)
+      const next = drawingFrame(width, height, Number.isFinite(clear) ? clear : 0)
       // Rounded, so a sub-pixel resize never reframes the camera.
       const halfWidth = Math.round(next.halfWidth * 100) / 100
       const halfHeight = Math.round(next.halfHeight * 100) / 100
@@ -450,6 +469,13 @@ function useDrawingFrame(ref: RefObject<Element | null>): DrawingFrame | null {
           ? current
           : { halfWidth, halfHeight, clearBottom },
       )
+    }
+    const box = el.getBoundingClientRect()
+    measure(box.width, box.height)
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[entries.length - 1]?.contentRect
+      if (rect) measure(rect.width, rect.height)
     })
     observer.observe(el)
     return () => observer.disconnect()
@@ -574,6 +600,7 @@ export function ModelRunner({
   overrides,
   intro,
   onActiveChange,
+  onCameraRest,
   footage = null,
   className = '',
 }: ModelRunnerProps) {
@@ -639,16 +666,18 @@ export function ModelRunner({
   // exactly the labels drawn, sized at the live scale; it and the whole-body camera keep their
   // subject above the frame's clear bottom.
   const presetKey = cameraKey(camera)
-  const strideLabels = useMemo(() => {
-    const stride = allAnnotations.find((a) => a.paramId === 'strideLength')
-    return {
+  // Vertical ratio's label lines come from the bound stride, not the focus, so a stop that adds
+  // vertical ratio to its focus once the stride camera rests keeps the same camera.
+  const strideLabels = useMemo(
+    () => ({
       headLabel: allAnnotations.some((a) => a.paramId === 'cadence'),
       bounceLabel: allAnnotations.some((a) => a.paramId === 'pelvisBounce'),
-      strideLabelLines: stride?.label.lines.length ?? 2,
-    }
-  }, [allAnnotations])
+      strideLabelLines: strideLabelLineCount(params, values),
+    }),
+    [allAnnotations, params, values],
+  )
   const wholeBodyLabels = useMemo(() => {
-    const lane = allAnnotations.filter((a) => a.label.side === 'below' && a.label.anchor.y <= GROUND_Y + 1e-9)
+    const lane = allAnnotations.filter((a) => inGroundLane(a.label))
     return {
       headLabel: strideLabels.headLabel,
       beat: allAnnotations.some((a) => a.pulses !== undefined),
@@ -718,8 +747,8 @@ export function ModelRunner({
   const order = useMemo(() => drawOrder(values, target, heldPhase), [values, target, heldPhase])
   const description = useMemo(() => describeRunner(params, focusParams), [params, focusParams])
   const legend = useMemo(
-    () => neutralEdgeInFrame(edgeStyles, values, heldPhase, target),
-    [edgeStyles, values, heldPhase, target],
+    () => neutralEdgeInFrame(edgeStyles, values, heldPhase, target, frame),
+    [edgeStyles, values, heldPhase, target, frame],
   )
   // Footfall rings move, so only a playing figure with motion allowed draws them; a window's hold
   // (the landing contact, a dwell) would freeze one at full strength, so not there either.
@@ -924,21 +953,35 @@ export function ModelRunner({
   })
 
   // A camera change tweens from wherever the camera is now, so retargeting mid-tween stays
-  // continuous. Reduced motion, a hidden tab or an offscreen figure cut instead.
+  // continuous. Reduced motion, a hidden tab or an offscreen figure cut instead, and so does the
+  // first measurement of the drawing: that reframes a camera the reader has not seen move.
+  const onCameraRestRef = useRef(onCameraRest)
   useLayoutEffect(() => {
+    onCameraRestRef.current = onCameraRest
+  })
+  const measuredRef = useRef(measuredFrame !== null)
+  useLayoutEffect(() => {
+    const firstMeasure = !measuredRef.current && measuredFrame !== null
+    measuredRef.current = measuredFrame !== null
     const cut = () => {
       cameraNowRef.current = target
       cameraTweenRef.current = null
       drawRef.current()
+      onCameraRestRef.current?.(presetKey)
     }
     if (appliedCameraKeyRef.current === targetKey) {
       if (cameraTweenRef.current && (reduced || !active)) cut()
       return
     }
     appliedCameraKeyRef.current = targetKey
-    if (reduced || !active) cut()
-    else cameraTweenRef.current = { from: cameraNowRef.current, to: target, elapsedMs: 0 }
-  }, [targetKey, target, reduced, active])
+    if (reduced || !active || firstMeasure) cut()
+    else cameraTweenRef.current = { from: cameraNowRef.current, to: target, elapsedMs: 0, restKey: presetKey }
+  }, [targetKey, target, presetKey, reduced, active, measuredFrame])
+
+  // A rest left over from one window (a dwell, the landing contact) never carries into another.
+  useLayoutEffect(() => {
+    holdLeftRef.current = 0
+  }, [phaseWindow])
 
   // A value tween starts when its key first appears; reduced motion jumps it to the end.
   useLayoutEffect(() => {
@@ -1069,6 +1112,7 @@ export function ModelRunner({
         if (t >= 1) {
           cameraNowRef.current = cameraTween.to
           cameraTweenRef.current = null
+          onCameraRestRef.current?.(cameraTween.restKey)
         } else {
           cameraNowRef.current = interpolateCamera(cameraTween.from, cameraTween.to, easeInOutCubic(t))
         }
@@ -1169,10 +1213,10 @@ export function ModelRunner({
                   <path key={`fill-${i}`} data-path={`${a}:f:${i}`} data-role="fill" className={FILL_CLASS} />
                 ))}
                 {annotation.guides.map((_, i) => {
-                  // A dashed guide is a reference line (knee flexion's straight leg): heavier and
-                  // darker than a ray, so its dashes read.
+                  // A dashed guide is a reference line (knee flexion's straight leg), drawn as a
+                  // row of round dots in the accent: unlike the grey dashes of an unmeasured part.
                   const dashed = annotation.dashedGuides?.includes(i) === true
-                  const dash = RUNNER_PX.referenceDash * unit
+                  const gap = RUNNER_PX.referenceDotGap * unit
                   return (
                     <path
                       key={`guide-${i}`}
@@ -1181,8 +1225,8 @@ export function ModelRunner({
                       fill="none"
                       className={dashed ? REFERENCE_CLASS : GUIDE_CLASS}
                       strokeWidth={(dashed ? RUNNER_PX.referenceStroke : RUNNER_PX.guideStroke) * unit}
-                      strokeDasharray={dashed ? `${dash} ${dash * 0.8}` : undefined}
-                      strokeLinecap={dashed ? 'butt' : undefined}
+                      strokeDasharray={dashed ? `0 ${gap}` : undefined}
+                      strokeLinecap={dashed ? 'round' : undefined}
                     />
                   )
                 })}

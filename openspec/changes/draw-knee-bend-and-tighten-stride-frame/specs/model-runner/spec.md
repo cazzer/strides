@@ -28,10 +28,13 @@ is annotated, the bounce's own true-scale bracket SHALL give way to vertical rat
 the bounce heads the focus (its parameter is the focus's first), so the bounce is drawn once except
 where it is the stop's headline.
 
-Knee flexion SHALL be drawn as a bend from straight: a dashed straight-leg reference line running
-from the knee straight on along the live thigh's direction, longer than the arc's radius and well
-short of a shank (so it reads as a reference line, never as a second leg), and the arc from that
-line onto the live shank, sweeping exactly the drawn knee bend; its label hangs past the line's end.
+Knee flexion SHALL be drawn as a bend from straight: a straight-leg reference line running from the
+knee straight on along the live thigh's direction, longer than the arc's radius and well short of a
+shank (so it reads as a reference line, never as a second leg), drawn as a row of dots in the
+annotation's own accent (never the grey dashes of an unmeasured part, which the "Dashed: not
+measured" legend explains), and the arc from that line onto the live shank, sweeping exactly the
+drawn knee bend; its label hangs past the line's end, and the text alternative says "bend" as the
+label does.
 
 The contact marks SHALL meet the points their metrics read, which are ankles, not heels: the
 overstride offset's guides SHALL be plumb lines from hip-mid and from the contact ankle down to the
@@ -93,7 +96,7 @@ foot, while planted, stands exactly above its tick.
 
 #### Scenario: Knee flexion accents its own leg and reads from straight
 - **WHEN** knee flexion is measured and in focus on a side camera
-- **THEN** the near leg's thigh and shank are accented and the far leg's are not, a dashed line runs from the near knee straight on along its thigh, the arc runs from that line onto the shank sweeping the drawn value, and the label reads the card's value followed by "bend"
+- **THEN** the near leg's thigh and shank are accented and the far leg's are not, a dotted accent line runs from the near knee straight on along its thigh, the arc runs from that line onto the shank sweeping the drawn value, and the label reads the card's value followed by "bend"
 
 #### Scenario: Knee drive accents its own thigh
 - **WHEN** knee drive is measured and in focus on a side camera
@@ -127,8 +130,14 @@ viewBox's 3:4 shows more than the viewBox) above its clear bottom: the share of 
 at its bottom, that the page may cover, which a layout states on the runner (the phone tour: 15%,
 where its stop panel may overlap the drawing; elsewhere none). The preset itself SHALL be the
 neutral parameters' stride frame in the viewBox; the renderer SHALL reframe it on the values it
-draws, the bound vertical ratio, the labels it draws and its drawing's visible frame. Labels SHALL be
-kept inside the drawing's visible frame.
+draws, the bound vertical ratio, the labels it draws (vertical ratio's label lines read from the
+binding, so the camera does not change when vertical ratio joins the focus) and its drawing's
+visible frame. Labels SHALL be kept inside the drawing's visible frame, above its clear bottom, and
+the "Dashed: not measured" legend SHALL show whenever a dashed part has a joint in that same frame.
+A framed camera's zoom SHALL never fall below a small positive minimum, whatever room its labels
+ask for. The drawing and its scale SHALL be measured before the first paint, and the camera SHALL
+cut, not tween, to the framing its first measurement gives; a later resize tweens like any camera
+change.
 
 `wholeBodySide` SHALL likewise be reframed, once the renderer has measured its drawing, on the bound
 values (not the intro's overrides, so the intro never moves the camera) and that drawing: the whole
@@ -162,6 +171,14 @@ summary's runner with no row open) uses it.
 #### Scenario: The stride camera frames the stride at any length
 - **WHEN** the stride is anywhere in its drawable range and the bounce up to and past its drawable limit
 - **THEN** the figure, the whole stride, the (capped) inset and the label pads lie inside the frame
+
+#### Scenario: The legend reads the drawing's frame
+- **WHEN** the stride camera fills a drawing far wider than 3:4 and the figure's only dashed parts lie beyond the viewBox's edge, inside the drawing
+- **THEN** "Dashed: not measured" shows
+
+#### Scenario: No zoom on mount
+- **WHEN** a runner mounts on a whole-body or stride view in a drawing other than the viewBox's 3:4
+- **THEN** its first painted frame is already the framed camera, with no tween from the preset
 
 #### Scenario: The whole body stays above a phone's stop panel
 - **WHEN** the whole figure is shown on a 390×844 phone tour, whose panel may cover the bottom 15% of the drawing

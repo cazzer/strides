@@ -19,7 +19,7 @@ import {
   type PhaseWindow,
 } from './camera'
 import { GAIT_PHASES, poseAt } from './gaitModel'
-import { formatRunnerValue, type LabelSide, type RunnerSide } from './runnerAnnotations'
+import { KNEE_BEND_SUFFIX, formatRunnerValue, type LabelSide, type RunnerSide } from './runnerAnnotations'
 import { RUNNER_PARAM_SEGMENTS, RUNNER_PARAM_SPECS, paramForMetric } from './runnerParams'
 import type {
   BoundRunnerParams,
@@ -52,9 +52,9 @@ export const RUNNER_PX = {
   focusJoint: 5,
   markStroke: 2,
   guideStroke: 1,
-  /** A dashed reference line (knee flexion's straight leg): heavier than a ray, so its dashes read. */
-  referenceStroke: 2,
-  referenceDash: 5,
+  /** A dotted reference line (knee flexion's straight leg): round dots this wide, this far apart. */
+  referenceStroke: 2.5,
+  referenceDotGap: 5,
   groundStroke: 1,
   label: 13,
   labelHalo: 3,
@@ -262,7 +262,9 @@ export function describeRunner(
   const shown = focusParams.flatMap((id) => {
     const param = bound[id]
     if (param.source !== 'measured') return []
-    const value = `${METRIC_LABELS[param.metricId]} ${formatRunnerValue(param.metricId, param.metricValue)}`
+    // As the figure labels it: knee flexion reads as a bend from straight.
+    const suffix = id === 'peakSwingKneeBend' ? KNEE_BEND_SUFFIX : ''
+    const value = `${METRIC_LABELS[param.metricId]} ${formatRunnerValue(param.metricId, param.metricValue)}${suffix}`
     return [
       param.clamped
         ? `${value}, drawn at a limit of the figure, not at the measured value`
@@ -287,19 +289,29 @@ export function cameraFromKey(key: string): CameraState {
   return { yawDeg, pitchDeg, zoom, target: { x, y, z } }
 }
 
+/** The screen y of the top of a frame's clear bottom: what the page may cover lies below it. */
+export function usableBottom(frame: DrawingFrame): number {
+  return frame.halfHeight - 2 * frame.halfHeight * frame.clearBottom
+}
+
 /**
- * Whether any neutral edge has an endpoint inside the frame for this pose and camera: the
- * "Dashed: not measured" legend only explains dashes the reader can see.
+ * Whether any neutral edge has an endpoint inside the drawing's visible frame (default: the
+ * viewBox), above its clear bottom, for this pose and camera: the "Dashed: not measured" legend only
+ * explains dashes the reader can see.
  */
 export function neutralEdgeInFrame(
   edgeStyles: readonly SegmentStyle[],
   values: RunnerParams,
   phase: number,
   camera: CameraPreset | CameraState,
+  frame: DrawingFrame = VIEWBOX_FRAME,
 ): boolean {
   const projected = projectPose(poseAt(phase, values), camera)
+  const bottom = usableBottom(frame)
   const inFrame = (j: number) =>
-    Math.abs(projected[j].x) <= VIEW_HALF_WIDTH && Math.abs(projected[j].y) <= VIEW_HALF_HEIGHT
+    Math.abs(projected[j].x) <= frame.halfWidth &&
+    projected[j].y >= -frame.halfHeight &&
+    projected[j].y <= bottom
   return EDGE_JOINT_INDICES.some(
     ([a, b], i) => edgeStyles[i] === 'neutral' && (inFrame(a) || inFrame(b)),
   )
@@ -442,7 +454,8 @@ export interface LabelLayout {
 /**
  * Where a label's lines go, in viewBox units: its block sits `gapUnits` beyond the projected
  * anchor on `side`, `offsetLines` line pitches further out above or below (a label stacked under
- * another in the same lane), then is kept inside the visible frame (default: the viewBox).
+ * another in the same lane), then is kept inside the visible frame (default: the viewBox), above its
+ * clear bottom.
  */
 export function placeLabel(
   anchor: { x: number; y: number },
@@ -462,8 +475,9 @@ export function placeLabel(
   else if (side === 'below') centreY += gapUnits + blockHeight / 2 + offsetLines * lineHeight
   else centreY -= gapUnits + blockHeight / 2 + offsetLines * lineHeight
   const chars = Math.max(0, ...lines.map((line) => line.length))
-  const limit = Math.max(0, frame.halfHeight - blockHeight / 2)
-  centreY = Math.min(limit, Math.max(-limit, centreY))
+  const top = -frame.halfHeight + blockHeight / 2
+  const bottom = Math.max(top, usableBottom(frame) - blockHeight / 2)
+  centreY = Math.min(bottom, Math.max(top, centreY))
   const first = centreY - ((lines.length - 1) * lineHeight) / 2
   return {
     x: clampLabelX(x, labelAlign(side), chars, fontUnits, frame.halfWidth),

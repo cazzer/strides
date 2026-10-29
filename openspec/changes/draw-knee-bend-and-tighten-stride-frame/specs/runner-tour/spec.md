@@ -13,10 +13,11 @@ focus draws vertical ratio's stride (the stride is measured), the camera SHALL b
 (`strideSide`: the whole figure and one stride along the ground, side on, at one scale) at the
 stop's rate. A rhythm stop headed by a metric other than vertical ratio SHALL open on the whole
 figure from the side with its headline alone in focus; after the arrival tween and a beat of about
-1.5 s the camera SHALL ease out to the stride camera, and once it rests vertical ratio SHALL join the
-focus, so the stride's marks never draw on a camera still on its way. Each arrival at the stop
-SHALL open this way again. Under reduced motion the stop SHALL go straight to the stride camera with
-vertical ratio in focus. A stop headed by vertical ratio, and the one-thing stop, SHALL go straight
+1.5 s the camera SHALL ease out to the stride camera, and once the runner reports it at rest there
+vertical ratio SHALL join the focus (after a fallback wait if no report comes), so the stride's marks
+never draw on a camera still on its way. Each arrival at the stop SHALL open this way again. Under
+reduced motion the stop SHALL go straight to the stride camera with vertical ratio in focus, and
+switching reduced motion off at the stop SHALL NOT restart the opening. A stop headed by vertical ratio, and the one-thing stop, SHALL go straight
 to the stride camera. The knees stop SHALL rest on its headline's key phase for about 500 ms each
 cycle while it plays. At wide layouts the band legend SHALL show beside the runner only while the active
 stop's headline has a compact bar; at narrow layouts it SHALL show inside each stop's panel under

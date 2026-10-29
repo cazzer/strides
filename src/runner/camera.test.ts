@@ -15,6 +15,7 @@ import {
   projectPoint,
   projectPose,
   resolveCamera,
+  MIN_FRAMED_ZOOM,
   WHOLE_BODY_FRAME_PAD,
   strideCamera,
   wholeBodyCamera,
@@ -560,5 +561,16 @@ describe('wholeBodyCamera', () => {
     expect(Object.isFrozen(phone)).toBe(true)
     expect(phone.yawDeg).toBe(0)
     expect(phone.target.x).toBe(0)
+  })
+})
+
+describe('framed cameras never vanish or mirror', () => {
+  it('clamps the zoom to a small positive minimum when the pads exceed the frame', () => {
+    const huge = { left: 9, right: 9, top: 9, bottom: 9 }
+    const stride = strideCamera(NEUTRAL_RUNNER_PARAMS, 0.03, { pad: huge })
+    const whole = wholeBodyCamera(NEUTRAL_RUNNER_PARAMS, { pad: huge })
+    expect(stride.zoom).toBe(MIN_FRAMED_ZOOM)
+    expect(whole.zoom).toBe(MIN_FRAMED_ZOOM)
+    expect(Number.isFinite(stride.target.y) && Number.isFinite(whole.target.y)).toBe(true)
   })
 })

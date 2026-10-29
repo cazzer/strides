@@ -12,7 +12,7 @@ import { hasCompactBar } from '../summary/summaryLabels'
 import { CAMERA_TWEEN_MS } from '../../runner/runnerScene'
 import { RunnerTour } from './RunnerTour'
 import { tourPlan } from './tourPlan'
-import { STRIDE_OPENING_BEAT_MS } from './useStrideOpening'
+import { STRIDE_OPENING_BEAT_MS, STRIDE_OPENING_REST_FALLBACK_MS } from './useStrideOpening'
 import { SHORT_PHONE_QUERY } from './useShortPhoneLayout'
 import type { ExtractedEvidenceFrame } from '../../video/extractFrames'
 
@@ -118,6 +118,30 @@ function stop(container: HTMLElement, id: string): HTMLElement {
 async function skipIntro() {
   const { intro } = await lastRunnerProps()
   act(() => intro?.onSkip())
+}
+
+/** A matchMedia whose reduced-motion query can be switched, firing its change listeners. */
+function mockReducedMotionToggle(initial: boolean) {
+  const state = { reduced: initial }
+  const listeners = new Set<() => void>()
+  window.matchMedia = vi.fn((query: string) => ({
+    get matches() {
+      return query.includes('reduced-motion') ? state.reduced : false
+    },
+    media: query,
+    onchange: null,
+    addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+    removeEventListener: (_: string, listener: () => void) => listeners.delete(listener),
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia
+  return {
+    set(reduced: boolean) {
+      state.reduced = reduced
+      act(() => listeners.forEach((listener) => listener()))
+    },
+  }
 }
 
 function setReducedMotion(reduced: boolean) {
@@ -501,12 +525,42 @@ describe('RunnerTour — the runner follows the active stop', () => {
     props = await lastRunnerProps()
     expect(props.camera).toBe('strideSide')
     expect(props.focus?.metricIds).toEqual(['cadence'])
-    // Once it rests, the stride's marks draw.
-    act(() => vi.advanceTimersByTime(CAMERA_TWEEN_MS))
+    // A rest on another camera does not end the ease; the runner's rest on the stride view does.
+    act(() => props.onCameraRest?.('wholeBodySide'))
+    expect((await lastRunnerProps()).focus?.metricIds).toEqual(['cadence'])
+    act(() => props.onCameraRest?.('strideSide'))
     props = await lastRunnerProps()
     expect(props.focus?.metricIds).toEqual(['cadence', 'verticalRatio'])
     expect(props.camera).toBe('strideSide')
     expect(rail(container)).toHaveAttribute('data-camera', 'strideSide')
+  })
+
+  it('draws the stride’s marks after a fallback wait if the runner never reports its camera at rest', async () => {
+    vi.useFakeTimers()
+    const { container } = renderTour({ resultKey: nextKey() })
+    await skipIntro()
+    act(() => vi.advanceTimersByTime(50))
+    act(() => stop(container, 'rhythm').focus())
+    act(() => vi.advanceTimersByTime(CAMERA_TWEEN_MS + STRIDE_OPENING_BEAT_MS))
+    act(() => vi.advanceTimersByTime(STRIDE_OPENING_REST_FALLBACK_MS - 10))
+    expect((await lastRunnerProps()).focus?.metricIds).toEqual(['cadence'])
+    act(() => vi.advanceTimersByTime(10))
+    expect((await lastRunnerProps()).focus?.metricIds).toEqual(['cadence', 'verticalRatio'])
+  })
+
+  it('does not restart the opening when reduced motion is switched off at the stop', async () => {
+    vi.useFakeTimers()
+    const media = mockReducedMotionToggle(false)
+    const { container } = renderTour({ resultKey: nextKey() })
+    await skipIntro()
+    act(() => vi.advanceTimersByTime(50))
+    act(() => stop(container, 'rhythm').focus())
+    expect((await lastRunnerProps()).camera).toBe('wholeBodySide')
+    media.set(true)
+    expect((await lastRunnerProps()).camera).toBe('strideSide')
+    media.set(false)
+    expect((await lastRunnerProps()).camera).toBe('strideSide')
+    expect((await lastRunnerProps()).focus?.metricIds).toEqual(['cadence', 'verticalRatio'])
   })
 
   it('opens the rhythm stop again each time it is reached', async () => {
@@ -517,7 +571,7 @@ describe('RunnerTour — the runner follows the active stop', () => {
     act(() => vi.advanceTimersByTime(50))
     act(() => stop(container, 'rhythm').focus())
     act(() => vi.advanceTimersByTime(CAMERA_TWEEN_MS + STRIDE_OPENING_BEAT_MS))
-    act(() => vi.advanceTimersByTime(CAMERA_TWEEN_MS))
+    act(() => vi.advanceTimersByTime(STRIDE_OPENING_REST_FALLBACK_MS))
     expect((await lastRunnerProps()).camera).toBe('strideSide')
     act(() => stop(container, 'posture').focus())
     expect((await lastRunnerProps()).camera).toBe('torsoSide')
@@ -585,7 +639,7 @@ describe('RunnerTour — the runner follows the active stop', () => {
     act(() => stop(container, 'rhythm').focus())
     expect((await lastRunnerProps()).focus?.metricIds).toEqual(['verticalOscillationCm'])
     act(() => vi.advanceTimersByTime(CAMERA_TWEEN_MS + STRIDE_OPENING_BEAT_MS))
-    act(() => vi.advanceTimersByTime(CAMERA_TWEEN_MS))
+    act(() => vi.advanceTimersByTime(STRIDE_OPENING_REST_FALLBACK_MS))
     expect((await lastRunnerProps()).focus?.metricIds).toEqual(['verticalOscillationCm', 'verticalRatio'])
     expect(stop(container, 'rhythm').querySelector('.runner-tour__value--secondary')).not.toBeNull()
   })

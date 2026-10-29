@@ -12,6 +12,7 @@ import {
   type PhaseWindow,
 } from './camera'
 import { GAIT_PHASES, cyclesPerSecond } from './gaitModel'
+import { formatRunnerValue } from './runnerAnnotations'
 import { NEUTRAL_RUNNER_PARAMS, runnerParamValues, segmentSource } from './runnerParams'
 import {
   FRAME_MS,
@@ -41,6 +42,7 @@ import {
   sanitizeRate,
   segmentStyle,
   strideFramePad,
+  usableBottom,
   RUNNER_PX,
   LABEL_LINE_HEIGHT,
   STRIDE_FRAME_MARGIN_PX,
@@ -506,5 +508,29 @@ describe('labels stay inside the visible frame', () => {
     expect(inWide.x - width).toBeGreaterThanOrEqual(-2.3)
     expect(inWide.x).toBeLessThan(inViewBox.x)
     expect(clampLabelX(5, 'start', 4, font, 2.3)).toBeLessThanOrEqual(2.3 - 4 * font * LABEL_CHAR_WIDTH_EM)
+  })
+})
+
+describe('labels stay above the clear bottom (strides-trn2.11)', () => {
+  it('lifts a label that would hang into the covered bottom of the drawing', () => {
+    const frame = { halfWidth: 2.31, halfHeight: 2, clearBottom: 0.15 }
+    const font = 0.1
+    const lines = ['51.2%', 'of torso length']
+    const layout = placeLabel({ x: 0, y: 1.6 }, 'below', lines, font, 0.05, 0, frame)
+    const lastLineBottom = layout.ys[layout.ys.length - 1] + (font * LABEL_LINE_HEIGHT) / 2
+    expect(lastLineBottom).toBeLessThanOrEqual(usableBottom(frame) + 1e-9)
+    // Without a clear bottom it hangs where it is.
+    const free = placeLabel({ x: 0, y: 1.6 }, 'below', lines, font, 0.05, 0, { ...frame, clearBottom: 0 })
+    expect(free.ys[0]).toBeGreaterThan(layout.ys[0])
+  })
+})
+
+describe('the text alternative says what the figure labels', () => {
+  it('reads knee flexion as a bend', () => {
+    const bound = bindAll()
+    const text = describeRunner(bound, ['peakSwingKneeBend'])
+    const knees = bound.peakSwingKneeBend
+    if (knees.source !== 'measured') throw new Error('knee flexion should be measured')
+    expect(text).toContain(`${METRIC_LABELS.kneeFlexion} ${formatRunnerValue('kneeFlexion', knees.metricValue)} bend`)
   })
 })

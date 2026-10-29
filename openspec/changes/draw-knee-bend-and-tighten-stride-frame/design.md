@@ -58,7 +58,27 @@ from being clamped at the frame edge during the zoom. A stop headed by vertical 
 opening (that drawing is the headline). The summary row goes straight to the stride: the reader
 opened that row on purpose.
 
+**D7. Review round 2.**
+- The "Dashed: not measured" legend tests the drawing's own frame above its clear bottom
+  (`neutralEdgeInFrame(…, frame)`); with the viewBox it vanished once the stride camera put the
+  figure beyond ±1.5 (a component test fires a wide drawing and fails without the fix).
+- Vertical ratio's label line count is read from the binding (`strideLabelLineCount`), so the
+  `easing` (headline-only) and `drawn` phases share one stride camera even when the label says
+  "shown approximately".
+- The drawing's frame and the stage's scale are measured in layout effects as well as by the
+  observers, and the camera cuts on the first measurement. Live, the ground line's position from a
+  runner's first painted frame no longer changes (it used to tween 1.83 → 1.64 over ~750 ms in the
+  phone summary).
+- The straight-leg line is a row of round accent dots (2.5 px, 5 px apart), not grey dashes, so it
+  never reads as an unmeasured limb.
+- The opening's `easing → drawn` step follows the runner's `onCameraRest('strideSide')` (a tween
+  ending, or a cut); a 1.2 s timer only stands in for a missing report. Reduced motion switched on
+  at the stop sets the opening to `drawn` for good.
+- Nits: a window change clears any leftover rest; framed zooms never fall below 0.05; labels clamp
+  above the clear bottom (the phone landing label moved from 608–628 px, under the 602 px panel, to
+  582–602); the text alternative reads "Knee flexion 102.9° bend".
+
 ## Risks
 
-- The landing stop's overstride label sits under the phone panel at 390×844 (608–628 px, panel at
-  602), on base as on this branch: `landingSide` is not reframed here.
+- The landing camera is not reframed here; its label is only kept above the clear bottom, so at
+  390×844 it now sits just above the panel, over the stance foot's ground line.

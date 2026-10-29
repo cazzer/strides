@@ -437,6 +437,18 @@ export function bounceInset(
   }
 }
 
+/**
+ * How many lines vertical ratio's label under the stride takes for these bound parameters: its value
+ * and "bounce ÷ stride", and "shown approximately" when the stride is clamped or the inset capped.
+ * The same count `planAnnotations` gives the stride's label, read from the binding alone, so a camera
+ * framed on it does not change when vertical ratio joins or leaves the focus.
+ */
+export function strideLabelLineCount(bound: BoundRunnerParams, values: RunnerParams): number {
+  const stride = bound.strideLength
+  if (stride.source !== 'measured') return 2
+  return stride.clamped || bounceInset(values, 'right', stride.metricValue).capped ? 3 : 2
+}
+
 /** How far below the ground a footfall's tick reaches. Each tick is its pulse's guide, in order. */
 const BEAT_TICK_DEPTH = 0.08
 
@@ -815,7 +827,7 @@ export function planAnnotations({
 }
 
 /** A label hanging below a point on or under the ground sits in the ground lane. */
-function inGroundLane(label: RunnerAnnotationLabel): boolean {
+export function inGroundLane(label: RunnerAnnotationLabel): boolean {
   return label.side === 'below' && label.anchor.y <= GROUND_Y + GROUND_LANE_TOLERANCE
 }
 

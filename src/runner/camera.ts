@@ -195,6 +195,16 @@ export function drawingFrame(width: number, height: number, clearBottom = 0): Dr
   }
 }
 
+/**
+ * The least zoom a framed camera takes. Pads larger than the frame would ask for a vanishing or
+ * negative (mirrored) zoom; the figure is drawn tiny instead.
+ */
+export const MIN_FRAMED_ZOOM = 0.05
+
+function framedZoom(zoom: number): number {
+  return Number.isFinite(zoom) ? Math.max(MIN_FRAMED_ZOOM, zoom) : MIN_FRAMED_ZOOM
+}
+
 /** The frame's usable span in screen y (down): its top to the top of its clear bottom. */
 function usableSpan(frame: DrawingFrame): { top: number; bottom: number } {
   return {
@@ -252,9 +262,11 @@ export function wholeBodyCamera(
     if (headLabel) top = Math.max(top, headTopAnchor(pose).y)
   }
   const { top: frameTop, bottom: frameBottom } = usableSpan(frame)
-  const zoom = Math.min(
-    (frameBottom - frameTop - pad.top - pad.bottom) / (top - bottom),
-    (frame.halfWidth - Math.max(pad.left, pad.right)) / reach,
+  const zoom = framedZoom(
+    Math.min(
+      (frameBottom - frameTop - pad.top - pad.bottom) / (top - bottom),
+      (frame.halfWidth - Math.max(pad.left, pad.right)) / reach,
+    ),
   )
   const screenMiddle = (frameTop + frameBottom) / 2
   return preset(0, 0, zoom, {
@@ -315,9 +327,11 @@ export function strideCamera(
   const bottom = GROUND_Y - STRIDE_BRACKET_DEPTH - STRIDE_TICK_HALF
   // The frame above its clear bottom, in screen y (down).
   const { top: frameTop, bottom: frameBottom } = usableSpan(frame)
-  const zoom = Math.min(
-    (2 * frame.halfWidth - pad.left - pad.right) / (right - left),
-    (frameBottom - frameTop - pad.top - pad.bottom) / (top - bottom),
+  const zoom = framedZoom(
+    Math.min(
+      (2 * frame.halfWidth - pad.left - pad.right) / (right - left),
+      (frameBottom - frameTop - pad.top - pad.bottom) / (top - bottom),
+    ),
   )
   // Centre the padded span in that frame (screen y runs down, world y up).
   const screenMiddle = (frameTop + frameBottom) / 2

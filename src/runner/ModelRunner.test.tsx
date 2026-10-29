@@ -1,7 +1,7 @@
 import { Profiler, StrictMode } from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { makeMetric } from '../results/__fixtures__/metricResult'
+import { makeMetric, makeVerticalOscillation } from '../results/__fixtures__/metricResult'
 import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { bindAll, bindOnly } from './__fixtures__/boundParams'
@@ -12,6 +12,9 @@ import {
   landingCamera,
   projectPoint,
   projectPose,
+  drawingFrame,
+  strideCamera,
+  wholeBodyCamera,
 } from './camera'
 import { GAIT_PHASES, GROUND_Y, cyclesPerSecond, pelvisHeight, poseAt } from './gaitModel'
 import {
@@ -29,7 +32,7 @@ import {
   type RunnerFocus,
   type RunnerFootage,
 } from './ModelRunner'
-import { BEAT_DECAY_CYCLES, formatRunnerValue, phaseForLeg } from './runnerAnnotations'
+import { BEAT_DECAY_CYCLES, formatRunnerValue, phaseForLeg, strideLabelLineCount } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
 import {
   FAR_OPACITY,
@@ -40,6 +43,9 @@ import {
   UNFOCUSED_OPACITY,
   clampLabelX,
   edgeKey,
+  strideFramePad,
+  usableBottom,
+  wholeBodyFramePad,
 } from './runnerScene'
 import type { CameraPreset, CameraState, ProjectedJoint, RunnerParams } from './types'
 
@@ -66,11 +72,29 @@ class FakeIntersectionObserver {
 class FakeResizeObserver {
   static instances: FakeResizeObserver[] = []
   disconnect = vi.fn()
-  constructor() {
+  readonly targets: Element[] = []
+  readonly callback: ResizeObserverCallback
+  constructor(callback: ResizeObserverCallback = () => {}) {
+    this.callback = callback
     FakeResizeObserver.instances.push(this)
   }
-  observe() {}
+  observe(target: Element) {
+    this.targets.push(target)
+  }
   unobserve() {}
+}
+
+/** Delivers a content box to the observers watching the runner's drawing (or another part). */
+function resizeDrawing(width: number, height: number, part = 'drawing') {
+  act(() => {
+    for (const observer of FakeResizeObserver.instances) {
+      if (!observer.targets.some((t) => t.matches(`[data-runner-part="${part}"]`))) continue
+      observer.callback(
+        [{ contentRect: { width, height } } as ResizeObserverEntry],
+        observer as unknown as ResizeObserver,
+      )
+    }
+  })
 }
 
 function setOnScreen(isIntersecting: boolean) {
@@ -1554,5 +1578,100 @@ describe('ModelRunner knee flexion, read as a bend from straight (strides-trn2.1
       expect(now.cx !== previous.cx || now.cy !== previous.cy).toBe(true)
       previous = now
     }
+  })
+})
+
+describe('ModelRunner frames its cameras on the measured drawing (strides-trn2.11)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+  })
+  const drawing = () => document.querySelector('[data-runner-part="drawing"]') as SVGSVGElement
+  const groundY = () => Number(document.querySelector('[data-ground]')?.getAttribute('y1'))
+  const legendShown = () => screen.queryByText('Dashed: not measured') !== null
+  const STRIDE_FOCUS: RunnerFocus = { metricIds: ['cadence', 'verticalRatio'] }
+
+  it('frames the stride view on a wide drawing, and the dashed legend still names the dashed head it shows', () => {
+    mockReducedMotion(true)
+    // The demo's stride: hip bounce 15.4% of torso over vertical ratio 2.46%, 6.26 torso lengths.
+    const bound = bindAll({
+      verticalOscillation: makeVerticalOscillation({ value: 0.154 }),
+      verticalRatio: makeMetric('verticalRatio', { value: 0.0246 }),
+    })
+    const values = runnerParamValues(bound)
+    setup({ params: bound, camera: 'strideSide', focus: STRIDE_FOCUS })
+    // A drawing far wider than 3:4 (a landscape stage): the stride view fills it, and the whole
+    // figure, its dashed head included, lies beyond the viewBox's left edge.
+    resizeDrawing(700, 584, 'stage')
+    resizeDrawing(700, 300)
+    if (bound.strideLength.source !== 'measured') throw new Error('stride should be measured')
+    // The runner rounds the measured frame to hundredths (4.667 → 4.67).
+    const frame = { ...drawingFrame(700, 300), halfWidth: 4.67 }
+    const camera = strideCamera(values, bound.strideLength.metricValue, {
+      frame,
+      pad: strideFramePad({ unitsPerPx: 1 / 146, headLabel: true, bounceLabel: false, strideLabelLines: 2 }),
+      headLabel: true,
+      bounceBracket: false,
+    })
+    expectPose(phaseForLeg('right', GAIT_PHASES.leftContact), camera, values)
+    const dashedXs = Array.from(document.querySelectorAll('line[data-edge][data-style="neutral"]')).flatMap(
+      (line) => [Number(line.getAttribute('x1')), Number(line.getAttribute('x2'))],
+    )
+    expect(dashedXs.length).toBeGreaterThan(0)
+    expect(Math.max(...dashedXs)).toBeLessThan(-1.5)
+    expect(Math.min(...dashedXs)).toBeGreaterThan(-frame.halfWidth)
+    expect(legendShown()).toBe(true)
+  })
+
+  it('cuts to the whole-body frame on the first measurement, above the clear bottom the page states', () => {
+    const onCameraRest = vi.fn()
+    setup({ camera: 'wholeBodySide', onCameraRest })
+    const preset = groundY()
+    drawing().style.setProperty('--runner-clear-bottom', '0.15')
+    resizeDrawing(390, 338)
+    const frame = drawingFrame(390, 338, 0.15)
+    expect(frame.clearBottom).toBe(0.15)
+    const pad = wholeBodyFramePad({ unitsPerPx: 1 / 100, headLabel: false, beat: false, groundLabelLines: 0 })
+    const framed = projectPoint({ x: 0, y: GROUND_Y, z: 0 }, wholeBodyCamera(VALUES, { frame, pad, headLabel: false })).y
+    // At once, with no tween: the reader never sees the preset zoom out.
+    expect(groundY()).toBeCloseTo(framed, 4)
+    expect(groundY()).not.toBeCloseTo(preset, 2)
+    expect(groundY()).toBeLessThanOrEqual(usableBottom(frame))
+    expect(onCameraRest).toHaveBeenLastCalledWith('wholeBodySide')
+  })
+
+  it('tweens a later reframe and reports when the camera comes to rest', () => {
+    const onCameraRest = vi.fn()
+    setup({ camera: 'wholeBodySide', onCameraRest })
+    resizeDrawing(390, 338)
+    onCameraRest.mockClear()
+    resizeDrawing(300, 600)
+    const pad = wholeBodyFramePad({ unitsPerPx: 1 / 100, headLabel: false, beat: false, groundLabelLines: 0 })
+    const target = projectPoint(
+      { x: 0, y: GROUND_Y, z: 0 },
+      wholeBodyCamera(VALUES, { frame: drawingFrame(300, 600), pad, headLabel: false }),
+    ).y
+    advance(16)
+    advance(200)
+    expect(groundY()).not.toBeCloseTo(target, 3)
+    expect(onCameraRest).not.toHaveBeenCalled()
+    advance(600)
+    expect(groundY()).toBeCloseTo(target, 4)
+    expect(onCameraRest).toHaveBeenCalledWith('wholeBodySide')
+  })
+
+  it('keeps one stride camera whether or not vertical ratio is in the focus, for a label shown approximately', () => {
+    mockReducedMotion(true)
+    // A bounce of half a torso length: its ×10 inset is capped, so vertical ratio's label has three lines.
+    const params = bindAll({
+      verticalOscillation: makeVerticalOscillation({ value: 0.5 }),
+      verticalRatio: makeMetric('verticalRatio', { value: 0.08 }),
+    })
+    expect(strideLabelLineCount(params, runnerParamValues(params))).toBe(3)
+    const { rerenderWith } = setup({ params, camera: 'strideSide', focus: { metricIds: ['cadence'] } })
+    resizeDrawing(400, 400)
+    const before = joint('nose')
+    rerenderWith({ focus: STRIDE_FOCUS })
+    expect(document.querySelector('[data-annotation="strideLength"] text')?.querySelectorAll('tspan')).toHaveLength(3)
+    expect(joint('nose')).toEqual(before)
   })
 })

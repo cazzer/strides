@@ -26,6 +26,7 @@ import {
   STACK_GAP_LINES,
   STRAIGHT_LEG_REFERENCE_LENGTH,
   shownWhileStill,
+  strideLabelLineCount,
   type AnnotationInput,
   type AnnotationPlan,
   type RunnerAnnotation,
@@ -814,4 +815,24 @@ describe('the step-width guides meet both feet in the front view', () => {
       })
     }
   }
+})
+
+describe('strideLabelLineCount', () => {
+  it('is the stride label’s own line count, read from the binding alone', () => {
+    for (const [bounce, ratio] of [
+      [0.154, 0.0246],
+      [0.5, 0.08],
+      [0.154, 0.005],
+    ]) {
+      const bound = bindAll({
+        verticalOscillation: makeVerticalOscillation({ value: bounce }),
+        verticalRatio: makeMetric('verticalRatio', { value: ratio }),
+      })
+      const [annotation] = annotate(bound, ['strideLength'])
+      expect(strideLabelLineCount(bound, runnerParamValues(bound)), `${bounce} / ${ratio}`).toBe(
+        annotation.label.lines.length,
+      )
+    }
+    expect(strideLabelLineCount(bindOnly([]), runnerParamValues(bindOnly([])))).toBe(2)
+  })
 })

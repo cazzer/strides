@@ -611,7 +611,7 @@ function TourBody({
   const stopFocus = useRunnerFocus(focusMetrics)
   const opensWhole =
     shown !== null && focusMetrics !== null && stopOpensWhole(shown, focusMetrics, stopFocus, params)
-  const opening = useStrideOpening(opensWhole ? shown : null, reducedMotion)
+  const { phase: opening, onCameraRest } = useStrideOpening(opensWhole ? shown : null, reducedMotion)
   const headlineFocus = useRunnerFocus(opensWhole && focusMetrics !== null ? focusMetrics.slice(0, 1) : null)
   const focus = opensWhole && opening !== 'drawn' ? headlineFocus : stopFocus
   const { camera, playbackRate, keyPhaseDwellMs } = introRunning
@@ -643,6 +643,7 @@ function TourBody({
           overrides={intro.overrides}
           intro={{ running: introRunning, onSkip: skipIntro }}
           onActiveChange={setRunnerSeen}
+          onCameraRest={onCameraRest}
           footage={footage}
           className={`${RUNNER_CLASS} ${barRow !== null ? RUNNER_CONTROLS_IN_ROW_CLASS : RUNNER_CONTROL_ROW_CLASS}`}
         />
