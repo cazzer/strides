@@ -8,10 +8,20 @@ import type { BoundRunnerParams, CameraPreset } from '../runner/types'
 export interface RunnerView {
   camera: CameraPreset
   playbackRate: number
+  /**
+   * While playing, how long the figure rests on its headline's key phase each cycle, wall-clock ms
+   * (`ModelRunner`'s `keyPhaseDwellMs`). Absent: no rest.
+   */
+  keyPhaseDwellMs?: number
 }
 
 /** The rate every slowed area plays at. */
 export const SLOW_MOTION_RATE = 0.4
+/**
+ * How long the knees view rests on its headline's key phase (knee flexion's peak bend) each cycle,
+ * wall-clock ms: the bend's arc is built on that pose, so the moving leg meets it for a beat.
+ */
+export const KNEES_DWELL_MS = 500
 
 /**
  * Where the model runner looks for each focus area, and how fast it plays there. Shared by the
@@ -30,7 +40,7 @@ export const FOCUS_AREA_CAMERA: Readonly<Record<FocusAreaId, RunnerView>> = {
   rhythm: { camera: 'wholeBodySide', playbackRate: 1 },
   arms: { camera: 'armsQuarter', playbackRate: 1 },
   posture: { camera: 'torsoSide', playbackRate: 1 },
-  knees: { camera: 'legsSide', playbackRate: SLOW_MOTION_RATE },
+  knees: { camera: 'legsSide', playbackRate: SLOW_MOTION_RATE, keyPhaseDwellMs: KNEES_DWELL_MS },
   landing: { camera: 'landingSide', playbackRate: SLOW_MOTION_RATE },
   footPath: { camera: 'feetFront', playbackRate: SLOW_MOTION_RATE },
 }

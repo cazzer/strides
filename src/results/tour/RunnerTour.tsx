@@ -11,7 +11,7 @@ import type { CameraPreset } from '../../runner/types'
 import { usePrefersReducedMotion } from '../../runner/usePrefersReducedMotion'
 import { useRunnerIntro } from '../../runner/useRunnerIntro'
 import { BandLegend } from '../BandLegend'
-import { NO_FOCUS_CAMERA, runnerFocusFor } from '../focusAreaCamera'
+import { FOCUS_AREA_CAMERA, NO_FOCUS_CAMERA, runnerFocusFor } from '../focusAreaCamera'
 import { GuidedResultsView } from '../GuidedResultsView'
 import type { GuidedResultsViewProps } from '../GuidedResultsView'
 import type { MetricCardEvidence } from '../MetricsPanel'
@@ -19,12 +19,13 @@ import { useRevealFragment } from '../revealFragment'
 import { runnerFootageFor } from '../runnerFootagePlate'
 import type { SessionCoverage } from '../sessionCoverage'
 import { hasCompactBar } from '../summary/summaryLabels'
-import { introCamera, stopFocusMetrics, stopView, tourPlan, tourStopDomId } from './tourPlan'
+import { introCamera, stopFocusMetrics, stopOpensWhole, stopView, tourPlan, tourStopDomId } from './tourPlan'
 import type { TourPlan } from './tourPlan'
 import { AreaStop, OneThingStop } from './TourStop'
 import { useActiveStop } from './useActiveStop'
 import { useMostlyVisible } from './useMostlyVisible'
 import { useShortPhoneLayout } from './useShortPhoneLayout'
+import { useStrideOpening } from './useStrideOpening'
 
 export interface RunnerTourProps extends GuidedResultsViewProps {
   /** The reader skipped (or finished) the tour. The session remembers the summary as the landing
@@ -548,7 +549,9 @@ interface TourBodyProps {
  *
  * The runner's focus is the shown stop's headline metric, plus vertical ratio where the rhythm stop
  * states it as its secondary value (`stopFocusMetrics`), so the figure never labels a number the
- * stop's text does not state. A focus drawing vertical ratio's stride takes the stride camera.
+ * stop's text does not state. A focus drawing vertical ratio's stride takes the stride camera. A
+ * rhythm stop headed by another metric opens on the whole figure with its headline alone, then
+ * eases out to the stride, whose marks draw once the camera rests (`useStrideOpening`).
  */
 function TourBody({
   heuristics,
@@ -602,12 +605,19 @@ function TourBody({
       : shown === 'oneThing' && plan.oneThing.kind === 'cue'
         ? [plan.oneThing.metric]
         : null
-  const focus = useRunnerFocus(focusMetrics)
-  const { camera, playbackRate } = introRunning
-    ? { camera: introPreset, playbackRate: NO_FOCUS_CAMERA.playbackRate }
+  const stopFocus = useRunnerFocus(focusMetrics)
+  const opensWhole =
+    shown !== null && focusMetrics !== null && stopOpensWhole(shown, focusMetrics, stopFocus, params)
+  const opening = useStrideOpening(opensWhole ? shown : null, reducedMotion)
+  const headlineFocus = useRunnerFocus(opensWhole && focusMetrics !== null ? focusMetrics.slice(0, 1) : null)
+  const focus = opensWhole && opening !== 'drawn' ? headlineFocus : stopFocus
+  const { camera, playbackRate, keyPhaseDwellMs } = introRunning
+    ? { camera: introPreset, playbackRate: NO_FOCUS_CAMERA.playbackRate, keyPhaseDwellMs: undefined }
     : shown === null
       ? NO_FOCUS_CAMERA
-      : stopView(shown, focus, params)
+      : opensWhole && opening === 'whole' && shown !== 'oneThing'
+        ? FOCUS_AREA_CAMERA[shown]
+        : stopView(shown, stopFocus, params)
   // None while the intro runs: no stop is shown then, and the figure is still adopting the gait.
   const footage = useMemo(
     () =>
@@ -625,6 +635,7 @@ function TourBody({
           camera={camera}
           focus={focus}
           playbackRate={playbackRate}
+          keyPhaseDwellMs={keyPhaseDwellMs}
           label={`Model runner, ${runnerLabel}`}
           overrides={intro.overrides}
           intro={{ running: introRunning, onSkip: skipIntro }}

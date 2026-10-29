@@ -146,7 +146,7 @@ function SummaryBody({
     [activeRow],
   )
   // A rhythm row drawing vertical ratio's stride takes the stride camera (`runnerViewFor`).
-  const { camera, playbackRate } = runnerViewFor(activeRow?.view.area ?? null, focus, params)
+  const { camera, playbackRate, keyPhaseDwellMs } = runnerViewFor(activeRow?.view.area ?? null, focus, params)
   // The opened side row's headline frame, faintly behind the still figure. Below lg the camera
   // stays on the whole figure with no focus, so there is none.
   const footage = useMemo(
@@ -190,6 +190,7 @@ function SummaryBody({
           camera={camera}
           focus={focus}
           playbackRate={playbackRate}
+          keyPhaseDwellMs={keyPhaseDwellMs}
           label={`Model runner, ${activeRow === null ? 'whole body' : activeRow.view.label.toLowerCase()}`}
           footage={footage}
           className="h-56 lg:h-[min(28rem,calc(100dvh-14rem))]"

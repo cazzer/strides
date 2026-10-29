@@ -9,8 +9,10 @@ import { METRIC_LABELS } from '../metricConfidence'
 import type { SessionCoverage } from '../sessionCoverage'
 import type { ScalePassStatus, VideoAnalysisState } from '../types'
 import { hasCompactBar } from '../summary/summaryLabels'
+import { CAMERA_TWEEN_MS } from '../../runner/runnerScene'
 import { RunnerTour } from './RunnerTour'
 import { tourPlan } from './tourPlan'
+import { STRIDE_OPENING_BEAT_MS } from './useStrideOpening'
 import { SHORT_PHONE_QUERY } from './useShortPhoneLayout'
 import type { ExtractedEvidenceFrame } from '../../video/extractFrames'
 
@@ -470,16 +472,70 @@ describe('RunnerTour — the runner follows the active stop', () => {
     expect(container.querySelector('.runner-tour__slow-motion')).toHaveTextContent('Slow motion')
   })
 
-  it('focuses the rhythm stop on cadence and the vertical ratio it states, on the stride camera', async () => {
+  it('opens the rhythm stop on the whole figure with cadence, then eases out to the stride and draws it', async () => {
+    vi.useFakeTimers()
     const { container } = renderTour({ resultKey: nextKey() })
     await skipIntro()
+    // The reading line's first read (one animation frame) lands before any stop is focused.
+    act(() => vi.advanceTimersByTime(50))
     expect(container.querySelector('.runner-tour__legend')).toBeNull()
+    act(() => stop(container, 'rhythm').focus())
+    // Arrival: the headline on the whole figure, through the arrival tween and a beat.
+    let props = await lastRunnerProps()
+    expect(props.focus?.metricIds).toEqual(['cadence'])
+    expect(props.camera).toBe('wholeBodySide')
+    expect(props.playbackRate).toBe(1)
+    expect(rail(container)).toHaveAttribute('data-camera', 'wholeBodySide')
+    act(() => vi.advanceTimersByTime(CAMERA_TWEEN_MS + STRIDE_OPENING_BEAT_MS - 10))
+    expect((await lastRunnerProps()).camera).toBe('wholeBodySide')
+    // The camera eases out to the stride, still with the headline alone.
+    act(() => vi.advanceTimersByTime(10))
+    props = await lastRunnerProps()
+    expect(props.camera).toBe('strideSide')
+    expect(props.focus?.metricIds).toEqual(['cadence'])
+    // Once it rests, the stride's marks draw.
+    act(() => vi.advanceTimersByTime(CAMERA_TWEEN_MS))
+    props = await lastRunnerProps()
+    expect(props.focus?.metricIds).toEqual(['cadence', 'verticalRatio'])
+    expect(props.camera).toBe('strideSide')
+    expect(rail(container)).toHaveAttribute('data-camera', 'strideSide')
+  })
+
+  it('opens the rhythm stop again each time it is reached', async () => {
+    vi.useFakeTimers()
+    const { container } = renderTour({ resultKey: nextKey() })
+    await skipIntro()
+    // The reading line's first read (one animation frame) lands before any stop is focused.
+    act(() => vi.advanceTimersByTime(50))
+    act(() => stop(container, 'rhythm').focus())
+    act(() => vi.advanceTimersByTime(CAMERA_TWEEN_MS + STRIDE_OPENING_BEAT_MS))
+    act(() => vi.advanceTimersByTime(CAMERA_TWEEN_MS))
+    expect((await lastRunnerProps()).camera).toBe('strideSide')
+    act(() => stop(container, 'posture').focus())
+    expect((await lastRunnerProps()).camera).toBe('torsoSide')
+    act(() => stop(container, 'rhythm').focus())
+    expect((await lastRunnerProps()).camera).toBe('wholeBodySide')
+  })
+
+  it('goes straight to the stride at the rhythm stop under reduced motion', async () => {
+    setReducedMotion(true)
+    const { container } = renderTour({ resultKey: nextKey() })
     act(() => stop(container, 'rhythm').focus())
     const props = await lastRunnerProps()
     expect(props.focus?.metricIds).toEqual(['cadence', 'verticalRatio'])
     expect(props.camera).toBe('strideSide')
-    expect(props.playbackRate).toBe(1)
-    expect(rail(container)).toHaveAttribute('data-camera', 'strideSide')
+  })
+
+  it('rests the knees stop on its headline’s key phase each cycle', async () => {
+    const { container } = renderTour({ resultKey: nextKey() })
+    await skipIntro()
+    act(() => stop(container, 'knees').focus())
+    const props = await lastRunnerProps()
+    expect(props.camera).toBe('legsSide')
+    expect(props.keyPhaseDwellMs).toBeGreaterThanOrEqual(400)
+    expect(props.keyPhaseDwellMs).toBeLessThanOrEqual(600)
+    act(() => stop(container, 'posture').focus())
+    expect((await lastRunnerProps()).keyPhaseDwellMs).toBeUndefined()
   })
 
   it('focuses the rhythm stop on cadence alone when vertical ratio is not measured', async () => {
@@ -510,12 +566,18 @@ describe('RunnerTour — the runner follows the active stop', () => {
   })
 
   it('focuses a cadence-less rhythm stop on its area headline and the secondary vertical ratio it states', async () => {
+    vi.useFakeTimers()
     const { container } = renderTour({
       resultKey: nextKey(),
       heuristics: makeHeuristics({ cadence: makeMetric('cadence', { value: null, confidence: 0 }) }),
     })
     await skipIntro()
+    // The reading line's first read (one animation frame) lands before any stop is focused.
+    act(() => vi.advanceTimersByTime(50))
     act(() => stop(container, 'rhythm').focus())
+    expect((await lastRunnerProps()).focus?.metricIds).toEqual(['verticalOscillationCm'])
+    act(() => vi.advanceTimersByTime(CAMERA_TWEEN_MS + STRIDE_OPENING_BEAT_MS))
+    act(() => vi.advanceTimersByTime(CAMERA_TWEEN_MS))
     expect((await lastRunnerProps()).focus?.metricIds).toEqual(['verticalOscillationCm', 'verticalRatio'])
     expect(stop(container, 'rhythm').querySelector('.runner-tour__value--secondary')).not.toBeNull()
   })

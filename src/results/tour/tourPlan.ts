@@ -116,6 +116,28 @@ export function stopView(
 }
 
 /**
+ * Whether a stop opens on its area's own framing before its stride view (`useStrideOpening`): an
+ * area stop whose view is the stride camera under a headline other than vertical ratio (the rhythm
+ * stop headed by cadence or the bounce, stating vertical ratio second). The headline reads on the
+ * whole figure first, then the camera eases out to the stride. A stop headed by vertical ratio goes
+ * straight to its stride: that drawing is its headline. The one-thing stop always goes straight.
+ */
+export function stopOpensWhole(
+  id: TourStopId,
+  metrics: readonly MetricId[],
+  focus: RunnerFocus | undefined,
+  params: BoundRunnerParams,
+): boolean {
+  return (
+    id !== 'oneThing' &&
+    metrics.length > 0 &&
+    metrics[0] !== 'verticalRatio' &&
+    FOCUS_AREA_CAMERA[id].camera !== 'strideSide' &&
+    stopView(id, focus, params).camera === 'strideSide'
+  )
+}
+
+/**
  * The metrics a stop puts on the runner: its headline, and vertical ratio where the stop states it
  * as its secondary value (the rhythm stop whose bounce reading vertical ratio heads, under another
  * headline). Never a number the stop does not state: the bounce and stride the figure draws for

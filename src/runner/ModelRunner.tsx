@@ -61,11 +61,16 @@ import { SKELETON_EDGES } from '../results/skeletonGeometry'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
 import {
   LANDING_PHASE_WINDOW,
+  VIEWBOX_FRAME,
+  drawingFrame,
   interpolateCamera,
+  keyPhaseDwellWindow,
   landingCamera,
   projectPoint,
   projectPose,
+  resolveCamera,
   strideCamera,
+  type DrawingFrame,
   type PhaseWindow,
 } from './camera'
 import {
@@ -113,6 +118,7 @@ import {
   sanitizeRate,
   segmentStyle,
   stepPlayback,
+  strideFramePad,
   valueTweenProgress,
   type RunnerSource,
   type SegmentStyle,
@@ -213,6 +219,12 @@ export interface ModelRunnerProps {
   focus?: RunnerFocus
   /** Default 1; a non-finite or non-positive rate plays at 1. */
   playbackRate?: number
+  /**
+   * While playing with a limb focus, rest this long (wall-clock ms) on the held phase each cycle,
+   * so the annotated limb meets its mark for a beat (the knees view). Absent or 0: no rest. The
+   * landing camera's own rests take precedence.
+   */
+  keyPhaseDwellMs?: number
   /** The figure's accessible name. */
   label: string
   overrides?: RunnerOverrides
@@ -249,6 +261,10 @@ const MARK_CLASS = 'stroke-cyan-700 dark:stroke-cyan-300 forced-colors:stroke-[c
 const FILL_CLASS = 'fill-cyan-700/15 dark:fill-cyan-300/20 forced-colors:fill-none'
 const GUIDE_CLASS =
   'stroke-neutral-500 dark:stroke-neutral-400 forced-colors:stroke-[color:CanvasText]'
+// A reference line the value is read from (knee flexion's straight leg): darker than a ray, so its
+// dashes read against the figure, never the accent (it is not a measured part).
+const REFERENCE_CLASS =
+  'stroke-neutral-700 dark:stroke-neutral-300 forced-colors:stroke-[color:CanvasText]'
 const GROUND_CLASS =
   'stroke-neutral-300 dark:stroke-neutral-700 forced-colors:stroke-[color:GrayText]'
 // The footage plate: hidden until the loop marks it shown, then faded in to a faint 0.26, also on
@@ -295,6 +311,8 @@ interface Scene {
   /** The static values (bound plus `overrides.values`), before any value tween. */
   values: RunnerParams
   pxPerUnit: number
+  /** The drawing's visible frame: labels are kept inside it. */
+  frame: DrawingFrame
   targets: DrawTargets
   heldPhase: number
   /** The footage plate on offer (copied, still, keyed to the held phase); null: none. */
@@ -392,6 +410,32 @@ function useSvgPixelScale(ref: RefObject<Element | null>): number {
     return () => observer.disconnect()
   }, [ref])
   return scale
+}
+
+/**
+ * The drawing's visible frame (`drawingFrame`) from a ResizeObserver on the drawing itself: a stage
+ * wider or taller than the viewBox's 3:4 shows more of the scene than the viewBox.
+ */
+function useDrawingFrame(ref: RefObject<Element | null>): DrawingFrame {
+  const [frame, setFrame] = useState<DrawingFrame>(VIEWBOX_FRAME)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1]?.contentRect
+      if (!box) return
+      const next = drawingFrame(box.width, box.height)
+      // Rounded, so a sub-pixel resize never reframes the camera.
+      const halfWidth = Math.round(next.halfWidth * 100) / 100
+      const halfHeight = Math.round(next.halfHeight * 100) / 100
+      setFrame((current) =>
+        current.halfWidth === halfWidth && current.halfHeight === halfHeight ? current : { halfWidth, halfHeight },
+      )
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [ref])
+  return frame
 }
 
 type Annotations = ReturnType<typeof planAnnotations>['annotations']
@@ -506,6 +550,7 @@ export function ModelRunner({
   camera,
   focus,
   playbackRate,
+  keyPhaseDwellMs = 0,
   label,
   overrides,
   intro,
@@ -525,6 +570,7 @@ export function ModelRunner({
   const visible = useDocumentVisible()
   const onScreen = useOnScreen(figureRef)
   const pxPerUnit = useSvgPixelScale(stageRef)
+  const frame = useDrawingFrame(svgRef)
   // The reader's own choice, never reset by a focus or camera change.
   const [choice, setChoice] = useState<'play' | 'pause' | null>(null)
   const playing = choice === null ? !reduced : choice === 'play'
@@ -543,23 +589,6 @@ export function ModelRunner({
     ) as Record<RunnerParamId, number>
   }, [params, overrideValues])
 
-  // The landing and stride cameras are framed on the static values, so their keys change only
-  // when they do.
-  const tracksContact = camera === 'landingSide'
-  const presetKey = cameraKey(camera)
-  const framedKey = useMemo(() => {
-    if (camera === 'landingSide') return cameraKey(landingCamera(values))
-    if (camera === 'strideSide') {
-      const stride = params.strideLength
-      return cameraKey(
-        stride.source === 'measured' ? strideCamera(values, stride.metricValue) : strideCamera(values),
-      )
-    }
-    return null
-  }, [camera, values, params])
-  const targetKey = framedKey ?? presetKey
-  const target = useMemo(() => cameraFromKey(targetKey), [targetKey])
-  const phaseWindow = tracksContact ? LANDING_PHASE_WINDOW : null
   const overrideSources = overrides?.sources
   const sources = useMemo(
     () => effectiveSources(params, overrideSources),
@@ -568,6 +597,9 @@ export function ModelRunner({
   const focusMetrics = focus?.metricIds
   const focusParams = useMemo(() => focusParamsOf(focusMetrics ?? []), [focusMetrics])
   const annotationKind = focus?.annotation
+  const tracksContact = camera === 'landingSide'
+  // The landing and stride cameras keep their presets' yaw when framed, so the plan reads the preset.
+  const cameraYawDeg = resolveCamera(camera).yawDeg
   const { heldPhase, annotations: allAnnotations } = useMemo(
     () =>
       planAnnotations({
@@ -576,13 +608,52 @@ export function ModelRunner({
         sources,
         focusParams,
         kind: annotationKind,
-        cameraYawDeg: target.yawDeg,
+        cameraYawDeg,
         heldPhaseWithoutKey: tracksContact ? GAIT_PHASES.rightContact : undefined,
       }),
-    [params, values, sources, focusParams, annotationKind, target.yawDeg, tracksContact],
+    [params, values, sources, focusParams, annotationKind, cameraYawDeg, tracksContact],
   )
+
+  // The landing and stride cameras are framed on the static values, so their keys change only
+  // when they do. The stride camera also fills the drawing's visible frame and keeps room for
+  // exactly the labels drawn, sized at the live scale.
+  const presetKey = cameraKey(camera)
+  const strideLabels = useMemo(() => {
+    const stride = allAnnotations.find((a) => a.paramId === 'strideLength')
+    return {
+      headLabel: allAnnotations.some((a) => a.paramId === 'cadence'),
+      bounceLabel: allAnnotations.some((a) => a.paramId === 'pelvisBounce'),
+      strideLabelLines: stride?.label.lines.length ?? 2,
+    }
+  }, [allAnnotations])
+  const framedKey = useMemo(() => {
+    if (camera === 'landingSide') return cameraKey(landingCamera(values))
+    if (camera === 'strideSide') {
+      const stride = params.strideLength
+      const framing = {
+        frame,
+        pad: strideFramePad({ unitsPerPx: 1 / pxPerUnit, ...strideLabels }),
+        headLabel: strideLabels.headLabel,
+        bounceBracket: strideLabels.bounceLabel,
+      }
+      return cameraKey(
+        stride.source === 'measured'
+          ? strideCamera(values, stride.metricValue, framing)
+          : strideCamera(values, undefined, framing),
+      )
+    }
+    return null
+  }, [camera, values, params, frame, pxPerUnit, strideLabels])
+  const targetKey = framedKey ?? presetKey
+  const target = useMemo(() => cameraFromKey(targetKey), [targetKey])
   // A limb focus keys the still frame to a leg phase; a cadence beat reads at any phase.
   const limbKeyed = allAnnotations.some((a) => a.kind !== 'beat' && a.keyPhase !== null)
+  // The landing camera loops its window; a dwelling view rests on the held phase once a cycle.
+  const dwellMs = Number.isFinite(keyPhaseDwellMs) && keyPhaseDwellMs > 0 ? keyPhaseDwellMs : 0
+  const phaseWindow = useMemo<PhaseWindow | null>(() => {
+    if (tracksContact) return LANDING_PHASE_WINDOW
+    return limbKeyed && dwellMs > 0 ? keyPhaseDwellWindow(heldPhase, dwellMs) : null
+  }, [tracksContact, limbKeyed, dwellMs, heldPhase])
   // A still figure shows a limb mark only at its key phase; a playing one shows every mark.
   const valueTween = overrides?.valueTween ?? null
   // A parameter tweening in shows only its flash: its annotation would duplicate the value and
@@ -594,9 +665,14 @@ export function ModelRunner({
       (a) => !hidden.has(a.paramId) && (playing || shownWhileStill(a, heldPhase)),
     )
   }, [playing, allAnnotations, heldPhase, tweening])
+  // The knee parameters accent only the leg they are annotated on.
+  const focusSides = useMemo(
+    () => Object.fromEntries(allAnnotations.map((a) => [a.paramId, a.side])),
+    [allAnnotations],
+  )
   const edgeStyles = useMemo(
-    () => SKELETON_EDGES.map((edge) => segmentStyle(edge, sources, focusParams)),
-    [sources, focusParams],
+    () => SKELETON_EDGES.map((edge) => segmentStyle(edge, sources, focusParams, focusSides)),
+    [sources, focusParams, focusSides],
   )
   const focusShown = edgeStyles.includes('focus')
   const jointStyleList = useMemo(() => jointStyles(edgeStyles), [edgeStyles])
@@ -606,8 +682,8 @@ export function ModelRunner({
     () => neutralEdgeInFrame(edgeStyles, values, heldPhase, target),
     [edgeStyles, values, heldPhase, target],
   )
-  // Footfall rings move, so only a playing figure with motion allowed draws them; the landing
-  // window's contact hold would freeze one at full strength, so not there either.
+  // Footfall rings move, so only a playing figure with motion allowed draws them; a window's hold
+  // (the landing contact, a dwell) would freeze one at full strength, so not there either.
   const showPulses = playing && !reduced && phaseWindow === null
   const flash = overrides?.flash ?? null
   const introRunning = intro?.running === true && !reduced
@@ -752,6 +828,7 @@ export function ModelRunner({
         fontUnits,
         (text.side === 'left' ? RUNNER_PX.labelGapLeft : RUNNER_PX.labelGap) * unit,
         text.offsetLines,
+        scene.frame,
       )
       lines.forEach((line, i) => setPoint(line, 'x', 'y', layout.x, layout.ys[i]))
       const chars = Math.max(0, ...text.lines.map((line) => line.length))
@@ -799,6 +876,7 @@ export function ModelRunner({
     sceneRef.current = {
       values,
       pxPerUnit,
+      frame,
       targets: collectTargets(svg, annotations, flashPoint),
       heldPhase,
       plate: plateInput,
@@ -1051,16 +1129,24 @@ export function ModelRunner({
                 {annotation.fills.map((_, i) => (
                   <path key={`fill-${i}`} data-path={`${a}:f:${i}`} data-role="fill" className={FILL_CLASS} />
                 ))}
-                {annotation.guides.map((_, i) => (
-                  <path
-                    key={`guide-${i}`}
-                    data-path={`${a}:g:${i}`}
-                    data-role="guide"
-                    fill="none"
-                    className={GUIDE_CLASS}
-                    strokeWidth={RUNNER_PX.guideStroke * unit}
-                  />
-                ))}
+                {annotation.guides.map((_, i) => {
+                  // A dashed guide is a reference line (knee flexion's straight leg): heavier and
+                  // darker than a ray, so its dashes read.
+                  const dashed = annotation.dashedGuides?.includes(i) === true
+                  const dash = RUNNER_PX.referenceDash * unit
+                  return (
+                    <path
+                      key={`guide-${i}`}
+                      data-path={`${a}:g:${i}`}
+                      data-role={dashed ? 'reference' : 'guide'}
+                      fill="none"
+                      className={dashed ? REFERENCE_CLASS : GUIDE_CLASS}
+                      strokeWidth={(dashed ? RUNNER_PX.referenceStroke : RUNNER_PX.guideStroke) * unit}
+                      strokeDasharray={dashed ? `${dash} ${dash * 0.8}` : undefined}
+                      strokeLinecap={dashed ? 'butt' : undefined}
+                    />
+                  )
+                })}
                 {annotation.marks.map((_, i) => (
                   <path
                     key={`mark-${i}`}

@@ -6,6 +6,7 @@ import { bindRunnerParams, paramForMetric } from '../runner/runnerParams'
 import { makeHeuristics, makeVerticalOscillation } from './__fixtures__/metricResult'
 import {
   FOCUS_AREA_CAMERA,
+  KNEES_DWELL_MS,
   NO_FOCUS_CAMERA,
   SLOW_MOTION_RATE,
   runnerFocusFor,
@@ -28,7 +29,7 @@ describe('FOCUS_AREA_CAMERA', () => {
       rhythm: { camera: 'wholeBodySide', playbackRate: 1 },
       arms: { camera: 'armsQuarter', playbackRate: 1 },
       posture: { camera: 'torsoSide', playbackRate: 1 },
-      knees: { camera: 'legsSide', playbackRate: 0.4 },
+      knees: { camera: 'legsSide', playbackRate: 0.4, keyPhaseDwellMs: KNEES_DWELL_MS },
       landing: { camera: 'landingSide', playbackRate: 0.4 },
       footPath: { camera: 'feetFront', playbackRate: 0.4 },
     })

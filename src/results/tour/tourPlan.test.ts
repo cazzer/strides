@@ -3,7 +3,7 @@ import type { MetricId } from '../../heuristics/types'
 import { FOCUS_AREA_ORDER } from '../../guidance/focusAreas'
 import { makeHeuristics, makeMetric, makeVerticalOscillationCm } from '../__fixtures__/metricResult'
 import { bindRunnerParams } from '../../runner/runnerParams'
-import { FOCUS_AREA_CAMERA, NO_FOCUS_CAMERA, runnerFocusFor } from '../focusAreaCamera'
+import { FOCUS_AREA_CAMERA, KNEES_DWELL_MS, NO_FOCUS_CAMERA, runnerFocusFor } from '../focusAreaCamera'
 import type { SessionCoverage } from '../sessionCoverage'
 import {
   BOTH_VIEWS_HINT,
@@ -131,7 +131,7 @@ describe('stopCamera and tourStopDomId', () => {
     expect(kneeStop.view.area).toBe('knees')
     const params = bindRunnerParams(makeHeuristics())
     const view = stopView('knees', runnerFocusFor(stopFocusMetrics(kneeStop)), params)
-    expect(view).toEqual({ camera: 'legsSide', playbackRate: 0.4 })
+    expect(view).toEqual({ camera: 'legsSide', playbackRate: 0.4, keyPhaseDwellMs: KNEES_DWELL_MS })
     expect(view.playbackRate).toBe(stopCamera('landing').playbackRate)
     for (const area of FOCUS_AREA_ORDER) {
       expect([1, 0.4], area).toContain(stopCamera(area).playbackRate)

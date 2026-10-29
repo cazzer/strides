@@ -11,7 +11,14 @@
  */
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { GAIT_PHASES, GROUND_Y, MODEL_PROPORTIONS, PELVIS_HEIGHT, poseAt } from './gaitModel'
-import { BOUNCE_BRACKET_X, STRIDE_BRACKET_DEPTH, bounceInset, strideSpan } from './runnerAnnotations'
+import {
+  BOUNCE_BRACKET_X,
+  STRIDE_BRACKET_DEPTH,
+  STRIDE_TICK_HALF,
+  bounceInset,
+  headTopAnchor,
+  strideSpan,
+} from './runnerAnnotations'
 import { NEUTRAL_RUNNER_PARAMS } from './runnerParams'
 import type {
   CameraPreset,
@@ -50,6 +57,16 @@ export interface PhaseWindow {
   /** Pauses inside the window, each taken once per pass. Absent: none. A hold must sit after the
    * window's start (offset > 0): one placed exactly at the start never fires. */
   holds?: readonly PhaseHold[]
+}
+
+/**
+ * The whole cycle as one window that rests `ms` (wall-clock) on `phase` each pass: a view that holds
+ * its annotated limb on its mark for a beat once a cycle. The window starts half a cycle away from
+ * the rest, so the rest is always strictly inside it and is never skipped where a step wraps.
+ */
+export function keyPhaseDwellWindow(phase: number, ms: number): PhaseWindow {
+  const start = phase + 0.5 - Math.floor(phase + 0.5)
+  return Object.freeze({ start, length: 1, holds: Object.freeze([Object.freeze({ phase, ms })]) })
 }
 
 /** How long each landing loop rests on the contact frame, wall-clock ms. */
@@ -143,45 +160,107 @@ export function landingCamera(values: RunnerParams): CameraState {
 }
 
 /**
- * Room the stride frame keeps beyond what it frames, in PROJECTED units (labels are sized on
- * screen, not in the world): the bounce's own label left of its bracket (drawn when the bounce heads
- * the stop), the cadence label above the head, and vertical ratio's two-line label under the stride.
+ * The drawing's visible frame, in projected units. The renderer fits the viewBox (±
+ * `CAMERA_FRAME_HALF_WIDTH` × ± `CAMERA_FRAME_HALF_HEIGHT`) with `meet`, so a stage wider than 3:4
+ * shows more at the sides and a taller one more above and below: the visible frame is never smaller
+ * than the viewBox.
  */
-export const STRIDE_FRAME_PAD = Object.freeze({ left: 0.45, right: 0.1, top: 0.4, bottom: 0.45 })
+export interface DrawingFrame {
+  halfWidth: number
+  halfHeight: number
+}
+
+/** The viewBox itself: the frame every preset is designed for, and the least a stage shows. */
+export const VIEWBOX_FRAME: DrawingFrame = Object.freeze({
+  halfWidth: CAMERA_FRAME_HALF_WIDTH,
+  halfHeight: CAMERA_FRAME_HALF_HEIGHT,
+})
+
+/** The visible frame of a drawing `width` × `height` CSS pixels, fitted with `meet`. */
+export function drawingFrame(width: number, height: number): DrawingFrame {
+  if (!(width > 0) || !(height > 0)) return VIEWBOX_FRAME
+  const scale = Math.min(width / (2 * CAMERA_FRAME_HALF_WIDTH), height / (2 * CAMERA_FRAME_HALF_HEIGHT))
+  return {
+    halfWidth: Math.max(CAMERA_FRAME_HALF_WIDTH, width / (2 * scale)),
+    halfHeight: Math.max(CAMERA_FRAME_HALF_HEIGHT, height / (2 * scale)),
+  }
+}
+
+/** Room kept beyond the framed world span, in PROJECTED units (labels are sized on screen). */
+export interface FramePad {
+  left: number
+  right: number
+  top: number
+  bottom: number
+}
+
+/**
+ * The stride frame's label room at the viewBox's own scale (100 px per unit), for the bare preset:
+ * the bounce's own label left of its bracket, the cadence label above the head, and vertical ratio's
+ * two-line label under the stride. The renderer sizes it from the live scale and what it draws
+ * (`strideFramePad`).
+ */
+export const STRIDE_FRAME_PAD: FramePad = Object.freeze({ left: 0.45, right: 0.1, top: 0.3, bottom: 0.45 })
+/**
+ * The share of the frame's height, at its bottom, the stride frame keeps clear: the phone tour lets
+ * the active panel cover up to the bottom 15% of the drawing (`--rt-clear`), so the stride's label
+ * never sits under it.
+ */
+export const STRIDE_FRAME_CLEAR_BOTTOM = 0.15
 const STRIDE_SAMPLES = 30
+
+export interface StrideFraming {
+  /** The visible frame to fill. Default: the viewBox. */
+  frame?: DrawingFrame
+  /** Label room beyond the framed span, projected units. Default: `STRIDE_FRAME_PAD`. */
+  pad?: FramePad
+  /** The cadence label is drawn above the head: frame its anchor over the head. Default true. */
+  headLabel?: boolean
+  /** The bounce's own bracket is drawn behind the hips: frame it. Default true. */
+  bounceBracket?: boolean
+}
 
 /**
  * The stride camera for one parameter set and vertical ratio: from the side, the whole figure, one
  * drawn stride along the ground ahead of the near (right) foot's contact at the figure's own scale,
- * and the magnified bounce inset over it (`bounceInset`). Framed on the values it draws, as the
- * landing camera is: a stride several figures long fixes the zoom, so the figure is small. `ratio`
- * defaults to the neutral figure's own (bounce over stride), for the bare preset.
+ * the magnified bounce inset over it (`bounceInset`), and the labels' room, filling the visible
+ * frame (all of the drawing's box, not only the viewBox) less its clear bottom. Framed on the values
+ * it draws, as the landing camera is, so it fits whatever stride is bound: the stride fixes the
+ * zoom. `ratio` defaults to the neutral figure's own (bounce over stride), for the bare preset.
  */
 export function strideCamera(
   values: RunnerParams,
   ratio: number = NEUTRAL_RUNNER_PARAMS.pelvisBounce / NEUTRAL_RUNNER_PARAMS.strideLength,
+  { frame = VIEWBOX_FRAME, pad = STRIDE_FRAME_PAD, headLabel = true, bounceBracket = true }: StrideFraming = {},
 ): CameraState {
   const { end } = strideSpan(values, 'right')
-  let left = BOUNCE_BRACKET_X
+  let left = bounceBracket ? BOUNCE_BRACKET_X : Infinity
   let right = end
   let top = bounceInset(values, 'right', ratio).high
+  let head = -Infinity
   for (let i = 0; i < STRIDE_SAMPLES; i += 1) {
-    for (const j of poseAt(i / STRIDE_SAMPLES, values)) {
+    const pose = poseAt(i / STRIDE_SAMPLES, values)
+    for (const j of pose) {
       left = Math.min(left, j.x)
       right = Math.max(right, j.x)
       top = Math.max(top, j.y)
     }
+    head = Math.max(head, headTopAnchor(pose).y)
   }
-  const bottom = GROUND_Y - STRIDE_BRACKET_DEPTH
-  const pad = STRIDE_FRAME_PAD
+  if (headLabel) top = Math.max(top, head)
+  const bottom = GROUND_Y - STRIDE_BRACKET_DEPTH - STRIDE_TICK_HALF
+  // The frame less its clear bottom, in screen y (down).
+  const frameTop = -frame.halfHeight
+  const frameBottom = frame.halfHeight - 2 * frame.halfHeight * STRIDE_FRAME_CLEAR_BOTTOM
   const zoom = Math.min(
-    (2 * CAMERA_FRAME_HALF_WIDTH - pad.left - pad.right) / (right - left),
-    (2 * CAMERA_FRAME_HALF_HEIGHT - pad.top - pad.bottom) / (top - bottom),
+    (2 * frame.halfWidth - pad.left - pad.right) / (right - left),
+    (frameBottom - frameTop - pad.top - pad.bottom) / (top - bottom),
   )
-  // Centre the framed span in the frame less its pads (screen y runs down, world y up).
+  // Centre the padded span in that frame (screen y runs down, world y up).
+  const screenMiddle = (frameTop + frameBottom) / 2
   return preset(0, 0, zoom, {
     x: (left + right) / 2 - (pad.left - pad.right) / (2 * zoom),
-    y: (top + bottom) / 2 + (pad.top - pad.bottom) / (2 * zoom),
+    y: (top + bottom) / 2 + (pad.top - pad.bottom) / (2 * zoom) + screenMiddle / zoom,
     z: 0,
   })
 }

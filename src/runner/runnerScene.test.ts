@@ -30,6 +30,7 @@ import {
   drawOrder,
   easeInOutCubic,
   effectiveSources,
+  focusAccentEdges,
   focusParamsOf,
   jointStyles,
   labelAlign,
@@ -39,6 +40,10 @@ import {
   placeLabel,
   sanitizeRate,
   segmentStyle,
+  strideFramePad,
+  RUNNER_PX,
+  LABEL_LINE_HEIGHT,
+  STRIDE_FRAME_MARGIN_PX,
   type PlaybackState,
 } from './runnerScene'
 import type { BoundRunnerParams } from './types'
@@ -433,5 +438,72 @@ describe('stepPlayback', () => {
     expect(Math.abs(endHolds - restarts)).toBeLessThanOrEqual(1)
     // Each contact hold shows the exact contact frame for about the hold's length.
     expect(contactFrames / contactHolds).toBeGreaterThanOrEqual(Math.floor(LANDING_CONTACT_HOLD_MS / FRAME_MS))
+  })
+})
+
+describe('the knee parameters accent their own leg (strides-trn2.11)', () => {
+  const sources = effectiveSources(bindAll())
+  const focusEdges = (params: Parameters<typeof segmentStyle>[2], sides: Parameters<typeof segmentStyle>[3]) =>
+    SKELETON_EDGES.filter((edge) => segmentStyle(edge, sources, params, sides) === 'focus').map(
+      ([a, b]) => `${a}-${b}`,
+    )
+
+  it('knee flexion accents the annotated leg’s thigh and shank, knee drive its thigh', () => {
+    expect(focusAccentEdges('peakSwingKneeBend', 'right')).toEqual([
+      ['right_hip', 'right_knee'],
+      ['right_knee', 'right_ankle'],
+    ])
+    expect(focusAccentEdges('peakThighAngle', 'left')).toEqual([['left_hip', 'left_knee']])
+    expect(focusEdges(['peakSwingKneeBend'], { peakSwingKneeBend: 'right' }).sort()).toEqual(
+      ['right_hip-right_knee', 'right_knee-right_ankle'].sort(),
+    )
+    expect(focusEdges(['peakThighAngle'], { peakThighAngle: 'right' })).toEqual(['right_hip-right_knee'])
+  })
+
+  it('both knee metrics on one leg share its thigh and leave the other leg unaccented', () => {
+    const edges = focusEdges(['peakSwingKneeBend', 'peakThighAngle'], {
+      peakSwingKneeBend: 'right',
+      peakThighAngle: 'right',
+    })
+    expect(edges.sort()).toEqual(['right_hip-right_knee', 'right_knee-right_ankle'].sort())
+  })
+
+  it('without a side, and for every other parameter, accents every edge the parameter shapes', () => {
+    expect(focusAccentEdges('peakSwingKneeBend')).toHaveLength(2)
+    expect(focusEdges(['peakSwingKneeBend'], {}).sort()).toEqual(
+      ['left_knee-left_ankle', 'right_knee-right_ankle'].sort(),
+    )
+    expect(focusAccentEdges('landingOffset', 'right')).toHaveLength(4)
+  })
+})
+
+describe('strideFramePad', () => {
+  const line = RUNNER_PX.label * LABEL_LINE_HEIGHT
+  it('keeps room for exactly the labels drawn, at the live scale', () => {
+    const base = strideFramePad({ unitsPerPx: 1 / 100, headLabel: false, bounceLabel: false, strideLabelLines: 2 })
+    expect(base.left).toBeCloseTo(STRIDE_FRAME_MARGIN_PX / 100, 12)
+    expect(base.right).toBeCloseTo(STRIDE_FRAME_MARGIN_PX / 100, 12)
+    expect(base.top).toBeCloseTo(STRIDE_FRAME_MARGIN_PX / 100, 12)
+    expect(base.bottom).toBeCloseTo((STRIDE_FRAME_MARGIN_PX + RUNNER_PX.labelGap + 2 * line) / 100, 12)
+    const all = strideFramePad({ unitsPerPx: 1 / 50, headLabel: true, bounceLabel: true, strideLabelLines: 3 })
+    expect(all.top).toBeCloseTo((STRIDE_FRAME_MARGIN_PX + RUNNER_PX.labelGap + line) / 50, 12)
+    expect(all.bottom).toBeCloseTo((STRIDE_FRAME_MARGIN_PX + RUNNER_PX.labelGap + 3 * line) / 50, 12)
+    expect(all.left).toBeGreaterThan(base.left * 2 + 0.5)
+  })
+})
+
+describe('labels stay inside the visible frame', () => {
+  it('may use a wider drawing’s sides, never beyond them', () => {
+    const font = 0.13
+    const inViewBox = placeLabel({ x: -1.9, y: 0 }, 'left', ['174 steps/min'], font, 0.06)
+    const inWide = placeLabel({ x: -1.9, y: 0 }, 'left', ['174 steps/min'], font, 0.06, 0, {
+      halfWidth: 2.3,
+      halfHeight: 2,
+    })
+    const width = '174 steps/min'.length * font * LABEL_CHAR_WIDTH_EM
+    expect(inViewBox.x - width).toBeGreaterThanOrEqual(-VIEW_HALF_WIDTH)
+    expect(inWide.x - width).toBeGreaterThanOrEqual(-2.3)
+    expect(inWide.x).toBeLessThan(inViewBox.x)
+    expect(clampLabelX(5, 'start', 4, font, 2.3)).toBeLessThanOrEqual(2.3 - 4 * font * LABEL_CHAR_WIDTH_EM)
   })
 })

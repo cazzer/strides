@@ -14,6 +14,7 @@ import {
   BOUNCE_INSET_MAX_HEIGHT,
   CLAMPED_LABEL_SUFFIX,
   KEY_LEG_PHASE,
+  KNEE_BEND_SUFFIX,
   PARAM_ANNOTATION_KIND,
   RUNNER_METRIC_UNITS,
   beatEnvelope,
@@ -23,6 +24,7 @@ import {
   phaseForLeg,
   planAnnotations,
   STACK_GAP_LINES,
+  STRAIGHT_LEG_REFERENCE_LENGTH,
   shownWhileStill,
   type AnnotationInput,
   type AnnotationPlan,
@@ -313,6 +315,32 @@ describe('the marks are the drawn values and lie on the live figure', () => {
     expect(screenAngle(knee, arcPoints[0], beyond, SIDE)).toBeCloseTo(0, 9)
     expect(screenAngle(knee, arcPoints[arcPoints.length - 1], ankle, SIDE)).toBeCloseTo(0, 9)
     expect(screenAngle(knee, beyond, ankle, SIDE)).toBeCloseTo(values.peakSwingKneeBend, 9)
+  })
+
+  it('knee flexion: the bend is read from a dashed straight-leg line along the live thigh, labelled as a bend', () => {
+    const phase = heldFor('peakSwingKneeBend')
+    const annotation = only(bound, 'peakSwingKneeBend')
+    const [arcPoints] = annotation.marks
+    const hip = liveJoint(phase, bound, 'right_hip')
+    const knee = liveJoint(phase, bound, 'right_knee')
+    const ankle = liveJoint(phase, bound, 'right_ankle')
+    expect(annotation.dashedGuides).toEqual([0])
+    const [from, to] = annotation.guides[0]
+    expect(from).toEqual({ x: knee.x, y: knee.y, z: knee.z })
+    // Straight on from the live thigh, exactly the reference's length past the knee.
+    expect(screenAngle(knee, to, { x: 2 * knee.x - hip.x, y: 2 * knee.y - hip.y, z: knee.z }, SIDE)).toBeCloseTo(0, 9)
+    expect(screenLength(knee, to, SIDE)).toBeCloseTo(STRAIGHT_LEG_REFERENCE_LENGTH, 9)
+    // The arc runs from the straight-leg line onto the shank, sweeping the drawn value exactly.
+    expect(screenAngle(knee, arcPoints[0], to, SIDE)).toBeCloseTo(0, 9)
+    expect(screenAngle(knee, to, ankle, SIDE)).toBeCloseTo(values.peakSwingKneeBend, 9)
+    // The reference stops well short of a shank: a line, never a second leg.
+    expect(STRAIGHT_LEG_REFERENCE_LENGTH).toBeLessThan(MODEL_PROPORTIONS.shank * 0.75)
+    const knees = bound.peakSwingKneeBend
+    if (knees.source !== 'measured') throw new Error('knee flexion should be measured')
+    const value = formatRunnerValue('kneeFlexion', knees.metricValue)
+    expect(annotation.label.lines).toEqual([`${value}${KNEE_BEND_SUFFIX}`])
+    expect(annotation.label.text).toBe(`${value} bend`)
+    expect(annotation.label.anchor).toEqual(to)
   })
 
   it('bounce: the bracket spans hip-mid’s height range over a cycle', () => {

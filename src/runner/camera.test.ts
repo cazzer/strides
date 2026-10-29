@@ -6,18 +6,31 @@ import {
   LANDING_FRAME_ABOVE_HIP,
   LANDING_PHASE_WINDOW,
   LANDING_FRAME_BELOW_GROUND,
+  STRIDE_FRAME_CLEAR_BOTTOM,
   STRIDE_FRAME_PAD,
+  VIEWBOX_FRAME,
+  drawingFrame,
   interpolateCamera,
+  keyPhaseDwellWindow,
   landingCamera,
   projectPoint,
   projectPose,
   resolveCamera,
   strideCamera,
+  type DrawingFrame,
 } from './camera'
 import { GAIT_PHASES, GROUND_Y, poseAt } from './gaitModel'
-import { BOUNCE_BRACKET_X, BOUNCE_INSET_MAX_HEIGHT, STRIDE_BRACKET_DEPTH, bounceInset, strideSpan } from './runnerAnnotations'
+import {
+  BOUNCE_BRACKET_X,
+  BOUNCE_INSET_MAX_HEIGHT,
+  STRIDE_BRACKET_DEPTH,
+  STRIDE_TICK_HALF,
+  bounceInset,
+  headTopAnchor,
+  strideSpan,
+} from './runnerAnnotations'
 import { NEUTRAL_RUNNER_PARAMS, RUNNER_PARAM_SPECS } from './runnerParams'
-import { VIEW_HALF_WIDTH } from './runnerScene'
+import { VIEW_HALF_WIDTH, stepPlayback, strideFramePad } from './runnerScene'
 import type { CameraPreset, CameraState, RunnerParamId, RunnerParams } from './types'
 
 const PRESETS = Object.keys(CAMERA_PRESETS) as CameraPreset[]
@@ -340,6 +353,142 @@ describe('interpolateCamera', () => {
           previous = current
         }
       }
+    }
+  })
+})
+
+describe('strideCamera fills the visible frame (strides-trn2.11)', () => {
+  const [shortest, longest] = RUNNER_PARAM_SPECS.strideLength.range
+  // The tour's drawings measured live: 1280×800 (401 × 404 px) and 390×844 (390 × 338 px), and a
+  // tall one for good measure.
+  const frames: DrawingFrame[] = [
+    VIEWBOX_FRAME,
+    drawingFrame(401, 404),
+    drawingFrame(390, 338),
+    drawingFrame(300, 600),
+  ]
+  const cases = [shortest, 3.14, 6.28, longest].flatMap((strideLength) => [
+    { ...NEUTRAL_RUNNER_PARAMS, strideLength },
+    { ...NEUTRAL_RUNNER_PARAMS, strideLength, landingOffset: 0.7, pelvisBounce: 0.5, torsoPitch: 35 },
+  ])
+
+  it('reads the visible frame of a meet-fitted drawing', () => {
+    expect(drawingFrame(300, 400)).toEqual(VIEWBOX_FRAME)
+    expect(drawingFrame(400, 400).halfWidth).toBeCloseTo(2, 9)
+    expect(drawingFrame(400, 400).halfHeight).toBeCloseTo(2, 9)
+    expect(drawingFrame(300, 800).halfHeight).toBeCloseTo(4, 9)
+    expect(drawingFrame(0, 400)).toEqual(VIEWBOX_FRAME)
+  })
+
+  it('keeps the figure, the stride, the inset and every label’s room inside the frame and above its clear bottom', () => {
+    for (const frame of frames) {
+      for (const values of cases) {
+        for (const ratio of [values.pelvisBounce / values.strideLength, 1 / values.strideLength]) {
+          for (const labels of [
+            { headLabel: true, bounceLabel: false },
+            { headLabel: false, bounceLabel: true },
+          ]) {
+            const pad = strideFramePad({ unitsPerPx: 1 / 100, strideLabelLines: 3, ...labels })
+            const camera = strideCamera(values, ratio, {
+              frame,
+              pad,
+              headLabel: labels.headLabel,
+              bounceBracket: labels.bounceLabel,
+            })
+            const where = `frame ${frame.halfWidth}×${frame.halfHeight}, stride ${values.strideLength}, ratio ${ratio}`
+            const bottomLimit = frame.halfHeight - 2 * frame.halfHeight * STRIDE_FRAME_CLEAR_BOTTOM
+            const { start, end } = strideSpan(values, 'right')
+            const below = GROUND_Y - STRIDE_BRACKET_DEPTH - STRIDE_TICK_HALF
+            for (const x of [start, end]) {
+              const p = projectPoint({ x, y: below, z: 0 }, camera)
+              expect(p.x, where).toBeLessThanOrEqual(frame.halfWidth - pad.right + 1e-9)
+              expect(p.y, where).toBeLessThanOrEqual(bottomLimit - pad.bottom + 1e-9)
+            }
+            const inset = bounceInset(values, 'right', ratio)
+            const insetTop = projectPoint({ x: inset.x, y: inset.high, z: 0 }, camera)
+            expect(insetTop.y, where).toBeGreaterThanOrEqual(-frame.halfHeight + pad.top - 1e-9)
+            if (labels.bounceLabel) {
+              const bracket = projectPoint({ x: BOUNCE_BRACKET_X, y: 1, z: 0 }, camera)
+              expect(bracket.x, where).toBeGreaterThanOrEqual(-frame.halfWidth + pad.left - 1e-9)
+            }
+            for (let i = 0; i < 40; i += 1) {
+              const pose = poseAt(i / 40, values)
+              for (const j of projectPose(pose, camera)) {
+                expect(j.x, `${j.name} ${where}`).toBeGreaterThanOrEqual(-frame.halfWidth + pad.left - 1e-3)
+                expect(j.x, `${j.name} ${where}`).toBeLessThanOrEqual(frame.halfWidth - pad.right + 1e-3)
+                expect(j.y, `${j.name} ${where}`).toBeGreaterThanOrEqual(-frame.halfHeight + pad.top - 1e-3)
+              }
+              if (labels.headLabel) {
+                const head = projectPoint(headTopAnchor(pose), camera)
+                expect(head.y, where).toBeGreaterThanOrEqual(-frame.halfHeight + pad.top - 1e-3)
+              }
+            }
+          }
+        }
+      }
+    }
+  })
+
+  it('is tight: the framed span meets the padded frame on its limiting side', () => {
+    for (const frame of frames) {
+      for (const values of cases) {
+        const pad = strideFramePad({ unitsPerPx: 1 / 100, strideLabelLines: 2, headLabel: true, bounceLabel: false })
+        const camera = strideCamera(values, 0.025, { frame, pad, headLabel: true, bounceBracket: false })
+        const { end } = strideSpan(values, 'right')
+        let left = Infinity
+        let top = -Infinity
+        for (let i = 0; i < 30; i += 1) {
+          const pose = poseAt(i / 30, values)
+          for (const j of pose) left = Math.min(left, j.x)
+          top = Math.max(top, headTopAnchor(pose).y)
+        }
+        const width = (end - left) * camera.zoom + pad.left + pad.right
+        const usable = 2 * frame.halfHeight * (1 - STRIDE_FRAME_CLEAR_BOTTOM)
+        const height =
+          (Math.max(top, bounceInset(values, 'right', 0.025).high) - (GROUND_Y - STRIDE_BRACKET_DEPTH - STRIDE_TICK_HALF)) *
+            camera.zoom +
+          pad.top +
+          pad.bottom
+        const fill = Math.max(width / (2 * frame.halfWidth), height / usable)
+        expect(fill, `frame ${frame.halfWidth}, stride ${values.strideLength}`).toBeCloseTo(1, 6)
+      }
+    }
+  })
+
+  it('draws the figure larger in a wider frame and for a shorter stride, never tied to one stride length', () => {
+    const values = { ...NEUTRAL_RUNNER_PARAMS, strideLength: 6.28 }
+    const pad = strideFramePad({ unitsPerPx: 1 / 100, strideLabelLines: 2, headLabel: true, bounceLabel: false })
+    const zoom = (frame: DrawingFrame, strideLength = 6.28) =>
+      strideCamera({ ...values, strideLength }, 0.0246, { frame, pad, headLabel: true, bounceBracket: false }).zoom
+    expect(zoom(drawingFrame(401, 404))).toBeGreaterThan(zoom(VIEWBOX_FRAME) * 1.25)
+    expect(zoom(drawingFrame(390, 338))).toBeGreaterThan(zoom(VIEWBOX_FRAME) * 1.4)
+    // Half the stride (one step instead of a gait cycle) frames a larger figure.
+    expect(zoom(drawingFrame(401, 404), 3.14)).toBeGreaterThan(zoom(drawingFrame(401, 404)) * 1.3)
+  })
+})
+
+describe('keyPhaseDwellWindow', () => {
+  it('rests exactly on its phase for its time once a cycle, and otherwise plays the whole cycle', () => {
+    for (const phase of [0, 0.12, 0.5, 0.62, 0.99]) {
+      const window = keyPhaseDwellWindow(phase, 500)
+      let state = { phase: phase + 0.3 - Math.floor(phase + 0.3), holdLeftMs: 0 }
+      let rested = 0
+      let rests = 0
+      let travelled = 0
+      // Four cycles at one cycle a second, in 30 fps steps.
+      for (let t = 0; t < 4000 + 4 * 500; t += 1000 / 30) {
+        const next = stepPlayback(state, 1000 / 30, 1, window)
+        if (next.holdLeftMs > 0 && state.holdLeftMs === 0) rests += 1
+        if (next.holdLeftMs > 0) {
+          rested += 1000 / 30
+          expect(next.phase).toBe(phase)
+        } else travelled += next.phase - state.phase - Math.floor(next.phase - state.phase)
+        state = next
+      }
+      expect(rests, String(phase)).toBe(4)
+      expect(travelled, String(phase)).toBeGreaterThan(3.5)
+      expect(rested / rests, String(phase)).toBeGreaterThan(500 - 1000 / 30)
+      expect(rested / rests, String(phase)).toBeLessThan(500 + 2 * (1000 / 30))
     }
   })
 })

@@ -11,12 +11,15 @@ import {
   CAMERA_FRAME_HALF_HEIGHT,
   CAMERA_FRAME_HALF_WIDTH,
   CAMERA_PRESETS,
+  VIEWBOX_FRAME,
   projectPose,
   resolveCamera,
+  type DrawingFrame,
+  type FramePad,
   type PhaseWindow,
 } from './camera'
 import { GAIT_PHASES, poseAt } from './gaitModel'
-import { formatRunnerValue, type LabelSide } from './runnerAnnotations'
+import { formatRunnerValue, type LabelSide, type RunnerSide } from './runnerAnnotations'
 import { RUNNER_PARAM_SEGMENTS, RUNNER_PARAM_SPECS, paramForMetric } from './runnerParams'
 import type {
   BoundRunnerParams,
@@ -49,6 +52,9 @@ export const RUNNER_PX = {
   focusJoint: 5,
   markStroke: 2,
   guideStroke: 1,
+  /** A dashed reference line (knee flexion's straight leg): heavier than a ray, so its dashes read. */
+  referenceStroke: 2,
+  referenceDash: 5,
   groundStroke: 1,
   label: 13,
   labelHalo: 3,
@@ -135,18 +141,47 @@ function sameEdge(a: SkeletonEdge, b: SkeletonEdge): boolean {
 }
 
 /**
- * `'focus'` when a measured focus parameter shapes the edge, else `'measured'` when any measured
- * parameter does, else `'neutral'`. Head edges belong to no parameter, so are always neutral.
+ * The knee parameters' accents, per leg: the segments that form the measured angle on the measured
+ * leg. Knee flexion is the angle between thigh and shank, so both are accented; knee drive is the
+ * thigh's angle, so the thigh alone. The other leg is not accented: it is not what the value reads.
+ */
+const SIDED_FOCUS_ACCENT: Partial<Record<RunnerParamId, readonly (readonly [string, string])[]>> = {
+  peakSwingKneeBend: [
+    ['hip', 'knee'],
+    ['knee', 'ankle'],
+  ],
+  peakThighAngle: [['hip', 'knee']],
+}
+
+/**
+ * The edges a focus parameter accents: on the leg it is annotated on (`side`) for the knee
+ * parameters, every edge it shapes otherwise (or without a side).
+ */
+export function focusAccentEdges(paramId: RunnerParamId, side?: RunnerSide): readonly SkeletonEdge[] {
+  const parts = SIDED_FOCUS_ACCENT[paramId]
+  if (parts === undefined || side === undefined) return RUNNER_PARAM_SEGMENTS[paramId]
+  return parts.map(([a, b]) => [`${side}_${a}` as KeypointName, `${side}_${b}` as KeypointName] as const)
+}
+
+/**
+ * `'focus'` when a measured focus parameter accents the edge (`focusAccentEdges`, on the leg in
+ * `focusSides`), else `'measured'` when any measured parameter shapes it, else `'neutral'`. An
+ * accented edge that no measured parameter shapes stays neutral: a dashed part is never accented
+ * as if measured. Head edges belong to no parameter, so are always neutral.
  */
 export function segmentStyle(
   edge: SkeletonEdge,
   sources: RunnerSources,
   focusParams: readonly RunnerParamId[],
+  focusSides: Partial<Record<RunnerParamId, RunnerSide>> = {},
 ): SegmentStyle {
   const shapes = (id: RunnerParamId) =>
     sources[id] === 'measured' && RUNNER_PARAM_SEGMENTS[id].some((e) => sameEdge(e, edge))
-  if (focusParams.some(shapes)) return 'focus'
-  return RUNNER_PARAM_IDS.some(shapes) ? 'measured' : 'neutral'
+  const accents = (id: RunnerParamId) =>
+    sources[id] === 'measured' && focusAccentEdges(id, focusSides[id]).some((e) => sameEdge(e, edge))
+  const measured = RUNNER_PARAM_IDS.some(shapes)
+  if (measured && focusParams.some(accents)) return 'focus'
+  return measured ? 'measured' : 'neutral'
 }
 
 const STYLE_RANK: Readonly<Record<SegmentStyle, number>> = { neutral: 0, measured: 1, focus: 2 }
@@ -379,15 +414,21 @@ export function labelAlign(side: LabelSide): LabelAlign {
 }
 
 /**
- * A label's screen x kept inside the frame, from an estimated text width (`chars` × a
- * typical Inter advance), so a long value never runs off a narrow phone frame.
+ * A label's screen x kept inside the visible frame (default: the viewBox), from an estimated text
+ * width (`chars` × a typical Inter advance), so a long value never runs off a narrow phone frame.
  */
-export function clampLabelX(x: number, align: LabelAlign, chars: number, fontUnits: number): number {
+export function clampLabelX(
+  x: number,
+  align: LabelAlign,
+  chars: number,
+  fontUnits: number,
+  halfWidth: number = VIEW_HALF_WIDTH,
+): number {
   const width = chars * fontUnits * LABEL_CHAR_WIDTH_EM
   const left = align === 'start' ? x : align === 'middle' ? x - width / 2 : x - width
   const pad = fontUnits * 0.4
-  const min = -VIEW_HALF_WIDTH + pad
-  const max = VIEW_HALF_WIDTH - pad - width
+  const min = -halfWidth + pad
+  const max = halfWidth - pad - width
   const shift = max < min ? min - left : Math.min(max, Math.max(min, left)) - left
   return x + shift
 }
@@ -401,7 +442,7 @@ export interface LabelLayout {
 /**
  * Where a label's lines go, in viewBox units: its block sits `gapUnits` beyond the projected
  * anchor on `side`, `offsetLines` line pitches further out above or below (a label stacked under
- * another in the same lane), then is kept inside the frame.
+ * another in the same lane), then is kept inside the visible frame (default: the viewBox).
  */
 export function placeLabel(
   anchor: { x: number; y: number },
@@ -410,6 +451,7 @@ export function placeLabel(
   fontUnits: number,
   gapUnits: number,
   offsetLines = 0,
+  frame: DrawingFrame = VIEWBOX_FRAME,
 ): LabelLayout {
   const lineHeight = fontUnits * LABEL_LINE_HEIGHT
   const blockHeight = lines.length * lineHeight
@@ -420,11 +462,45 @@ export function placeLabel(
   else if (side === 'below') centreY += gapUnits + blockHeight / 2 + offsetLines * lineHeight
   else centreY -= gapUnits + blockHeight / 2 + offsetLines * lineHeight
   const chars = Math.max(0, ...lines.map((line) => line.length))
-  const limit = Math.max(0, VIEW_HALF_HEIGHT - blockHeight / 2)
+  const limit = Math.max(0, frame.halfHeight - blockHeight / 2)
   centreY = Math.min(limit, Math.max(-limit, centreY))
   const first = centreY - ((lines.length - 1) * lineHeight) / 2
   return {
-    x: clampLabelX(x, labelAlign(side), chars, fontUnits),
+    x: clampLabelX(x, labelAlign(side), chars, fontUnits, frame.halfWidth),
     ys: lines.map((_, i) => first + i * lineHeight),
+  }
+}
+
+/** A small clear margin the stride frame keeps round its outermost marks and labels, CSS px. */
+export const STRIDE_FRAME_MARGIN_PX = 12
+/** The bounce's own label beside its bracket: "of torso length" is its widest line. */
+const BOUNCE_LABEL_CHARS = 'of torso length'.length
+
+export interface StridePadInput {
+  /** Projected units per label pixel (1 / the renderer's pixels per unit). */
+  unitsPerPx: number
+  /** The cadence label sits above the head. */
+  headLabel: boolean
+  /** The bounce's own bracket is drawn, labelled on its left. */
+  bounceLabel: boolean
+  /** Lines in vertical ratio's label under the stride (its value and caption, a clamp note). */
+  strideLabelLines: number
+}
+
+/**
+ * The stride frame's room for its labels, in projected units, sized as the renderer draws them
+ * (`RUNNER_PX` over the live pixels per unit): one line and its gap above the head for cadence,
+ * vertical ratio's label block under the stride, the bounce's label left of its bracket when that is
+ * drawn, and a small margin everywhere. Nothing else is reserved.
+ */
+export function strideFramePad({ unitsPerPx, headLabel, bounceLabel, strideLabelLines }: StridePadInput): FramePad {
+  const line = RUNNER_PX.label * LABEL_LINE_HEIGHT
+  const margin = STRIDE_FRAME_MARGIN_PX
+  const px = (value: number) => value * unitsPerPx
+  return {
+    left: px(margin + (bounceLabel ? RUNNER_PX.labelGapLeft + BOUNCE_LABEL_CHARS * RUNNER_PX.label * LABEL_CHAR_WIDTH_EM : 0)),
+    right: px(margin),
+    top: px(margin + (headLabel ? RUNNER_PX.labelGap + line : 0)),
+    bottom: px(margin + RUNNER_PX.labelGap + strideLabelLines * line),
   }
 }

@@ -13,7 +13,7 @@ import {
   projectPoint,
   projectPose,
 } from './camera'
-import { GAIT_PHASES, GROUND_Y, pelvisHeight, poseAt } from './gaitModel'
+import { GAIT_PHASES, GROUND_Y, cyclesPerSecond, pelvisHeight, poseAt } from './gaitModel'
 import {
   MAX_PLATE_SIDE_IN_FRAME_WIDTHS,
   fitFootagePlate,
@@ -29,7 +29,7 @@ import {
   type RunnerFocus,
   type RunnerFootage,
 } from './ModelRunner'
-import { BEAT_DECAY_CYCLES, phaseForLeg } from './runnerAnnotations'
+import { BEAT_DECAY_CYCLES, formatRunnerValue, phaseForLeg } from './runnerAnnotations'
 import { runnerParamValues } from './runnerParams'
 import {
   FAR_OPACITY,
@@ -1452,5 +1452,107 @@ describe('ModelRunner pause with a limb focus', () => {
     const before = jointCx('right_ankle')
     fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
     expect(jointCx('right_ankle')).toBe(before)
+  })
+})
+
+describe('ModelRunner knee flexion, read as a bend from straight (strides-trn2.11)', () => {
+  const KNEES: RunnerFocus = { metricIds: ['kneeFlexion'] }
+  const held = phaseForLeg('right', GAIT_PHASES.peakSwingKneeBend)
+  const style = (edge: string) => document.querySelector(`[data-edge="${edge}"]`)?.getAttribute('data-style')
+
+  it('accents the measured leg’s thigh and shank only; the other leg keeps the figure’s own style', () => {
+    setup({ camera: 'legsSide', focus: KNEES })
+    expect(style('right_hip-right_knee')).toBe('focus')
+    expect(style('right_knee-right_ankle')).toBe('focus')
+    expect(style('left_hip-left_knee')).toBe('measured')
+    expect(style('left_knee-left_ankle')).toBe('measured')
+    expect(document.querySelectorAll('[data-edge][data-style="focus"]')).toHaveLength(2)
+  })
+
+  it('accents knee drive’s thigh alone, on the measured leg', () => {
+    setup({ camera: 'legsSide', focus: { metricIds: ['kneeDrive'] } })
+    expect(style('right_hip-right_knee')).toBe('focus')
+    expect(style('right_knee-right_ankle')).toBe('measured')
+    expect(style('left_hip-left_knee')).toBe('measured')
+    expect(document.querySelectorAll('[data-edge][data-style="focus"]')).toHaveLength(1)
+  })
+
+  it('never accents a dashed thigh: with every thigh setting neutral, the thigh stays neutral', () => {
+    setup({ params: bindOnly(['kneeFlexion']), camera: 'legsSide', focus: KNEES })
+    expect(style('right_hip-right_knee')).toBe('neutral')
+    expect(style('right_knee-right_ankle')).toBe('focus')
+  })
+
+  it('draws the straight-leg line dashed along the thigh and labels the value as a bend', () => {
+    setup({ camera: 'legsSide', focus: KNEES })
+    fireEvent.click(screen.getByRole('button', { name: 'Pause runner' }))
+    expectPose(held, 'legsSide')
+    const reference = document.querySelector('[data-annotation="peakSwingKneeBend"] [data-role="reference"]')
+    expect(reference).not.toBeNull()
+    expect(reference?.getAttribute('stroke-dasharray')).toBeTruthy()
+    const [from, to] = pathEnds(reference?.getAttribute('d') ?? null)
+    const hip = joint('right_hip')
+    const knee = joint('right_knee')
+    expect(from.x).toBeCloseTo(knee.cx, 3)
+    expect(from.y).toBeCloseTo(knee.cy, 3)
+    // Straight on from the thigh: hip, knee and the line's end are collinear, the end past the knee.
+    const cross = (knee.cx - hip.cx) * (to.y - hip.cy) - (knee.cy - hip.cy) * (to.x - hip.cx)
+    expect(cross).toBeCloseTo(0, 3)
+    expect(Math.hypot(to.x - hip.cx, to.y - hip.cy)).toBeGreaterThan(
+      Math.hypot(knee.cx - hip.cx, knee.cy - hip.cy),
+    )
+    const knees = bindAll().peakSwingKneeBend
+    if (knees.source !== 'measured') throw new Error('knee flexion should be measured')
+    const label = document.querySelector('[data-annotation="peakSwingKneeBend"] text')?.textContent
+    expect(label).toBe(`${formatRunnerValue('kneeFlexion', knees.metricValue)} bend`)
+  })
+
+  it('rests on the peak bend for the dwell once a cycle while playing, within the thirty-frame cap', () => {
+    setup({ camera: 'legsSide', focus: KNEES, playbackRate: 0.4, keyPhaseDwellMs: 500 })
+    const projected = projectPose(poseAt(held, VALUES), 'legsSide')
+    const atPeak = () =>
+      COMMON_KEYPOINT_NAMES.every(
+        (name, j) =>
+          Math.abs(joint(name).cx - projected[j].x) < 1e-3 && Math.abs(joint(name).cy - projected[j].y) < 1e-3,
+      )
+    // Leave the mount's held frame first, so every stretch counted below is a rest.
+    advance(200)
+    expect(atPeak()).toBe(false)
+    const stretches: number[] = []
+    let run = 0
+    let draws = 0
+    let previous = joint('right_ankle')
+    for (let t = 0; t < 6000; t += 16) {
+      advance(16)
+      const now = joint('right_ankle')
+      if (now.cx !== previous.cx || now.cy !== previous.cy) draws += 1
+      previous = now
+      if (atPeak()) run += 16
+      else if (run > 0) {
+        stretches.push(run)
+        run = 0
+      }
+    }
+    // One cycle at 0.4× plus its rest: one rest per cycle.
+    const cycleMs = 1000 / (cyclesPerSecond(VALUES) * 0.4) + 500
+    expect(stretches.length).toBeGreaterThanOrEqual(Math.floor(5800 / cycleMs) - 1)
+    expect(stretches.length).toBeLessThanOrEqual(Math.ceil(5800 / cycleMs))
+    for (const ms of stretches) {
+      expect(ms).toBeGreaterThanOrEqual(500 - 2 * FRAME_MS)
+      expect(ms).toBeLessThanOrEqual(500 + 2 * FRAME_MS)
+    }
+    expect(draws).toBeLessThanOrEqual(6 * 30)
+  })
+
+  it('never rests without a dwell', () => {
+    setup({ camera: 'legsSide', focus: KNEES, playbackRate: 0.4 })
+    advance(16)
+    let previous = joint('right_ankle')
+    for (let t = 0; t < 3000; t += 100) {
+      advance(100)
+      const now = joint('right_ankle')
+      expect(now.cx !== previous.cx || now.cy !== previous.cy).toBe(true)
+      previous = now
+    }
   })
 })

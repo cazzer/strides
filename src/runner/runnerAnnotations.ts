@@ -12,7 +12,9 @@
  * on the pose its metric reads (its key phase), and the renderer's still frame holds the first
  * annotated parameter's key phase, so that limb lies exactly on its mark. No limb-shaped guide is
  * drawn: a ghost leg beside the runner would read as a target pose. Guides are reference rays,
- * plumb lines from the joints a metric reads, and extension ticks only. Pure: no React, no DOM.
+ * plumb lines from the joints a metric reads, and extension ticks only; knee flexion's dashed
+ * straight-leg line runs on from the thigh well short of a shank's length, so it reads as the line
+ * the bend is measured from, never as a second leg. Pure: no React, no DOM.
  *
  * **Cadence moves no geometry, so it is drawn as time: a footfall beat.** Its label sits above the
  * head and a ring pulses out from each foot's contact point at that foot's contact phase, so the
@@ -182,6 +184,12 @@ export interface RunnerAnnotation {
   fills: readonly (readonly Vec3[])[]
   /** Short reference rays and extension ticks, drawn thin and solid. Never limb-shaped. */
   guides: readonly (readonly Vec3[])[]
+  /**
+   * Indices into `guides` drawn dashed: a reference line the value is measured FROM (knee
+   * flexion's straight-leg line), so it reads as a reference, not as a part of the figure. Absent:
+   * none.
+   */
+  dashedGuides?: readonly number[]
   label: RunnerAnnotationLabel
   /**
    * Small words naming parts of the mark, with no value of their own (vertical ratio's "bounce"
@@ -320,7 +328,11 @@ interface Built {
   marks: Vec3[][]
   fills: Vec3[][]
   guides: Vec3[][]
+  /** Indices into `guides` drawn dashed. */
+  dashedGuides?: number[]
   label: LabelPlacement
+  /** Words after the value on its own line ("104.4° bend"). */
+  valueSuffix?: string
   /** A line printed under the value, above any clamp note. */
   caption?: string
   /** The mark could not be drawn at the value (a capped inset): say "shown approximately". */
@@ -368,7 +380,8 @@ function bounceBracket(values: RunnerParams): { marks: Vec3[][]; anchor: Vec3 } 
 
 /** How far under the ground the stride bracket runs: below the footfall ticks. */
 export const STRIDE_BRACKET_DEPTH = 0.15
-const STRIDE_TICK_HALF = 0.06
+/** Half the stride bracket's end ticks: its marks reach this far below the bracket. */
+export const STRIDE_TICK_HALF = 0.06
 
 /**
  * One stride along the ground: from `side`'s contact point to where that foot lands next, the
@@ -463,6 +476,15 @@ function angleArc(centre: Vec3, fromDeg: number, toDeg: number, radius: number) 
   }
 }
 
+const KNEE_BEND_ARC_RADIUS = 0.3
+/**
+ * How far knee flexion's straight-leg line runs past the knee, torso lengths: clearly past its arc,
+ * well short of the shank (0.85), so it reads as a reference line, never as a second leg.
+ */
+export const STRAIGHT_LEG_REFERENCE_LENGTH = 0.55
+/** Knee flexion is read as a bend from straight: its label says so ("104.4° bend"). */
+export const KNEE_BEND_SUFFIX = ' bend'
+
 const BUILDERS: Readonly<Record<RunnerParamId, Builder>> = {
   cadence(_value, values, { phase }) {
     // One pulse per footfall: two per cycle, so the rings beat at the drawn cadence exactly.
@@ -501,13 +523,20 @@ const BUILDERS: Readonly<Record<RunnerParamId, Builder>> = {
     const pose = poseAt(phase, values)
     const hip = sideJoint(pose, side, 'hip')
     const knee = sideJoint(pose, side, 'knee')
-    // The thigh's own side-view direction: the continuation ray then lies exactly along it.
+    // The thigh's own side-view direction: the straight-leg line then lies exactly along it.
     const thighDeg = Math.atan2(knee.x - hip.x, -(knee.y - hip.y)) / DEG
-    const radius = 0.3
+    const { marks, fills, guides } = angleArc(knee, thighDeg, thighDeg - value, KNEE_BEND_ARC_RADIUS)
+    const straight = ray(knee, thighDeg, STRAIGHT_LEG_REFERENCE_LENGTH)
     return {
-      ...angleArc(knee, thighDeg, thighDeg - value, radius),
-      // At the arc's start on the thigh's continuation, on the side the shank does not fold to.
-      label: { anchor: ray(knee, thighDeg, radius), side: value >= 0 ? 'right' : 'left' },
+      marks,
+      fills,
+      // The thigh carried on past the knee, dashed: where the shank would point with the knee
+      // straight. The bend is read from it, so the arc runs from it onto the shank.
+      guides: [[knee, straight], guides[1]],
+      dashedGuides: [0],
+      // Past the straight-leg line's end, on the side the shank does not fold to.
+      label: { anchor: straight, side: value >= 0 ? 'right' : 'left' },
+      valueSuffix: KNEE_BEND_SUFFIX,
     }
   },
   pelvisBounce(_value, values) {
@@ -752,7 +781,7 @@ export function planAnnotations({
     const q = KEY_LEG_PHASE[paramId]
     const phase = q === null ? heldPhase : phaseForLeg(side, q)
     const built = BUILDERS[paramId](values[paramId], values, { side, phase, metricValue: param.metricValue })
-    const value = formatRunnerValue(param.metricId, param.metricValue)
+    const value = formatRunnerValue(param.metricId, param.metricValue) + (built.valueSuffix ?? '')
     const valueLines = labelLines(value, false)
     const clamped = param.clamped || built.approximate === true
     const annotation: RunnerAnnotation = {
@@ -761,6 +790,7 @@ export function planAnnotations({
       marks: built.marks,
       fills: built.fills,
       guides: built.guides,
+      ...(built.dashedGuides ? { dashedGuides: built.dashedGuides } : {}),
       label: {
         text:
           value +
