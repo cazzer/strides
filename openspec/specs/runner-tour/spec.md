@@ -86,16 +86,24 @@ metric at the one-thing stop, none without a cue), plus vertical ratio where the
 it as its secondary value, so the runner never labels a number the stop does not state. Where the
 focus draws vertical ratio's stride (the stride is measured), the camera SHALL be the stride camera
 (`strideSide`: the whole figure and one stride along the ground, side on, at one scale) at the
-stop's rate. At wide layouts the band legend SHALL show beside the runner only while the active
+stop's rate. A rhythm stop headed by a metric other than vertical ratio SHALL open on the whole
+figure from the side with its headline alone in focus; after the arrival tween and a beat of about
+1.5 s the camera SHALL ease out to the stride camera, and once the runner reports it at rest there
+vertical ratio SHALL join the focus (after a fallback wait if no report comes), so the stride's marks
+never draw on a camera still on its way. Each arrival at the stop SHALL open this way again. Under
+reduced motion the stop SHALL go straight to the stride camera with vertical ratio in focus, and
+switching reduced motion off at the stop SHALL NOT restart the opening. A stop headed by vertical ratio, and the one-thing stop, SHALL go straight
+to the stride camera. The knees stop SHALL rest on its headline's key phase for about 500 ms each
+cycle while it plays. At wide layouts the band legend SHALL show beside the runner only while the active
 stop's headline has a compact bar; at narrow layouts it SHALL show inside each stop's panel under
 its compact bar, and only in a panel that has one.
 
 | stop | camera | rate |
 |---|---|---|
-| rhythm | whole body, side; the stride camera where vertical ratio's stride is drawn | 1 |
+| rhythm | whole body, side; then the stride camera where vertical ratio's stride is drawn | 1 |
 | arms | upper body, 15° off the side (`armsQuarter`) | 1 |
 | posture | torso, side | 1 |
-| knees | legs, side | 0.4, labelled "Slow motion" |
+| knees | legs, side, resting ~0.5 s on the headline's key phase each cycle | 0.4, labelled "Slow motion" |
 | landing | legs, side (a stopgap until a contact-tracking camera) | 0.4, labelled "Slow motion" |
 | foot path | feet, front | 0.4, labelled "Slow motion" |
 | one thing | whole body, side; the stride camera when its cue is vertical ratio with a measured stride | 1 |
@@ -113,14 +121,16 @@ With no stop active the runner SHALL show the whole figure from the side at full
 
 - **WHEN** the rhythm stop is active with cadence as its headline and vertical ratio as its
   secondary value, its stride measured
-- **THEN** the runner's focus is cadence and vertical ratio, the camera is the stride camera at full
-  speed, and no bounce or stride value is labelled on the figure, only vertical ratio's
+- **THEN** the runner first shows cadence alone on the whole figure from the side, then eases out to
+  the stride camera at full speed, and once it rests the focus is cadence and vertical ratio, and no
+  bounce or stride value is labelled on the figure, only vertical ratio's
 
 #### Scenario: A bounce-headlined rhythm stop keeps its headline's mark
 
 - **WHEN** cadence is excluded, so the bounce in centimetres heads the rhythm stop with vertical
   ratio as its secondary value, its stride measured
-- **THEN** the runner's focus is the bounce and vertical ratio on the stride camera, and the figure
+- **THEN** after the opening on the whole figure, the runner's focus is the bounce and vertical
+  ratio on the stride camera, and the figure
   draws both the bounce's own true-scale bracket, labelled with the headline value, and vertical
   ratio's stride and ×10 inset
 
@@ -152,6 +162,12 @@ With no stop active the runner SHALL show the whole figure from the side at full
 - **THEN** the runner frames the upper body 15° off the side, the near arm is painted over the
   trunk, its backswing stays outside the torso outline, and the far wrist stays outside it at the
   neutral lean
+
+#### Scenario: The rhythm stop under reduced motion
+
+- **WHEN** reduced motion is requested and the rhythm stop, headed by cadence with vertical ratio's
+  stride measured, is active
+- **THEN** the runner shows the stride camera with cadence and vertical ratio at once, with no tween
 
 ### Requirement: The tour opens with the runner's intro
 

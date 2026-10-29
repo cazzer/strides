@@ -173,11 +173,33 @@ that window to below the ground (room for the ground-lane labels) inside the fra
 the neutral parameters' landing frame; the renderer SHALL reframe it on the values it draws.
 
 `strideSide` SHALL be a side view framed per parameter set and vertical ratio:
-`strideCamera(values, ratio)` frames the whole figure over its cycle, one drawn stride along the
-ground ahead of the near foot's contact, the magnified bounce inset over it and the bounce's own
-bracket behind the hips, with room for their labels. The preset itself SHALL be the neutral
-parameters' stride frame; the renderer SHALL reframe it on the values it draws and the bound
-vertical ratio.
+`strideCamera(values, ratio, framing)` frames the whole figure over its cycle, one drawn stride along
+the ground ahead of the near foot's contact (whatever stride length is bound, never a fixed one),
+the magnified bounce inset over it and, where it is drawn, the bounce's own bracket behind the hips,
+with room for exactly the labels drawn (the cadence label above the head, vertical ratio's label
+under the stride, the bounce's label beside its bracket) sized at the renderer's live scale plus a
+small margin. It SHALL fill the drawing's whole visible frame (a drawing wider or taller than the
+viewBox's 3:4 shows more than the viewBox) above its clear bottom: the share of the drawing's height,
+at its bottom, that the page may cover, which a layout states on the runner (the phone tour: 15%,
+where its stop panel may overlap the drawing; elsewhere none). The preset itself SHALL be the
+neutral parameters' stride frame in the viewBox; the renderer SHALL reframe it on the values it
+draws, the bound vertical ratio, the labels it draws (vertical ratio's label lines read from the
+binding, so the camera does not change when vertical ratio joins the focus) and its drawing's
+visible frame. Labels SHALL be kept inside the drawing's visible frame, above its clear bottom, and
+the "Dashed: not measured" legend SHALL show whenever a dashed part has a joint in that same frame.
+A framed camera's zoom SHALL never fall below a small positive minimum, whatever room its labels
+ask for. The drawing and its scale SHALL be measured before the first paint, and the camera SHALL
+cut, not tween, to the framing its first measurement gives; a later resize tweens like any camera
+change.
+
+`wholeBodySide` SHALL likewise be reframed, once the renderer has measured its drawing, on the bound
+values (not the intro's overrides, so the intro never moves the camera) and that drawing: the whole
+figure over its cycle from the ground (or a stance foot that gives way below it) to the head, with
+room for the cadence label above the head and for the footfall rings or ground-lane labels under the
+ground where they are drawn, as large as fits above the clear bottom, centred there and on hip-mid's
+line. Until the drawing is measured, and for a bare `resolveCamera('wholeBodySide')`, the preset
+stands. Every whole-body view (the intro, the rhythm stop's opening, the one-thing stop, the
+summary's runner with no row open) uses it.
 
 #### Scenario: Side view
 - **WHEN** a point one torso length ahead in the direction of travel is projected at yaw 0, zoom 1
@@ -202,6 +224,22 @@ vertical ratio.
 #### Scenario: The stride camera frames the stride at any length
 - **WHEN** the stride is anywhere in its drawable range and the bounce up to and past its drawable limit
 - **THEN** the figure, the whole stride, the (capped) inset and the label pads lie inside the frame
+
+#### Scenario: The legend reads the drawing's frame
+- **WHEN** the stride camera fills a drawing far wider than 3:4 and the figure's only dashed parts lie beyond the viewBox's edge, inside the drawing
+- **THEN** "Dashed: not measured" shows
+
+#### Scenario: No zoom on mount
+- **WHEN** a runner mounts on a whole-body or stride view in a drawing other than the viewBox's 3:4
+- **THEN** its first painted frame is already the framed camera, with no tween from the preset
+
+#### Scenario: The whole body stays above a phone's stop panel
+- **WHEN** the whole figure is shown on a 390×844 phone tour, whose panel may cover the bottom 15% of the drawing
+- **THEN** every joint over the cycle, the ground and the cadence label's room lie inside the drawing above that 15%
+
+#### Scenario: The stride camera fills a wide drawing
+- **WHEN** the drawing is wider than 3:4 (the tour's rail at 1280×800, its phone stage at 390×844)
+- **THEN** the stride camera frames the figure larger than in the viewBox alone, and the figure, the stride, the inset and their labels' room stay inside the visible frame and above its bottom 15%
 
 ### Requirement: The model-runner core is pure and leaves measurement untouched
 
@@ -265,14 +303,18 @@ y = 0, the plane the stance foot stands on.
 ### Requirement: The focus area is accented and annotated with its metric's own value
 
 Edges shaped by a measured focus parameter SHALL be accented, by a wider stroke as well as a hue,
-with the other measured parts receding; measured parts SHALL never be dimmed so far that they read
+with the other measured parts receding, except that the knee parameters SHALL accent only the leg
+they are annotated on: knee flexion its thigh and shank (the two arms of the angle it measures),
+knee drive its thigh; the other leg SHALL keep the figure's own style. An accented edge that no
+measured parameter shapes SHALL stay neutral (dashed grey), never accented as if measured; measured parts SHALL never be dimmed so far that they read
 as neutral, and neutral dashes SHALL never be dimmed. In forced-colours mode measured, neutral and
 focus parts SHALL use distinct system colours. Each measured focus parameter SHALL carry an
 annotation of its natural kind (an angle arc for trunk lean, knee drive and knee flexion; a
 vertical bracket for bounce and arm swing; a horizontal offset for overstride, foot strike, step
 width and swing-foot excursion; a footfall beat for cadence; for vertical ratio, a stride bracket
 and a magnified bounce inset), whose geometry is the drawn value exactly and whose label is the
-metric's own reported value in the guided card's format, except that the foot-strike label names
+metric's own reported value in the guided card's format, except that knee flexion's label reads
+the value followed by "bend" ("104.4° bend"), and the foot-strike label names
 its class as the part of the foot that lands first, as an estimate ("Heel first (estimate)",
 "Midfoot first (estimate)", "Forefoot first (estimate)"), classed exactly as the card classes it,
 and vertical ratio's prints at its band's precision as the stop does. A clamped value's label
@@ -285,6 +327,14 @@ ignored, and two focus metrics driving one parameter SHALL give one annotation. 
 is annotated, the bounce's own true-scale bracket SHALL give way to vertical ratio's inset unless
 the bounce heads the focus (its parameter is the focus's first), so the bounce is drawn once except
 where it is the stop's headline.
+
+Knee flexion SHALL be drawn as a bend from straight: a straight-leg reference line running from the
+knee straight on along the live thigh's direction, longer than the arc's radius and well short of a
+shank (so it reads as a reference line, never as a second leg), drawn as a row of dots in the
+annotation's own accent (never the grey dashes of an unmeasured part, which the "Dashed: not
+measured" legend explains), and the arc from that line onto the live shank, sweeping exactly the
+drawn knee bend; its label hangs past the line's end, and the text alternative says "bend" as the
+label does.
 
 The contact marks SHALL meet the points their metrics read, which are ankles, not heels: the
 overstride offset's guides SHALL be plumb lines from hip-mid and from the contact ankle down to the
@@ -343,6 +393,14 @@ foot, while planted, stands exactly above its tick.
 #### Scenario: The bounce gives way to vertical ratio's inset, except as the headline
 - **WHEN** vertical ratio and the bounce are both in focus
 - **THEN** only vertical ratio's marks are drawn when vertical ratio or another metric heads the focus, and both the bounce's true-scale bracket and the inset are drawn when the bounce heads it
+
+#### Scenario: Knee flexion accents its own leg and reads from straight
+- **WHEN** knee flexion is measured and in focus on a side camera
+- **THEN** the near leg's thigh and shank are accented and the far leg's are not, a dotted accent line runs from the near knee straight on along its thigh, the arc runs from that line onto the shank sweeping the drawn value, and the label reads the card's value followed by "bend"
+
+#### Scenario: Knee drive accents its own thigh
+- **WHEN** knee drive is measured and in focus on a side camera
+- **THEN** only the near thigh is accented
 
 ### Requirement: The runner animates at most thirty frames a second and only while seen
 
@@ -784,4 +842,21 @@ the whole stride, the inset and the labels' room fit the frame.
 - **WHEN** the stride is anywhere in its drawable range, with a bounce up to its drawable limit
 - **THEN** the stride camera keeps the figure, the stride, the inset and the label pads inside the
   frame, zooming out further the longer the stride
+
+### Requirement: A knee view rests on its key phase each cycle
+
+While playing with a limb focus and a dwell (`keyPhaseDwellMs`, the knees view's 500 ms), the
+renderer SHALL rest on the held phase (the focus's first limb key phase, the headline's) for the
+dwell, wall-clock, once each cycle, so the moving limb meets its annotation for a beat; the rest
+SHALL NOT lift the thirty-frame cap and playback SHALL otherwise run round the whole cycle, only
+forward. The landing camera's own window and rests take precedence. Without a dwell the figure
+never rests. Under reduced motion, or paused, the figure stands still at the held phase as before.
+
+#### Scenario: The knees view rests on the peak bend
+- **WHEN** the runner plays the knees view (knee flexion in focus, legs from the side, 0.4×, a 500 ms dwell)
+- **THEN** once per cycle the drawn pose is exactly the peak-bend pose for about 500 ms, and no more than thirty frames a second are drawn
+
+#### Scenario: No dwell, no rest
+- **WHEN** the runner plays a limb focus without a dwell
+- **THEN** the pose changes on every frame
 
