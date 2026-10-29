@@ -132,6 +132,9 @@ export const TOUR_RAIL_CLASS =
  */
 const RUNNER_CLASS = [
   'lg:h-[calc(100dvh_-_var(--motion-story-header-height,88px)_-_11rem)]',
+  // The panel may cover the bottom 15% of the drawing (`--rt-clear`): the runner's framed cameras
+  // (whole body, stride) keep the figure and its labels above it.
+  'max-lg:[--runner-clear-bottom:0.15]',
   'max-lg:col-start-1 max-lg:row-start-1',
   'max-lg:[&_[data-runner-part=caption]]:sr-only',
   'max-lg:[&_[data-runner-part=stage]]:pointer-events-none max-lg:[&_[data-runner-part=stage]]:sticky max-lg:[&_[data-runner-part=stage]]:top-[var(--rt-top)] max-lg:[&_[data-runner-part=stage]]:-mx-4 max-lg:[&_[data-runner-part=stage]]:h-[calc(100dvh_-_var(--rt-top))] max-lg:[&_[data-runner-part=stage]]:flex-none sm:max-lg:[&_[data-runner-part=stage]]:-mx-6',

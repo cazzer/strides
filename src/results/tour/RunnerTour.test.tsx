@@ -220,6 +220,14 @@ afterEach(() => {
 })
 
 describe('RunnerTour — shell', () => {
+  it('tells the runner a phone panel may cover the bottom 15% of its drawing', async () => {
+    renderTour({ resultKey: nextKey() })
+    const { CLEAR_BOTTOM_PROPERTY } = await vi.importActual<typeof import('../../runner/ModelRunner')>(
+      '../../runner/ModelRunner',
+    )
+    expect((await lastRunnerProps()).className).toContain(`max-lg:[${CLEAR_BOTTOM_PROPERTY}:0.15]`)
+  })
+
   it('renders one guided shell and one completion line, the h2 then a sticky Skip', () => {
     const { container, onLeaveTour } = renderTour()
 

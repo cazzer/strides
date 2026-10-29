@@ -123,10 +123,21 @@ the magnified bounce inset over it and, where it is drawn, the bounce's own brac
 with room for exactly the labels drawn (the cadence label above the head, vertical ratio's label
 under the stride, the bounce's label beside its bracket) sized at the renderer's live scale plus a
 small margin. It SHALL fill the drawing's whole visible frame (a drawing wider or taller than the
-viewBox's 3:4 shows more than the viewBox), less the bottom 15% of its height, which a phone tour's
-panel may cover. The preset itself SHALL be the neutral parameters' stride frame in the viewBox;
-the renderer SHALL reframe it on the values it draws, the bound vertical ratio, the labels it draws
-and its drawing's visible frame. Labels SHALL be kept inside the drawing's visible frame.
+viewBox's 3:4 shows more than the viewBox) above its clear bottom: the share of the drawing's height,
+at its bottom, that the page may cover, which a layout states on the runner (the phone tour: 15%,
+where its stop panel may overlap the drawing; elsewhere none). The preset itself SHALL be the
+neutral parameters' stride frame in the viewBox; the renderer SHALL reframe it on the values it
+draws, the bound vertical ratio, the labels it draws and its drawing's visible frame. Labels SHALL be
+kept inside the drawing's visible frame.
+
+`wholeBodySide` SHALL likewise be reframed, once the renderer has measured its drawing, on the bound
+values (not the intro's overrides, so the intro never moves the camera) and that drawing: the whole
+figure over its cycle from the ground (or a stance foot that gives way below it) to the head, with
+room for the cadence label above the head and for the footfall rings or ground-lane labels under the
+ground where they are drawn, as large as fits above the clear bottom, centred there and on hip-mid's
+line. Until the drawing is measured, and for a bare `resolveCamera('wholeBodySide')`, the preset
+stands. Every whole-body view (the intro, the rhythm stop's opening, the one-thing stop, the
+summary's runner with no row open) uses it.
 
 #### Scenario: Side view
 - **WHEN** a point one torso length ahead in the direction of travel is projected at yaw 0, zoom 1
@@ -151,6 +162,10 @@ and its drawing's visible frame. Labels SHALL be kept inside the drawing's visib
 #### Scenario: The stride camera frames the stride at any length
 - **WHEN** the stride is anywhere in its drawable range and the bounce up to and past its drawable limit
 - **THEN** the figure, the whole stride, the (capped) inset and the label pads lie inside the frame
+
+#### Scenario: The whole body stays above a phone's stop panel
+- **WHEN** the whole figure is shown on a 390×844 phone tour, whose panel may cover the bottom 15% of the drawing
+- **THEN** every joint over the cycle, the ground and the cadence label's room lie inside the drawing above that 15%
 
 #### Scenario: The stride camera fills a wide drawing
 - **WHEN** the drawing is wider than 3:4 (the tour's rail at 1280×800, its phone stage at 390×844)

@@ -70,6 +70,7 @@ import {
   projectPose,
   resolveCamera,
   strideCamera,
+  wholeBodyCamera,
   type DrawingFrame,
   type PhaseWindow,
 } from './camera'
@@ -85,6 +86,7 @@ import {
   circularDistance,
   planAnnotations,
   shownWhileStill,
+  STACK_GAP_LINES,
   type AnnotationKind,
   type RunnerAnnotationLabel,
   type RunnerSide,
@@ -120,6 +122,7 @@ import {
   stepPlayback,
   strideFramePad,
   valueTweenProgress,
+  wholeBodyFramePad,
   type RunnerSource,
   type SegmentStyle,
 } from './runnerScene'
@@ -413,23 +416,39 @@ function useSvgPixelScale(ref: RefObject<Element | null>): number {
 }
 
 /**
- * The drawing's visible frame (`drawingFrame`) from a ResizeObserver on the drawing itself: a stage
- * wider or taller than the viewBox's 3:4 shows more of the scene than the viewBox.
+ * The custom property a layout sets on the runner (or an ancestor) to say how much of the drawing's
+ * bottom it may cover, as a share of its height (the phone tour: 0.15). Unset: nothing covers it.
  */
-function useDrawingFrame(ref: RefObject<Element | null>): DrawingFrame {
-  const [frame, setFrame] = useState<DrawingFrame>(VIEWBOX_FRAME)
+export const CLEAR_BOTTOM_PROPERTY = '--runner-clear-bottom'
+
+/**
+ * The drawing's visible frame (`drawingFrame`) from a ResizeObserver on the drawing itself: a stage
+ * wider or taller than the viewBox's 3:4 shows more of the scene than the viewBox. Null until
+ * measured (and where nothing can measure it).
+ */
+function useDrawingFrame(ref: RefObject<Element | null>): DrawingFrame | null {
+  const [frame, setFrame] = useState<DrawingFrame | null>(null)
   useEffect(() => {
     const el = ref.current
     if (!el || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver((entries) => {
       const box = entries[entries.length - 1]?.contentRect
       if (!box) return
-      const next = drawingFrame(box.width, box.height)
+      // How much of the drawing's bottom the page may cover: a layout sets the
+      // `--runner-clear-bottom` property (the phone tour), so the runner carries no layout code.
+      const clear = Number.parseFloat(getComputedStyle(el).getPropertyValue(CLEAR_BOTTOM_PROPERTY))
+      const next = drawingFrame(box.width, box.height, Number.isFinite(clear) ? clear : 0)
       // Rounded, so a sub-pixel resize never reframes the camera.
       const halfWidth = Math.round(next.halfWidth * 100) / 100
       const halfHeight = Math.round(next.halfHeight * 100) / 100
+      const { clearBottom } = next
       setFrame((current) =>
-        current.halfWidth === halfWidth && current.halfHeight === halfHeight ? current : { halfWidth, halfHeight },
+        current !== null &&
+        current.halfWidth === halfWidth &&
+        current.halfHeight === halfHeight &&
+        current.clearBottom === clearBottom
+          ? current
+          : { halfWidth, halfHeight, clearBottom },
       )
     })
     observer.observe(el)
@@ -570,7 +589,8 @@ export function ModelRunner({
   const visible = useDocumentVisible()
   const onScreen = useOnScreen(figureRef)
   const pxPerUnit = useSvgPixelScale(stageRef)
-  const frame = useDrawingFrame(svgRef)
+  const measuredFrame = useDrawingFrame(svgRef)
+  const frame = measuredFrame ?? VIEWBOX_FRAME
   // The reader's own choice, never reset by a focus or camera change.
   const [choice, setChoice] = useState<'play' | 'pause' | null>(null)
   const playing = choice === null ? !reduced : choice === 'play'
@@ -616,7 +636,8 @@ export function ModelRunner({
 
   // The landing and stride cameras are framed on the static values, so their keys change only
   // when they do. The stride camera also fills the drawing's visible frame and keeps room for
-  // exactly the labels drawn, sized at the live scale.
+  // exactly the labels drawn, sized at the live scale; it and the whole-body camera keep their
+  // subject above the frame's clear bottom.
   const presetKey = cameraKey(camera)
   const strideLabels = useMemo(() => {
     const stride = allAnnotations.find((a) => a.paramId === 'strideLength')
@@ -626,8 +647,26 @@ export function ModelRunner({
       strideLabelLines: stride?.label.lines.length ?? 2,
     }
   }, [allAnnotations])
+  const wholeBodyLabels = useMemo(() => {
+    const lane = allAnnotations.filter((a) => a.label.side === 'below' && a.label.anchor.y <= GROUND_Y + 1e-9)
+    return {
+      headLabel: strideLabels.headLabel,
+      beat: allAnnotations.some((a) => a.pulses !== undefined),
+      groundLabelLines:
+        lane.reduce((sum, a) => sum + a.label.lines.length, 0) + Math.max(0, lane.length - 1) * STACK_GAP_LINES,
+    }
+  }, [allAnnotations, strideLabels])
   const framedKey = useMemo(() => {
     if (camera === 'landingSide') return cameraKey(landingCamera(values))
+    // Framed on the bound values, not the intro's overrides, so the intro never moves the camera;
+    // the preset stands until the drawing has been measured.
+    if (camera === 'wholeBodySide') {
+      if (measuredFrame === null) return null
+      const pad = wholeBodyFramePad({ unitsPerPx: 1 / pxPerUnit, ...wholeBodyLabels })
+      return cameraKey(
+        wholeBodyCamera(runnerParamValues(params), { frame, pad, headLabel: wholeBodyLabels.headLabel }),
+      )
+    }
     if (camera === 'strideSide') {
       const stride = params.strideLength
       const framing = {
@@ -643,7 +682,7 @@ export function ModelRunner({
       )
     }
     return null
-  }, [camera, values, params, frame, pxPerUnit, strideLabels])
+  }, [camera, values, params, frame, measuredFrame, pxPerUnit, strideLabels, wholeBodyLabels])
   const targetKey = framedKey ?? presetKey
   const target = useMemo(() => cameraFromKey(targetKey), [targetKey])
   // A limb focus keys the still frame to a leg phase; a cadence beat reads at any phase.

@@ -11,7 +11,13 @@
 - [x] 2.2 `useStrideOpening` + `stopOpensWhole`: whole body, ease out, then draw; reduced motion straight to stride
 - [x] 2.3 Tests (`camera.test.ts`, `RunnerTour.test.tsx`)
 
-## 3. Verification
+## 3. Whole-body framing (review round 1)
 
-- [x] 3.1 Full vitest, `tsc -b`, `eslint .`
-- [x] 3.2 Live: Demo (3 clips) at 1280×800 and 390×844 (and 390 reduced motion), knees playing / dwell / paused, rhythm arrival and stride
+- [x] 3.1 `DrawingFrame.clearBottom` read from `--runner-clear-bottom` (phone tour 0.15); stride camera uses it
+- [x] 3.2 `wholeBodyCamera` + `wholeBodyFramePad`; ModelRunner reframes `wholeBodySide` once measured, on the bound values
+- [x] 3.3 Tests (`camera.test.ts`, `RunnerTour.test.tsx`); live every stop and the intro at 1280×800 and 390×844, base vs branch label boxes
+
+## 4. Verification
+
+- [x] 4.1 Full vitest, `tsc -b`, `eslint .`
+- [x] 4.2 Live: Demo (3 clips) at 1280×800 and 390×844 (and 390 reduced motion), knees playing / dwell / paused, rhythm arrival and stride

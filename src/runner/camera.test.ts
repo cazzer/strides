@@ -6,7 +6,6 @@ import {
   LANDING_FRAME_ABOVE_HIP,
   LANDING_PHASE_WINDOW,
   LANDING_FRAME_BELOW_GROUND,
-  STRIDE_FRAME_CLEAR_BOTTOM,
   STRIDE_FRAME_PAD,
   VIEWBOX_FRAME,
   drawingFrame,
@@ -16,7 +15,9 @@ import {
   projectPoint,
   projectPose,
   resolveCamera,
+  WHOLE_BODY_FRAME_PAD,
   strideCamera,
+  wholeBodyCamera,
   type DrawingFrame,
 } from './camera'
 import { GAIT_PHASES, GROUND_Y, poseAt } from './gaitModel'
@@ -30,7 +31,7 @@ import {
   strideSpan,
 } from './runnerAnnotations'
 import { NEUTRAL_RUNNER_PARAMS, RUNNER_PARAM_SPECS } from './runnerParams'
-import { VIEW_HALF_WIDTH, stepPlayback, strideFramePad } from './runnerScene'
+import { VIEW_HALF_WIDTH, stepPlayback, strideFramePad, wholeBodyFramePad } from './runnerScene'
 import type { CameraPreset, CameraState, RunnerParamId, RunnerParams } from './types'
 
 const PRESETS = Object.keys(CAMERA_PRESETS) as CameraPreset[]
@@ -364,7 +365,7 @@ describe('strideCamera fills the visible frame (strides-trn2.11)', () => {
   const frames: DrawingFrame[] = [
     VIEWBOX_FRAME,
     drawingFrame(401, 404),
-    drawingFrame(390, 338),
+    drawingFrame(390, 338, 0.15),
     drawingFrame(300, 600),
   ]
   const cases = [shortest, 3.14, 6.28, longest].flatMap((strideLength) => [
@@ -378,6 +379,8 @@ describe('strideCamera fills the visible frame (strides-trn2.11)', () => {
     expect(drawingFrame(400, 400).halfHeight).toBeCloseTo(2, 9)
     expect(drawingFrame(300, 800).halfHeight).toBeCloseTo(4, 9)
     expect(drawingFrame(0, 400)).toEqual(VIEWBOX_FRAME)
+    expect(drawingFrame(390, 338, 0.15).clearBottom).toBe(0.15)
+    expect(drawingFrame(390, 338, Number.NaN).clearBottom).toBe(0)
   })
 
   it('keeps the figure, the stride, the inset and every label’s room inside the frame and above its clear bottom', () => {
@@ -396,7 +399,7 @@ describe('strideCamera fills the visible frame (strides-trn2.11)', () => {
               bounceBracket: labels.bounceLabel,
             })
             const where = `frame ${frame.halfWidth}×${frame.halfHeight}, stride ${values.strideLength}, ratio ${ratio}`
-            const bottomLimit = frame.halfHeight - 2 * frame.halfHeight * STRIDE_FRAME_CLEAR_BOTTOM
+            const bottomLimit = frame.halfHeight - 2 * frame.halfHeight * frame.clearBottom
             const { start, end } = strideSpan(values, 'right')
             const below = GROUND_Y - STRIDE_BRACKET_DEPTH - STRIDE_TICK_HALF
             for (const x of [start, end]) {
@@ -443,7 +446,7 @@ describe('strideCamera fills the visible frame (strides-trn2.11)', () => {
           top = Math.max(top, headTopAnchor(pose).y)
         }
         const width = (end - left) * camera.zoom + pad.left + pad.right
-        const usable = 2 * frame.halfHeight * (1 - STRIDE_FRAME_CLEAR_BOTTOM)
+        const usable = 2 * frame.halfHeight * (1 - frame.clearBottom)
         const height =
           (Math.max(top, bounceInset(values, 'right', 0.025).high) - (GROUND_Y - STRIDE_BRACKET_DEPTH - STRIDE_TICK_HALF)) *
             camera.zoom +
@@ -461,7 +464,7 @@ describe('strideCamera fills the visible frame (strides-trn2.11)', () => {
     const zoom = (frame: DrawingFrame, strideLength = 6.28) =>
       strideCamera({ ...values, strideLength }, 0.0246, { frame, pad, headLabel: true, bounceBracket: false }).zoom
     expect(zoom(drawingFrame(401, 404))).toBeGreaterThan(zoom(VIEWBOX_FRAME) * 1.25)
-    expect(zoom(drawingFrame(390, 338))).toBeGreaterThan(zoom(VIEWBOX_FRAME) * 1.4)
+    expect(zoom(drawingFrame(390, 338, 0.15))).toBeGreaterThan(zoom(VIEWBOX_FRAME) * 1.4)
     // Half the stride (one step instead of a gait cycle) frames a larger figure.
     expect(zoom(drawingFrame(401, 404), 3.14)).toBeGreaterThan(zoom(drawingFrame(401, 404)) * 1.3)
   })
@@ -490,5 +493,72 @@ describe('keyPhaseDwellWindow', () => {
       expect(rested / rests, String(phase)).toBeGreaterThan(500 - 1000 / 30)
       expect(rested / rests, String(phase)).toBeLessThan(500 + 2 * (1000 / 30))
     }
+  })
+})
+
+describe('wholeBodyCamera', () => {
+  const frames = [
+    VIEWBOX_FRAME,
+    drawingFrame(401, 404),
+    drawingFrame(390, 338, 0.15),
+    drawingFrame(375, 268, 0.15),
+    drawingFrame(300, 600, 0.15),
+  ]
+  const cases = [
+    NEUTRAL_RUNNER_PARAMS,
+    { ...NEUTRAL_RUNNER_PARAMS, landingOffset: 0.7, pelvisBounce: 0.5, torsoPitch: 35, armSwing: 0.6 },
+    { ...NEUTRAL_RUNNER_PARAMS, torsoPitch: -15, peakThighAngle: 80 },
+  ]
+
+  it('keeps the whole figure over its cycle, the ground and the head label’s room above the clear bottom', () => {
+    for (const frame of frames) {
+      for (const values of cases) {
+        for (const pad of [
+          WHOLE_BODY_FRAME_PAD,
+          wholeBodyFramePad({ unitsPerPx: 1 / 130, headLabel: true, beat: true, groundLabelLines: 0 }),
+          wholeBodyFramePad({ unitsPerPx: 1 / 84, headLabel: false, beat: false, groundLabelLines: 3.5 }),
+        ]) {
+          const camera = wholeBodyCamera(values, { frame, pad })
+          const where = `frame ${frame.halfWidth}×${frame.halfHeight}/${frame.clearBottom}`
+          const usableBottom = frame.halfHeight - 2 * frame.halfHeight * frame.clearBottom
+          const ground = projectPoint({ x: 0, y: GROUND_Y, z: 0 }, camera).y
+          expect(ground, where).toBeLessThanOrEqual(usableBottom - pad.bottom + 1e-9)
+          for (let i = 0; i < 40; i += 1) {
+            const pose = poseAt(i / 40, values)
+            for (const j of projectPose(pose, camera)) {
+              expect(j.y, `${j.name} ${where}`).toBeLessThanOrEqual(usableBottom - pad.bottom + 1e-3)
+              expect(j.y, `${j.name} ${where}`).toBeGreaterThanOrEqual(-frame.halfHeight + pad.top - 1e-3)
+              expect(Math.abs(j.x), `${j.name} ${where}`).toBeLessThanOrEqual(frame.halfWidth - pad.left + 1e-3)
+            }
+            const head = projectPoint(headTopAnchor(pose), camera)
+            expect(head.y, where).toBeGreaterThanOrEqual(-frame.halfHeight + pad.top - 1e-3)
+          }
+        }
+      }
+    }
+  })
+
+  it('is tight on the height and centred in the span above the clear bottom', () => {
+    const frame = drawingFrame(390, 338, 0.15)
+    const camera = wholeBodyCamera(NEUTRAL_RUNNER_PARAMS, { frame })
+    const usableBottom = frame.halfHeight - 2 * frame.halfHeight * frame.clearBottom
+    let top = -Infinity
+    for (let i = 0; i < 30; i += 1) top = Math.max(top, headTopAnchor(poseAt(i / 30, NEUTRAL_RUNNER_PARAMS)).y)
+    const headY = projectPoint({ x: 0, y: top, z: 0 }, camera).y - WHOLE_BODY_FRAME_PAD.top
+    const groundY = projectPoint({ x: 0, y: GROUND_Y, z: 0 }, camera).y + WHOLE_BODY_FRAME_PAD.bottom
+    expect(headY).toBeCloseTo(-frame.halfHeight, 9)
+    expect(groundY).toBeCloseTo(usableBottom, 9)
+  })
+
+  it('draws the desktop figure about as large as the preset, and a phone’s smaller only to clear the panel', () => {
+    const desktop = wholeBodyCamera(NEUTRAL_RUNNER_PARAMS, { frame: drawingFrame(401, 404) })
+    const phone = wholeBodyCamera(NEUTRAL_RUNNER_PARAMS, { frame: drawingFrame(390, 338, 0.15) })
+    expect(desktop.zoom).toBeGreaterThan(0.9)
+    expect(desktop.zoom).toBeLessThan(1.1)
+    expect(phone.zoom).toBeLessThan(desktop.zoom)
+    expect(phone.zoom).toBeGreaterThan(desktop.zoom * 0.8)
+    expect(Object.isFrozen(phone)).toBe(true)
+    expect(phone.yawDeg).toBe(0)
+    expect(phone.target.x).toBe(0)
   })
 })

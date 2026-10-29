@@ -168,23 +168,43 @@ export function landingCamera(values: RunnerParams): CameraState {
 export interface DrawingFrame {
   halfWidth: number
   halfHeight: number
+  /**
+   * The share of the frame's height, at its bottom, that something on the page may cover (the
+   * phone tour's stop panel covers up to the bottom 15% of the drawing, `--rt-clear`). The framed
+   * cameras keep their subject above it. 0: nothing covers it.
+   */
+  clearBottom: number
 }
 
 /** The viewBox itself: the frame every preset is designed for, and the least a stage shows. */
 export const VIEWBOX_FRAME: DrawingFrame = Object.freeze({
   halfWidth: CAMERA_FRAME_HALF_WIDTH,
   halfHeight: CAMERA_FRAME_HALF_HEIGHT,
+  clearBottom: 0,
 })
 
 /** The visible frame of a drawing `width` × `height` CSS pixels, fitted with `meet`. */
-export function drawingFrame(width: number, height: number): DrawingFrame {
-  if (!(width > 0) || !(height > 0)) return VIEWBOX_FRAME
+export function drawingFrame(width: number, height: number, clearBottom = 0): DrawingFrame {
+  const clear = Number.isFinite(clearBottom) ? Math.min(0.5, Math.max(0, clearBottom)) : 0
+  if (!(width > 0) || !(height > 0)) return { ...VIEWBOX_FRAME, clearBottom: clear }
   const scale = Math.min(width / (2 * CAMERA_FRAME_HALF_WIDTH), height / (2 * CAMERA_FRAME_HALF_HEIGHT))
   return {
     halfWidth: Math.max(CAMERA_FRAME_HALF_WIDTH, width / (2 * scale)),
     halfHeight: Math.max(CAMERA_FRAME_HALF_HEIGHT, height / (2 * scale)),
+    clearBottom: clear,
   }
 }
+
+/** The frame's usable span in screen y (down): its top to the top of its clear bottom. */
+function usableSpan(frame: DrawingFrame): { top: number; bottom: number } {
+  return {
+    top: -frame.halfHeight,
+    bottom: frame.halfHeight - 2 * frame.halfHeight * frame.clearBottom,
+  }
+}
+
+const WHOLE_BODY_TARGET_Y = HEAD_TOP / 2
+const WHOLE_BODY_SAMPLES = 120
 
 /** Room kept beyond the framed world span, in PROJECTED units (labels are sized on screen). */
 export interface FramePad {
@@ -194,6 +214,56 @@ export interface FramePad {
   bottom: number
 }
 
+/** The whole-body frame's room at the viewBox's own scale (100 px per unit), for tests and callers without a measured scale. */
+export const WHOLE_BODY_FRAME_PAD: FramePad = Object.freeze({ left: 0.12, right: 0.12, top: 0.34, bottom: 0.27 })
+
+export interface WholeBodyFraming {
+  /** The visible frame to fill. Default: the viewBox. */
+  frame?: DrawingFrame
+  /** Room beyond the framed figure, projected units. Default: `WHOLE_BODY_FRAME_PAD`. */
+  pad?: FramePad
+  /** The cadence label is drawn above the head: frame its anchor over the head. Default true. */
+  headLabel?: boolean
+}
+
+/**
+ * The whole-body camera for one parameter set and a drawing's visible frame: from the side, the
+ * whole figure over its cycle, from the ground (and its labels' room under it) to the head (and the
+ * cadence label's room over it), as large as fits the frame above its clear bottom, centred there
+ * and on hip-mid's line. On a phone that keeps the feet and the ground above the stop panel and the
+ * cadence label off the drawing's top edge. The renderer uses it once it has measured its drawing;
+ * until then (and for a bare `resolveCamera('wholeBodySide')`) the preset stands.
+ */
+export function wholeBodyCamera(
+  values: RunnerParams,
+  { frame = VIEWBOX_FRAME, pad = WHOLE_BODY_FRAME_PAD, headLabel = true }: WholeBodyFraming = {},
+): CameraState {
+  let top = -Infinity
+  // The ground, or lower where a large overstride's stance foot gives way below it (gaitModel D15).
+  let bottom = GROUND_Y
+  let reach = 0
+  for (let i = 0; i < WHOLE_BODY_SAMPLES; i += 1) {
+    const pose = poseAt(i / WHOLE_BODY_SAMPLES, values)
+    for (const j of pose) {
+      top = Math.max(top, j.y)
+      bottom = Math.min(bottom, j.y)
+      reach = Math.max(reach, Math.abs(j.x))
+    }
+    if (headLabel) top = Math.max(top, headTopAnchor(pose).y)
+  }
+  const { top: frameTop, bottom: frameBottom } = usableSpan(frame)
+  const zoom = Math.min(
+    (frameBottom - frameTop - pad.top - pad.bottom) / (top - bottom),
+    (frame.halfWidth - Math.max(pad.left, pad.right)) / reach,
+  )
+  const screenMiddle = (frameTop + frameBottom) / 2
+  return preset(0, 0, zoom, {
+    x: 0,
+    y: (top + bottom) / 2 + (pad.top - pad.bottom) / (2 * zoom) + screenMiddle / zoom,
+    z: 0,
+  })
+}
+
 /**
  * The stride frame's label room at the viewBox's own scale (100 px per unit), for the bare preset:
  * the bounce's own label left of its bracket, the cadence label above the head, and vertical ratio's
@@ -201,12 +271,6 @@ export interface FramePad {
  * (`strideFramePad`).
  */
 export const STRIDE_FRAME_PAD: FramePad = Object.freeze({ left: 0.45, right: 0.1, top: 0.3, bottom: 0.45 })
-/**
- * The share of the frame's height, at its bottom, the stride frame keeps clear: the phone tour lets
- * the active panel cover up to the bottom 15% of the drawing (`--rt-clear`), so the stride's label
- * never sits under it.
- */
-export const STRIDE_FRAME_CLEAR_BOTTOM = 0.15
 const STRIDE_SAMPLES = 30
 
 export interface StrideFraming {
@@ -224,7 +288,7 @@ export interface StrideFraming {
  * The stride camera for one parameter set and vertical ratio: from the side, the whole figure, one
  * drawn stride along the ground ahead of the near (right) foot's contact at the figure's own scale,
  * the magnified bounce inset over it (`bounceInset`), and the labels' room, filling the visible
- * frame (all of the drawing's box, not only the viewBox) less its clear bottom. Framed on the values
+ * frame (all of the drawing's box, not only the viewBox) above its clear bottom. Framed on the values
  * it draws, as the landing camera is, so it fits whatever stride is bound: the stride fixes the
  * zoom. `ratio` defaults to the neutral figure's own (bounce over stride), for the bare preset.
  */
@@ -249,9 +313,8 @@ export function strideCamera(
   }
   if (headLabel) top = Math.max(top, head)
   const bottom = GROUND_Y - STRIDE_BRACKET_DEPTH - STRIDE_TICK_HALF
-  // The frame less its clear bottom, in screen y (down).
-  const frameTop = -frame.halfHeight
-  const frameBottom = frame.halfHeight - 2 * frame.halfHeight * STRIDE_FRAME_CLEAR_BOTTOM
+  // The frame above its clear bottom, in screen y (down).
+  const { top: frameTop, bottom: frameBottom } = usableSpan(frame)
   const zoom = Math.min(
     (2 * frame.halfWidth - pad.left - pad.right) / (right - left),
     (frameBottom - frameTop - pad.top - pad.bottom) / (top - bottom),
@@ -266,7 +329,12 @@ export function strideCamera(
 }
 
 export const CAMERA_PRESETS: Readonly<Record<CameraPreset, CameraState>> = Object.freeze({
-  wholeBodySide: preset(0, 0, 1, { x: 0, y: HEAD_TOP / 2, z: 0 }),
+  /**
+   * The whole figure from the side, for the viewBox. Once it has measured its drawing, ModelRunner
+   * reframes it on the values it draws and that drawing (`wholeBodyCamera`); a bare
+   * `resolveCamera('wholeBodySide')` gets this one.
+   */
+  wholeBodySide: preset(0, 0, 1, { x: 0, y: WHOLE_BODY_TARGET_Y, z: 0 }),
   upperFrontQuarter: preset(45, 5, 1.7, { x: 0, y: PELVIS_HEIGHT + 0.6, z: 0 }),
   /**
    * The arms stop: 15° off the side, so the sagittal arm swing reads fore-and-aft while the two

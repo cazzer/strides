@@ -20,9 +20,14 @@ User review of live tour screenshots (`strides-trn2.11`):
 - The knees view (tour stop and summary row) rests 500 ms on the headline's key phase each cycle
   while playing (`keyPhaseDwellMs`), so the arc and the leg line up. Reduced motion still holds the
   still key frame.
-- `strideCamera` fills the drawing's whole visible frame, less the bottom 15% a phone panel may
-  cover, with room for exactly the labels drawn at the live scale and a 12 px margin. Labels are kept
+- `strideCamera` fills the drawing's whole visible frame above its clear bottom (the share a page
+  panel may cover), with room for exactly the labels drawn at the live scale and a 12 px margin. Labels are kept
   inside the visible frame rather than the viewBox. Framed on the bound stride, never a fixed length.
+- The whole-body view (intro, rhythm opening, one-thing stop, summary with no row open) is reframed
+  the same way once the drawing is measured: the whole figure, ground and cadence label's room, as
+  large as fits above the clear bottom. The phone tour states its clear bottom (15%) on the runner
+  through `--runner-clear-bottom`; other layouts have none. On a 390×844 phone the feet and ground
+  now sit above the stop panel and the cadence label is off the drawing's top edge.
 - The tour's rhythm stop (headed by cadence or the bounce, stating vertical ratio) opens on the whole
   figure with its headline alone, eases out to the stride camera after the arrival tween plus 1.5 s,
   and adds vertical ratio's marks once the camera rests. Reduced motion goes straight to the stride.
@@ -34,5 +39,5 @@ Presentation only: no heuristic, measurement or metric value changes.
 
 ### Modified Capabilities
 
-- `model-runner`: knee accents and the bend drawing; the stride camera's framing; a dwell rest.
+- `model-runner`: knee accents and the bend drawing; the stride and whole-body cameras' framing; a dwell rest.
 - `runner-tour`: the rhythm stop's opening sequence; the knees stop's dwell.

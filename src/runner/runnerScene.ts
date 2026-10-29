@@ -471,7 +471,7 @@ export function placeLabel(
   }
 }
 
-/** A small clear margin the stride frame keeps round its outermost marks and labels, CSS px. */
+/** A small clear margin the stride and whole-body frames keep round their outermost marks and labels, CSS px. */
 export const STRIDE_FRAME_MARGIN_PX = 12
 /** The bounce's own label beside its bracket: "of torso length" is its widest line. */
 const BOUNCE_LABEL_CHARS = 'of torso length'.length
@@ -502,5 +502,36 @@ export function strideFramePad({ unitsPerPx, headLabel, bounceLabel, strideLabel
     right: px(margin),
     top: px(margin + (headLabel ? RUNNER_PX.labelGap + line : 0)),
     bottom: px(margin + RUNNER_PX.labelGap + strideLabelLines * line),
+  }
+}
+
+export interface WholeBodyPadInput {
+  /** Projected units per label pixel (1 / the renderer's pixels per unit). */
+  unitsPerPx: number
+  /** The cadence label sits above the head. */
+  headLabel: boolean
+  /** Footfall rings pulse at the feet (cadence): their largest radius below the ground. */
+  beat: boolean
+  /** Lines in the ground lane's labels under the ground (with their stacking gaps); 0: none. */
+  groundLabelLines: number
+}
+
+/**
+ * The whole-body frame's room, in projected units sized as the renderer draws its labels: the
+ * cadence label over the head, the footfall rings or the ground lane's labels under the ground, and
+ * a small margin everywhere.
+ */
+export function wholeBodyFramePad({ unitsPerPx, headLabel, beat, groundLabelLines }: WholeBodyPadInput): FramePad {
+  const line = RUNNER_PX.label * LABEL_LINE_HEIGHT
+  const margin = STRIDE_FRAME_MARGIN_PX
+  const under = Math.max(
+    beat ? RUNNER_PX.beatRingMax : 0,
+    groundLabelLines > 0 ? RUNNER_PX.labelGap + groundLabelLines * line : 0,
+  )
+  return {
+    left: margin * unitsPerPx,
+    right: margin * unitsPerPx,
+    top: (margin + (headLabel ? RUNNER_PX.labelGap + line : 0)) * unitsPerPx,
+    bottom: (margin + under) * unitsPerPx,
   }
 }

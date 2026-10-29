@@ -499,6 +499,7 @@ describe('labels stay inside the visible frame', () => {
     const inWide = placeLabel({ x: -1.9, y: 0 }, 'left', ['174 steps/min'], font, 0.06, 0, {
       halfWidth: 2.3,
       halfHeight: 2,
+      clearBottom: 0,
     })
     const width = '174 steps/min'.length * font * LABEL_CHAR_WIDTH_EM
     expect(inViewBox.x - width).toBeGreaterThanOrEqual(-VIEW_HALF_WIDTH)

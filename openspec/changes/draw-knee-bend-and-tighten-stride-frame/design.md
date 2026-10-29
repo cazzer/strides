@@ -31,8 +31,25 @@ stop do not.
 **D4. Fill the visible frame.** The viewBox is fitted with `meet`, so a non-3:4 drawing shows more.
 `ModelRunner` observes the drawing (svg) box, derives its visible frame, and frames the stride camera
 in it; label pads come from `strideFramePad` at `1 / pxPerUnit` (the scale labels are sized at), for
-the labels actually drawn. The bottom 15% is kept clear (`--rt-clear`). Labels clamp to the visible
-frame. Measured live on the demo: figure 98 → 153 px tall at 1280×800, 83 → 150 px at 390×844.
+the labels actually drawn. The clear bottom is a share of the drawing's height the page may cover;
+the phone tour sets `--runner-clear-bottom: 0.15` on the runner below `lg` (its panel may cover the
+bottom 15% of the drawing, `--rt-clear`), the runner reads it in its ResizeObserver, so `src/runner`
+carries no phone code; desktop and the summary have none. Labels clamp to the visible frame.
+Measured live on the demo: figure 98 → 153 px tall at 1280×800, 83 → 150 px at 390×844.
+
+**D6. The whole-body view is framed the same way (review round 1).** On a 390×844 phone the
+`wholeBodySide` preset filled the drawing's whole height, so the feet and ground sat under the stop
+panel and the cadence label was clamped to the drawing's top edge. `wholeBodyCamera(values, framing)`
+frames the figure over its cycle (ground, or a sinking stance foot, to the head or the cadence label's
+anchor), with label room from `wholeBodyFramePad` (cadence label above; footfall rings or ground-lane
+labels below; 12 px margin), above the clear bottom, centred on hip-mid's line. It frames the BOUND
+values, not the intro's overrides, so the intro's steps never move the camera. The preset stands until
+the drawing is measured (and in jsdom), so every existing preset-based test still holds. Live: the
+phone's rhythm opening now has the figure 364–587 px with the panel at 602, the label 12 px under
+the drawing's top; desktop's whole body is about 15% larger than the preset and still inside the
+frame. Labels on every other stop (arms, posture, knees apart from the new "bend", landing, foot path)
+are at the same pixel boxes as on base at both sizes, so clamping to the visible frame moved nothing
+there.
 
 **D5. Open, then ease, then draw.** `useStrideOpening` (tour only): `whole` (area camera, headline
 focus) for `CAMERA_TWEEN_MS + 1500`, `easing` (stride camera, headline focus) for one tween, then
@@ -43,5 +60,5 @@ opened that row on purpose.
 
 ## Risks
 
-- On a 390×844 phone the whole-body opening frame (the existing `wholeBodySide`) puts the feet under
-  the stop panel, as it already did for the intro and for clips without a stride.
+- The landing stop's overstride label sits under the phone panel at 390×844 (608–628 px, panel at
+  602), on base as on this branch: `landingSide` is not reframed here.
