@@ -3,6 +3,7 @@ import type { ReactNode, RefObject } from 'react'
 import type { FormHeuristicsResult, MetricId, View } from '../../heuristics/types'
 import { FOCUS_AREAS, FOCUS_AREA_ORDER } from '../../guidance/focusAreas'
 import type { TourStopId } from '../../guidance/focusAreas'
+import type { RatioClipBounce } from '../../guidance/compositeReadings'
 import { ONE_THING_LABEL } from '../../guidance/feedbackPoints'
 import { ModelRunner } from '../../runner/ModelRunner'
 import type { RunnerFocus } from '../../runner/ModelRunner'
@@ -210,12 +211,14 @@ export function RunnerTour({ onLeaveTour, resultKey, coverage, onAddClip, ...gui
   const { heuristics } = guidedProps.analysis
   const scalePassStatus = guidedProps.analysis.scalePass.status
   const sourceIndices = guidedProps.sourceIndices ?? null
+  const ratioClipBounce = guidedProps.ratioClipBounce ?? null
   const rootRef = useRef<HTMLDivElement>(null)
   const barRef = useRef<HTMLDivElement>(null)
   useBarHeightProperty(barRef, rootRef)
   const plan = useMemo(
-    () => (heuristics ? tourPlan(heuristics, scalePassStatus, coverage, sourceIndices) : null),
-    [heuristics, scalePassStatus, coverage, sourceIndices],
+    () =>
+      heuristics ? tourPlan(heuristics, scalePassStatus, coverage, sourceIndices, ratioClipBounce) : null,
+    [heuristics, scalePassStatus, coverage, sourceIndices, ratioClipBounce],
   )
   const stopIds: TourStopId[] =
     plan === null ? [] : [...plan.areaStops.map((stop) => stop.view.area), 'oneThing']
@@ -257,6 +260,7 @@ export function RunnerTour({ onLeaveTour, resultKey, coverage, onAddClip, ...gui
             barRow={actionsInBody ? actions : null}
             evidence={guidedProps.evidence ?? NO_EVIDENCE}
             sourceIndices={sourceIndices}
+            ratioClipBounce={ratioClipBounce}
             clipViewKinds={guidedProps.clipViewKinds ?? NO_VIEW_KINDS}
           />
         ) : null}
@@ -528,6 +532,8 @@ interface TourBodyProps {
    * each metric, and each clip's view. */
   evidence: readonly MetricCardEvidence[]
   sourceIndices: Record<MetricId, number> | null
+  /** The relative bounce on vertical ratio's own clip, for the runner's stride. */
+  ratioClipBounce: RatioClipBounce | null
   clipViewKinds: readonly (View | null)[]
 }
 
@@ -557,6 +563,7 @@ function TourBody({
   barRow,
   evidence,
   sourceIndices,
+  ratioClipBounce,
   clipViewKinds,
 }: TourBodyProps) {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -570,8 +577,8 @@ function TourBody({
   const activeIndex = active === null ? -1 : stopIds.indexOf(active)
 
   const params = useMemo(
-    () => bindRunnerParams(heuristics, undefined, sourceIndices),
-    [heuristics, sourceIndices],
+    () => bindRunnerParams(heuristics, undefined, { sourceIndices, ratioClipBounce }),
+    [heuristics, sourceIndices, ratioClipBounce],
   )
   const [runnerSeen, setRunnerSeen] = useState(false)
   // The figure, not the whole rail: its caption, Pause row and legend may sit below the fold.

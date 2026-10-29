@@ -1,5 +1,6 @@
 import type { AggregateAnalysisState } from './types'
 import type { MetricId, View } from '../heuristics/types'
+import type { RatioClipBounce } from '../guidance/compositeReadings'
 import { MetricsPanel } from './MetricsPanel'
 import type { MetricCardEvidence } from './MetricsPanel'
 import { metricTier } from './metricConfidence'
@@ -31,6 +32,12 @@ export interface ResultsViewProps {
    * not read a label. */
   clipViewKinds?: readonly (View | null)[]
   sourceIndices?: Record<MetricId, number> | null
+  /**
+   * The relative hip bounce measured on vertical ratio's own clip, read off that clip's result (null
+   * until fused, or with one clip). Presentation only: what vertical ratio's derivation and the
+   * runner's stride cite, never a fused value.
+   */
+  ratioClipBounce?: RatioClipBounce | null
   onOpenEvidenceVideo?: (clipIndex: number, timestamp: number, returnFocus: HTMLButtonElement | null) => void
 }
 

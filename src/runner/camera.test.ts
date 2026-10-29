@@ -15,7 +15,7 @@ import {
   strideCamera,
 } from './camera'
 import { GAIT_PHASES, GROUND_Y, poseAt } from './gaitModel'
-import { BOUNCE_BRACKET_X, STRIDE_BRACKET_DEPTH, strideSpan } from './runnerAnnotations'
+import { STRIDE_BRACKET_DEPTH, bounceInset, strideSpan } from './runnerAnnotations'
 import { NEUTRAL_RUNNER_PARAMS, RUNNER_PARAM_SPECS } from './runnerParams'
 import { VIEW_HALF_WIDTH } from './runnerScene'
 import type { CameraPreset, CameraState, RunnerParamId, RunnerParams } from './types'
@@ -225,9 +225,11 @@ describe('presets', () => {
       { ...NEUTRAL_RUNNER_PARAMS, strideLength, landingOffset: 0.7, pelvisBounce: 0.5, torsoPitch: 35 },
     ])
 
-    it('frames the whole figure and the whole stride, with the label pads clear, at every stride', () => {
+    it('frames the whole figure, the whole stride and the bounce inset, with the label pads clear, at every stride', () => {
       for (const values of cases) {
-        const camera = strideCamera(values)
+        // The bounce the inset magnifies: this case's own, up to the drawable limit (0.5).
+        const ratio = values.pelvisBounce / values.strideLength
+        const camera = strideCamera(values, ratio)
         expect(camera.yawDeg).toBe(0)
         expect(camera.pitchDeg).toBe(0)
         const { start, end } = strideSpan(values, 'right')
@@ -238,8 +240,10 @@ describe('presets', () => {
         for (const p of ends) {
           expect(p.y, where).toBeLessThanOrEqual(CAMERA_FRAME_HALF_HEIGHT - STRIDE_FRAME_PAD.bottom + 1e-9)
         }
-        const bounce = projectPoint({ x: BOUNCE_BRACKET_X, y: 1, z: 0 }, camera)
-        expect(bounce.x, where).toBeGreaterThanOrEqual(-VIEW_HALF_WIDTH + STRIDE_FRAME_PAD.left - 1e-9)
+        // The magnified bounce inset's top stays under the label pad, at the bounce's drawable limit.
+        const inset = bounceInset(values, 'right', ratio)
+        const top = projectPoint({ x: inset.x, y: inset.high, z: 0 }, camera)
+        expect(top.y, where).toBeGreaterThanOrEqual(-CAMERA_FRAME_HALF_HEIGHT + STRIDE_FRAME_PAD.top - 1e-9)
         for (let i = 0; i < 40; i += 1) {
           for (const j of projectPose(poseAt(i / 40, values), camera)) {
             expect(Math.abs(j.x), `${j.name} ${where}`).toBeLessThanOrEqual(VIEW_HALF_WIDTH)

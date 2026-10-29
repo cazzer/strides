@@ -11,7 +11,7 @@
  */
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { GAIT_PHASES, GROUND_Y, MODEL_PROPORTIONS, PELVIS_HEIGHT, poseAt } from './gaitModel'
-import { BOUNCE_BRACKET_X, STRIDE_BRACKET_DEPTH, strideSpan } from './runnerAnnotations'
+import { STRIDE_BRACKET_DEPTH, bounceInset, strideSpan } from './runnerAnnotations'
 import { NEUTRAL_RUNNER_PARAMS } from './runnerParams'
 import type {
   CameraPreset,
@@ -144,23 +144,27 @@ export function landingCamera(values: RunnerParams): CameraState {
 
 /**
  * Room the stride frame keeps beyond what it frames, in PROJECTED units (labels are sized on
- * screen, not in the world): the "bounce" tag left of the bounce bracket, the cadence label above
- * the head, and vertical ratio's two-line label under the stride bracket.
+ * screen, not in the world): the cadence label above the head, and vertical ratio's two-line label
+ * under the stride bracket.
  */
-export const STRIDE_FRAME_PAD = Object.freeze({ left: 0.45, right: 0.1, top: 0.4, bottom: 0.45 })
+export const STRIDE_FRAME_PAD = Object.freeze({ left: 0.1, right: 0.1, top: 0.4, bottom: 0.45 })
 const STRIDE_SAMPLES = 30
 
 /**
- * The stride camera for one parameter set: from the side, the whole figure and one drawn stride
- * along the ground ahead of the near (right) foot's contact, at one scale, so vertical ratio's two
- * brackets (bounce and stride) are seen at their true proportion. Framed on the values it draws, as
- * the landing camera is: a stride several figures long fixes the zoom, so the figure is small.
+ * The stride camera for one parameter set and vertical ratio: from the side, the whole figure, one
+ * drawn stride along the ground ahead of the near (right) foot's contact at the figure's own scale,
+ * and the magnified bounce inset over it (`bounceInset`). Framed on the values it draws, as the
+ * landing camera is: a stride several figures long fixes the zoom, so the figure is small. `ratio`
+ * defaults to the neutral figure's own (bounce over stride), for the bare preset.
  */
-export function strideCamera(values: RunnerParams): CameraState {
+export function strideCamera(
+  values: RunnerParams,
+  ratio: number = NEUTRAL_RUNNER_PARAMS.pelvisBounce / NEUTRAL_RUNNER_PARAMS.strideLength,
+): CameraState {
   const { end } = strideSpan(values, 'right')
-  let left = BOUNCE_BRACKET_X
+  let left = Infinity
   let right = end
-  let top = -Infinity
+  let top = bounceInset(values, 'right', ratio).high
   for (let i = 0; i < STRIDE_SAMPLES; i += 1) {
     for (const j of poseAt(i / STRIDE_SAMPLES, values)) {
       left = Math.min(left, j.x)

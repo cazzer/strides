@@ -20,7 +20,7 @@
  * loops `LANDING_PHASE_WINDOW` around that contact, resting on its holds (`stepPlayback`). Entering
  * the window plays on into it; leaving the camera lets the phase run round the whole cycle again
  * from where it is. Paused on the landing camera, the figure stands at the held phase too. The
- * stride camera (`camera="strideSide"`) is framed the same way, on `strideCamera(values)`, and
+ * stride camera (`camera="strideSide"`) is framed the same way, on `strideCamera(values, vertical ratio)`, and
  * plays the whole cycle.
  *
  * **Cadence beats at the footfalls.** A cadence focus is labelled above the head with ground ticks
@@ -549,9 +549,14 @@ export function ModelRunner({
   const presetKey = cameraKey(camera)
   const framedKey = useMemo(() => {
     if (camera === 'landingSide') return cameraKey(landingCamera(values))
-    if (camera === 'strideSide') return cameraKey(strideCamera(values))
+    if (camera === 'strideSide') {
+      const stride = params.strideLength
+      return cameraKey(
+        stride.source === 'measured' ? strideCamera(values, stride.metricValue) : strideCamera(values),
+      )
+    }
     return null
-  }, [camera, values])
+  }, [camera, values, params])
   const targetKey = framedKey ?? presetKey
   const target = useMemo(() => cameraFromKey(targetKey), [targetKey])
   const phaseWindow = tracksContact ? LANDING_PHASE_WINDOW : null

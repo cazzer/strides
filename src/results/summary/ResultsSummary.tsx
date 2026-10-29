@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { FormHeuristicsResult, MetricId, View } from '../../heuristics/types'
 import { feedbackFor } from '../../guidance/feedbackPoints'
-import { readingHeadline } from '../../guidance/compositeReadings'
+import { readingHeadline, type RatioClipBounce } from '../../guidance/compositeReadings'
 import { FOCUS_AREAS } from '../../guidance/focusAreas'
 import type { FocusAreaId } from '../../guidance/focusAreas'
 import { ModelRunner } from '../../runner/ModelRunner'
@@ -67,6 +67,7 @@ export function ResultsSummary({ onReplayTour, onOpenClassic, ...guidedProps }: 
             clipViews={guidedProps.clipViews ?? NO_CLIP_VIEWS}
             clipViewKinds={guidedProps.clipViewKinds ?? NO_VIEW_KINDS}
             sourceIndices={guidedProps.sourceIndices ?? null}
+            ratioClipBounce={guidedProps.ratioClipBounce ?? null}
             onOpenEvidenceVideo={guidedProps.onOpenEvidenceVideo}
           />
         ) : null}
@@ -94,6 +95,7 @@ interface SummaryBodyProps {
   clipViews: readonly string[]
   clipViewKinds: readonly (View | null)[]
   sourceIndices: Record<MetricId, number> | null
+  ratioClipBounce: RatioClipBounce | null
   onOpenEvidenceVideo?: GuidedResultsViewProps['onOpenEvidenceVideo']
 }
 
@@ -115,6 +117,7 @@ function SummaryBody({
   clipViews,
   clipViewKinds,
   sourceIndices,
+  ratioClipBounce,
   onOpenEvidenceVideo,
 }: SummaryBodyProps) {
   const rootRef = useRef<HTMLDivElement>(null)
@@ -124,15 +127,15 @@ function SummaryBody({
   const activeArea = wide ? openedArea : null
 
   const { rows, notMeasured } = useMemo(() => {
-    const { areas, notMeasured } = summaryRows(heuristics, { sourceIndices })
+    const { areas, notMeasured } = summaryRows(heuristics, { sourceIndices, ratioClipBounce })
     return {
       rows: areas.map((row) => ({ ...row, feedback: feedbackFor(row.view) })),
       notMeasured,
     }
-  }, [heuristics, sourceIndices])
+  }, [heuristics, sourceIndices, ratioClipBounce])
   const params = useMemo(
-    () => bindRunnerParams(heuristics, undefined, sourceIndices),
-    [heuristics, sourceIndices],
+    () => bindRunnerParams(heuristics, undefined, { sourceIndices, ratioClipBounce }),
+    [heuristics, sourceIndices, ratioClipBounce],
   )
   const activeRow = rows.find((row) => row.view.area === activeArea) ?? null
   const focus = useMemo(

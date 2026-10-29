@@ -482,22 +482,33 @@ What the frames show:
 
 ## Knees slowed, vertical ratio drawn as bounce over one stride (`strides-trn2.10`)
 
-Change: `openspec/changes/slow-knees-and-draw-vertical-ratio` (design D1–D6).
+Change: `openspec/changes/slow-knees-and-draw-vertical-ratio` (design D1–D8).
 
 - **Knees at 0.4×** (`SLOW_MOTION_RATE`, the landing/foot-path rate), tour and wide summary.
-- **`strideLength`** (torso lengths) binds from vertical ratio through `bounceDerivation`: VO / VR,
-  only on VR's clip and the hip fit, i.e. exactly when the From line has figures. It moves no joint
-  (treadmill model; the stance foot's slide is NOT tied to it) and gets no intro step.
-- **Drawing:** bounce bracket + stride bracket 0.15 under the ground, from the near foot's contact
-  forward by the stride; label "2.46%" / "bounce ÷ stride", tags "bounce" / "stride". Replaces the
-  bounce's own bracket when both are in focus. Camera `strideSide` = `strideCamera(values)`.
+- **`strideLength`** (torso lengths) binds from vertical ratio through `bounceDerivation`: bounce / VR,
+  hip fit only, i.e. exactly when the From line has figures. It moves no joint (treadmill model; the
+  stance foot's slide is NOT tied to it) and gets no intro step.
+- **The bounce comes from VR's own clip** (D7): `ratioClipBounceFor(clips, sourceIndices)` in
+  `MultiClipVideoSession` reads VR's winning clip's per-clip relative VO and passes it down as
+  `ratioClipBounce` (results props -> summaryRows / tourPlan / bindRunnerParams). Fusion is untouched;
+  the figure's own hip motion keeps the FUSED VO. On the 3-clip demo VR wins on clip 1 (0.02457) and
+  VO on clip 2 (0.1713); clip 1's VO is 0.1543, so the stride is 6.28 torsos.
+- **Drawing** (D8): true-scale stride bracket 0.15 under the ground from the near foot's contact; the
+  bounce as an inset ×10 (`BOUNCE_INSET_FACTOR`) standing 0.6 above the ground 3/4 along the stride,
+  tagged "hip bounce ×10"; label "2.46%" / "bounce ÷ stride"; tag "stride". The true-scale bounce
+  bracket gives way while the inset shows. Camera `strideSide` = `strideCamera(values, VR)`.
 - **Tour focus** is now headline + VR where the rhythm stop states VR (secondary block).
-- ⚠️ **The 3-clip demo shows no stride drawing:** fusion takes VR from clip 1 and VO from clip 2
-  (live, 2026-10-29), so the same-clip guard leaves the stride neutral (the summary's From line has
-  no figures there either). Single side clips draw it (side-landscape 2.46%, side-portrait 3.00%).
-- Live 2026-10-29 (port 5263, ANGLE Metal, fresh context per run, no errors): label boxes at 390×844
-  side-landscape: VR label 198–262 × 530–550, tags "bounce" 89–120 × 472–482, "stride"
-  218–242 × 512–522; drawing 316–654, the panel's opaque box starts lower, nothing clipped.
+- **Fused-equality proof, 2026-10-29:** base = main `33f0a684` exported with `git archive` and served
+  on port 5274 (node_modules symlinked), branch on 5263, both identity-checked; Demo (3 clips) in
+  `?view=classic`, fresh Chromium per trial, 2 trials per arm. Each trial recorded the per-clip
+  `[analysis-diagnostics]` and scale-pass lines (minus timing keys), the last `[evidence-coverage]`
+  (which carries `sourceIndices`) and the classic panel's text: **all four files md5
+  `8b500d57…bd`**, `cmp` equal both ways through `rtk proxy sh -c`. Script: scratchpad
+  `fused-equality.mjs`; records `tour-tweaks-live/equality/`.
+- Live 2026-10-29 (port 5263, ANGLE Metal, one browser process, no errors): the demo now draws it.
+  390×844 demo: VR label 186–250 × 535–555, "hip bounce ×10" 197–259 × 481–491, inset x 266,
+  464–509, "stride" 206–230 × 517–527; drawing 316–654; nothing overlaps or clips. Labels read 2.46%
+  in the first context and 2.40% later (the known cold/warm mix of a reused browser process).
   Screenshots: scratchpad `tour-tweaks-live/*.png`.
 
 ## Gotchas

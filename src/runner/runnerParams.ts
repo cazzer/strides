@@ -15,7 +15,7 @@
  *   denominator, the stride, which the bounce reading derives in torso lengths (`bounceDerivation`).
  * - There are no per-side or variability parameters, because no metric reports either.
  */
-import { bounceDerivation } from '../guidance/compositeReadings'
+import { bounceDerivation, type RatioClipBounce } from '../guidance/compositeReadings'
 import { metricTier, type MetricTier } from '../results/metricConfidence'
 import type { FormHeuristicsResult, MetricResult } from '../heuristics/types'
 import { MODEL_TORSO_LENGTH_CM, realizeParams } from './gaitModel'
@@ -113,26 +113,37 @@ export const NEUTRAL_RUNNER_PARAMS: RunnerParams = mapParams((id) => RUNNER_PARA
 
 export type RunnerMetrics = Pick<FormHeuristicsResult, RunnerMetricId>
 
-type SourceIndices = Readonly<Record<MetricId, number>> | null
+/**
+ * Where the stride's bounce comes from: which clip won each fused metric (null: one clip), and the
+ * relative bounce measured on vertical ratio's own clip (null: read the fused one, guarded to the
+ * same clip). See `bounceDerivation`.
+ */
+export interface StrideSource {
+  sourceIndices?: Readonly<Record<MetricId, number>> | null
+  ratioClipBounce?: RatioClipBounce | null
+}
 
 /** The stride, in torso lengths, that vertical ratio was computed over, or null where unsaid. */
 function measuredStride(
   metrics: RunnerMetrics,
   tierOf: (metric: MetricResult) => MetricTier,
-  sourceIndices: SourceIndices,
+  { sourceIndices = null, ratioClipBounce = null }: StrideSource,
 ): number | null {
   const tiers = {
     verticalRatio: tierOf(metrics.verticalRatio),
     verticalOscillation: tierOf(metrics.verticalOscillation),
   }
-  return bounceDerivation(metrics, tiers, sourceIndices)?.figures?.strideTorsoLengths ?? null
+  return (
+    bounceDerivation(metrics, tiers, sourceIndices, undefined, ratioClipBounce)?.figures
+      ?.strideTorsoLengths ?? null
+  )
 }
 
 function bindOne(
   spec: RunnerParamSpec,
   metrics: RunnerMetrics,
   tierOf: (metric: MetricResult) => MetricTier,
-  sourceIndices: SourceIndices,
+  strideSource: StrideSource,
 ): BoundRunnerParam {
   for (const candidate of spec.metrics) {
     const { metric } = candidate
@@ -140,7 +151,7 @@ function bindOne(
     if (result.value === null || tierOf(result) === 'excluded') continue
     const scaled =
       'stride' in candidate
-        ? measuredStride(metrics, tierOf, sourceIndices)
+        ? measuredStride(metrics, tierOf, strideSource)
         : result.value * candidate.scale
     if (scaled === null) continue
     const [min, max] = spec.range
@@ -159,29 +170,25 @@ function bindOne(
 /**
  * Binds every parameter to its first measured candidate metric, or to its neutral constant when
  * every candidate is null or tiered `'excluded'`. A `'caveated'` metric binds: low confidence is
- * still a measurement. `sourceIndices` (null: one clip) says which clip won each metric, so the
- * stride binds only where the bounce reading can derive it (both inputs from vertical ratio's clip).
+ * still a measurement. `strideSource` says where the stride's bounce comes from: in a multi-clip
+ * session, vertical ratio's own clip (`ratioClipBounce`), so the stride binds wherever that clip
+ * measured the relative bounce, whichever clip fusion took the relative bounce from.
  *
  * Every bound `value` is what the model draws. The contact parameters are passed through
  * `realizeParams`, so where they conflict the weaker one is redrawn: a measured one then carries
  * the drawn `value` with `clamped: true` (its `metricValue` stays the truth), and a neutral one
- * carries its constant adjusted to fit. A measured stride is also marked clamped when the bounce
- * it divides was clamped: `clamped` there means "the drawn ratio is not vertical ratio".
+ * carries its constant adjusted to fit.
  */
 export function bindRunnerParams(
   metrics: RunnerMetrics,
   tierOf: (metric: MetricResult) => MetricTier = metricTier,
-  sourceIndices: SourceIndices = null,
+  strideSource: StrideSource = {},
 ): BoundRunnerParams {
-  const bound = mapParams((id) => bindOne(RUNNER_PARAM_SPECS[id], metrics, tierOf, sourceIndices))
+  const bound = mapParams((id) => bindOne(RUNNER_PARAM_SPECS[id], metrics, tierOf, strideSource))
   const measured = new Set(RUNNER_PARAM_IDS.filter((id) => bound[id].source === 'measured'))
   const drawn = realizeParams(runnerParamValues(bound), measured)
-  const bounceClamped = bound.pelvisBounce.source === 'measured' && bound.pelvisBounce.clamped
   return mapParams((id): BoundRunnerParam => {
     const param = bound[id]
-    if (id === 'strideLength' && param.source === 'measured' && bounceClamped) {
-      return { ...param, clamped: true }
-    }
     if (drawn[id] === param.value) return param
     return param.source === 'measured'
       ? { ...param, value: drawn[id], clamped: true }

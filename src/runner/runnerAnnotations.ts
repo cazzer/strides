@@ -18,11 +18,11 @@
  * head and a ring pulses out from each foot's contact point at that foot's contact phase, so the
  * rings beat exactly as often as the figure's feet land (`beatEnvelope`).
  *
- * **Vertical ratio is drawn as its two inputs** (`strideLength`): the hip-bounce bracket and, along
- * the ground, one stride from the near foot's contact to where that foot lands next. Bounce ÷
- * stride is the drawn ratio, so the two brackets ARE the measurement's quotient; the label prints
- * vertical ratio, and two small tags name the brackets. It replaces the bounce's own bracket when
- * both are in focus (the same bracket, drawn once).
+ * **Vertical ratio is drawn as its two inputs** (`strideLength`): along the ground at the figure's
+ * own scale, one stride from the near foot's contact to where that foot lands next; over it, the
+ * hip bounce magnified `BOUNCE_INSET_FACTOR` times, tagged with its factor (at true scale it is a
+ * few pixels). Inset ÷ factor ÷ stride is vertical ratio exactly; the label prints vertical ratio.
+ * The bounce's own true-scale bracket gives way while it is shown, so the bounce is drawn once.
  */
 import { classifyFootStrike, type FootStrikeClass } from '../heuristics/footStrikePattern'
 import { formatMeasuredBandValue } from '../guidance/bandPosition'
@@ -142,8 +142,7 @@ export function labelLines(value: string, clamped: boolean): string[] {
 
 /** Vertical ratio's label names its own arithmetic under the value. */
 export const STRIDE_RATIO_CAPTION = 'bounce ÷ stride'
-/** The small words naming vertical ratio's two brackets. */
-export const BOUNCE_TAG = 'bounce'
+/** The small word naming vertical ratio's stride bracket. */
 export const STRIDE_TAG = 'stride'
 
 /** Which side of its projected anchor a label's block sits on. */
@@ -380,6 +379,40 @@ export function strideSpan(values: RunnerParams, side: RunnerSide): { start: num
   return { start, end: start + values.strideLength }
 }
 
+/**
+ * How much the bounce inset magnifies the hip bounce. At true scale a typical bounce beside its
+ * stride (vertical ratio 2 to 4%) is a few pixels on a phone; ten times reads, and stays inside the
+ * frame up to the bounce's drawable limit.
+ */
+export const BOUNCE_INSET_FACTOR = 10
+/** The tag that marks the inset as magnified, naming its factor. */
+export const BOUNCE_INSET_TAG = `hip bounce ×${BOUNCE_INSET_FACTOR}`
+/** The inset's foot, above the ground and the stride's tag. */
+export const BOUNCE_INSET_BASE = 0.6
+/** Where along the stride the inset stands, as a fraction of it: clear of the figure and the tag. */
+const BOUNCE_INSET_ALONG = 0.75
+
+/**
+ * Vertical ratio's bounce as a magnified inset over the stride: a vertical bracket
+ * `BOUNCE_INSET_FACTOR` times the bounce, standing on `BOUNCE_INSET_BASE`. The bounce is
+ * `ratio × strideLength`: vertical ratio times the drawn stride, which is the measured bounce on
+ * vertical ratio's clip whenever the stride is drawn unclamped. The stride stays at true scale.
+ */
+export function bounceInset(
+  values: RunnerParams,
+  side: RunnerSide,
+  ratio: number,
+): { x: number; low: number; high: number; bounce: number } {
+  const { start, end } = strideSpan(values, side)
+  const bounce = ratio * values.strideLength
+  return {
+    x: start + BOUNCE_INSET_ALONG * (end - start),
+    low: BOUNCE_INSET_BASE,
+    high: BOUNCE_INSET_BASE + bounce * BOUNCE_INSET_FACTOR,
+    bounce,
+  }
+}
+
 /** How far below the ground a footfall's tick reaches. Each tick is its pulse's guide, in order. */
 const BEAT_TICK_DEPTH = 0.08
 
@@ -401,6 +434,8 @@ interface BuildContext {
   side: RunnerSide
   /** The phase this annotation is drawn at: its key phase, or the held phase. */
   phase: number
+  /** The bound parameter's metric value (vertical ratio, for the stride). */
+  metricValue: number
 }
 
 type Builder = (value: number, values: RunnerParams, ctx: BuildContext) => Built
@@ -468,22 +503,23 @@ const BUILDERS: Readonly<Record<RunnerParamId, Builder>> = {
     const { marks, anchor } = bounceBracket(values)
     return { marks, fills: [], guides: [], label: { anchor, side: 'left' } }
   },
-  strideLength(_value, values, { side }) {
-    // Vertical ratio's two inputs at one scale: the bounce bracket, and one stride along the ground.
-    const bounce = bounceBracket(values)
+  strideLength(_value, values, { side, metricValue }) {
+    // Vertical ratio's two inputs: one stride along the ground at true scale, and the bounce as a
+    // magnified inset over it (at true scale a few pixels), its factor on its tag.
     const { start, end } = strideSpan(values, side)
     const y = GROUND_Y - STRIDE_BRACKET_DEPTH
     const { z } = contactPoint(values, side)
     const middle = { x: (start + end) / 2, y, z }
+    const inset = bounceInset(values, side, metricValue)
     return {
       marks: [
-        ...bounce.marks,
         [
           { x: start, y, z },
           { x: end, y, z },
         ],
         verticalTick(start, y, z, STRIDE_TICK_HALF),
         verticalTick(end, y, z, STRIDE_TICK_HALF),
+        ...verticalBracket(inset.x, z, inset.low, inset.high, STRIDE_TICK_HALF),
       ],
       fills: [],
       // From the foot's contact on the ground down to the bracket's start: the stride starts here.
@@ -496,7 +532,12 @@ const BUILDERS: Readonly<Record<RunnerParamId, Builder>> = {
       label: { anchor: middle, side: 'below' },
       caption: STRIDE_RATIO_CAPTION,
       tags: [
-        { text: BOUNCE_TAG, lines: [BOUNCE_TAG], anchor: bounce.anchor, side: 'left' },
+        {
+          text: BOUNCE_INSET_TAG,
+          lines: [BOUNCE_INSET_TAG],
+          anchor: { x: inset.x, y: (inset.low + inset.high) / 2, z },
+          side: 'left',
+        },
         { text: STRIDE_TAG, lines: [STRIDE_TAG], anchor: middle, side: 'above' },
       ],
     }
@@ -667,7 +708,7 @@ export function planAnnotations({
       (kind === undefined || natural === kind)
     )
   })
-  // Vertical ratio draws the bounce bracket itself; the bounce's own would be the same bracket.
+  // Vertical ratio draws the bounce itself, as its magnified inset: one bounce mark on the figure.
   const eligible = annotatable.includes('strideLength')
     ? annotatable.filter((paramId) => paramId !== 'pelvisBounce')
     : annotatable
@@ -695,7 +736,7 @@ export function planAnnotations({
     const side = sideFor(paramId)
     const q = KEY_LEG_PHASE[paramId]
     const phase = q === null ? heldPhase : phaseForLeg(side, q)
-    const built = BUILDERS[paramId](values[paramId], values, { side, phase })
+    const built = BUILDERS[paramId](values[paramId], values, { side, phase, metricValue: param.metricValue })
     const value = formatRunnerValue(param.metricId, param.metricValue)
     const valueLines = labelLines(value, false)
     const annotation: RunnerAnnotation = {

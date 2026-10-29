@@ -233,8 +233,8 @@ describe('bindRunnerParams', () => {
     it("is neutral when the relative bounce came from another clip than vertical ratio's", () => {
       const sourceIndices = Object.fromEntries(ALL_METRICS.map((id) => [id, 0])) as Record<MetricId, number>
       const other = { ...sourceIndices, verticalOscillation: 1 }
-      expect(bindRunnerParams(makeHeuristics(), undefined, sourceIndices).strideLength.source).toBe('measured')
-      expectNeutral(bindRunnerParams(makeHeuristics(), undefined, other), 'strideLength')
+      expect(bindRunnerParams(makeHeuristics(), undefined, { sourceIndices }).strideLength.source).toBe('measured')
+      expectNeutral(bindRunnerParams(makeHeuristics(), undefined, { sourceIndices: other }), 'strideLength')
     })
 
     it('is clamped to its drawable range, and says so', () => {
@@ -244,15 +244,31 @@ describe('bindRunnerParams', () => {
       expect(bound.strideLength).toMatchObject({ value: 10, metricValue: 0.01, clamped: true })
     })
 
-    it('is marked clamped when the bounce it divides was clamped: the drawn ratio is not the measured one', () => {
-      const bound = bindRunnerParams(
-        makeHeuristics({
-          verticalOscillation: makeVerticalOscillation({ value: 0.6 }),
-          verticalRatio: makeMetric('verticalRatio', { value: 0.1 }),
-        }),
+    it("takes the bounce from vertical ratio's own clip when the session gives it", () => {
+      // The 3-clip demo's shape: vertical ratio won on clip 0, the relative bounce on clip 1.
+      const sourceIndices = { ...Object.fromEntries(ALL_METRICS.map((id) => [id, 0])), verticalOscillation: 1 } as Record<
+        MetricId,
+        number
+      >
+      const heuristics = makeHeuristics({ verticalRatio: makeMetric('verticalRatio', { value: 0.0246 }) })
+      expectNeutral(bindRunnerParams(heuristics, undefined, { sourceIndices }), 'strideLength')
+      const bound = bindRunnerParams(heuristics, undefined, {
+        sourceIndices,
+        ratioClipBounce: { value: 0.154, tier: 'normal' },
+      })
+      expect(bound.strideLength).toEqual({
+        source: 'measured',
+        value: 0.154 / 0.0246,
+        metricId: 'verticalRatio',
+        metricValue: 0.0246,
+        clamped: false,
+      })
+      // The figure's own bounce is still the fused one: nothing fused moves.
+      expect(bound.pelvisBounce).toMatchObject({ metricId: 'verticalOscillation', value: 0.15 })
+      expectNeutral(
+        bindRunnerParams(heuristics, undefined, { sourceIndices, ratioClipBounce: { value: 0.154, tier: 'excluded' } }),
+        'strideLength',
       )
-      expect(bound.pelvisBounce).toMatchObject({ value: 0.5, clamped: true })
-      expect(bound.strideLength).toMatchObject({ value: 0.6 / 0.1, clamped: true })
     })
   })
 

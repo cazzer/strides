@@ -114,7 +114,22 @@ export interface BounceDerivation {
 }
 
 /**
+ * The relative hip bounce (`verticalOscillation`) as measured on vertical ratio's OWN clip, with its
+ * tier: what a multi-clip session reads off that clip's per-clip result. Fusion picks each metric's
+ * clip independently, so the fused relative bounce may come from another clip than vertical ratio;
+ * this one is the same clip and the same hip fit by construction. Presentation only: it is read,
+ * never fused, and moves no fused value or clip choice.
+ */
+export interface RatioClipBounce {
+  value: number | null
+  tier: MetricTier
+}
+
+/**
  * Null unless vertical ratio is measured (not excluded). `sourceIndices` null means one clip.
+ *
+ * The bounce is `ratioClipBounce` when given (vertical ratio's own clip's relative bounce), else the
+ * fused relative bounce, and then only when it was fused from vertical ratio's clip.
  *
  * `voSignal` is the signal `verticalOscillation` was computed from. Production computes every clip
  * with `DEFAULT_HEURISTICS_CONFIG` (`runClipAnalysisPipeline.ts`), and the result does not record
@@ -126,15 +141,20 @@ export function bounceDerivation(
   tiers: Readonly<Pick<Record<MetricId, MetricTier>, 'verticalRatio' | 'verticalOscillation'>>,
   sourceIndices: Readonly<Record<MetricId, number>> | null,
   voSignal: VerticalOscillationSignal = DEFAULT_HEURISTICS_CONFIG.verticalOscillationSignal,
+  ratioClipBounce: RatioClipBounce | null = null,
 ): BounceDerivation | null {
   const ratio = fused.verticalRatio
   if (tiers.verticalRatio === 'excluded' || ratio.value === null || ratio.value === 0) return null
-  const relative = fused.verticalOscillation.value
-  const usable =
-    voSignal === 'hipMid' &&
-    relative !== null &&
-    tiers.verticalOscillation !== 'excluded' &&
-    (sourceIndices === null || sourceIndices.verticalOscillation === sourceIndices.verticalRatio)
+  const bounce = ratioClipBounce ?? {
+    value: fused.verticalOscillation.value,
+    tier: tiers.verticalOscillation,
+  }
+  const relative = bounce.value
+  const sameClip =
+    ratioClipBounce !== null ||
+    sourceIndices === null ||
+    sourceIndices.verticalOscillation === sourceIndices.verticalRatio
+  const usable = voSignal === 'hipMid' && relative !== null && bounce.tier !== 'excluded' && sameClip
   return {
     figures: usable ? { bounceTorsoLengths: relative, strideTorsoLengths: relative / ratio.value } : null,
     strideCount: ratio.sampleSize,

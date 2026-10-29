@@ -1,6 +1,7 @@
 import type { FormHeuristicsResult, MetricId } from '../../heuristics/types'
 import { feedbackFor, selectOneThing } from '../../guidance/feedbackPoints'
 import type { AreaFeedback, OneThing } from '../../guidance/feedbackPoints'
+import type { RatioClipBounce } from '../../guidance/compositeReadings'
 import { FOCUS_AREAS } from '../../guidance/focusAreas'
 import type { FocusAreaId, TourStopId } from '../../guidance/focusAreas'
 import type { RunnerFocus } from '../../runner/ModelRunner'
@@ -77,7 +78,8 @@ export function introCamera(coverage: SessionCoverage | null): CameraPreset {
 /**
  * What the runner tour walks through, PURE so the stops are testable without rendering: one stop
  * per measured focus area in focus-area order (the summary's own rows, with their feedback and
- * readings), then the one-thing stop. `sourceIndices` (null: one clip) guards the bounce reading's
+ * readings), then the one-thing stop. `sourceIndices` (null: one clip) and `ratioClipBounce` (the
+ * relative bounce on vertical ratio's own clip) source the bounce reading's
  * derivation to vertical ratio's own clip.
  */
 export function tourPlan(
@@ -85,8 +87,9 @@ export function tourPlan(
   scalePassStatus: ScalePassStatus,
   coverage: SessionCoverage | null,
   sourceIndices: Readonly<Record<MetricId, number>> | null = null,
+  ratioClipBounce: RatioClipBounce | null = null,
 ): TourPlan {
-  const { areas, views } = summaryRows(heuristics, { sourceIndices })
+  const { areas, views } = summaryRows(heuristics, { sourceIndices, ratioClipBounce })
   const unmeasured = views.filter((view) => !view.measured).map((view) => view.area)
   return {
     areaStops: areas.map((area) => ({ ...area, feedback: feedbackFor(area.view) })),

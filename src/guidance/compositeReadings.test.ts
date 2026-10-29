@@ -137,6 +137,29 @@ describe('bounceDerivation', () => {
     ).toEqual({ figures: null, strideCount: 7 })
   })
 
+  it("takes the bounce from vertical ratio's own clip when given, whichever clip fusion took it from", () => {
+    const heuristics = makeHeuristics()
+    const mixed = { ...ONE_CLIP, verticalOscillation: 1 }
+    const derivation = bounceDerivation(heuristics, tiersOf(heuristics), mixed, 'hipMid', {
+      value: 0.172,
+      tier: 'normal',
+    })
+    expect(derivation).toEqual({
+      figures: { bounceTorsoLengths: 0.172, strideTorsoLengths: 0.172 / 0.04 },
+      strideCount: 7,
+    })
+    // Still the same fit, and still a measurement: an earMid series or an excluded bounce cites none.
+    expect(
+      bounceDerivation(heuristics, tiersOf(heuristics), mixed, 'earMid', { value: 0.172, tier: 'normal' })!.figures,
+    ).toBeNull()
+    expect(
+      bounceDerivation(heuristics, tiersOf(heuristics), mixed, 'hipMid', { value: 0.172, tier: 'excluded' })!.figures,
+    ).toBeNull()
+    expect(
+      bounceDerivation(heuristics, tiersOf(heuristics), mixed, 'hipMid', { value: null, tier: 'excluded' })!.figures,
+    ).toBeNull()
+  })
+
   it('drops the figures unless vertical oscillation reads the same hip fit (hipMid)', () => {
     const heuristics = makeHeuristics()
     expect(bounceDerivation(heuristics, tiersOf(heuristics), ONE_CLIP, 'earMid')).toEqual({

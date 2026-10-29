@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { makeMetric, makeVerticalOscillation } from '../results/__fixtures__/metricResult'
+import type { MetricId } from '../heuristics/types'
+import { makeHeuristics, makeMetric, makeVerticalOscillation } from '../results/__fixtures__/metricResult'
 import { COMMON_KEYPOINT_NAMES, type KeypointName } from '../pose/types'
 import { bindAll, bindOnly } from './__fixtures__/boundParams'
 import { measureStrideBracket, measureVerticalOscillation } from './__fixtures__/measureModel'
@@ -8,11 +9,14 @@ import { GAIT_PHASES, GROUND_Y, MODEL_PROPORTIONS, cyclesPerSecond, pelvisHeight
 import { flashAnchor } from './introFlash'
 import {
   BEAT_DECAY_CYCLES,
+  BOUNCE_INSET_BASE,
+  BOUNCE_INSET_FACTOR,
   CLAMPED_LABEL_SUFFIX,
   KEY_LEG_PHASE,
   PARAM_ANNOTATION_KIND,
   RUNNER_METRIC_UNITS,
   beatEnvelope,
+  bounceInset,
   formatRunnerValue,
   labelLines,
   phaseForLeg,
@@ -23,7 +27,7 @@ import {
   type AnnotationPlan,
   type RunnerAnnotation,
 } from './runnerAnnotations'
-import { runnerParamValues } from './runnerParams'
+import { bindRunnerParams, runnerParamValues } from './runnerParams'
 import {
   LABEL_CHAR_WIDTH_EM,
   LABEL_LINE_HEIGHT,
@@ -328,17 +332,7 @@ describe('the marks are the drawn values and lie on the live figure', () => {
     })
     const v = runnerParamValues(vr)
     const annotation = only(vr, 'strideLength')
-    const [bounceSpan, , , stride, startTick, endTick] = annotation.marks
-
-    it('the bounce bracket is hip-mid’s measured height range, the bound bounce exactly', () => {
-      const range = sampleCycle((p) => hipMid(p, vr).y)
-      expect(Math.min(bounceSpan[0].y, bounceSpan[1].y)).toBeCloseTo(range.min, 6)
-      expect(Math.max(bounceSpan[0].y, bounceSpan[1].y)).toBeCloseTo(range.max, 6)
-      expect(screenLength(bounceSpan[0], bounceSpan[1], SIDE)).toBeCloseTo(v.pelvisBounce, 12)
-      expect(v.pelvisBounce).toBe(0.154)
-      // The model's own bounce, read with the metric's formula, is the same number.
-      expect(measureVerticalOscillation(v)).toBeCloseTo(0.154, 9)
-    })
+    const [stride, startTick, endTick, inset] = annotation.marks
 
     it('the stride bracket runs along the ground from the near foot’s contact, the bound stride exactly', () => {
       expect(stride[0].y).toBe(stride[1].y)
@@ -357,32 +351,64 @@ describe('the marks are the drawn values and lie on the live figure', () => {
       expect(endTick.map((p) => p.x)).toEqual([stride[1].x, stride[1].x])
     })
 
-    it('bounce ÷ stride as drawn is vertical ratio, and the label prints vertical ratio', () => {
+    it('the bounce inset is the bounce × its factor exactly: the measured bounce on vertical ratio’s clip', () => {
+      expect(inset[0].x).toBe(inset[1].x)
+      expect(Math.min(inset[0].y, inset[1].y)).toBe(BOUNCE_INSET_BASE)
+      const length = screenLength(inset[0], inset[1], SIDE)
+      expect(length).toBeCloseTo(0.154 * BOUNCE_INSET_FACTOR, 12)
+      // The figure's own bounce (the same clip here) read with the metric's formula is the same number.
+      expect(measureVerticalOscillation(v) * BOUNCE_INSET_FACTOR).toBeCloseTo(length, 9)
+      expect(bounceInset(v, 'right', ratio).bounce).toBeCloseTo(0.154, 15)
+      // It stands over the stride, clear of the figure.
+      expect(inset[0].x).toBeGreaterThan(stride[0].x)
+      expect(inset[0].x).toBeLessThan(stride[1].x)
+    })
+
+    it('in a mixed-clip session the inset is the bounce on vertical ratio’s clip, not the fused one', () => {
+      const sourceIndices = Object.fromEntries(
+        Object.keys(makeHeuristics()).filter((id) => id !== 'view').map((id) => [id, 0]),
+      ) as Record<MetricId, number>
+      const mixed = bindRunnerParams(
+        makeHeuristics({ verticalRatio: makeMetric('verticalRatio', { value: ratio }) }),
+        undefined,
+        { sourceIndices: { ...sourceIndices, verticalOscillation: 1 }, ratioClipBounce: { value: 0.172, tier: 'normal' } },
+      )
+      const [mixedStride, , , mixedInset] = only(mixed, 'strideLength').marks
+      expect(screenLength(mixedInset[0], mixedInset[1], SIDE)).toBeCloseTo(0.172 * BOUNCE_INSET_FACTOR, 12)
+      expect(screenLength(mixedStride[0], mixedStride[1], SIDE)).toBeCloseTo(0.172 / ratio, 12)
+      // The figure keeps the fused bounce (0.15): the inset is not a reading of the figure's hips.
+      expect(mixed.pelvisBounce.value).toBe(0.15)
+    })
+
+    it('inset ÷ factor ÷ stride as drawn is vertical ratio, and the drawing says so', () => {
       const drawn =
-        screenLength(bounceSpan[0], bounceSpan[1], SIDE) / screenLength(stride[0], stride[1], SIDE)
+        screenLength(inset[0], inset[1], SIDE) / BOUNCE_INSET_FACTOR / screenLength(stride[0], stride[1], SIDE)
       expect(drawn).toBeCloseTo(ratio, 12)
       expect(measureVerticalOscillation(v) / measureStrideBracket(v)).toBeCloseTo(ratio, 9)
       expect(annotation.clamped).toBe(false)
       expect(annotation.label.lines).toEqual([formatRunnerValue('verticalRatio', ratio), 'bounce ÷ stride'])
       expect(annotation.label.lines[0]).toBe('2.46%')
       expect(annotation.label.side).toBe('below')
+      // The magnified inset names its factor; the stride is at true scale and says nothing more.
       expect(annotation.tags?.map((tag) => [tag.text, tag.side])).toEqual([
-        ['bounce', 'left'],
+        [`hip bounce ×${BOUNCE_INSET_FACTOR}`, 'left'],
         ['stride', 'above'],
       ])
     })
 
-    it('draws the bounce bracket once: the bounce’s own annotation gives way to vertical ratio', () => {
+    it('draws the bounce once: the bounce’s own true-scale bracket gives way to the inset', () => {
       expect(annotate(vr, ['pelvisBounce', 'strideLength']).map((a) => a.paramId)).toEqual(['strideLength'])
       expect(annotate(vr, ['pelvisBounce']).map((a) => a.paramId)).toEqual(['pelvisBounce'])
-      expect(only(vr, 'pelvisBounce').marks).toEqual(annotation.marks.slice(0, 3))
+      // No mark of the stride's annotation is the true-scale bounce bracket.
+      const [bounceBracket] = only(vr, 'pelvisBounce').marks
+      for (const mark of annotation.marks) expect(mark).not.toEqual(bounceBracket)
     })
 
-    it('says "shown approximately" when the drawn ratio is not the measured one', () => {
+    it('says "shown approximately" when the stride had to be clamped', () => {
       const clamped = only(
         bindAll({
-          verticalOscillation: makeVerticalOscillation({ value: 0.6 }),
-          verticalRatio: makeMetric('verticalRatio', { value: 0.1 }),
+          verticalOscillation: makeVerticalOscillation({ value: 0.15 }),
+          verticalRatio: makeMetric('verticalRatio', { value: 0.01 }),
         }),
         'strideLength',
       )

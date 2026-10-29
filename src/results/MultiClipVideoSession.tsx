@@ -38,6 +38,7 @@ import {
   scalePassLeaseIndex,
 } from './multiClipAnalysis'
 import type { ClipSession } from './multiClipAnalysis'
+import { ratioClipBounceFor } from './ratioClipBounce'
 import { clipViewLabel } from './clipProvenance'
 
 /** Stable empty list, so "extraction has not settled yet" never hands the cards a fresh
@@ -463,10 +464,23 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
   // Memoised on its CONTENT: `computeFusionSourceIndices` returns a fresh object every render, which
   // would defeat every memo keyed on it downstream (the summary's rows, the tour's plan, the evidence
   // filter). A 13-entry record, so the string key is cheap.
-  const sourceIndicesKey = JSON.stringify(computeFusionSourceIndices(clips))
+  const fusionIndices = computeFusionSourceIndices(clips)
+  const sourceIndicesKey = JSON.stringify(fusionIndices)
+  // The relative bounce on vertical ratio's own clip (presentation only: read off that clip's
+  // result, never fused), memoised on its content like `sourceIndices`.
+  const ratioClipBounceKey = JSON.stringify(
+    ratioClipBounceFor(
+      clips.map((clip) => clip.analysis.heuristics),
+      fusionIndices,
+    ),
+  )
   const sourceIndices = useMemo(
     () => JSON.parse(sourceIndicesKey) as ReturnType<typeof computeFusionSourceIndices>,
     [sourceIndicesKey],
+  )
+  const ratioClipBounce = useMemo(
+    () => JSON.parse(ratioClipBounceKey) as ReturnType<typeof ratioClipBounceFor>,
+    [ratioClipBounceKey],
   )
   // The session's ONE evidence extraction. It lives here, not inside the results subtree, because
   // the images it produces are canvas ELEMENTS and a node has one parent: whoever owns extraction
@@ -533,6 +547,7 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
     clipViews,
     clipViewKinds,
     sourceIndices,
+    ratioClipBounce,
     onOpenEvidenceVideo: clips.every(
       (clip) => !clipHostsLiveElement(clip.analysis.phase, clip.analysis.scalePass.status),
     )

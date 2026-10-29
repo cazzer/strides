@@ -263,7 +263,7 @@ describe('ModelRunner drawing', () => {
     expect(Array.from(container.querySelectorAll('[data-annotation]'), (el) => el.getAttribute('data-annotation'))).toEqual(['pelvisBounce'])
   })
 
-  it('draws vertical ratio as the bounce and one stride, labelled with its value and both brackets named', () => {
+  it('draws vertical ratio as one stride and the magnified bounce, labelled with its value and the factor', () => {
     const { container } = setup({
       camera: 'strideSide',
       focus: { metricIds: ['verticalOscillation', 'verticalRatio'] },
@@ -279,7 +279,7 @@ describe('ModelRunner drawing', () => {
       'bounce ÷ stride',
     ])
     const tags = annotation.querySelectorAll('text[data-tag-index]')
-    expect(Array.from(tags, (tag) => tag.textContent)).toEqual(['bounce', 'stride'])
+    expect(Array.from(tags, (tag) => tag.textContent)).toEqual(['hip bounce ×10', 'stride'])
     for (const tag of tags) expect(tag.querySelector('tspan')?.getAttribute('x')).not.toBeNull()
     for (const path of annotation.querySelectorAll('path')) expect(path.getAttribute('d')).toMatch(/^M-?\d/)
   })

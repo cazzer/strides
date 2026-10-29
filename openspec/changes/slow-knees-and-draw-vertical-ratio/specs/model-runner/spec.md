@@ -9,11 +9,12 @@ falling back to centimetres divided by the model's 50 cm torso only when the rat
 Vertical ratio SHALL bind the stride length, as the stride it was computed over in torso lengths:
 the bounce reading's derived stride (relative vertical oscillation ÷ vertical ratio), and only where
 that reading can derive it (relative vertical oscillation measured on vertical ratio's own clip from
-the same hip fit); otherwise the stride SHALL hold its neutral constant. No metric SHALL be a
-candidate for more than one parameter, and `stepWidthCm` SHALL bind nothing. A value outside the
+the same hip fit); otherwise the stride SHALL hold its neutral constant. In a multi-clip session the
+relative bounce SHALL be read off vertical ratio's own clip's result, whichever clip fusion took the
+fused relative bounce from; this SHALL NOT change any fused value or any clip choice. No metric SHALL
+be a candidate for more than one parameter, and `stepWidthCm` SHALL bind nothing. A value outside the
 drawable range SHALL be clamped and the bound parameter SHALL record the metric's own value and that
-it was clamped; a measured stride SHALL also be marked clamped when the bounce it divides was
-clamped.
+it was clamped.
 
 Every bound parameter's value SHALL be exactly what the model draws. Where the landing offset, the
 contact shank offset and the peak thigh angle cannot all be drawn together, a measured parameter
@@ -47,8 +48,15 @@ parameter that gives way SHALL remain neutral, with its constant adjusted to fit
 - **THEN** the stride length is bound to 0.154 / 0.0246 torso lengths, names `verticalRatio`, and
   records 0.0246 as its metric value
 
-#### Scenario: No stride without a relative bounce from the same clip
-- **WHEN** relative vertical oscillation is excluded, or came from another clip than vertical ratio
+#### Scenario: The stride's bounce comes from vertical ratio's own clip
+- **WHEN** vertical ratio won on clip 1 at 0.0246, clip 1 measured a relative bounce of 0.154, and
+  fusion took the relative bounce (0.172) from clip 2
+- **THEN** the stride length is bound to 0.154 / 0.0246, the fused relative bounce stays 0.172 from
+  clip 2, and pelvis bounce stays bound to 0.172
+
+#### Scenario: No stride without a relative bounce on vertical ratio's clip
+- **WHEN** vertical ratio's clip's relative bounce is null or excluded, or, with no per-clip bounce
+  given, the fused relative bounce came from another clip than vertical ratio
 - **THEN** the stride length holds its neutral constant
 
 #### Scenario: One metric never drives two degrees of freedom
@@ -71,23 +79,32 @@ parameter that gives way SHALL remain neutral, with its constant adjusted to fit
 
 ### Requirement: Vertical ratio is drawn as the hip bounce over one stride
 
-A focus on vertical ratio with a measured stride SHALL draw the ratio's two inputs at one scale: the
-hip-bounce bracket, spanning hip-mid's height range over the cycle (exactly the drawn bounce), and a
-horizontal stride bracket under the ground from the near foot's first contact point to that point
-plus the drawn stride (exactly the drawn stride length), so the drawn bounce ÷ drawn stride is
-vertical ratio. Its label SHALL print vertical ratio's own value at its band's precision, as the
-stop prints it, over the words "bounce ÷ stride", and say "shown approximately" when the drawn ratio
-is not the measured one; the two brackets SHALL be named "bounce" and "stride" with no value of
-their own. When the bounce is also in focus its own bracket SHALL give way (the same bracket is drawn
-once). The stride SHALL move no joint and SHALL get no intro step. The runner SHALL frame such a
-focus with the stride camera (`strideSide`): side on, framed on the drawn values so the whole figure,
-the whole stride and the labels' room fit the frame.
+A focus on vertical ratio with a measured stride SHALL draw the ratio's two inputs: a horizontal
+stride bracket under the ground, at the figure's own scale, from the near foot's first contact point
+to that point plus the drawn stride (exactly the drawn stride length), and the hip bounce as a
+magnified inset over the stride, a vertical bracket exactly ten times the bounce (vertical ratio ×
+the drawn stride: the relative bounce on vertical ratio's clip whenever the stride is unclamped),
+tagged "hip bounce ×10" so the magnification is stated on the drawing. Inset ÷ 10 ÷ stride SHALL be
+vertical ratio. The label SHALL print vertical ratio's own value at its band's precision, as the stop
+prints it, over the words "bounce ÷ stride", and say "shown approximately" when the stride had to be
+clamped; the stride SHALL be tagged "stride"; neither tag carries a value. The bounce SHALL NOT be
+drawn twice: while the inset shows, the bounce's own true-scale bracket SHALL give way. The stride
+SHALL move no joint and SHALL get no intro step. The runner SHALL frame such a focus with the stride
+camera (`strideSide`): side on, framed on the drawn values and vertical ratio so the whole figure,
+the whole stride, the inset and the labels' room fit the frame.
 
-#### Scenario: The drawn brackets are the measured inputs
+#### Scenario: The drawn marks are the measured inputs
 
 - **WHEN** vertical ratio 0.0246 is drawn with a bounce of 0.154 torso lengths
-- **THEN** the bounce bracket is 0.154 long, the stride bracket 0.154 / 0.0246 long and horizontal,
-  their quotient is 0.0246, and the label reads "2.46%" over "bounce ÷ stride"
+- **THEN** the stride bracket is 0.154 / 0.0246 long and horizontal, the inset is 1.54 long and
+  tagged "hip bounce ×10", inset ÷ 10 ÷ stride is 0.0246, and the label reads "2.46%" over
+  "bounce ÷ stride"
+
+#### Scenario: A mixed-clip session
+
+- **WHEN** vertical ratio and the relative bounce were fused from different clips
+- **THEN** the inset is ten times the bounce measured on vertical ratio's clip, and the figure's own
+  hip motion keeps the fused bounce
 
 #### Scenario: No stride, no drawing
 
@@ -96,6 +113,6 @@ the whole stride and the labels' room fit the frame.
 
 #### Scenario: The stride camera fits every drawable stride
 
-- **WHEN** the stride is anywhere in its drawable range
-- **THEN** the stride camera keeps the figure, both brackets and the label pads inside the frame,
-  zooming out further the longer the stride
+- **WHEN** the stride is anywhere in its drawable range, with a bounce up to its drawable limit
+- **THEN** the stride camera keeps the figure, the stride, the inset and the label pads inside the
+  frame, zooming out further the longer the stride

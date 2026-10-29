@@ -20,3 +20,10 @@
 - [x] 4.1 `stopFocusMetrics`, `stopView`, `runnerViewFor`; tour and summary use them
 - [x] 4.2 Full vitest, tsc, lint
 - [x] 4.3 Live check at 1280×800 and 390×844 (demo, side-landscape, side-portrait)
+
+## 5. Follow-ups (user's picks)
+
+- [x] 5.1 Bounce from vertical ratio's own clip: `ratioClipBounceFor`, `bounceDerivation(…, ratioClipBounce)`, plumbed through summary rows, tour plan and runner binding
+- [x] 5.2 Presentation-only proof: frozen-input unit test (`ratioClipBounce.test.ts`) and live base-vs-branch fused equality on the demo
+- [x] 5.3 Magnified bounce inset (×10, tagged), true-scale bounce bracket gives way; readback tests (inset = bounce × factor)
+- [x] 5.4 Live check: demo and one side clip at 1280×800 and 390×844
