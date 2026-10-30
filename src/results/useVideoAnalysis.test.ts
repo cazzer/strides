@@ -1984,7 +1984,7 @@ describe('useVideoAnalysis', () => {
   describe('the scale-pass lane (schedule-scale-passes-after-primaries)', () => {
     interface LaneProps {
       queued: boolean
-      scalePassAllowed: boolean
+      backgroundPassAllowed: boolean
     }
 
     function renderLaneHook(videoSource: VideoSource, detector: PoseDetector, initial: LaneProps) {
@@ -2005,7 +2005,7 @@ describe('useVideoAnalysis', () => {
 
       const { result, rerender } = renderLaneHook(makeVideoSource(), makeFakeDetector(), {
         queued: true,
-        scalePassAllowed: false,
+        backgroundPassAllowed: false,
       })
 
       await waitFor(() => expect(result.current.phase).toBe('ready'))
@@ -2013,7 +2013,7 @@ describe('useVideoAnalysis', () => {
       expect(result.current.scalePass.status).toBe('pending')
       expect(sampleClipMock).toHaveBeenCalledTimes(1)
 
-      rerender({ queued: true, scalePassAllowed: true })
+      rerender({ queued: true, backgroundPassAllowed: true })
       await waitFor(() =>
         expect(['done', 'failed']).toContain(result.current.scalePass.status),
       )
@@ -2038,11 +2038,11 @@ describe('useVideoAnalysis', () => {
 
       const { result, rerender } = renderLaneHook(makeVideoSource(), makeFakeDetector(), {
         queued: false,
-        scalePassAllowed: true,
+        backgroundPassAllowed: true,
       })
       await waitFor(() => expect(result.current.scalePass.status).toBe('running'))
 
-      rerender({ queued: true, scalePassAllowed: false })
+      rerender({ queued: true, backgroundPassAllowed: false })
       await act(async () => {})
       expect(scaleHandle.stop).not.toHaveBeenCalled()
       expect(result.current.scalePass.status).toBe('running')
@@ -2065,7 +2065,7 @@ describe('useVideoAnalysis', () => {
 
       const { result } = renderLaneHook(makeVideoSource({ sourceBlob }), makeFakeDetector(), {
         queued: true,
-        scalePassAllowed: false,
+        backgroundPassAllowed: false,
       })
       await waitFor(() => expect(result.current.phase).toBe('ready'))
       expect(result.current.scalePass.status).toBe('pending')
@@ -2074,7 +2074,7 @@ describe('useVideoAnalysis', () => {
 
     it('keeps the demux of a clip that still holds the detector, even before the lane reaches it', async () => {
       // The session learns of 'ready' one render after the clip does, so a lone clip reads
-      // `scalePassAllowed: false` for that render. Releasing then would make its pass re-read
+      // `backgroundPassAllowed: false` for that render. Releasing then would make its pass re-read
       // and re-demux the clip for nothing.
       const sourceBlob = new Blob([new Uint8Array([1, 2, 3])])
       sampleClipMock
@@ -2087,13 +2087,13 @@ describe('useVideoAnalysis', () => {
       const { result, rerender } = renderLaneHook(
         makeVideoSource({ sourceBlob }),
         makeFakeDetector(),
-        { queued: false, scalePassAllowed: false },
+        { queued: false, backgroundPassAllowed: false },
       )
       await waitFor(() => expect(result.current.phase).toBe('ready'))
       await act(async () => {})
       expect(releaseClipDemuxMock).not.toHaveBeenCalled()
 
-      rerender({ queued: false, scalePassAllowed: true })
+      rerender({ queued: false, backgroundPassAllowed: true })
       await waitFor(() => expect(result.current.scalePass.status).toBe('running'))
       expect(releaseClipDemuxMock).not.toHaveBeenCalled()
     })

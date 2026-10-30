@@ -7,7 +7,7 @@ import {
   computeAggregateAnalysisState,
   computeFusionSourceIndices,
   nextActiveClipIndex,
-  nextScalePassClipIndex,
+  nextBackgroundPassClipIndex,
   scalePassLeaseIndex,
 } from './multiClipAnalysis'
 import type { ClipSession } from './multiClipAnalysis'
@@ -450,68 +450,68 @@ describe('nextActiveClipIndex', () => {
   })
 })
 
-describe('nextScalePassClipIndex', () => {
+describe('nextBackgroundPassClipIndex', () => {
   const done = (id: string) => makePrimaryDoneClip(id, 'done')
   const pending = (id: string) => makePrimaryDoneClip(id, 'pending')
   const running = (id: string) => makePrimaryDoneClip(id, 'running')
 
   it('is null with no clips', () => {
-    expect(nextScalePassClipIndex([], 0)).toBeNull()
+    expect(nextBackgroundPassClipIndex([], 0)).toBeNull()
   })
 
   it('grants a lone clip its pass as soon as its primary is ready', () => {
-    expect(nextScalePassClipIndex([pending('a')], 0)).toBe(0)
-    expect(nextScalePassClipIndex([makeClip('a', { phase: 'sampling' })], 0)).toBeNull()
+    expect(nextBackgroundPassClipIndex([pending('a')], 0)).toBe(0)
+    expect(nextBackgroundPassClipIndex([makeClip('a', { phase: 'sampling' })], 0)).toBeNull()
   })
 
   it('is null while any primary is sampling or processing', () => {
     for (const phase of ['sampling', 'processing'] as const) {
-      expect(nextScalePassClipIndex([pending('a'), makeClip('b', { phase })], 1)).toBeNull()
+      expect(nextBackgroundPassClipIndex([pending('a'), makeClip('b', { phase })], 1)).toBeNull()
     }
   })
 
   it('is null while a later clip is idle with a usable source — its primary is still to come', () => {
-    expect(nextScalePassClipIndex([pending('a'), makeClip('b')], 1)).toBeNull()
+    expect(nextBackgroundPassClipIndex([pending('a'), makeClip('b')], 1)).toBeNull()
     // Still loading counts as coming, too.
     const loading = makeClip('b')
     loading.videoSource = { ...loading.videoSource, status: 'loading' }
-    expect(nextScalePassClipIndex([pending('a'), loading], 1)).toBeNull()
+    expect(nextBackgroundPassClipIndex([pending('a'), loading], 1)).toBeNull()
   })
 
   it('does not wait on a clip whose source failed to load, or one that errored', () => {
     const failedLoad = makeClip('b')
     failedLoad.videoSource = { ...failedLoad.videoSource, status: 'error' }
-    expect(nextScalePassClipIndex([pending('a'), failedLoad], 1)).toBe(0)
+    expect(nextBackgroundPassClipIndex([pending('a'), failedLoad], 1)).toBe(0)
 
     const errored = makeClip('b', { phase: 'error', error: { kind: 'unknown', message: 'x' } })
-    expect(nextScalePassClipIndex([pending('a'), errored], 1)).toBe(0)
+    expect(nextBackgroundPassClipIndex([pending('a'), errored], 1)).toBe(0)
   })
 
   it('does not wait on an idle clip BEFORE the active index, which can never get the detector again', () => {
     // An errored clip reset by "Try again" goes back to idle behind the active index.
-    expect(nextScalePassClipIndex([makeClip('a'), pending('b')], 1)).toBe(1)
+    expect(nextBackgroundPassClipIndex([makeClip('a'), pending('b')], 1)).toBe(1)
   })
 
   it('grants the lowest-index pending clip once every primary is done', () => {
-    expect(nextScalePassClipIndex([done('a'), pending('b'), pending('c')], 2)).toBe(1)
-    expect(nextScalePassClipIndex([pending('a'), pending('b'), pending('c')], 2)).toBe(0)
+    expect(nextBackgroundPassClipIndex([done('a'), pending('b'), pending('c')], 2)).toBe(1)
+    expect(nextBackgroundPassClipIndex([pending('a'), pending('b'), pending('c')], 2)).toBe(0)
   })
 
   it('keeps the lane for a running pass, over a lower-index pending one and over an outstanding primary', () => {
-    expect(nextScalePassClipIndex([pending('a'), running('b')], 1)).toBe(1)
+    expect(nextBackgroundPassClipIndex([pending('a'), running('b')], 1)).toBe(1)
     // A clip added while the pass runs does not take the lane from it.
-    expect(nextScalePassClipIndex([pending('a'), running('b'), makeClip('c')], 1)).toBe(1)
+    expect(nextBackgroundPassClipIndex([pending('a'), running('b'), makeClip('c')], 1)).toBe(1)
   })
 
   it('is null once every pass is terminal', () => {
-    expect(nextScalePassClipIndex([done('a'), makePrimaryDoneClip('b', 'skipped')], 1)).toBeNull()
+    expect(nextBackgroundPassClipIndex([done('a'), makePrimaryDoneClip('b', 'skipped')], 1)).toBeNull()
   })
 
   it('a playback-path clip gets the lane straight after its own primary, even with primaries still to come', () => {
     // It still holds the shared detector until its pass is terminal, so the next clip's primary
     // waits for it — withholding the lane here would deadlock the session.
     const clips = [pending('a'), makePrimaryDoneClip('b', 'pending', 'playback'), makeClip('c')]
-    expect(nextScalePassClipIndex(clips, 1)).toBe(1)
+    expect(nextBackgroundPassClipIndex(clips, 1)).toBe(1)
   })
 })
 
@@ -535,12 +535,12 @@ describe('the two lanes together (schedule-scale-passes-after-primaries)', () =>
     }
     for (let step = 0; step < 4 * paths.length; step += 1) {
       active = nextActiveClipIndex(clips, active)
-      const lane = nextScalePassClipIndex(clips, active)
+      const lane = nextBackgroundPassClipIndex(clips, active)
       const primary = clips[active].analysis.phase === 'idle' ? active : null
       expect(primary !== null && lane !== null).toBe(false)
       if (primary !== null) {
         set(primary, { phase: 'sampling' })
-        expect(nextScalePassClipIndex(clips, active)).toBeNull()
+        expect(nextBackgroundPassClipIndex(clips, active)).toBeNull()
         set(primary, {
           phase: 'ready',
           diagnostics: sampledOn(paths[primary]),
@@ -550,7 +550,7 @@ describe('the two lanes together (schedule-scale-passes-after-primaries)', () =>
       } else if (lane !== null) {
         set(lane, { scalePass: makeScalePass('running') })
         expect(nextActiveClipIndex(clips, active)).toBe(active)
-        expect(nextScalePassClipIndex(clips, active)).toBe(lane)
+        expect(nextBackgroundPassClipIndex(clips, active)).toBe(lane)
         expect(clips.filter((c) => c.analysis.scalePass.status === 'running')).toHaveLength(1)
         set(lane, { scalePass: makeScalePass('done') })
         order.push(`S${lane + 1}`)
@@ -617,10 +617,10 @@ describe('the scale-pass lease and clips that cannot run (review round 1)', () =
     expect(lease).toBe(0)
     expect(nextActiveClipIndex(clips, 1, lease)).toBe(1)
     // ...and the lease keeps the lane, although c's primary now counts as outstanding.
-    expect(nextScalePassClipIndex(clips, 1, lease)).toBe(0)
+    expect(nextBackgroundPassClipIndex(clips, 1, lease)).toBe(0)
     // Without the lease, both would have moved on.
     expect(nextActiveClipIndex(clips, 1)).toBe(2)
-    expect(nextScalePassClipIndex(clips, 1)).toBeNull()
+    expect(nextBackgroundPassClipIndex(clips, 1)).toBeNull()
   })
 
   it('resolves a lease only while the granted clip is there and its pass is due or running', () => {
@@ -639,18 +639,18 @@ describe('the scale-pass lease and clips that cannot run (review round 1)', () =
     const clips = [pending('a'), failedLoad('b'), makeClip('c')]
     const active = nextActiveClipIndex(clips, 1)
     expect(active).toBe(2)
-    expect(nextScalePassClipIndex(clips, active)).toBeNull()
+    expect(nextBackgroundPassClipIndex(clips, active)).toBeNull()
 
     const afterC = [pending('a'), failedLoad('b'), pending('c')]
     expect(nextActiveClipIndex(afterC, active)).toBe(2)
-    expect(nextScalePassClipIndex(afterC, 2)).toBe(0)
+    expect(nextBackgroundPassClipIndex(afterC, 2)).toBe(0)
   })
 
   it('a failed load as the last clip does not count as an outstanding primary', () => {
     const clips = [pending('a'), failedLoad('b')]
     const active = nextActiveClipIndex(clips, 0)
     expect(active).toBe(1)
-    expect(nextScalePassClipIndex(clips, active)).toBe(0)
+    expect(nextBackgroundPassClipIndex(clips, active)).toBe(0)
   })
 })
 
@@ -663,7 +663,7 @@ describe('a playback-path primary waits for earlier passes (design.md D9)', () =
     const clips = [pending('a'), idle('b', 'playback')]
     const active = nextActiveClipIndex(clips, 0)
     expect(active).toBe(0)
-    expect(nextScalePassClipIndex(clips, active)).toBe(0)
+    expect(nextBackgroundPassClipIndex(clips, active)).toBe(0)
   })
 
   it('is advanced into once every earlier pass is terminal', () => {
@@ -677,24 +677,24 @@ describe('a playback-path primary waits for earlier passes (design.md D9)', () =
     // (strides-6i6.5).
     const clips = [pending('a'), idle('b', null)]
     expect(nextActiveClipIndex(clips, 0)).toBe(0)
-    expect(nextScalePassClipIndex(clips, 0)).toBeNull()
+    expect(nextBackgroundPassClipIndex(clips, 0)).toBeNull()
   })
 
   it('does not hold back a sequential primary, which still runs before any pass', () => {
     const clips = [pending('a'), idle('b', 'sequential')]
     const active = nextActiveClipIndex(clips, 0)
     expect(active).toBe(1)
-    expect(nextScalePassClipIndex(clips, active)).toBeNull()
+    expect(nextBackgroundPassClipIndex(clips, active)).toBeNull()
   })
 
   it('drains the earlier passes in index order before the playback primary', () => {
     const clips = [pending('a'), pending('b'), idle('c', 'playback')]
     const active = nextActiveClipIndex(clips, 1)
     expect(active).toBe(1)
-    expect(nextScalePassClipIndex(clips, active)).toBe(0)
+    expect(nextBackgroundPassClipIndex(clips, active)).toBe(0)
     const afterA = [makePrimaryDoneClip('a', 'done'), pending('b'), idle('c', 'playback')]
     expect(nextActiveClipIndex(afterA, 1)).toBe(1)
-    expect(nextScalePassClipIndex(afterA, 1)).toBe(1)
+    expect(nextBackgroundPassClipIndex(afterA, 1)).toBe(1)
   })
 
   it('ignores a failed load or an errored clip ahead of it', () => {
@@ -723,45 +723,45 @@ describe('a next clip still loading or probing when a primary finishes (strides-
     const clips = [pending('1'), unprobed('2', 'loading'), unprobed('3', 'loading')]
     const active = nextActiveClipIndex(clips, 0)
     expect(active).toBe(0)
-    expect(nextScalePassClipIndex(clips, active)).toBeNull()
+    expect(nextBackgroundPassClipIndex(clips, active)).toBeNull()
   })
 
   it("withholds clip 1's pass while clip 2's video has loaded but its probe has not answered", () => {
     const clips = [pending('1'), unprobed('2', 'ready')]
-    expect(nextScalePassClipIndex(clips, nextActiveClipIndex(clips, 0))).toBeNull()
+    expect(nextBackgroundPassClipIndex(clips, nextActiveClipIndex(clips, 0))).toBeNull()
   })
 
   it('hands clip 2 the detector once its probe answers sequential, and the pass keeps waiting', () => {
     const clips = [pending('1'), makeClip('2', { primarySamplingPath: 'sequential' })]
     const active = nextActiveClipIndex(clips, 0)
     expect(active).toBe(1)
-    expect(nextScalePassClipIndex(clips, active)).toBeNull()
+    expect(nextBackgroundPassClipIndex(clips, active)).toBeNull()
   })
 
   it("drains clip 1's pass first once clip 2's probe answers playback (the reference order)", () => {
     const clips = [pending('1'), makeClip('2', { primarySamplingPath: 'playback' })]
     const active = nextActiveClipIndex(clips, 0)
     expect(active).toBe(0)
-    expect(nextScalePassClipIndex(clips, active)).toBe(0)
+    expect(nextBackgroundPassClipIndex(clips, active)).toBe(0)
   })
 
   it('does not wait on an unprobed clip whose video failed to load', () => {
     const clips = [pending('1'), unprobed('2', 'error')]
     const active = nextActiveClipIndex(clips, 0)
     expect(active).toBe(1)
-    expect(nextScalePassClipIndex(clips, active)).toBe(0)
+    expect(nextBackgroundPassClipIndex(clips, active)).toBe(0)
   })
 
   it('does not wait on an unprobed clip with no load in progress, which has no answer coming', () => {
     const clips = [pending('1'), unprobed('2', 'empty')]
-    expect(nextScalePassClipIndex(clips, nextActiveClipIndex(clips, 0))).toBe(0)
+    expect(nextBackgroundPassClipIndex(clips, nextActiveClipIndex(clips, 0))).toBe(0)
   })
 
   it('still lets a playback-path clip waiting for its own pass take the lane ahead of an unprobed clip', () => {
     // It holds the shared detector until its pass is terminal, so the unprobed clip cannot start
     // before it either way; withholding its lane would deadlock.
     const clips = [makePrimaryDoneClip('1', 'pending', 'playback'), unprobed('2', 'loading')]
-    expect(nextScalePassClipIndex(clips, nextActiveClipIndex(clips, 0))).toBe(0)
+    expect(nextBackgroundPassClipIndex(clips, nextActiveClipIndex(clips, 0))).toBe(0)
   })
 
   /**
@@ -792,7 +792,7 @@ describe('a next clip still loading or probing when a primary finishes (strides-
           : c,
       )
       active = nextActiveClipIndex(clips, active)
-      const lane = nextScalePassClipIndex(clips, active)
+      const lane = nextBackgroundPassClipIndex(clips, active)
       const { phase, primarySamplingPath } = clips[active].analysis
       const primary = phase === 'idle' && primarySamplingPath !== null ? active : null
       expect(primary !== null && lane !== null).toBe(false)

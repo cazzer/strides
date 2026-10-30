@@ -1,6 +1,7 @@
 import type { MetricId } from '../heuristics/types'
 import type { ClipPoster } from '../video/posterFrame'
 import type { VideoSource } from '../video/types'
+import { outlinePassStatus } from './types'
 import type {
   AggregateAnalysisState,
   AnalysisPhase,
@@ -34,7 +35,7 @@ export interface ClipSession {
 }
 
 // `pending` outranks every terminal status: with scale passes queued behind every primary
-// (`nextScalePassClipIndex`), one clip can be 'done' while another still waits its turn, and the
+// (`nextBackgroundPassClipIndex`), one clip can be 'done' while another still waits its turn, and the
 // session has not finished measuring until the last one has run.
 const SCALE_PASS_STATUS_PRIORITY: ScalePassStatus[] = [
   'running',
@@ -65,6 +66,13 @@ function aggregatePhase(clips: ClipSession[]): AnalysisPhase {
 function aggregateScalePassStatus(clips: ClipSession[]): ScalePassStatus {
   for (const status of SCALE_PASS_STATUS_PRIORITY) {
     if (clips.some((c) => c.analysis.scalePass.status === status)) return status
+  }
+  return 'idle'
+}
+
+function aggregateOutlinePassStatus(clips: ClipSession[]): ScalePassStatus {
+  for (const status of SCALE_PASS_STATUS_PRIORITY) {
+    if (clips.some((c) => outlinePassStatus(c.analysis) === status)) return status
   }
   return 'idle'
 }
@@ -102,6 +110,7 @@ export function computeAggregateAnalysisState(clips: ClipSession[]): AggregateAn
       : null,
     diagnostics: null,
     scalePass: { status: aggregateScalePassStatus(clips), diagnostics: null },
+    outlinePass: { status: aggregateOutlinePassStatus(clips) },
     error: aggregateError(clips),
     // Defense in depth alongside the `aggregatePhase` fix above: a 'ready' clip is finished and
     // deterministic (re-running it has nothing new to say -- see ResultsView's own comment on
@@ -175,7 +184,7 @@ function isDoneWithSharedDetector(clip: ClipSession): boolean {
   if (clip.analysis.phase !== 'ready') return false
   // The shared detector is the PRIMARY one, and a 'ready' clip is finished with it. Its scale pass
   // uses a separate, module-cached MediaPipe detector and is scheduled on its own lane
-  // (`nextScalePassClipIndex`), after every primary -- except on the playback path, where the
+  // (`nextBackgroundPassClipIndex`), after every primary -- except on the playback path, where the
   // pass replays the clip's own element and keeps the old rule of finishing before the next clip
   // starts.
   if (!sampledOnPlaybackPath(clip)) return true
@@ -203,11 +212,30 @@ function samplingPathPending(clip: ClipSession): boolean {
   return clip.videoSource.status === 'loading' || clip.videoSource.status === 'ready'
 }
 
-/** Whether this clip still has a scale pass to run or running. */
-function hasScalePassAhead(clip: ClipSession): boolean {
+function isInFlight(status: ScalePassStatus): boolean {
+  return status === 'pending' || status === 'running'
+}
+
+/** Whether this clip still has a background pass — scale or outline — to run or running. */
+function hasBackgroundPassAhead(clip: ClipSession): boolean {
   return (
     clip.analysis.phase === 'ready' &&
-    (clip.analysis.scalePass.status === 'pending' || clip.analysis.scalePass.status === 'running')
+    (isInFlight(clip.analysis.scalePass.status) || isInFlight(outlinePassStatus(clip.analysis)))
+  )
+}
+
+function isBackgroundPassRunning(clip: ClipSession): boolean {
+  return (
+    clip.analysis.scalePass.status === 'running' || outlinePassStatus(clip.analysis) === 'running'
+  )
+}
+
+/** Ready, scale pass terminal, outline pass due (`strides-uz48`). */
+function isWaitingForOutlinePass(clip: ClipSession): boolean {
+  return (
+    clip.analysis.phase === 'ready' &&
+    isScalePassTerminal(clip.analysis.scalePass.status) &&
+    outlinePassStatus(clip.analysis) === 'pending'
   )
 }
 
@@ -224,7 +252,7 @@ function hasScalePassAhead(clip: ClipSession): boolean {
  * real-time playback sampler is sensitive to what ran on the GPU just before it — measured, a
  * WebM primary started right after MediaPipe detector creation detected 93/97 frames where the
  * reference order (after a whole scale pass) detected 99/99 — so it must see exactly the order it
- * always did. While it waits, `nextScalePassClipIndex` drains those earlier passes.
+ * always did. While it waits, `nextBackgroundPassClipIndex` drains those earlier passes.
  *
  * Never advances while the scale-pass lane is held — a pass 'running', or `scalePassLeaseIndex`,
  * the clip the lane was last granted to while its pass is still due. A clip added after every
@@ -243,13 +271,13 @@ export function nextActiveClipIndex(
   if (clips.length === 0) return 0
   let index = Math.min(Math.max(currentActiveIndex, 0), clips.length - 1)
   if (scalePassLeaseIndex !== null) return index
-  if (clips.some((c) => c.analysis.scalePass.status === 'running')) return index
+  if (clips.some(isBackgroundPassRunning)) return index
   while (index < clips.length - 1 && isDoneWithSharedDetector(clips[index])) {
     const next = clips[index + 1]
     const playbackPrimaryMustWait =
       isPrimaryToCome(next) &&
       primaryMaySampleOnPlaybackPath(next) &&
-      clips.slice(0, index + 1).some(hasScalePassAhead)
+      clips.slice(0, index + 1).some(hasBackgroundPassAhead)
     if (playbackPrimaryMustWait) break
     index += 1
   }
@@ -268,7 +296,7 @@ export function scalePassLeaseIndex(
   if (grantedClipId === null) return null
   const index = clips.findIndex((c) => c.clipId === grantedClipId)
   if (index === -1) return null
-  return hasScalePassAhead(clips[index]) ? index : null
+  return hasBackgroundPassAhead(clips[index]) ? index : null
 }
 
 /**
@@ -297,15 +325,25 @@ export function scalePassLeaseIndex(
  *      (reset after an error) can never be handed the detector again, so it is never the next
  *      primary;
  *   5. otherwise the lowest-index clip that is 'ready' with its pass 'pending'.
+ *
+ * The OUTLINE pass (`strides-uz48`) shares this lane, after every scale pass: step 1 also keeps a
+ * running outline pass, a leased outline pass keeps the lane only while no scale pass is due, and
+ * a sixth step grants the lowest-index clip whose scale pass is terminal and outline pass pending.
  */
-export function nextScalePassClipIndex(
+export function nextBackgroundPassClipIndex(
   clips: ClipSession[],
   activeClipIndex: number,
   leaseIndex: number | null = null,
 ): number | null {
-  const running = clips.findIndex((c) => c.analysis.scalePass.status === 'running')
+  const running = clips.findIndex(isBackgroundPassRunning)
   if (running !== -1) return running
-  if (leaseIndex !== null && isWaitingForScalePass(clips[leaseIndex])) return leaseIndex
+  if (leaseIndex !== null) {
+    const leased = clips[leaseIndex]
+    if (isWaitingForScalePass(leased)) return leaseIndex
+    // An outline pass keeps its lease only while no scale pass is due anywhere: every scale pass
+    // runs before any outline pass.
+    if (isWaitingForOutlinePass(leased) && !clips.some(isWaitingForScalePass)) return leaseIndex
+  }
   if (clips.some((c) => c.analysis.phase === 'sampling' || c.analysis.phase === 'processing')) {
     return null
   }
@@ -319,5 +357,8 @@ export function nextScalePassClipIndex(
     return null
   }
   const next = clips.findIndex(isWaitingForScalePass)
-  return next === -1 ? null : next
+  if (next !== -1) return next
+  // 6. Every scale pass is done: the lowest-index clip whose outline pass is due (`strides-uz48`).
+  const outline = clips.findIndex(isWaitingForOutlinePass)
+  return outline === -1 ? null : outline
 }

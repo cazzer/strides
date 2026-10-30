@@ -34,10 +34,11 @@ import {
   computeAggregateAnalysisState,
   computeFusionSourceIndices,
   nextActiveClipIndex,
-  nextScalePassClipIndex,
+  nextBackgroundPassClipIndex,
   scalePassLeaseIndex,
 } from './multiClipAnalysis'
 import type { ClipSession } from './multiClipAnalysis'
+import { outlinePassStatus } from './types'
 import { ratioClipBounceFor } from './ratioClipBounce'
 import { clipViewLabel } from './clipProvenance'
 
@@ -130,6 +131,9 @@ function sameClipSession(previous: ClipSession | undefined, next: ClipSession): 
     previous.analysis.scalePass.diagnostics === next.analysis.scalePass.diagnostics &&
     previous.analysis.scalePass.error === next.analysis.scalePass.error &&
     previous.analysis.scalePass.reason === next.analysis.scalePass.reason &&
+    previous.analysis.outlinePass?.status === next.analysis.outlinePass?.status &&
+    previous.analysis.outlinePass?.reason === next.analysis.outlinePass?.reason &&
+    previous.analysis.outlinePass?.error === next.analysis.outlinePass?.error &&
     // Read by the schedule before a clip's run starts (`nextActiveClipIndex`), and it settles on
     // its own, with nothing else moving.
     previous.analysis.primarySamplingPath === next.analysis.primarySamplingPath &&
@@ -203,7 +207,7 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
   const [pendingLoads, setPendingLoads] = useState<Record<string, ClipPendingLoad>>({})
   const [clipStates, setClipStates] = useState<Record<string, ClipSession>>({})
   const [activeClipIndex, setActiveClipIndex] = useState(0)
-  // Which clip the scale-pass lane was last granted to (`nextScalePassClipIndex`). Only read
+  // Which clip the scale-pass lane was last granted to (`nextBackgroundPassClipIndex`). Only read
   // through `scalePassLeaseIndex`, which drops it once that clip's pass is terminal or the clip is
   // gone, so it never needs clearing by hand.
   const [scalePassLeaseClipId, setScalePassLeaseClipId] = useState<string | null>(null)
@@ -417,7 +421,7 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
   const activeClipId = clips[desiredActiveIndex]?.clipId ?? null
   // The scale-pass lane: which ONE clip may run its background scale pass now. Remembered as a
   // lease from the grant until that pass is terminal, by the same during-render adjustment.
-  const scalePassClipIndex = nextScalePassClipIndex(clips, desiredActiveIndex, leaseIndex)
+  const scalePassClipIndex = nextBackgroundPassClipIndex(clips, desiredActiveIndex, leaseIndex)
   const scalePassClipId =
     scalePassClipIndex === null ? null : (clips[scalePassClipIndex]?.clipId ?? null)
   if (scalePassClipId !== scalePassLeaseClipId) {
@@ -443,7 +447,8 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
   const analysisInFlight =
     aggregate.phase === 'sampling' ||
     aggregate.phase === 'processing' ||
-    clips.some((c) => clipHostsLiveElement(c.analysis.phase, c.analysis.scalePass.status))
+    clips.some((c) => clipHostsLiveElement(c.analysis.phase, c.analysis.scalePass.status)) ||
+    clips.some((c) => outlinePassStatus(c.analysis) === 'running')
   useScreenWakeLock(analysisInFlight)
   // Read once: a device's primary pointer does not change mid-session, and a coarse one is the
   // closest honest proxy for "a phone or tablet" without sniffing the user agent.
@@ -630,7 +635,7 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
                         total={clipIds.length}
                         viewLabel={clipViews[index]}
                         isActiveClip={id === activeClipId}
-                        scalePassAllowed={id === scalePassClipId}
+                        backgroundPassAllowed={id === scalePassClipId}
                         isPresented={id === presentedClipId}
                         // Every clip shifts horizontally when the leading entry appears or leaves, so
                         // the working clip has to be scrolled back into view at that moment too — its

@@ -261,3 +261,46 @@ export async function createMediaPipePoseLandmarkerDetector(
     },
   }
 }
+
+/** One outline-pass segmentation: MediaPipe's pose (normalized to the input image) and its person
+ * mask. `close()` releases the mask's GPU/WASM storage and MUST be called once read. */
+export interface OutlineSegmentation {
+  landmarks: Array<{ x: number; y: number }> | null
+  mask: { width: number; height: number; getAsFloat32Array(): Float32Array } | null
+  close(): void
+}
+
+/** The outline pass's detector (`strides-uz48`): one image in, one segmentation out. */
+export interface OutlineSegmenter {
+  segment(image: HTMLCanvasElement): OutlineSegmentation
+  close(): void
+}
+
+/**
+ * A SECOND PoseLandmarker on the same self-hosted `.task` (no new download — `fetchModelAsset`
+ * serves the cached bytes), in IMAGE mode with person masks. Separate from the scale pass's
+ * VIDEO-mode instance on purpose: IMAGE mode has no timestamp state to poison, and each
+ * MoveNet-guided crop is an independent image. The full-frame VIDEO-mode mask is what failed the
+ * spike on the far frames (`docs/agent-notes/swing-foot-travel.md`).
+ */
+export async function createMediaPipeOutlineSegmenter(): Promise<OutlineSegmenter> {
+  const wasmFileset = await FilesetResolver.forVisionTasks(WASM_BASE_PATH)
+  const modelAssetBuffer = await fetchModelAsset(POSE_LANDMARKER_MODEL_ASSET)
+  const landmarker = await PoseLandmarker.createFromOptions(wasmFileset, {
+    baseOptions: { modelAssetBuffer, delegate: 'GPU' },
+    runningMode: 'IMAGE',
+    numPoses: 1,
+    outputSegmentationMasks: true,
+  })
+  return {
+    segment(image) {
+      const result = landmarker.detect(image)
+      return {
+        landmarks: result.landmarks[0] ?? null,
+        mask: result.segmentationMasks?.[0] ?? null,
+        close: () => result.close(),
+      }
+    },
+    close: () => landmarker.close(),
+  }
+}

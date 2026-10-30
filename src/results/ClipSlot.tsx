@@ -46,10 +46,10 @@ export interface ClipSlotProps {
   isActiveClip?: boolean
   /**
    * Whether this clip's background scale pass may start now — `true` for at most one clip, the one
-   * `nextScalePassClipIndex` names. Passed straight through to `useVideoAnalysis`. Defaulted to
+   * `nextBackgroundPassClipIndex` names. Passed straight through to `useVideoAnalysis`. Defaulted to
    * `true` so a slot rendered in isolation behaves like a lone clip.
    */
-  scalePassAllowed?: boolean
+  backgroundPassAllowed?: boolean
   /**
    * Whether this clip's preview is currently open. The session owns it (at most one clip is
    * presented at a time) and it reaches three places from here: the loop condition inside
@@ -104,7 +104,7 @@ export function ClipSlot({
   total = 1,
   viewLabel = 'View pending',
   isActiveClip = false,
-  scalePassAllowed = true,
+  backgroundPassAllowed = true,
   isPresented = false,
   leadingEntryPresent = false,
   onPresent,
@@ -117,7 +117,7 @@ export function ClipSlot({
   const analysis = useVideoAnalysis(videoSource, detector, {
     presented: isPresented,
     queued: !isActiveClip,
-    scalePassAllowed,
+    backgroundPassAllowed,
   })
   // Reads `videoSource`'s blob and metadata only, never its `videoRef` — the poster is decoded on
   // a detached element, so it cannot move the playback position `sampleClip` is reading from (see
@@ -173,7 +173,7 @@ export function ClipSlot({
       analysis.phase,
       analysis.scalePass.status,
       !isActiveClip,
-      scalePassAllowed,
+      backgroundPassAllowed,
     ),
   )
 

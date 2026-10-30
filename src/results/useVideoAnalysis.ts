@@ -10,6 +10,13 @@ import { sampleClipAdaptive } from './sampleClipAdaptive'
 import { runClipAnalysisPipeline } from './runClipAnalysisPipeline'
 import { resolveSamplingRobustnessConfig } from './samplingRobustnessConfig'
 import { resolveScalePassConfig } from './scalePassConfig'
+import { resolveOutlinePassConfig } from './outlinePassConfig'
+import { graftOutlineResult, withOutlineUnavailable } from './swingFootOutlineGraft'
+import { createOutlineFrameReader } from './outlineFrameReader'
+import { sampleClipSequential } from './sampleClipSequential'
+import { getOutlineSegmenter } from '../pose/outlinePassDetector'
+import { summarizeSwingFootOutline } from '../heuristics/swingFootOutline'
+import { DEFAULT_HEURISTICS_CONFIG } from '../heuristics/types'
 import {
   dropGraftedExemplars,
   graftScalePassResult,
@@ -21,11 +28,12 @@ import { cancelScalePassAssetPrefetch } from '../pose/scalePassAssetPrefetch'
 import { resolvePoseDetectorConfig } from '../pose/poseBackendConfig'
 import type {
   AnalysisPhase,
+  OutlinePassState,
   ScalePassState,
   ScalePassStatus,
   VideoAnalysisState,
 } from './types'
-import { logPerfTimings, roundMs } from './perfTimings'
+import { logPerfTimings, roundMs, summarizeDurations } from './perfTimings'
 import type { SamplerTimings } from './perfTimings'
 import { progressPercent } from './progressPercent'
 
@@ -75,8 +83,18 @@ function idleState(): Omit<VideoAnalysisState, 'start' | 'reset'> {
     heuristics: null,
     diagnostics: null,
     scalePass: { status: 'idle', diagnostics: null },
+    outlinePass: { status: 'idle' },
     error: null,
   }
+}
+
+function isPassInFlight(status: ScalePassStatus | undefined): boolean {
+  return status === 'pending' || status === 'running'
+}
+
+/** The outline pass's watchdog: generous against ~95 ms per 4K crop measured in the spike. */
+function outlineWatchdogMs(plannedFrames: number): number {
+  return Math.max(30_000, 200 * plannedFrames)
 }
 
 /**
@@ -109,12 +127,12 @@ export function __resetScaleDetectorCreationForTests(): void {
 
 /**
  * Whether a clip's primary run is done and its background scale pass is waiting its turn behind
- * other clips (`nextScalePassClipIndex`) — due, but not allowed to start, so nothing will read
+ * other clips (`nextBackgroundPassClipIndex`) — due, but not allowed to start, so nothing will read
  * this clip's bytes or element until the lane reaches it.
  *
- * `queued` (not the clip holding the shared detector) is required as well as `!scalePassAllowed`,
+ * `queued` (not the clip holding the shared detector) is required as well as `!backgroundPassAllowed`,
  * because the session learns of a clip's `'ready'` one render after the clip does: on that render
- * a lone clip — whose pass is about to start — still reads `scalePassAllowed: false`. A clip that
+ * a lone clip — whose pass is about to start — still reads `backgroundPassAllowed: false`. A clip that
  * still holds the detector is never treated as waiting, so the lone clip neither drops its demux
  * nor gives up its on-screen element for one render. The last clip of a session stays active
  * after its primary (there is nothing to advance to), so it is never treated as waiting either.
@@ -123,9 +141,14 @@ export function isWaitingForScalePassLane(
   phase: AnalysisPhase,
   scalePassStatus: ScalePassStatus,
   queued: boolean,
-  scalePassAllowed: boolean,
+  backgroundPassAllowed: boolean,
+  outlinePassStatus: ScalePassStatus = 'idle',
 ): boolean {
-  return phase === 'ready' && scalePassStatus === 'pending' && queued && !scalePassAllowed
+  // The outline pass (`strides-uz48`) waits in the same lane, after the scale pass.
+  const due =
+    scalePassStatus === 'pending' ||
+    (outlinePassStatus === 'pending' && scalePassStatus !== 'running')
+  return phase === 'ready' && due && queued && !backgroundPassAllowed
 }
 
 /**
@@ -154,18 +177,18 @@ export interface VideoAnalysisOptions {
   queued?: boolean
   /**
    * Whether this clip's background scale pass may start now — the session's scale-pass lane
-   * (`nextScalePassClipIndex`), which runs every clip's primary pass before any scale pass and at
+   * (`nextBackgroundPassClipIndex`), which runs every clip's primary pass before any scale pass and at
    * most one scale pass at a time. While `false`, a pass that is due stays `'pending'`. A pass
    * that has already started is never cancelled by this turning `false`. Defaults to `true`, i.e.
    * a lone clip's pass starts as soon as its primary is ready, as it always has.
    */
-  scalePassAllowed?: boolean
+  backgroundPassAllowed?: boolean
 }
 
 export function useVideoAnalysis(
   videoSource: VideoSource,
   detector: PoseDetector | null,
-  { presented = false, queued = false, scalePassAllowed = true }: VideoAnalysisOptions = {},
+  { presented = false, queued = false, backgroundPassAllowed = true }: VideoAnalysisOptions = {},
 ): VideoAnalysisState {
   const { videoRef, metadata, sourceBlob } = videoSource
 
@@ -183,6 +206,12 @@ export function useVideoAnalysis(
   // passes can never share one: a new primary run's `handleRef.current?.stop()` in `start()`
   // must not be able to miss a still-running scale pass, and vice versa.
   const scaleHandleRef = useRef<SampleClipHandle | null>(null)
+  // The background outline pass's own handle (`strides-uz48`), for the same reason.
+  const outlineHandleRef = useRef<SampleClipHandle | null>(null)
+  const outlinePassClaimedForRunRef = useRef<number | null>(null)
+  const outlinePassStartedForRunRef = useRef<number | null>(null)
+  // Dev-only: the last outline pass's reader stats, read by its console line.
+  const outlineLogRef = useRef<Record<string, unknown> | null>(null)
   // Tracks which clip's `metadata` auto-start has already fired for, so it fires at most once
   // per freshly loaded clip — not every time `phase` happens to return to 'idle' (e.g. an
   // explicit `reset()`, or a stale run being abandoned). A new clip's `metadata` is always a new
@@ -240,6 +269,8 @@ export function useVideoAnalysis(
     handleRef.current = null
     scaleHandleRef.current?.stop()
     scaleHandleRef.current = null
+    outlineHandleRef.current?.stop()
+    outlineHandleRef.current = null
     runIdRef.current += 1
   }
 
@@ -397,6 +428,8 @@ export function useVideoAnalysis(
     // add-background-scale-pass).
     scaleHandleRef.current?.stop()
     scaleHandleRef.current = null
+    outlineHandleRef.current?.stop()
+    outlineHandleRef.current = null
     // Clear any loop left armed by a previous run's ready-state loop-restart (see the effect
     // below) — a looping video never fires `ended`, which sampleClip relies on to resolve.
     video.loop = false
@@ -592,14 +625,32 @@ export function useVideoAnalysis(
               : !resolveScalePassConfig().enabled
                 ? { status: 'skipped', reason: 'disabled', diagnostics: null }
                 : { status: 'pending', diagnostics: null }
+          // The outline pass (`strides-uz48`) is decided in the same literal: only a front clip
+          // plans one, and it reads frames only through the sequential decoder. A clip that
+          // planned one but cannot run it says why on the card, instead of "checking…" forever.
+          const outlinePlanned = heuristics.swingFootLateralExcursion.outlinePlan != null
+          const outlinePass: OutlinePassState = !outlinePlanned
+            ? { status: 'skipped', reason: 'not-front' }
+            : !resolveOutlinePassConfig().enabled
+              ? { status: 'skipped', reason: 'disabled' }
+              : !usesSequentialDecode
+                ? { status: 'skipped', reason: 'playback-path' }
+                : { status: 'pending' }
+          const readyHeuristics =
+            outlinePass.reason === 'playback-path'
+              ? withOutlineUnavailable(heuristics, 'playback-path')
+              : outlinePass.reason === 'disabled'
+                ? withOutlineUnavailable(heuristics, 'failed')
+                : heuristics
           setState({
             phase: 'ready',
             progress: 1,
             isPausedMidAnalysis: false,
             robustFrames,
-            heuristics,
+            heuristics: readyHeuristics,
             diagnostics,
             scalePass,
+            outlinePass,
             error: null,
           })
           const readyAt = performance.now()
@@ -724,23 +775,25 @@ export function useVideoAnalysis(
     const passesDone =
       state.phase === 'error' ||
       (state.phase === 'ready' &&
-        state.scalePass.status !== 'pending' &&
-        state.scalePass.status !== 'running')
+        !isPassInFlight(state.scalePass.status) &&
+        !isPassInFlight(state.outlinePass?.status))
     const waitingBehindAnotherClip =
       queued && state.phase === 'idle' && sequentialDecodeSupported !== null
     const waitingForLane = isWaitingForScalePassLane(
       state.phase,
       state.scalePass.status,
       queued,
-      scalePassAllowed,
+      backgroundPassAllowed,
+      state.outlinePass?.status,
     )
     if (passesDone || waitingBehindAnotherClip || waitingForLane) releaseClipDemux(sourceBlob)
   }, [
     sourceBlob,
     state.phase,
     state.scalePass.status,
+    state.outlinePass?.status,
     queued,
-    scalePassAllowed,
+    backgroundPassAllowed,
     sequentialDecodeSupported,
   ])
 
@@ -752,7 +805,7 @@ export function useVideoAnalysis(
   // exactly like a primary run), and every failure path lands on scalePass 'failed' with the
   // primary result untouched — the pass can only ever improve the displayed result.
   //
-  // Starts only while `scalePassAllowed` (the session's scale-pass lane), in two steps:
+  // Starts only while `backgroundPassAllowed` (the session's scale-pass lane), in two steps:
   //
   // 1. CLAIM, in a layout effect: 'pending' → 'running' as a synchronous update, so the commit that
   //    granted the lane is followed by a 'running' report (`ClipSlot`'s layout-effect `onReport`)
@@ -763,11 +816,11 @@ export function useVideoAnalysis(
   //
   // No cleanup cancels the pass when the flag later drops: the claim only ever declines to START.
   useLayoutEffect(() => {
-    if (state.phase !== 'ready' || state.scalePass.status !== 'pending' || !scalePassAllowed) return
+    if (state.phase !== 'ready' || state.scalePass.status !== 'pending' || !backgroundPassAllowed) return
     if (scalePassClaimedForRunRef.current === runIdRef.current) return
     scalePassClaimedForRunRef.current = runIdRef.current
     setState((s) => ({ ...s, scalePass: { status: 'running', diagnostics: null } }))
-  }, [state.phase, state.scalePass.status, scalePassAllowed])
+  }, [state.phase, state.scalePass.status, backgroundPassAllowed])
 
   useEffect(() => {
     if (state.phase !== 'ready' || state.scalePass.status !== 'running') return
@@ -1029,6 +1082,141 @@ export function useVideoAnalysis(
     sequentialDecodeSupported,
   ])
 
+  // The background OUTLINE pass (`strides-uz48`): once this clip's scale pass is terminal and the
+  // session's lane allows it, decode the clip again on the sequential path and hand the frames a
+  // front clip's `swingFootLateralExcursion` planned to a dedicated MediaPipe segmenter
+  // (`outlineFrameReader.ts`). Graft ONLY that metric. Same claim/run split, runId guards and
+  // once-per-run latches as the scale pass above; every failure lands on 'failed' with the
+  // metric's unavailable caveat, and the rest of the result untouched.
+  useLayoutEffect(() => {
+    if (state.phase !== 'ready' || state.outlinePass?.status !== 'pending' || !backgroundPassAllowed) return
+    if (isPassInFlight(state.scalePass.status)) return
+    if (outlinePassClaimedForRunRef.current === runIdRef.current) return
+    outlinePassClaimedForRunRef.current = runIdRef.current
+    setState((s) => ({ ...s, outlinePass: { status: 'running' } }))
+  }, [state.phase, state.outlinePass?.status, state.scalePass.status, backgroundPassAllowed])
+
+  useEffect(() => {
+    if (state.phase !== 'ready' || state.outlinePass?.status !== 'running') return
+    if (outlinePassStartedForRunRef.current === runIdRef.current) return
+    outlinePassStartedForRunRef.current = runIdRef.current
+    const runId = runIdRef.current
+
+    const failPass = (error: string) => {
+      if (runIdRef.current !== runId) return
+      outlineLogRef.current = null
+      setState((s) => ({
+        ...s,
+        heuristics: s.heuristics === null ? null : withOutlineUnavailable(s.heuristics, 'failed'),
+        outlinePass: { status: 'failed', error },
+      }))
+    }
+
+    // Read at start: the scale graft spreads the primary result, so the plan survives it.
+    const plan = state.heuristics?.swingFootLateralExcursion.outlinePlan ?? null
+    if (!metadata || !sourceBlob || plan === null) {
+      failPass(
+        plan === null
+          ? 'The outline pass started without a plan.'
+          : 'No clip bytes were available for the outline pass.',
+      )
+      return
+    }
+
+    const samplingRobustnessConfig = resolveSamplingRobustnessConfig()
+    const watchdogMs = outlineWatchdogMs(plan.frames.length)
+    const passStartedAt = performance.now()
+    void (async () => {
+      let segmenterDeadline: ReturnType<typeof setTimeout> | undefined
+      const segmenter = await Promise.race([
+        getOutlineSegmenter(),
+        new Promise<null>((resolve) => {
+          segmenterDeadline = setTimeout(() => resolve(null), watchdogMs)
+        }),
+      ])
+      clearTimeout(segmenterDeadline)
+      const segmenterReadyAt = performance.now()
+      if (runIdRef.current !== runId) return
+      if (!segmenter) {
+        failPass('The outline-pass segmenter could not be created.')
+        return
+      }
+
+      const reader = createOutlineFrameReader(plan, segmenter)
+      const { promise, handle } = sampleClipSequential(
+        sourceBlob,
+        reader.detector,
+        metadata.durationSec,
+        {
+          maxConsecutiveErrors: samplingRobustnessConfig.maxConsecutiveErrors,
+          detectionTimeoutMs: samplingRobustnessConfig.detectionTimeoutMs,
+        },
+        samplingRobustnessConfig.sequentialSampling,
+      )
+      outlineHandleRef.current = handle
+      // `handle.stop()` resolves with partial samples; `abortedLocally` discards that resolution.
+      let abortedLocally = false
+      const watchdog = setTimeout(() => {
+        abortedLocally = true
+        handle.stop()
+        if (outlineHandleRef.current === handle) outlineHandleRef.current = null
+        failPass(`The outline pass exceeded its ${watchdogMs}ms watchdog and was stopped.`)
+      }, watchdogMs)
+
+      try {
+        await promise
+      } catch (err) {
+        clearTimeout(watchdog)
+        if (outlineHandleRef.current === handle) outlineHandleRef.current = null
+        failPass(err instanceof Error ? err.message : 'Outline-pass decoding failed unexpectedly.')
+        return
+      }
+      clearTimeout(watchdog)
+      if (abortedLocally || runIdRef.current !== runId) return
+      if (outlineHandleRef.current === handle) outlineHandleRef.current = null
+      const sampledAt = performance.now()
+
+      try {
+        const summarized = summarizeSwingFootOutline(plan, reader.measurements(), DEFAULT_HEURISTICS_CONFIG)
+        const stats = reader.stats()
+        const segment = summarizeDurations(stats.segmentMs)
+        outlineLogRef.current = {
+          reading: summarized.outline ?? null,
+          value: summarized.value,
+          confidence: summarized.confidence,
+          caveat: summarized.caveat,
+          framesSegmented: stats.framesSegmented,
+          detectMedianMs: segment.p50Ms,
+          totalMs: roundMs(sampledAt - passStartedAt),
+        }
+        setState((s) => ({
+          ...s,
+          heuristics: s.heuristics === null ? null : graftOutlineResult(s.heuristics, summarized),
+          outlinePass: { status: 'done' },
+        }))
+        const doneAt = performance.now()
+        if (import.meta.env.DEV) logPerfTimings('analysis-pass', {
+          pass: 'outline',
+          path: 'sequential',
+          ...perfClipIdentity(metadata, sourceBlob),
+          plannedFrames: plan.frames.length,
+          framesSegmented: stats.framesSegmented,
+          framesWithoutMask: stats.framesWithoutMask,
+          segmenterWaitMs: roundMs(segmenterReadyAt - passStartedAt),
+          samplingMs: roundMs(sampledAt - segmenterReadyAt),
+          segment,
+          startToDoneMs: roundMs(doneAt - passStartedAt),
+          primaryReadyToDoneMs:
+            primaryReadyAtRef.current === null
+              ? null
+              : roundMs(doneAt - primaryReadyAtRef.current),
+        })
+      } catch (err) {
+        failPass(err instanceof Error ? err.message : 'Outline pass failed unexpectedly.')
+      }
+    })()
+  }, [state.phase, state.outlinePass?.status, state.heuristics, metadata, sourceBlob])
+
   // Auto-starts analysis the moment a freshly loaded clip is ready and a detector exists — no
   // explicit click required. Doesn't fire while `detector` is `null` (still loading, or it never
   // loads at all); either way the manual "Analyze" control remains available as a fallback and
@@ -1088,6 +1276,24 @@ export function useVideoAnalysis(
       }),
     )
   }, [state.scalePass])
+
+  // Development-only, third line: the outline pass's outcome (`strides-uz48`), once per terminal
+  // transition. On 'done' it carries the metric's outline reading and final value/confidence
+  // (the ONLY metric the pass can change) plus the reader's cost.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const pass = state.outlinePass
+    if (!pass || (pass.status !== 'done' && pass.status !== 'failed' && pass.status !== 'skipped')) return
+    console.log(
+      '[analysis-diagnostics:outline-pass]',
+      JSON.stringify({
+        status: pass.status,
+        ...(pass.reason !== undefined ? { reason: pass.reason } : {}),
+        ...(pass.error !== undefined ? { error: pass.error } : {}),
+        ...(pass.status === 'done' ? outlineLogRef.current : {}),
+      }),
+    )
+  }, [state.outlinePass])
 
   // The same predicate `start()` uses to pick its sampler, so the session's schedule and the run
   // cannot disagree about the path. `null` while only the probe timeout's stand-in is known and no

@@ -678,12 +678,12 @@ describe('MultiClipVideoSession', () => {
     })
     const analysisHook = vi.mocked(useVideoAnalysis)
     analysisHook.mockClear()
-    /** How many clips' latest render was handed the scale-pass lane (`scalePassAllowed`). */
+    /** How many clips' latest render was handed the scale-pass lane (`backgroundPassAllowed`). */
     const clipsHoldingTheScaleLane = () => {
       const latest = new Map<string, boolean>()
       for (const [videoSource, , options] of analysisHook.mock.calls) {
         const name = (videoSource.sourceBlob as File | null)?.name
-        if (name) latest.set(name, options?.scalePassAllowed ?? true)
+        if (name) latest.set(name, options?.backgroundPassAllowed ?? true)
       }
       return [...latest.values()].filter(Boolean).length
     }

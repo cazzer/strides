@@ -51,6 +51,27 @@ export interface ScalePassState {
   robustFrames?: RobustPoseFrame[]
 }
 
+export type OutlinePassSkipReason = 'not-front' | 'playback-path' | 'disabled'
+
+/**
+ * The background outline pass (`strides-uz48`): one MediaPipe segmentation pass over the frames a
+ * front clip's `swingFootLateralExcursion` planned, run after every scale pass. Same status
+ * machine and replace-wholesale discipline as `ScalePassState`; its only write outside this
+ * object is the grafted `swingFootLateralExcursion`.
+ */
+export interface OutlinePassState {
+  status: ScalePassStatus
+  /** Set only when status is 'skipped'. `'not-front'` covers every clip with no plan. */
+  reason?: OutlinePassSkipReason
+  /** Set only when status is 'failed'. */
+  error?: string
+}
+
+/** Absent reads as idle — fixtures that predate the outline pass need not state it. */
+export function outlinePassStatus(state: Pick<VideoAnalysisState, 'outlinePass'>): ScalePassStatus {
+  return state.outlinePass?.status ?? 'idle'
+}
+
 export interface VideoAnalysisState {
   phase: AnalysisPhase
   /** 0..1, meaningful during 'sampling'. */
@@ -68,6 +89,9 @@ export interface VideoAnalysisState {
   /** The background scale pass riding this run — decided ('pending' vs 'skipped') the moment
    * phase reaches 'ready'. */
   scalePass: ScalePassState
+  /** The background outline pass — decided at 'ready' alongside `scalePass`, run only once the
+   * scale pass is terminal. Optional for fixtures; `useVideoAnalysis` always sets it. */
+  outlinePass?: OutlinePassState
   error: VideoAnalysisError | null
   /**
    * Which path this clip's primary run samples on: `'sequential'` once its sequential-decode probe
