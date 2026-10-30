@@ -32,10 +32,21 @@ const FOOT_STRIKE_CLASS_LABELS: Record<FootStrikeClass, string> = {
   forefoot: 'Forefoot strike',
 }
 
+/**
+ * Sideways foot travel (`strides-uz48`) is an outline check, so its value reads as one: exactly 0
+ * is "nothing past the outline", never "0.0%", and a positive value is outward reach in hip widths.
+ * Shared with `MetricsPanel`'s `formatValue` so the two views cannot word it differently.
+ */
+export function formatSwingFootOutlineValue(value: number): string {
+  if (value === 0) return "None past the leg's outline"
+  return `${(value * 100).toFixed(1)}% of hip width outward`
+}
+
 export function formatGuidedValue(
   metric: Pick<MetricResult, 'metric' | 'value' | 'unit'>,
 ): string {
   if (metric.value === null) return 'Not available'
+  if (metric.metric === 'swingFootLateralExcursion') return formatSwingFootOutlineValue(metric.value)
   if (metric.metric === 'footStrikePattern') {
     const cls = classifyFootStrike(
       metric.value,

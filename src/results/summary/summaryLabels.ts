@@ -23,7 +23,7 @@ export const SHORT_METRIC_LABELS: Readonly<Partial<Record<MetricId, string>>> = 
   overstriding: 'Overstriding',
   stepWidthCm: 'Step width',
   stepWidth: 'Step width',
-  swingFootLateralExcursion: 'Swing-foot path',
+  swingFootLateralExcursion: 'Sideways foot travel',
 }
 
 /**

@@ -34,5 +34,5 @@ export const METRIC_DESCRIPTIONS: Record<MetricId, string> = {
   armSwingAmplitude:
     "How far your wrists travel up and down through one arm swing, as a percentage of your torso length, averaged across both arms when filmed from the front, or the near arm alone when filmed from the side. It doesn't measure how far your arms swing forward and back. A movement-amplitude measurement from the video only: it says how big the swing is, not what it contributes to your stride.",
   swingFootLateralExcursion:
-    'Sideways ankle travel relative to the same-side knee during early-to-mid swing, as a percentage of hip width. This describes the foot path seen from front or rear video, not heel rotation or a diagnosis.',
+    "Whether your foot travels sideways in early swing, just after it leaves the ground — checked on front video by asking if anything below the knee sticks out past the outer edge of that leg's outline, as a percentage of hip width. A large outward flick at this moment is what coaches call heel whip. This is an outline check: a flick hidden behind the thigh can't be seen. It is not foot rotation and not a diagnosis.",
 }

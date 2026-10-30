@@ -1576,6 +1576,32 @@ describe('planExemplarFrames', () => {
     })
   })
 
+  it("carries an outline exemplar's measured marks onto each instant (strides-uz48)", () => {
+    const paired = separatedPair(540)
+    const marks = (x: number) => ({
+      thighEdge: [{ x, y: 1 }, { x, y: 2 }] as [{ x: number; y: number }, { x: number; y: number }],
+      contour: [{ x, y: 1 }],
+      outermost: null,
+      midlineX: 0,
+    })
+    const plan = planExemplarFrames(
+      'swingFootLateralExcursion',
+      exemplar({
+        kind: 'swingFootOutline',
+        timestamp: 0,
+        pairedTimestamp: 0.4,
+        outlineMarks: { base: marks(10), ghost: marks(20) },
+      }),
+      paired,
+      HD,
+      0.05,
+    )
+    expect(plan?.base.outlineMarks).toEqual(marks(10))
+    expect(plan?.ghost?.outlineMarks).toEqual(marks(20))
+    const plain = planExemplarFrames('trunkLean', exemplar({ timestamp: 0, pairedTimestamp: 0.4 }), paired, HD, 0.05)
+    expect(plain && 'outlineMarks' in plain.base).toBe(false)
+  })
+
   it('omits `side` entirely when the exemplar carries none', () => {
     const plan = planExemplarFrames(
       'stepWidth',

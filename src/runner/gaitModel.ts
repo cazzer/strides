@@ -151,11 +151,6 @@ const STANCE_THIGH_RISE_MAX_DEG = 5
 const SWING_THIGH_MID_PHASE = GAIT_PHASES.rightContact + GAIT_PHASES.midStance
 const SWING_THIGH_MID_FRACTION = 0.6
 
-/**
- * P80 − P20 of a raised cosine sampled uniformly over one full period, as a fraction of its peak:
- * the value v = (1 − cos φ)/2 has P(v ≤ x) = arccos(1 − 2x)/π, so P80 − P20 = cos(π/5).
- */
-const RAISED_COSINE_P80_P20 = Math.cos(Math.PI / 5)
 
 const ARM_SWING_PHASE_OFFSET = 0.15
 
@@ -629,7 +624,10 @@ function buildLegFrame(params: RunnerParams): LegFrame {
   return {
     ...stance,
     sinTilt: legTiltSin(params.stepWidth),
-    arcSinPeak: (params.swingFootArc * hipWidth) / (shank * RAISED_COSINE_P80_P20),
+    // `swingFootArc` is the PEAK outward ankle travel past the knee's own line, in hip widths
+    // (`strides-uz48`): the raised-cosine bump peaks at 1, so the shank's extra lateral reach at
+    // mid-arc is exactly value × hip width. 0 draws no arc at all.
+    arcSinPeak: (params.swingFootArc * hipWidth) / shank,
     pelvisHeight: height,
     toeOff: stanceAngles(GAIT_PHASES.stanceEnd, stanceEndsHipY, stance),
     lateSwingKneeDeg: Math.max(KNEE_LATE_SWING_DEG, contact.kneeDeg),

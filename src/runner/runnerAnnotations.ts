@@ -698,9 +698,13 @@ const BUILDERS: Readonly<Record<RunnerParamId, Builder>> = {
     }
   },
   swingFootArc(value, values, { side, phase }) {
-    // Mid-arc, the ankle is at its widest; the span ends there and reaches back inward by the
-    // drawn range. Its position is illustrative, its length exact.
+    // Mid-arc, the ankle is at its widest; the span ends there and reaches back to the knee's own
+    // line. Its position is illustrative, its length exact. At 0 — nothing left the leg's outline
+    // — there is no travel to bracket, only the label.
     const ankle = sideJoint(poseAt(phase, values), side, 'ankle')
+    if (value === 0) {
+      return { marks: [], fills: [], guides: [], label: { anchor: { ...ankle }, side: 'above' } }
+    }
     const outward = side === 'left' ? -1 : 1
     const width = value * MODEL_PROPORTIONS.hipWidth
     const start = { x: ankle.x, y: ankle.y, z: ankle.z - outward * width }

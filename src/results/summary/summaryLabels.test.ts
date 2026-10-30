@@ -32,7 +32,7 @@ describe('alsoMeasuredNames', () => {
   it('lists every other later reading by its full name', () => {
     expect(alsoMeasuredNames(laterReadings(makeHeuristics(), 'footPath'))).toEqual([
       'Step width',
-      'Swing-foot lateral excursion',
+      'Sideways foot travel',
     ])
   })
 })

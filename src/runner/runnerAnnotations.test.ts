@@ -631,6 +631,17 @@ describe('the marks are the drawn values and lie on the live figure', () => {
     expect(screenLength(start, end, FRONT)).toBeCloseTo(values.stepWidth * MODEL_PROPORTIONS.hipWidth, 9)
   })
 
+  it('swing-foot arc at 0 (nothing past the outline): no bracket, the outline-check label (strides-uz48)', () => {
+    const atZero = bindAll({
+      swingFootLateralExcursion: makeMetric('swingFootLateralExcursion', { value: 0, unit: 'percent' }),
+    })
+    expect(runnerParamValues(atZero).swingFootArc).toBe(0)
+    const annotation = only(atZero, 'swingFootArc', 90)
+    expect(annotation.marks).toEqual([])
+    expect(annotation.label.text).toBe("None past the leg's outline")
+    expect(formatRunnerValue('swingFootLateralExcursion', 0.123)).toBe('12.3% of hip width outward')
+  })
+
   it('swing-foot arc: ends at the live swing ankle at mid-arc, value × hip width long', () => {
     const phase = heldFor('swingFootArc', 90)
     const annotation = only(bound, 'swingFootArc', 90)

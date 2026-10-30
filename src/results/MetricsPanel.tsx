@@ -15,6 +15,7 @@ import {
   metricTier,
 } from './metricConfidence'
 import { METRIC_DESCRIPTIONS } from './metricDescriptions'
+import { formatSwingFootOutlineValue } from './formatGuidedValue'
 import { clipSourceLabel } from './clipProvenance'
 
 /** Stable empty list, so a panel rendered without any evidence at all never hands its cards a
@@ -78,6 +79,7 @@ const FOOT_STRIKE_CLASS_LABELS: Record<FootStrikeClass, string> = {
 
 function formatValue(metric: MetricResult): string {
   if (metric.value === null) return 'Not available'
+  if (metric.metric === 'swingFootLateralExcursion') return formatSwingFootOutlineValue(metric.value)
   if (metric.metric === 'footStrikePattern') {
     const cls = classifyFootStrike(
       metric.value,

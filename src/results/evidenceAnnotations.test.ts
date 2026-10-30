@@ -573,31 +573,48 @@ describe('per-metric mark sets', () => {
     ])
   })
 
-  it('draws both swing-foot offsets against the same-side knee line', () => {
-    const points = (ankleX: number) => [
+  it('draws the outline check from its measured mask geometry, per instant (strides-uz48)', () => {
+    const swingPoints = [
       pos('left_hip', 300, 400), pos('right_hip', 400, 400),
-      pos('left_knee', 320, 500), pos('left_ankle', ankleX, 620),
+      pos('left_knee', 320, 500), pos('left_ankle', 330, 620),
     ]
     const annotation = planEvidenceAnnotations(
       plan({
         metric: 'swingFootLateralExcursion',
-        kind: 'swingFootLateralRange',
+        kind: 'swingFootOutline',
         side: 'left',
-        base: instant(points(370)),
-        ghost: instant(points(330), { opacity: EVIDENCE_GHOST_BLEND_ALPHA }),
+        base: {
+          ...instant(swingPoints),
+          outlineMarks: {
+            thighEdge: [{ x: 340, y: 440 }, { x: 340, y: 640 }],
+            contour: [{ x: 340, y: 440 }, { x: 338, y: 540 }, { x: 352, y: 600 }],
+            outermost: { x: 352, y: 600 },
+            midlineX: 350,
+          },
+        },
+        ghost: {
+          ...instant(swingPoints, { opacity: EVIDENCE_GHOST_BLEND_ALPHA }),
+          outlineMarks: {
+            thighEdge: [{ x: 341, y: 440 }, { x: 341, y: 650 }],
+            contour: [{ x: 341, y: 440 }, { x: 336, y: 650 }],
+            outermost: null,
+            midlineX: 350,
+          },
+        },
       }),
       MAX_OUTPUT_SIDE,
     )
-    expect(byRole(annotation.ops, 'kneePlumb')).toHaveLength(1)
-    expect(byRole(annotation.ops, 'kneePlumb', 'ghost')).toHaveLength(1)
-    expect(byRole(annotation.ops, 'hipWidthSegment')).toHaveLength(1)
-    expect(byRole(annotation.ops, 'hipWidthSegment', 'ghost')).toHaveLength(1)
-    const calipers = [
-      ...byRole(annotation.ops, 'ankleOffsetCaliper'),
-      ...byRole(annotation.ops, 'ankleOffsetCaliper', 'ghost'),
-    ] as EvidenceCaliperOp[]
-    expect(calipers.map((op) => [op.x1, op.x2])).toEqual([[320, 370], [320, 330]])
-    expect(calipers.every((op) => op.polarity === null)).toBe(true)
+    const edge = byRole(annotation.ops, 'thighOutlineEdge') as EvidenceLineOp[]
+    expect(edge.map((op) => [op.x1, op.y1, op.x2, op.y2])).toEqual([[340, 440, 340, 640]])
+    expect(byRole(annotation.ops, 'thighOutlineEdge', 'ghost')).toHaveLength(1)
+    expect(byRole(annotation.ops, 'legOutline')).toHaveLength(2)
+    expect(byRole(annotation.ops, 'legOutline', 'ghost')).toHaveLength(1)
+    expect(byRole(annotation.ops, 'outlineOutermost')).toHaveLength(1)
+    // A lower leg hidden behind the thigh has no outermost point to mark.
+    expect(byRole(annotation.ops, 'outlineOutermost', 'ghost')).toHaveLength(0)
+    expect(byRole(annotation.ops, 'hipMidlinePlumb')).toHaveLength(1)
+    expect(annotation.base.valueMeasuredAtInstant).toBe(true)
+    expect(annotation.ghost?.valueMeasuredAtInstant).toBe(true)
   })
 
   it('stepWidth keeps its measured displacement prominent with a local midline', () => {
@@ -633,8 +650,6 @@ describe('per-metric mark sets', () => {
       [521.6, 598.4],
       [527.6, 604.4],
     ])
-
-    expect(byRole(annotation.ops, 'hipWidthSegment')).toHaveLength(0)
 
     const caliper = byRole(
       annotation.ops,
@@ -1387,19 +1402,29 @@ describe('the honesty rule', () => {
       }),
     },
     {
-      kind: 'swingFootLateralRange',
+      kind: 'swingFootOutline',
       plan: plan({
         metric: 'swingFootLateralExcursion',
-        kind: 'swingFootLateralRange',
+        kind: 'swingFootOutline',
         side: 'left',
-        base: instant([
-          pos('left_hip', 300, 400), pos('right_hip', 400, 400),
-          pos('left_knee', 320, 500), pos('left_ankle', 370, 620),
-        ]),
-        ghost: instant([
-          pos('left_hip', 300, 400), pos('right_hip', 400, 400),
-          pos('left_knee', 320, 500), pos('left_ankle', 330, 620),
-        ], { opacity: EVIDENCE_GHOST_BLEND_ALPHA }),
+        base: {
+          ...instant([pos('left_hip', 300, 400), pos('left_knee', 320, 500)]),
+          outlineMarks: {
+            thighEdge: [{ x: 340, y: 440 }, { x: 340, y: 640 }],
+            contour: [{ x: 340, y: 440 }, { x: 352, y: 600 }],
+            outermost: { x: 352, y: 600 },
+            midlineX: 350,
+          },
+        },
+        ghost: {
+          ...instant([pos('left_hip', 300, 400), pos('left_knee', 320, 500)], { opacity: EVIDENCE_GHOST_BLEND_ALPHA }),
+          outlineMarks: {
+            thighEdge: [{ x: 341, y: 440 }, { x: 341, y: 650 }],
+            contour: [{ x: 341, y: 440 }, { x: 336, y: 650 }],
+            outermost: null,
+            midlineX: 350,
+          },
+        },
       }),
     },
   ]
@@ -1415,7 +1440,7 @@ describe('the honesty rule', () => {
       'armSwingCycle',
       'stridePair',
       'kneeDrivePeak',
-      'swingFootLateralRange',
+      'swingFootOutline',
     ]
     expect(FIXTURES.map((fixture) => fixture.kind).sort()).toEqual(
       [...kinds].sort(),
@@ -1511,7 +1536,7 @@ describe('the honesty rule', () => {
       ['bounceCycle', false, false],
       ['stridePair', true, true],
       ['kneeDrivePeak', true, null],
-      ['swingFootLateralRange', true, true],
+      ['swingFootOutline', true, true],
     ])
   })
 

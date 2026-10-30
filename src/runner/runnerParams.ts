@@ -92,9 +92,10 @@ export const RUNNER_PARAM_SPECS: Readonly<Record<RunnerParamId, RunnerParamSpec>
     range: [-0.3, 0.4],
   },
   stepWidth: { metrics: [{ metric: 'stepWidth', scale: 1 }], neutral: 0.3, range: [-1.5, 1.5] },
+  // The outline check reads exactly 0 when nothing left the leg's outline, so neutral is no arc.
   swingFootArc: {
     metrics: [{ metric: 'swingFootLateralExcursion', scale: 1 }],
-    neutral: 0.15,
+    neutral: 0,
     range: [0, 0.8],
   },
   // 2 to 10 torso lengths is 1 to 5 m at the model's 50 cm torso. The neutral is never drawn: only

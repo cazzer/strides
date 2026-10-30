@@ -12,6 +12,7 @@ import type {
   MetricExemplarKind,
   MetricId,
   MetricResult,
+  OutlineSideMarks,
 } from '../heuristics/types'
 import {
   MAX_EXEMPLARS_PER_METRIC,
@@ -440,6 +441,9 @@ export interface EvidenceInstantPlan {
    * pairs — the common case for both — the frame-level field is absent while this one is not.
    */
   side: 'left' | 'right' | null
+  /** The outline check's measured geometry at this instant, in NATIVE video pixels, copied from
+   * the exemplar's `outlineMarks` (`swingFootOutline` only; absent otherwise). */
+  outlineMarks?: OutlineSideMarks
 }
 
 /** One renderable image: a base frame, optionally a ghost composited over it, and the square crop
@@ -1349,6 +1353,7 @@ function instantPlan(
     ),
     outwardSign: resolveOutwardSigns(frame),
     side: resolveInstantSide(exemplar, role),
+    ...(exemplar.outlineMarks === undefined ? {} : { outlineMarks: exemplar.outlineMarks[role] }),
   }
 }
 

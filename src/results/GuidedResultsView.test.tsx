@@ -383,6 +383,24 @@ describe('The guided view announces completion with the same words the classic v
     expect(screen.getByRole('status')).toHaveTextContent(/^Analysis complete\./)
   })
 
+  it.each(['pending', 'running'] as const)(
+    'says the outline pass is checking sideways foot travel while it is %s, once the scale pass is not (strides-uz48)',
+    (outline) => {
+      renderView({ ...readyAnalysis(makeHeuristics(), 'done'), outlinePass: { status: outline } })
+      expect(screen.getAllByRole('status')).toHaveLength(1)
+      expect(screen.getByRole('status')).toHaveTextContent(
+        /^Analysis complete\. A second look at the clip added \d more metrics?\. Checking sideways foot travel with a closer look at the clip…$/,
+      )
+    },
+  )
+
+  it('does not mention the outline pass while the scale pass is still in flight', () => {
+    renderView({ ...readyAnalysis(makeHeuristics(), 'running'), outlinePass: { status: 'pending' } })
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /^Analysis complete\. Measuring more metrics with a second look at the clip…$/,
+    )
+  })
+
   it.each([
     [
       'pending',

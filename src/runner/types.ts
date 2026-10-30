@@ -38,7 +38,8 @@ export type RunnerParamId =
   | 'contactShankOffset'
   /** Ankle lateral offset from the midline at contact, in hip widths; positive = own side. */
   | 'stepWidth'
-  /** Lateral (ankle − same-side knee) P80−P20 range over early-to-mid swing, in hip widths. */
+  /** Peak outward ankle travel past the swing knee's own line in early swing, in hip widths; 0 is
+   * no arc. Bound to `swingFootLateralExcursion`, the outline check (`strides-uz48`). */
   | 'swingFootArc'
   /**
    * Ground covered over one gait cycle (one stride: a foot's contact to its next), torso lengths.

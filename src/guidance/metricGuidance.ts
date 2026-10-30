@@ -1224,16 +1224,16 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
       'No reference range has been established for this image-based ankle path measurement.',
     evidenceDirection: 'none-established',
     mandatoryNotes: [
-      'Detected footstrikes can trail visible landing, so the final third of each strike interval is excluded. This reduces, but cannot eliminate, the risk of including contact frames.',
+      "This is an outline check: it reports a foot that sticks out past the outer edge of its leg's outline in early swing. A flick hidden behind the thigh can't be seen, so a small whip reads the same as none.",
     ],
     speedSensitivity: null,
     research: [],
     remediation: [],
     captureHints: {
       wrongAngle:
-        'Film from directly in front of or behind the runner so sideways foot travel is visible.',
+        'Film from directly in front of or behind the runner so the foot is seen against the outline of its leg.',
       notEnoughData:
-        'Record several complete strides with both knees, ankles and hips visible throughout swing.',
+        'Record several complete strides from the front with both legs, hips to feet, clearly visible.',
     },
     remediationIntro: null,
     tryLine: null,

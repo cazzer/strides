@@ -158,6 +158,20 @@ function makeHighConfidenceResult(): FormHeuristicsResult {
  * and stepWidth, which is front-primary -- this fixture's 'front' view -- so it lands in tier 1
  * here, the mirror image of trunkLean/overstriding's side-primary exclusion.
  */
+describe('MetricsPanel — sideways foot travel (strides-uz48)', () => {
+  it.each([
+    [0, "None past the leg's outline"],
+    [0.123, '12.3% of hip width outward'],
+  ])('formats %s exactly as the guided view does', (value, text) => {
+    const heuristics = makeHighConfidenceResult()
+    heuristics.swingFootLateralExcursion = {
+      ...heuristics.swingFootLateralExcursion, value, confidence: 0.9,
+    }
+    render(<MetricsPanel heuristics={heuristics} />)
+    expect(within(screen.getByLabelText('Sideways foot travel')).getByText(text)).toBeInTheDocument()
+  })
+})
+
 function makeMixedTierResult(): FormHeuristicsResult {
   return {
     view: {
@@ -395,7 +409,7 @@ describe('MetricsPanel', () => {
       'Step width',
       'Step width (cm)',
       'Arm swing amplitude (wrist up-and-down)',
-      'Swing-foot lateral excursion',
+      'Sideways foot travel',
     ])
   })
 

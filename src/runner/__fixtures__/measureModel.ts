@@ -156,27 +156,19 @@ export function measureStepWidth(params: RunnerParams): number {
   return (leftWidth + rightWidth) / 2
 }
 
-/** Linear-interpolation percentile, the "linear" method `swingFootLateralExcursion` uses. */
-function percentile(values: number[], p: number): number {
-  const sorted = [...values].sort((a, b) => a - b)
-  const idx = p * (sorted.length - 1)
-  const lower = Math.floor(idx)
-  const upper = Math.ceil(idx)
-  return sorted[lower] + (sorted[upper] - sorted[lower]) * (idx - lower)
-}
-
 /**
- * swingFootLateralExcursion: P80 − P20 of (ankle − knee) lateral over hip width, across the window
- * from the other foot's contact to the end of early-to-mid swing (the terminal third excluded).
+ * swingFootArc as the outline check reads it (`strides-uz48`): the PEAK outward travel of the swing
+ * ankle past its knee's own line over the arc, in hip widths — the (ankle − knee) lateral offset's
+ * largest departure from where the leg's lean alone puts it at the arc's start.
  */
 export function measureSwingFootArc(params: RunnerParams): number {
   const samples = 2000
   const { swingArcStart, swingArcEnd } = GAIT_PHASES
-  const offsets = Array.from({ length: samples }, (_, i) => {
+  const offsets = Array.from({ length: samples + 1 }, (_, i) => {
     const pose = poseAt(swingArcStart + ((swingArcEnd - swingArcStart) * i) / samples, params)
     return (joint(pose, 'left_ankle').z - joint(pose, 'left_knee').z) / hipWidth(pose)
   })
-  return percentile(offsets, 0.8) - percentile(offsets, 0.2)
+  return Math.max(...offsets.map((offset) => Math.abs(offset - offsets[0])))
 }
 
 /** Each parameter's binding metric, measured off the model, with the tolerance it is exact to. */

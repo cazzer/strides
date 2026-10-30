@@ -99,9 +99,6 @@ export type EvidenceMarkRole =
   | 'hipMidlinePlumb'
   /** Vertical line at the knee's x — `footStrikePattern.ts:191` measures the ankle against it. */
   | 'kneePlumb'
-  /** left_hip → right_hip for swing-foot lateral excursion. This frame's segment only illustrates
-   * the hip-width scale; the metric uses a clip-median denominator. */
-  | 'hipWidthSegment'
   /** Vertical line at one stride endpoint's hip-mid x (`strideLength.ts:178-182`). */
   | 'strideTick'
   /** Horizontal line through the shoulder — the origin `armSwing.ts:405` measures the
@@ -120,6 +117,14 @@ export type EvidenceMarkRole =
    * `overstriding` and `footStrikePattern`. Their denominators are clip medians and exist in no
    * single frame, which is why nothing is labelled. */
   | 'ankleOffsetCaliper'
+  /** The swing thigh's outer edge in the person mask, extended down the leg — the line the outline
+   * check (`swingFootOutline.ts`) measures protrusion past. */
+  | 'thighOutlineEdge'
+  /** The leg's swing-side mask outline from the thigh band down: what was compared to the edge. */
+  | 'legOutline'
+  /** The outermost swing-side mask pixel below knee + 0.3 thigh length; absent when the lower leg
+   * is hidden behind the thigh. */
+  | 'outlineOutermost'
   /** The ankle-to-midline displacement in step width evidence. It gets a larger display mark
    * because this span can be only a few pixels at card size. */
   | 'stepWidthOffsetCaliper'
@@ -505,6 +510,13 @@ class MarkBuilder {
     })
   }
 
+  /** A point given in NATIVE video pixels (the outline check's mask geometry, which no keypoint
+   * names), in canvas space, at detected opacity. */
+  sourcePoint(point: { x: number; y: number }): ResolvedMarkPoint {
+    const { x, y } = this.toCanvas(point)
+    return { x, y, opacity: DETECTED_OPACITY }
+  }
+
   /** A reference line at a resolved point's x or y. Full-canvas unless a local half-span is given. */
   guide(
     role: EvidenceMarkRole,
@@ -794,27 +806,22 @@ function buildFootStrikeMarks(ctx: InstantContext): void {
   )
 }
 
-function buildSwingFootLateralMarks(ctx: InstantContext): void {
-  const { builder, index, plan } = ctx
-  const side = plan.side
-  if (side === undefined) return
-  const leftHip = builder.point(index, 'left_hip')
-  const rightHip = builder.point(index, 'right_hip')
-  if (leftHip !== null && rightHip !== null) {
-    builder.line('hipWidthSegment', leftHip, rightHip, ['left_hip', 'right_hip'])
+/**
+ * The outline check (`strides-uz48`): the thigh's outer edge, the leg's swing-side outline below
+ * it, the outermost lower-leg point when one is visible, and the hip midline that bounds which side
+ * is read. Every coordinate is the reader's measured mask geometry, not a keypoint. No text.
+ */
+function buildSwingFootOutlineMarks(ctx: InstantContext): void {
+  const { builder, instant } = ctx
+  const marks = instant.outlineMarks
+  if (marks === undefined) return
+  const [edgeTop, edgeBottom] = marks.thighEdge
+  builder.guide('hipMidlinePlumb', 'vertical', builder.sourcePoint({ x: marks.midlineX, y: edgeTop.y }))
+  builder.line('thighOutlineEdge', builder.sourcePoint(edgeTop), builder.sourcePoint(edgeBottom))
+  for (let k = 1; k < marks.contour.length; k += 1) {
+    builder.line('legOutline', builder.sourcePoint(marks.contour[k - 1]), builder.sourcePoint(marks.contour[k]))
   }
-  const knee = builder.point(index, KNEE_NAME[side])
-  const ankle = builder.point(index, ANKLE_NAME[side])
-  if (knee === null || ankle === null) return
-  builder.guide('kneePlumb', 'vertical', knee)
-  builder.line('shank', knee, ankle, [KNEE_NAME[side], ANKLE_NAME[side]])
-  builder.caliper(
-    'ankleOffsetCaliper',
-    'horizontal',
-    derived(ankle, knee.x, ankle.y),
-    ankle,
-    null,
-  )
+  if (marks.outermost !== null) builder.marker('outlineOutermost', builder.sourcePoint(marks.outermost))
 }
 
 function buildStepWidthMarks(ctx: InstantContext): void {
@@ -927,7 +934,7 @@ const INSTANT_MARK_BUILDERS: Record<
   bounceCycle: buildBounceMarks,
   stridePair: buildStrideInstantMarks,
   kneeDrivePeak: buildKneeDriveMarks,
-  swingFootOutline: buildSwingFootLateralMarks,
+  swingFootOutline: buildSwingFootOutlineMarks,
 }
 
 /**

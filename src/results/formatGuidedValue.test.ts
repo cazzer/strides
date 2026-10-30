@@ -67,6 +67,15 @@ describe('formatGuidedValue — matches MetricsPanel formatValue', () => {
     ).toBe('Forefoot strike (proxy)')
   })
 
+  it('reads sideways foot travel as an outline check: 0 is none past the outline (strides-uz48)', () => {
+    expect(
+      formatGuidedValue(makeMetric('swingFootLateralExcursion', { value: 0, unit: 'percent' })),
+    ).toBe("None past the leg's outline")
+    expect(
+      formatGuidedValue(makeMetric('swingFootLateralExcursion', { value: 0.123, unit: 'percent' })),
+    ).toBe('12.3% of hip width outward')
+  })
+
   it("says 'Not available' for a null value, as MetricsPanel's formatter does", () => {
     expect(formatGuidedValue(makeMetric('kneeDrive', { value: null }))).toBe(
       'Not available',
