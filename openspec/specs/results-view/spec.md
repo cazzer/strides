@@ -2599,20 +2599,6 @@ a live region. Neither behaviour SHALL change how frames are sampled or detected
 - **WHEN** a clip is analysing on a coarse-pointer device
 - **THEN** a non-live notice says analysis can take a minute or more and to keep the tab open
 
-### Requirement: Swing-foot lateral excursion appears with neutral interpretation and paired path evidence
-
-The results views SHALL label the metric "Swing-foot lateral excursion" and describe ankle travel
-relative to the same-side knee during early-to-mid swing, in percent of hip width. Guidance SHALL
-explain the terminal third exclusion and SHALL be unbanded
-and SHALL state that this is not heel rotation or a diagnosis. When evidence is available, the
-system SHALL show two instants of one complete swing near its low and high quantile offsets, with
-the measured knee's vertical line and the ankle's horizontal offset marked at each instant.
-
-#### Scenario: A usable swing has evidence at both ends of its range
-
-- **WHEN** a typical usable swing has drawable frames near its low and high offset quantiles
-- **THEN** one paired evidence image depicts those two positions of the same foot
-
 ### Requirement: The results surface explains illustrative and detected running motion
 
 In the classic results view, the system SHALL display a two-dimensional illustrative runner during sampling and processing, label it as an illustration, and show an actual detected pose only after analysis is ready. The first transition to detected pose SHALL respect reduced-motion preference. The illustration SHALL NOT be presented as universal ideal form or used to grade the runner. The runner tour and the results summary do not render this stage.
@@ -2638,4 +2624,53 @@ On a small screen, the classic view SHALL keep a compact metric rail visible whi
 #### Scenario: Evidence is pending, absent, or the metric is excluded
 - **WHEN** no extracted image can yet or ever be shown
 - **THEN** the stage states the condition and does not imply an extracted image exists
+
+### Requirement: Sideways foot travel appears as an outline check with no band
+
+Every view SHALL label `swingFootLateralExcursion` "Sideways foot travel" and SHALL format a value
+that rounds to 0.0% as "None past the leg's outline" and any other value as "<v×100 to one decimal>% of hip
+width outward", identically in the guided views, the classic panel and the runner label. The
+description SHALL say it checks early-swing sideways foot travel on front video, that a large
+outward flick just after toe-off is what coaches call heel whip, that it is an outline check that
+cannot see a flick hidden behind the thigh, and that it is not foot rotation or a diagnosis; that
+limit SHALL be stated once per card, in the description. The metric SHALL have no band. When
+clips tie on this metric's confidence (as every clip does while an outline pass is pending), the
+fused result SHALL come from a clip that planned an outline check; no other metric's fusion
+changes. Its evidence SHALL be one early-swing frame ghosted against a stance
+frame of the same strike, with the thigh's outer edge, the leg's swing-side outline, the outermost
+lower-leg point (when one exists) and the hip midline drawn from the measured mask geometry, and no
+text on the image. While the outline pass is pending or running and the scale pass is not, the one
+completion status line SHALL add " Checking sideways foot travel with a closer look at the clip…".
+
+#### Scenario: A session's fused card while the front clip is still checking
+- **WHEN** a side clip and a front clip both read confidence 0 for this metric and only the front clip planned an outline check
+- **THEN** the fused card carries the front clip's caveat and source
+
+#### Scenario: Nothing left the outline
+- **WHEN** the metric's value is 0
+- **THEN** the card, the classic panel and the runner label read "None past the leg's outline"
+
+#### Scenario: The status line while the outline pass runs
+- **WHEN** a clip is ready, its scale pass is terminal and its outline pass is running
+- **THEN** exactly one status line reads "Analysis complete." followed by the scale-pass sentence and "Checking sideways foot travel with a closer look at the clip…"
+
+### Requirement: A background outline pass grafts sideways foot travel only
+
+When a front clip's primary result carries an `outlinePlan`, the clip sampled on the sequential
+path and the outline pass is enabled, the system SHALL run the outline pass once the clip's scale
+pass is terminal and its lane allows, and SHALL replace only `swingFootLateralExcursion` in the
+displayed result: every other metric, its value and its evidence SHALL keep their references. A
+playback-path clip SHALL skip the pass with the caveat "This check needs a clip the browser can
+decode frame by frame."; a pass that fails (segmenter unavailable, decode error, watchdog of
+max(30 s, 0.2 s per planned frame)) or is disabled SHALL show "The closer look that checks sideways
+foot travel couldn't run on this clip." with `value: null`. A reset, a new clip or a new run SHALL
+stop the pass and discard its late result.
+
+#### Scenario: The outline pass finishes
+- **WHEN** the outline pass completes on a front clip
+- **THEN** `swingFootLateralExcursion` carries its outline reading and every other metric is the same object as before
+
+#### Scenario: A playback-path front clip
+- **WHEN** a front clip sampled on the playback path reaches ready
+- **THEN** no outline pass runs and the metric reads not available with the frame-by-frame caveat
 

@@ -2960,70 +2960,6 @@ about whether one clip has a measurable rhythm.
   reports its value on the same terms as any other clip, and footstrike timing is derived from the
   fitted bounce phase rather than falling back to the ankle-difference detector
 
-### Requirement: Swing-foot lateral excursion measures a complete swing's sideways ankle path relative to the knee
-
-The system SHALL expose `swingFootLateralExcursion` as a `MetricId` and a
-`FormHeuristicsResult` member, in `percent` units. A complete approximate swing SHALL be bounded
-by an opposite-foot detected strike and the measured foot's next detected strike. The terminal
-third of that detected strike interval SHALL be excluded because detected contact can lag visible
-landing; only earlier interior frames SHALL contribute, and the result SHALL be described as
-early-to-mid-swing excursion. The per-frame signal SHALL be the signed horizontal ankle offset from
-the same-side knee, divided by the same frame's positive bilateral hip width. Any frame with an
-interpolated contributing point SHALL be excluded from the extreme-quantile population, and a
-frame's hip width SHALL clear both a half-median-width and a one-tenth-torso-length stability
-floor. Each usable swing
-SHALL contribute its 80th-minus-20th percentile range, and the result SHALL be the median across
-usable swings. The result SHALL make no inward/outward or heel-rotation claim.
-
-#### Scenario: A foot moves sideways during swing
-
-- **WHEN** a front or rear clip contains complete alternating strikes and a resolvable sideways ankle path during each swing
-- **THEN** the result reports the median swing range as a fraction of hip width, with `viewFit: primary`
-
-#### Scenario: A static ankle offset is distinct from swing travel
-
-- **WHEN** the ankle remains at a fixed horizontal offset from its knee through every usable swing
-- **THEN** the result is zero, regardless of that fixed offset's sign or magnitude
-
-#### Scenario: Swing excursion is distinct from footstrike step width
-
-- **WHEN** ankle positions change only in retained swing interiors while footstrike poses stay fixed
-- **THEN** swing-foot lateral excursion changes while `stepWidth` remains fixed
-- **AND WHEN** ankle positions change only at detected footstrikes while retained swing poses stay fixed
-- **THEN** `stepWidth` changes while swing-foot lateral excursion remains fixed
-
-#### Scenario: A detected strike trails visible landing
-
-- **WHEN** the ankle remains fixed during the retained early-to-mid swing but moves sharply sideways in the terminal third of the detected strike interval after landing
-- **THEN** the late movement does not affect the reported range or its evidence endpoints
-
-### Requirement: Incomplete or unobservable swings do not produce a number
-
-The system SHALL discard a window with fewer than six directly detected retained samples or
-less than 70% direct frame coverage, and SHALL return `value: null`, `confidence: 0` when no usable complete
-window remains. One or two usable windows SHALL be reported with reduced confidence and a
-thin-sample caveat. Frame coverage SHALL count accepted direct samples over all complete
-candidate-window retained frames, including rejected candidates in the denominator. The system
-SHALL require a trustworthy fitted step rhythm and SHALL reject an opposite-foot strike interval
-that is not shorter than the shortest plausible full stride derived from that rhythm. Side and
-ambiguous views SHALL be unsuitable; the result SHALL be computed
-where possible and flagged, following the existing metric view-fit contract.
-
-#### Scenario: The clip ends during swing
-
-- **WHEN** all observable swings are clipped at a boundary or lack sufficient hip, knee, or ankle observations
-- **THEN** the result is null with a caveat naming the missing complete, resolvable swing
-
-#### Scenario: Two detected contacts span several steps after missed detections
-
-- **WHEN** two opposite-side detected strikes are adjacent in the candidate list but their elapsed time exceeds the shortest plausible full stride derived from the fitted step rhythm
-- **THEN** that interval does not contribute a swing range, and the missing interval reduces coverage
-
-#### Scenario: No independent step-period evidence exists
-
-- **WHEN** no trustworthy hip-bounce frequency can be fitted
-- **THEN** the result is null rather than assuming adjacent detected strikes bound one step
-
 ### Requirement: Arm swing amplitude reports per-stride wrist travel as a fraction of torso length
 
 The system SHALL expose arm swing amplitude as a `MetricId` (`armSwingAmplitude`), positioned
@@ -3228,4 +3164,64 @@ fallback to the hip-bounce band.
   rate (twice the stride rate)
 - **THEN** the fitted frequency lies within ±20% of the stride rate — the step rate is not on the
   grid
+
+### Requirement: Sideways foot travel is an early-swing outline check on front clips
+
+`swingFootLateralExcursion` (unit `percent`, a fraction of hip width) SHALL be computed only from a
+clip whose most plausible view is front; a side or ambiguous view SHALL return `value: null` with
+its view caveat and no plan. On a front clip the primary pass SHALL return `value: null`,
+`confidence: 0`, a "checking" caveat and an `outlinePlan` naming, for every detected strike, an
+early-swing window [strike + T/2, strike + 5T/4] and a stance window [strike, strike + T/4], where T
+is one over the fitted hip-bounce frequency (gated by `cadenceMinFitR2`), and the frames needing a
+person mask with the leg to read on each. The outline pass SHALL replace that result with one
+computed per frame and leg from MediaPipe's person mask (confidence > 0.5) over a MoveNet-guided
+crop, as follows. With s the leg's outward sign (its hip's side of hip-mid), L the thigh's image
+length (knee.y − hip.y) and HW the frame's hip width: the thigh's outer edge SHALL be the median,
+over rows [knee − 0.40L, knee − 0.10L], of the mask run at the hip→knee line (or the nearest run
+within 0.3 HW) walked outward to its end, with at least half the rows yielding one; the residual
+SHALL be s·(outermost − edge)/HW for the outermost swing-side pixel, past the hip midline, of the
+8-connected mask component seeded by those thigh runs, in rows from knee + 0.3L down; protrusion
+SHALL be max(0, residual), and 0 where no such pixel exists. A frame SHALL be dropped for that leg
+when its mask is missing, MediaPipe's hips or knees sit more than 0.5 HW from MoveNet's, a hip or
+the knee is missing or interpolated, HW is below half the clip's median, L ≤ 0, or the thigh band
+fails. A window SHALL be usable when it ends inside the clip and has at least 6 good frames covering
+at least 70% of its frames; its value SHALL be the P80 of its protrusions. The floor SHALL be the P80
+of stance protrusion pooled over every strike, null below 6 frames. Each side's reading SHALL be the
+median of its usable windows; the larger side SHALL be reported, as exactly 0 when it does not
+exceed the floor, and null when no window is usable or the floor is null. The caveat SHALL always
+be non-null. At 0 it SHALL say "in all n swings" only when no usable window exceeded the floor,
+and otherwise name the swings that went past it; above 0 it SHALL name the reported foot,
+count only that foot's usable swings, and state the floor the value cleared.
+
+#### Scenario: Every swing stays inside the leg's outline
+- **WHEN** no lower-leg mask pixel passes the thigh's outer edge in any usable early swing
+- **THEN** the value is 0 and the caveat says no sideways foot travel past the leg's outline "in all n swings"
+
+#### Scenario: One foot stuck out
+- **WHEN** the reported foot's usable windows exceed the floor
+- **THEN** the caveat names that foot, counts only its swings, and states the clip's noise floor
+
+#### Scenario: An injected connected flick reads its size
+- **WHEN** a foot bar connected to the leg reaches 0.05, 0.10, 0.20 or 0.30 hip widths past the thigh edge
+- **THEN** that frame's protrusion reads within 0.01 of the injected size
+
+#### Scenario: Mirrored and rear-labelled footage agree
+- **WHEN** the same mask and keypoints are mirrored horizontally, or the leg labels are swapped as in a rear view
+- **THEN** the protrusion is the same
+
+#### Scenario: MediaPipe and MoveNet disagree
+- **WHEN** MediaPipe's hips or knees sit more than 0.5 hip widths from MoveNet's on a frame
+- **THEN** that frame is not used for either leg
+
+#### Scenario: The knee's own contour is not a protrusion
+- **WHEN** the mask bulges past the thigh edge only between the knee and knee + 0.3 thigh length
+- **THEN** the protrusion is 0
+
+#### Scenario: A bystander beside the leg is ignored
+- **WHEN** a mask region past the thigh edge is not connected to the leg's thigh runs
+- **THEN** it does not count
+
+#### Scenario: A side view abstains
+- **WHEN** the clip's most plausible view is side or ambiguous
+- **THEN** the value is null, nothing is planned and no outline pass runs
 

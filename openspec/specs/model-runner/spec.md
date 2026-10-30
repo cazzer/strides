@@ -118,7 +118,7 @@ SHALL NOT provide any per-side or variability parameter, because no metric repor
 ### Requirement: A bound parameter changes only its own part of the runner, in the direction of its value
 
 Applying a bound metric's own formula to the model's joints SHALL return the parameter's value
-for every parameter in a conflict-free set (the swing-foot arc to within its percentile sampling,
+for every parameter in a conflict-free set (the swing-foot arc, read as its peak outward travel past the knee line, to within its sampling,
 the peak metrics to within their extrema finder's sampling). Raising a parameter SHALL raise
 that measured quantity. Changing a parameter SHALL leave every joint outside that parameter's
 documented set of joints unchanged, apart from one whole-figure vertical shift per phase that keeps
@@ -140,6 +140,10 @@ depends on the hips' height through stance. Cadence SHALL change only the cycle 
 #### Scenario: Contact conflict keeps the stronger parameter exact
 - **WHEN** both contact offsets are measured and the shank offset is too large for the landing offset without hyperextending the knee
 - **THEN** the landing offset is still exact, the knee is held straight, and the foot-strike offset is what gives way, drawn at the value its bound parameter carries
+
+#### Scenario: A swing-foot arc of zero draws no arc
+- **WHEN** the swing-foot arc is bound to 0 hip widths
+- **THEN** the swing ankle never leaves its knee's own line, and the measured peak outward travel is 0
 
 ### Requirement: Neutral parts are identifiable per segment
 
