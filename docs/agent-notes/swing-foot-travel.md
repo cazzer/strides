@@ -324,7 +324,7 @@ crop masks (`masks-c1/`, reduced to runs) and reproduced every per-frame reason 
 `park-approach.mp4` uploaded alone — **reproduces the spike**: 65 frames planned and segmented,
 every one with a crop-sized mask; 4 usable windows (2 per side), every window 15/15 good frames,
 all P80 0.000, floor 0.000 over 24 stance frames, value **0**, confidence 1.0, caveat "No sideways
-foot travel past your leg's outline (4 of 4 swings). …". k4 (left, 1.584–1.832) runs past the clip
+foot travel past your leg's outline in all 4 swings." (wording after the review round below). k4 (left, 1.584–1.832) runs past the clip
 end and is not segmented.
 
 | k | side | window | good/frames | P80 | closest approach (prod) | closest approach (spike) |
@@ -353,6 +353,27 @@ It lands ~3.0 s after the primary's ready (after the 1.4 s scale pass).
 empty, both normalized files md5 `12a58e58…`). Note the branch's primary `metrics.swingFoot…` row is
 the PLACEHOLDER (null): the primary diagnostics line is logged at ready, before the graft — read
 the value from the outline-pass line.
+
+## Review round 1 (`79f6a494` and the commit after it)
+
+- **Lane lease is {clip, pass}.** A scale lease used to carry over into the same clip's outline
+  pass (the lease only checked "some background pass ahead"), so an outline pass could run ahead
+  of a clip added while the scale pass ran. Now a scale lease ends with the scale pass.
+- **Caveat copy.** "in all n swings" only when no usable window exceeded the floor; otherwise the
+  remainder is named. Above 0: the reported foot's swings only, plus the floor ("…in 2 of 2
+  right-foot swings, above this clip's noise floor of 1.0%."). The outline-check limit lives once,
+  in the 40-word description; it is no longer appended to every caveat or repeated as a guidance
+  note. A value rounding to 0.0% formats as none.
+- **Fusion tie.** While a front clip's pass is pending/running/failed every clip reads confidence 0
+  and clip 1 (often a side clip, with its view caveat) used to win. On a tie THIS metric now prefers
+  a clip with an `outlinePlan`; no other metric passes a tie-breaker.
+- **Segmenter lifetime.** Each outline pass acquires and releases the IMAGE-mode segmenter; 5 s
+  after the last release it is closed (second GPU graph freed) and recreated on demand.
+- **Classic view status line** gained the same "Checking sideways foot travel…" clause as the
+  guided view's (it was guided-only, so the classic view never showed it).
+- Re-run live on park-approach: the reading is identical to the earlier trials (same windows,
+  residuals, floor, value 0); only the caveat text changed. 3-clip demo: the fused classic card is
+  clip 3's ("Measured from Clip 3 of 3", "…in all 4 swings. Combined from clip 3 of 3.").
 
 ## Still open
 

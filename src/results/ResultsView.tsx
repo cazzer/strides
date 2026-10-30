@@ -135,6 +135,13 @@ export function ResultsView({
               ? ` A second look at the clip added ${addedMetricCount} more metric${addedMetricCount === 1 ? '' : 's'}.`
               : scalePassCouldntAdd)}
           {analysis.scalePass.status === 'failed' && scalePassCouldntAdd}
+          {/* The outline pass (`strides-uz48`) runs after every scale pass; same words as the
+              guided view's line. */}
+          {analysis.scalePass.status !== 'pending' &&
+            analysis.scalePass.status !== 'running' &&
+            (analysis.outlinePass?.status === 'pending' ||
+              analysis.outlinePass?.status === 'running') &&
+            ' Checking sideways foot travel with a closer look at the clip…'}
         </p>
       )}
 

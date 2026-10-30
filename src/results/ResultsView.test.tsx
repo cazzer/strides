@@ -215,6 +215,24 @@ describe('ResultsView', () => {
     expect(screen.getByRole('status').textContent).toMatch(
       /a second look at the clip added 2 more metrics/i,
     )
+
+    // The outline pass (strides-uz48), same words as the guided view, once the scale pass is done.
+    rerender(
+      <ResultsView
+        analysis={makeAnalysis({
+          phase: 'ready',
+          heuristics: makeHeuristics(),
+          scalePass: { status: 'done', diagnostics: null },
+          outlinePass: { status: 'running' },
+        })}
+        onTryAgain={vi.fn()}
+        onStartOver={vi.fn()}
+      />,
+    )
+    expect(screen.getAllByRole('status')).toHaveLength(1)
+    expect(screen.getByRole('status').textContent).toMatch(
+      /added 2 more metrics\. Checking sideways foot travel with a closer look at the clip…$/,
+    )
   })
 
   it('pluralizes "1 more metric" (singular) when exactly one of the two grafted metrics gained a value', () => {
