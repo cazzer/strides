@@ -927,7 +927,7 @@ const INSTANT_MARK_BUILDERS: Record<
   bounceCycle: buildBounceMarks,
   stridePair: buildStrideInstantMarks,
   kneeDrivePeak: buildKneeDriveMarks,
-  swingFootLateralRange: buildSwingFootLateralMarks,
+  swingFootOutline: buildSwingFootLateralMarks,
 }
 
 /**

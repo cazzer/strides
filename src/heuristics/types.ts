@@ -151,8 +151,10 @@ export type MetricExemplarKind =
    * series' minima are the trailing extremes). The trough is legibility, not a measurement,
    * mirroring `kneeFlexionPeak`'s peak/trough contract clause for clause. */
   | 'kneeDrivePeak'
-  /** Two positions of one swing ankle relative to its own knee's vertical line. */
-  | 'swingFootLateralRange'
+  /** One early-swing frame's leg outline (thigh edge, lower-leg contour, outermost point),
+   * ghosted against the same leg's outline in stance — `swingFootLateralExcursion`'s outline
+   * check (`strides-uz48`). Carries `outlineMarks`. */
+  | 'swingFootOutline'
 
 /**
  * One renderable piece of evidence for a metric: either a single instant, or a ghosted PAIR of
@@ -292,6 +294,161 @@ export interface MetricExemplar {
    * pair is not evidence merely because a better one could not be drawn.
    */
   alternates?: MetricExemplar[]
+  /** The measured outline geometry for each instant, in source pixels — present on
+   * `'swingFootOutline'` exemplars only, which have no keypoint that states what was measured: the
+   * reading is a property of the person mask, not of a joint. */
+  outlineMarks?: OutlineMarks
+}
+
+export interface OutlinePoint {
+  x: number
+  y: number
+}
+
+/** What one instant of the outline check measured, in source pixels. */
+export interface OutlineSideMarks {
+  /** The thigh's outer edge, extended down to the bottom of the leg's mask component. */
+  thighEdge: [OutlinePoint, OutlinePoint]
+  /** The leg component's swing-side outline from the thigh band down, at most 64 points. */
+  contour: OutlinePoint[]
+  /** The outermost swing-side pixel below knee + 0.3 thigh length; null when the lower leg is
+   * hidden behind the thigh. */
+  outermost: OutlinePoint | null
+  /** Hip-midline x — the side boundary nothing past is read as this leg's. */
+  midlineX: number
+}
+
+export interface OutlineMarks {
+  base: OutlineSideMarks
+  ghost: OutlineSideMarks
+}
+
+export interface OutlineKeypoint {
+  x: number
+  y: number
+  interpolated: boolean
+}
+
+/** One frame the outline pass must segment, and which legs to read on it. */
+export interface SwingFootOutlineFramePlan {
+  timestamp: number
+  /** Planned sides that cleared every MoveNet-only gate — the only ones worth a mask. */
+  sides: Array<'left' | 'right'>
+  /** The MoveNet-guided crop in source pixels, unclamped (`swingFootOutline.ts`'s `cropRectFor`). */
+  crop: { x: number; y: number; width: number; height: number }
+  /** MoveNet's hips and knees (robust frame, source pixels); null where unresolved. */
+  keypoints: {
+    left_hip: OutlineKeypoint | null
+    right_hip: OutlineKeypoint | null
+    left_knee: OutlineKeypoint | null
+    right_knee: OutlineKeypoint | null
+  }
+  /** `detectionFactor` of each side's hip/knee/ankle — the evidence quality of this instant. */
+  quality: { left: number; right: number }
+}
+
+/** One detected strike's early-swing and stance windows. */
+export interface SwingFootOutlineWindowPlan {
+  side: 'left' | 'right'
+  strikeTimestamp: number
+  /** strike + T/2 */
+  swingStart: number
+  /** strike + 5T/4 */
+  swingEnd: number
+  stanceStart: number
+  /** strike + T/4 */
+  stanceEnd: number
+  /** Whether the early-swing window ends inside the clip. */
+  inClip: boolean
+  /** Every frame timestamp inside the window — the coverage denominator. */
+  swingTimestamps: number[]
+  stanceTimestamps: number[]
+}
+
+/** The primary pass's plan for the background outline pass. */
+export interface SwingFootOutlinePlan {
+  viewFit: ViewFitEntry
+  /** 1 / fitted hip-bounce frequency, seconds (one step). */
+  periodSeconds: number
+  /** Median MoveNet hip width over the clip, source pixels. */
+  hipWidthMedianPx: number
+  lastFrameTimestamp: number
+  windows: SwingFootOutlineWindowPlan[]
+  /** Sorted by timestamp, unique. */
+  frames: SwingFootOutlineFramePlan[]
+}
+
+export type SwingFootOutlineSideMeasurement =
+  | {
+      ok: true
+      /** s·(outermost − thighEdge)/HW; null when no lower-band pixel is on the swing side. */
+      residual: number | null
+      /** max(0, residual); 0 when residual is null. */
+      protrusion: number
+      marks: OutlineSideMarks
+    }
+  | {
+      ok: false
+      reason:
+        | 'no-mask'
+        | 'mask-untrusted'
+        | 'kp-missing'
+        | 'kp-interpolated'
+        | 'hip-floor'
+        | 'thigh-len'
+        | 'thigh-band'
+        | 'no-component'
+        | 'not-measured'
+    }
+
+export interface SwingFootOutlineFrameMeasurement {
+  timestamp: number
+  /** Largest MediaPipe-vs-MoveNet hip/knee distance in hip widths; null without a MediaPipe pose. */
+  mediaPipeDisagreement: number | null
+  sides: Partial<Record<'left' | 'right', SwingFootOutlineSideMeasurement>>
+}
+
+export interface SwingFootOutlineWindowReading {
+  side: 'left' | 'right'
+  strikeTimestamp: number
+  swingStart: number
+  swingEnd: number
+  inClip: boolean
+  frames: number
+  okFrames: number
+  usable: boolean
+  protrusionP80: number | null
+  /** Closest approach to the thigh edge (largest residual); negative = stayed inside. */
+  residualMax: number | null
+  /** Usable and its P80 is above the stance floor. */
+  outside: boolean
+}
+
+export interface SwingFootOutlineReading {
+  windows: SwingFootOutlineWindowReading[]
+  /** P80 of stance protrusion pooled over every strike; null below 6 stance frames. */
+  floor: number | null
+  stanceFrames: number
+  /** Median of each side's usable-window P80s. */
+  perSide: { left: number | null; right: number | null }
+  reportedSide: 'left' | 'right' | null
+  /** The reported side's raw protrusion, before the floor maps it to 0. */
+  protrusion: number | null
+  insideCount: number
+  outsideCount: number
+  usableCount: number
+}
+
+/**
+ * `swingFootLateralExcursion` is an outline check on front clips (`strides-uz48`): the primary
+ * pass emits `outlinePlan` with `value: null`, and the background outline pass replaces the
+ * result with one carrying `outline`.
+ */
+export interface SwingFootLateralExcursionResult extends MetricResult {
+  /** Absent or null: no outline pass is wanted (not a front clip, or nothing to check). */
+  outlinePlan?: SwingFootOutlinePlan | null
+  /** Present once the outline pass has measured; absent or null before. */
+  outline?: SwingFootOutlineReading | null
 }
 
 export interface MetricResult {
@@ -520,7 +677,7 @@ export interface FormHeuristicsResult {
   stepWidthCm: MetricResult
   kneeDrive: MetricResult
   armSwingAmplitude: MetricResult
-  swingFootLateralExcursion: MetricResult
+  swingFootLateralExcursion: SwingFootLateralExcursionResult
 }
 
 export interface HeuristicsConfig {
