@@ -38,8 +38,10 @@ const FOOT_STRIKE_CLASS_LABELS: Record<FootStrikeClass, string> = {
  * Shared with `MetricsPanel`'s `formatValue` so the two views cannot word it differently.
  */
 export function formatSwingFootOutlineValue(value: number): string {
-  if (value === 0) return "None past the leg's outline"
-  return `${(value * 100).toFixed(1)}% of hip width outward`
+  const percent = (value * 100).toFixed(1)
+  // A reach that rounds to 0.0% is not a reading of "0.0% outward": it is none at this precision.
+  if (Number(percent) === 0) return "None past the leg's outline"
+  return `${percent}% of hip width outward`
 }
 
 export function formatGuidedValue(

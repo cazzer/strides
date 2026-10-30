@@ -14,7 +14,7 @@ import { resolveOutlinePassConfig } from './outlinePassConfig'
 import { graftOutlineResult, withOutlineUnavailable } from './swingFootOutlineGraft'
 import { createOutlineFrameReader } from './outlineFrameReader'
 import { sampleClipSequential } from './sampleClipSequential'
-import { getOutlineSegmenter } from '../pose/outlinePassDetector'
+import { getOutlineSegmenter, releaseOutlineSegmenter } from '../pose/outlinePassDetector'
 import { summarizeSwingFootOutline } from '../heuristics/swingFootOutline'
 import { DEFAULT_HEURISTICS_CONFIG } from '../heuristics/types'
 import {
@@ -1126,10 +1126,13 @@ export function useVideoAnalysis(
     const samplingRobustnessConfig = resolveSamplingRobustnessConfig()
     const watchdogMs = outlineWatchdogMs(plan.frames.length)
     const passStartedAt = performance.now()
+    // One hold on the shared segmenter per pass, released once the pass is over by any path (done,
+    // failed, watchdog, or abandoned by a newer run), so an idle segmenter is closed.
+    const acquisition = getOutlineSegmenter()
     void (async () => {
       let segmenterDeadline: ReturnType<typeof setTimeout> | undefined
       const segmenter = await Promise.race([
-        getOutlineSegmenter(),
+        acquisition,
         new Promise<null>((resolve) => {
           segmenterDeadline = setTimeout(() => resolve(null), watchdogMs)
         }),
@@ -1214,7 +1217,9 @@ export function useVideoAnalysis(
       } catch (err) {
         failPass(err instanceof Error ? err.message : 'Outline pass failed unexpectedly.')
       }
-    })()
+    })().finally(() => {
+      void acquisition.finally(releaseOutlineSegmenter)
+    })
   }, [state.phase, state.outlinePass?.status, state.heuristics, metadata, sourceBlob])
 
   // Auto-starts analysis the moment a freshly loaded clip is ready and a detector exists — no

@@ -1,6 +1,11 @@
 import { classifyFootStrike } from '../heuristics/footStrikePattern'
 import { DEFAULT_HEURISTICS_CONFIG } from '../heuristics/types'
-import type { FormHeuristicsResult, MetricId, MetricResult } from '../heuristics/types'
+import type {
+  FormHeuristicsResult,
+  MetricId,
+  MetricResult,
+  SwingFootLateralExcursionResult,
+} from '../heuristics/types'
 import type { FootStrikeClass } from '../heuristics/footStrikePattern'
 import { metricTier } from './metricConfidence'
 
@@ -111,12 +116,33 @@ export function fusionDisagreementCaveat(
 
 function pickBestWithIndex<T extends { confidence: number }>(
   candidates: readonly T[],
+  preferOnTie?: (candidate: T) => boolean,
 ): { value: T; index: number } {
   let bestIndex = 0
   for (let i = 1; i < candidates.length; i += 1) {
-    if (candidates[i].confidence > candidates[bestIndex].confidence) bestIndex = i
+    const better = candidates[i].confidence > candidates[bestIndex].confidence
+    const preferredTie =
+      preferOnTie !== undefined &&
+      candidates[i].confidence === candidates[bestIndex].confidence &&
+      preferOnTie(candidates[i]) &&
+      !preferOnTie(candidates[bestIndex])
+    if (better || preferredTie) bestIndex = i
   }
   return { value: candidates[bestIndex], index: bestIndex }
+}
+
+/**
+ * The one metric with a tie-breaker (`strides-uz48`): while a front clip's outline pass is
+ * pending, running or failed, every clip reads confidence 0, and the first clip — often a side
+ * clip with its view caveat — would win the tie. The clip that PLANNED an outline check is the one
+ * whose "checking…"/"couldn't run" caveat is true of the session. Every other metric passes no
+ * preference and fuses exactly as before.
+ */
+function tieBreakerFor(
+  key: Exclude<keyof FormHeuristicsResult, 'view'>,
+): ((candidate: MetricResult) => boolean) | undefined {
+  if (key !== 'swingFootLateralExcursion') return undefined
+  return (candidate) => (candidate as SwingFootLateralExcursionResult).outlinePlan != null
 }
 
 /**
@@ -191,7 +217,7 @@ export function fuseFormHeuristicsResults(
     key: K,
   ): FormHeuristicsResult[K] => {
     const candidates = results.map((r) => r[key] as MetricResult)
-    const { value, index } = pickBestWithIndex(candidates)
+    const { value, index } = pickBestWithIndex(candidates, tieBreakerFor(key))
     return {
       ...value,
       caveat: [
@@ -253,7 +279,7 @@ export function fusionSourceIndices(
   }
 
   const sourceIndex = (key: Exclude<keyof FormHeuristicsResult, 'view'>): number =>
-    pickBestWithIndex(results.map((r) => r[key] as MetricResult)).index
+    pickBestWithIndex(results.map((r) => r[key] as MetricResult), tieBreakerFor(key)).index
 
   return {
     verticalOscillation: sourceIndex('verticalOscillation'),

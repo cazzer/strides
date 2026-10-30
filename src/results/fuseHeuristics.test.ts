@@ -548,3 +548,45 @@ describe('fusionSourceIndices', () => {
     expect(() => fusionSourceIndices([])).toThrow()
   })
 })
+
+describe('the swing-foot outline tie-breaker (strides-uz48)', () => {
+  const plan = {
+    viewFit: { fit: 'primary' as const, multiplier: 1 },
+    periodSeconds: 0.33,
+    hipWidthMedianPx: 60,
+    lastFrameTimestamp: 1,
+    windows: [],
+    frames: [],
+  }
+  const planned = (caveat: string) => ({
+    ...makeMetric('swingFootLateralExcursion', 0, { unit: 'percent', value: null, caveat }),
+    outlinePlan: plan,
+  })
+  const sideClip = makeResult(0.9, {
+    swingFootLateralExcursion: makeMetric('swingFootLateralExcursion', 0, {
+      unit: 'percent', value: null, caveat: 'Sideways foot travel is not reliable from a side view.',
+    }),
+  })
+  const frontClip = makeResult(0.9, { swingFootLateralExcursion: planned('Checking…') })
+
+  it('on a confidence-0 tie, the clip that planned the outline check wins', () => {
+    const fused = fuseFormHeuristicsResults([sideClip, sideClip, frontClip])
+    expect(fused.swingFootLateralExcursion.caveat).toBe('Checking… Combined from clip 3 of 3.')
+    expect(fusionSourceIndices([sideClip, sideClip, frontClip]).swingFootLateralExcursion).toBe(2)
+  })
+
+  it('still lets a higher confidence win, and leaves the first planned clip on a planned tie', () => {
+    const measured = makeResult(0.9, {
+      swingFootLateralExcursion: { ...planned('measured'), confidence: 0.8, value: 0 },
+    })
+    expect(fusionSourceIndices([frontClip, measured]).swingFootLateralExcursion).toBe(1)
+    expect(fusionSourceIndices([frontClip, frontClip]).swingFootLateralExcursion).toBe(0)
+  })
+
+  it('changes no other metric: every other source index is the plain first-best', () => {
+    const indices = fusionSourceIndices([sideClip, sideClip, frontClip])
+    for (const [metric, index] of Object.entries(indices)) {
+      if (metric !== 'swingFootLateralExcursion') expect(index, metric).toBe(0)
+    }
+  })
+})

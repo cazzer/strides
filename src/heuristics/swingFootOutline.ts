@@ -85,7 +85,6 @@ const MAX_CONTOUR_POINTS = 64
 /** Same tolerance the spike used for "this window ends inside the clip". */
 const IN_CLIP_EPSILON_SECONDS = 1e-6
 
-export const OUTLINE_NOTE = "This is an outline check: a flick hidden behind the thigh can't be seen."
 export const OUTLINE_CHECKING_CAVEAT = 'Checking sideways foot travel with a closer look at the clip…'
 
 /** A crop in source pixels; integers once clamped. */
@@ -571,8 +570,33 @@ function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1)}%`
 }
 
-function swingsPhrase(count: number, of: number): string {
-  return `(${count} of ${of} ${of === 1 ? 'swing' : 'swings'})`
+/**
+ * The value-0 sentence (`strides-uz48` review). "In all N swings" only when no usable window went
+ * past the floor; a 0 can also come from one foot's few slightly-outside windows sitting under its
+ * median, and then the remainder is named rather than hidden in the count.
+ */
+function insideCaveat(insideCount: number, usableCount: number): string {
+  if (insideCount === usableCount) {
+    return usableCount === 1
+      ? "No sideways foot travel past your leg's outline in the 1 swing checked."
+      : `No sideways foot travel past your leg's outline in all ${usableCount} swings.`
+  }
+  const others = usableCount - insideCount
+  return (
+    `No sideways foot travel past your leg's outline in ${insideCount} of ${usableCount} swings; ` +
+    `${others === 1 ? 'the other one' : `the other ${others}`} went only slightly past it, ` +
+    'not on most swings of either foot.'
+  )
+}
+
+/** The value > 0 sentence: counts the REPORTED foot's swings only, and shows the floor the value
+ * cleared. */
+function outsideCaveat(side: Side, value: number, floor: number, outside: number, checked: number): string {
+  return (
+    `Your ${side} foot stuck out past its leg's outline by ${formatPercent(value)} of hip width ` +
+    `in ${outside} of ${checked} ${side}-foot ${checked === 1 ? 'swing' : 'swings'}, ` +
+    `above this clip's noise floor of ${formatPercent(floor)}.`
+  )
 }
 
 /**
@@ -670,7 +694,7 @@ export function summarizeSwingFootOutline(
       value: null,
       confidence: 0,
       sampleSize: 0,
-      caveat: `No early swing had enough clear outline frames to check sideways foot travel. ${OUTLINE_NOTE}`,
+      caveat: 'No early swing had enough clear outline frames to check sideways foot travel.',
     }
   }
   if (floor === null) {
@@ -679,7 +703,7 @@ export function summarizeSwingFootOutline(
       value: null,
       confidence: 0,
       sampleSize: usableWindows.length,
-      caveat: `Too few clear stance frames to set this clip's outline noise floor. ${OUTLINE_NOTE}`,
+      caveat: "Too few clear stance frames to set this clip's outline noise floor.",
     }
   }
   const value = protrusion > floor ? protrusion : 0
@@ -691,9 +715,16 @@ export function summarizeSwingFootOutline(
     minRequiredSampleSize: MIN_WINDOWS_FOR_CONFIDENCE,
     interpolationConfidencePenalty: config.interpolationConfidencePenalty,
   })
+  const reportedWindows = usableWindows.filter((w) => w.side === reportedSide)
   const caveat = value === 0
-    ? `No sideways foot travel past your leg's outline ${swingsPhrase(reading.insideCount, reading.usableCount)}. ${OUTLINE_NOTE}`
-    : `Your ${reportedSide} foot stuck out past its leg's outline by ${formatPercent(value)} of hip width ${swingsPhrase(outsideCount, reading.usableCount)}. ${OUTLINE_NOTE}`
+    ? insideCaveat(reading.insideCount, reading.usableCount)
+    : outsideCaveat(
+        reportedSide,
+        value,
+        floor,
+        reportedWindows.filter((w) => w.outside).length,
+        reportedWindows.length,
+      )
   const exemplars = outlineExemplars(plan, byTimestamp, windows, reportedSide, protrusion)
   return {
     ...base,

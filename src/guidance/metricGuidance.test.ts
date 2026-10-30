@@ -1239,7 +1239,6 @@ describe('mandatory notes', () => {
     'stepWidth',
     'stepWidthCm',
     'footStrikePattern',
-    'swingFootLateralExcursion',
   ]
 
   it('carries a note on exactly the metrics that need one', () => {

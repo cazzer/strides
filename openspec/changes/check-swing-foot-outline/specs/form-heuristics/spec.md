@@ -38,11 +38,17 @@ at least 70% of its frames; its value SHALL be the P80 of its protrusions. The f
 of stance protrusion pooled over every strike, null below 6 frames. Each side's reading SHALL be the
 median of its usable windows; the larger side SHALL be reported, as exactly 0 when it does not
 exceed the floor, and null when no window is usable or the floor is null. The caveat SHALL always
-state the swing counts and that a flick hidden behind the thigh cannot be seen.
+be non-null. At 0 it SHALL say "in all n swings" only when no usable window exceeded the floor,
+and otherwise name the swings that went slightly past it; above 0 it SHALL name the reported foot,
+count only that foot's usable swings, and state the floor the value cleared.
 
 #### Scenario: Every swing stays inside the leg's outline
 - **WHEN** no lower-leg mask pixel passes the thigh's outer edge in any usable early swing
-- **THEN** the value is 0 and the caveat says no sideways foot travel past the leg's outline, with "(n of n swings)"
+- **THEN** the value is 0 and the caveat says no sideways foot travel past the leg's outline "in all n swings"
+
+#### Scenario: One foot stuck out
+- **WHEN** the reported foot's usable windows exceed the floor
+- **THEN** the caveat names that foot, counts only its swings, and states the clip's noise floor
 
 #### Scenario: An injected connected flick reads its size
 - **WHEN** a foot bar connected to the leg reaches 0.05, 0.10, 0.20 or 0.30 hip widths past the thigh edge

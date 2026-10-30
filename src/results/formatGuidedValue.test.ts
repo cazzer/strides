@@ -74,6 +74,9 @@ describe('formatGuidedValue — matches MetricsPanel formatValue', () => {
     expect(
       formatGuidedValue(makeMetric('swingFootLateralExcursion', { value: 0.123, unit: 'percent' })),
     ).toBe('12.3% of hip width outward')
+    expect(
+      formatGuidedValue(makeMetric('swingFootLateralExcursion', { value: 0.0004, unit: 'percent' })),
+    ).toBe("None past the leg's outline")
   })
 
   it("says 'Not available' for a null value, as MetricsPanel's formatter does", () => {

@@ -624,9 +624,11 @@ function buildLegFrame(params: RunnerParams): LegFrame {
   return {
     ...stance,
     sinTilt: legTiltSin(params.stepWidth),
-    // `swingFootArc` is the PEAK outward ankle travel past the knee's own line, in hip widths
-    // (`strides-uz48`): the raised-cosine bump peaks at 1, so the shank's extra lateral reach at
-    // mid-arc is exactly value × hip width. 0 draws no arc at all.
+    // `swingFootArc` is drawn as the PEAK outward ankle travel past the knee's own line, in hip
+    // widths: the raised-cosine bump peaks at 1, so the shank's extra lateral reach at mid-arc is
+    // value × hip width. 0 draws no arc. An illustration of the bound metric, not a model of it:
+    // the outline check measures reach past the THIGH's outer edge, which the model does not
+    // have (`strides-uz48`).
     arcSinPeak: (params.swingFootArc * hipWidth) / shank,
     pelvisHeight: height,
     toeOff: stanceAngles(GAIT_PHASES.stanceEnd, stanceEndsHipY, stance),

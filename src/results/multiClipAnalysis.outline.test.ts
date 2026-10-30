@@ -7,8 +7,9 @@ import {
   nextActiveClipIndex,
   nextBackgroundPassClipIndex,
   scalePassLeaseIndex,
+  backgroundPassKindAt,
 } from './multiClipAnalysis'
-import type { ClipSession } from './multiClipAnalysis'
+import type { BackgroundPassLease, ClipSession } from './multiClipAnalysis'
 import { makeHeuristics } from './__fixtures__/metricResult'
 
 // The outline pass (`strides-uz48`) shares the background lane, after every scale pass.
@@ -60,19 +61,28 @@ function readyClip(clipId: string, scaleStatus: ScalePassState['status'], outlin
   })
 }
 
-/** Plays a session forward as `MultiClipVideoSession` does, recording `P<n>`/`S<n>`/`O<n>`. */
-function simulate(count: number, outlineOn: number[]): string[] {
+/**
+ * Plays a session forward as `MultiClipVideoSession` does — the lease remembered as {clip, pass}
+ * across steps — recording `P<n>`/`S<n>`/`O<n>`. `addAfterScaleOf` adds an idle clip while that
+ * clip's scale pass runs.
+ */
+function simulate(count: number, outlineOn: number[], addAfterScaleOf?: number): string[] {
   let clips: ClipSession[] = Array.from({ length: count }, (_, i) => makeClip(String(i + 1)))
   let active = 0
-  let lease: number | null = null
+  let lease: BackgroundPassLease | null = null
   const order: string[] = []
   const set = (index: number, overrides: Partial<VideoAnalysisState>) => {
     clips = clips.map((c, i) => (i === index ? { ...c, analysis: { ...c.analysis, ...overrides } } : c))
   }
-  for (let step = 0; step < 6 * count; step += 1) {
-    active = nextActiveClipIndex(clips, active, lease)
-    const lane = nextBackgroundPassClipIndex(clips, active, lease)
-    lease = lane
+  const schedule = () => {
+    const leaseIndex = scalePassLeaseIndex(clips, lease?.clipId ?? null, lease?.pass)
+    active = nextActiveClipIndex(clips, active, leaseIndex)
+    const lane = nextBackgroundPassClipIndex(clips, active, leaseIndex, lease?.pass)
+    lease = lane === null ? null : { clipId: clips[lane].clipId, pass: backgroundPassKindAt(clips, lane) }
+    return lane
+  }
+  for (let step = 0; step < 8 * (count + 1); step += 1) {
+    const lane = schedule()
     const primary = clips[active].analysis.phase === 'idle' ? active : null
     expect(primary !== null && lane !== null).toBe(false)
     if (primary !== null) {
@@ -80,23 +90,30 @@ function simulate(count: number, outlineOn: number[]): string[] {
         phase: 'ready',
         diagnostics: sequential,
         scalePass: scale('pending'),
-        outlinePass: { status: outlineOn.includes(primary + 1) ? 'pending' : 'skipped', reason: 'not-front' },
+        outlinePass: outlineOn.includes(primary + 1)
+          ? { status: 'pending' }
+          : { status: 'skipped', reason: 'not-front' },
       })
       order.push(`P${primary + 1}`)
     } else if (lane !== null) {
       if (clips[lane].analysis.scalePass.status === 'pending') {
         set(lane, { scalePass: scale('running') })
+        expect(schedule()).toBe(lane)
+        if (addAfterScaleOf === lane + 1) {
+          clips = [...clips, makeClip(String(clips.length + 1))]
+          expect(schedule()).toBe(lane)
+        }
         set(lane, { scalePass: scale('done') })
         order.push(`S${lane + 1}`)
       } else {
         set(lane, { outlinePass: { status: 'running' } })
         // No primary advances, and the lane stays put, while an outline pass runs.
-        expect(nextActiveClipIndex(clips, active, lease)).toBe(active)
-        expect(nextBackgroundPassClipIndex(clips, active, lease)).toBe(lane)
+        const before = active
+        expect(schedule()).toBe(lane)
+        expect(active).toBe(before)
         set(lane, { outlinePass: { status: 'done' } })
         order.push(`O${lane + 1}`)
       }
-      lease = null
     }
   }
   return order
@@ -115,15 +132,26 @@ describe('the outline pass in the background lane', () => {
     expect(simulate(1, [1])).toEqual(['P1', 'S1', 'O1'])
   })
 
+  it("clip added while scale pass N runs → that clip's primary runs before N's outline", () => {
+    // A scale lease must not carry over into the same clip's outline pass (review, strides-uz48).
+    expect(simulate(1, [1], 1)).toEqual(['P1', 'S1', 'P2', 'S2', 'O1'])
+  })
+
+  it("ends a scale lease with the scale pass: it never leases the same clip's outline pass", () => {
+    const clips = [readyClip('1', 'done', 'pending'), makeClip('2')]
+    expect(scalePassLeaseIndex(clips, '1', 'scale')).toBeNull()
+    expect(scalePassLeaseIndex(clips, '1', 'outline')).toBe(0)
+  })
+
   it('does not let a leased outline pass jump a scale pass due on another clip', () => {
     const clips = [readyClip('1', 'done', 'pending'), readyClip('2', 'pending', 'skipped')]
-    expect(scalePassLeaseIndex(clips, '1')).toBe(0)
-    expect(nextBackgroundPassClipIndex(clips, 1, 0)).toBe(1)
+    expect(scalePassLeaseIndex(clips, '1', 'outline')).toBe(0)
+    expect(nextBackgroundPassClipIndex(clips, 1, 0, 'outline')).toBe(1)
   })
 
   it('keeps the lane on a leased outline pass once no scale pass is due', () => {
     const clips = [readyClip('1', 'done', 'pending'), readyClip('2', 'done', 'skipped'), makeClip('3')]
-    expect(nextBackgroundPassClipIndex(clips, 2, 0)).toBe(0)
+    expect(nextBackgroundPassClipIndex(clips, 2, 0, 'outline')).toBe(0)
     // ...and the clip added meanwhile waits for it.
     expect(nextActiveClipIndex(clips, 1, 0)).toBe(1)
   })

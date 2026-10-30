@@ -699,8 +699,10 @@ const BUILDERS: Readonly<Record<RunnerParamId, Builder>> = {
   },
   swingFootArc(value, values, { side, phase }) {
     // Mid-arc, the ankle is at its widest; the span ends there and reaches back to the knee's own
-    // line. Its position is illustrative, its length exact. At 0 — nothing left the leg's outline
-    // — there is no travel to bracket, only the label.
+    // line, value × hip width long. Illustrative in both position and reference: the card's value
+    // is reach past the thigh's outer EDGE in the person mask, which the model has no counterpart
+    // for, so the bracket stands in for it from the knee line. At 0 — nothing left the leg's
+    // outline — there is no travel to bracket, only the label.
     const ankle = sideJoint(poseAt(phase, values), side, 'ankle')
     if (value === 0) {
       return { marks: [], fills: [], guides: [], label: { anchor: { ...ankle }, side: 'above' } }

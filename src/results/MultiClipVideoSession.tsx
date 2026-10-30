@@ -36,8 +36,9 @@ import {
   nextActiveClipIndex,
   nextBackgroundPassClipIndex,
   scalePassLeaseIndex,
+  backgroundPassKindAt,
 } from './multiClipAnalysis'
-import type { ClipSession } from './multiClipAnalysis'
+import type { BackgroundPassLease, ClipSession } from './multiClipAnalysis'
 import { outlinePassStatus } from './types'
 import { ratioClipBounceFor } from './ratioClipBounce'
 import { clipViewLabel } from './clipProvenance'
@@ -210,7 +211,7 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
   // Which clip the scale-pass lane was last granted to (`nextBackgroundPassClipIndex`). Only read
   // through `scalePassLeaseIndex`, which drops it once that clip's pass is terminal or the clip is
   // gone, so it never needs clearing by hand.
-  const [scalePassLeaseClipId, setScalePassLeaseClipId] = useState<string | null>(null)
+  const [backgroundLease, setBackgroundLease] = useState<BackgroundPassLease | null>(null)
   // Which clip's preview is open, or `null`. Session-level rather than per-slot because it is a
   // mutually exclusive choice: exactly one clip can be presented at a time, and "presented" is the
   // third conjunct of every clip's loop condition (design.md D1), so two open previews would mean
@@ -413,7 +414,11 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
   // The scale-pass lease goes in FIRST: while the lane is granted to a clip whose pass is still
   // due, the active clip must not advance into a newly added one — even on a render where that
   // clip has not yet reported its pass 'running' (schedule-scale-passes-after-primaries).
-  const leaseIndex = scalePassLeaseIndex(clips, scalePassLeaseClipId)
+  const leaseIndex = scalePassLeaseIndex(
+    clips,
+    backgroundLease?.clipId ?? null,
+    backgroundLease?.pass,
+  )
   const desiredActiveIndex = nextActiveClipIndex(clips, activeClipIndex, leaseIndex)
   if (desiredActiveIndex !== activeClipIndex) {
     setActiveClipIndex(desiredActiveIndex)
@@ -421,11 +426,27 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
   const activeClipId = clips[desiredActiveIndex]?.clipId ?? null
   // The scale-pass lane: which ONE clip may run its background scale pass now. Remembered as a
   // lease from the grant until that pass is terminal, by the same during-render adjustment.
-  const scalePassClipIndex = nextBackgroundPassClipIndex(clips, desiredActiveIndex, leaseIndex)
+  const scalePassClipIndex = nextBackgroundPassClipIndex(
+    clips,
+    desiredActiveIndex,
+    leaseIndex,
+    backgroundLease?.pass,
+  )
   const scalePassClipId =
     scalePassClipIndex === null ? null : (clips[scalePassClipIndex]?.clipId ?? null)
-  if (scalePassClipId !== scalePassLeaseClipId) {
-    setScalePassLeaseClipId(scalePassClipId)
+  // Remembered as {clip, pass} (`strides-uz48`), so a scale lease cannot silently become the same
+  // clip's outline lease and let that pass skip ahead of a newly added primary.
+  const grantedPass =
+    scalePassClipIndex === null ? null : backgroundPassKindAt(clips, scalePassClipIndex)
+  if (
+    scalePassClipId !== (backgroundLease?.clipId ?? null) ||
+    grantedPass !== (backgroundLease?.pass ?? null)
+  ) {
+    setBackgroundLease(
+      scalePassClipId === null || grantedPass === null
+        ? null
+        : { clipId: scalePassClipId, pass: grantedPass },
+    )
   }
 
   const aggregate = computeAggregateAnalysisState(clips)
@@ -536,7 +557,7 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
     setPendingLoads({})
     setClipStates({})
     setActiveClipIndex(0)
-    setScalePassLeaseClipId(null)
+    setBackgroundLease(null)
     setPresentedClipId(null)
     headingRef.current?.focus()
   }, [clipStates, headingRef])

@@ -16,9 +16,11 @@ const {
   computeFormHeuristicsMock,
   getScalePassDetectorMock,
   getOutlineSegmenterMock,
+  releaseOutlineSegmenterMock,
   canUseSequentialDecodeMock,
   sampleClipSequentialMock,
 } = vi.hoisted(() => ({
+  releaseOutlineSegmenterMock: vi.fn(),
   sampleClipMock: vi.fn(),
   applyRobustnessMock: vi.fn(),
   computeFormHeuristicsMock: vi.fn(),
@@ -37,7 +39,10 @@ vi.mock('./sampleClipSequential', () => ({ sampleClipSequential: sampleClipSeque
 vi.mock('../pose/robustness/interpolate', () => ({ applyRobustness: applyRobustnessMock }))
 vi.mock('../heuristics/index', () => ({ computeFormHeuristics: computeFormHeuristicsMock }))
 vi.mock('../pose/scalePassDetector', () => ({ getScalePassDetector: getScalePassDetectorMock }))
-vi.mock('../pose/outlinePassDetector', () => ({ getOutlineSegmenter: getOutlineSegmenterMock }))
+vi.mock('../pose/outlinePassDetector', () => ({
+  getOutlineSegmenter: getOutlineSegmenterMock,
+  releaseOutlineSegmenter: releaseOutlineSegmenterMock,
+}))
 vi.mock('../video/webCodecsSupport', () => ({ canUseSequentialDecode: canUseSequentialDecodeMock }))
 vi.mock('../video/clipBytesCache', () => ({ releaseClipDemux: vi.fn() }))
 
@@ -100,7 +105,8 @@ const segmenter: OutlineSegmenter = { segment: vi.fn(), close: vi.fn() }
 
 beforeEach(() => {
   for (const mock of [sampleClipMock, applyRobustnessMock, computeFormHeuristicsMock, getScalePassDetectorMock,
-    getOutlineSegmenterMock, canUseSequentialDecodeMock, sampleClipSequentialMock]) mock.mockReset()
+    getOutlineSegmenterMock, releaseOutlineSegmenterMock, canUseSequentialDecodeMock,
+    sampleClipSequentialMock]) mock.mockReset()
   applyRobustnessMock.mockReturnValue(ROBUST_FRAMES)
   // The scale pass fails fast (no detector), so the lane reaches the outline pass at once.
   getScalePassDetectorMock.mockResolvedValue(null)
@@ -136,6 +142,9 @@ describe('the background outline pass (strides-uz48)', () => {
     for (const key of Object.keys(primary) as Array<keyof FormHeuristicsResult>) {
       if (key !== 'swingFootLateralExcursion') expect(result.current.heuristics![key], key).toBe(primary[key])
     }
+    // The pass's hold on the shared segmenter is released once it is over.
+    await waitFor(() => expect(releaseOutlineSegmenterMock).toHaveBeenCalledTimes(1))
+    expect(getOutlineSegmenterMock).toHaveBeenCalledTimes(1)
   })
 
   it('fails with the unavailable caveat when the segmenter cannot be created', async () => {
@@ -149,6 +158,7 @@ describe('the background outline pass (strides-uz48)', () => {
       value: null,
       caveat: OUTLINE_FAILED_CAVEAT,
     })
+    await waitFor(() => expect(releaseOutlineSegmenterMock).toHaveBeenCalledTimes(1))
   })
 
   it('skips a clip with no plan as not-front, leaving the metric as planned', async () => {
@@ -206,6 +216,7 @@ describe('the background outline pass (strides-uz48)', () => {
     })
     expect(result.current.phase).toBe('idle')
     expect(result.current.heuristics).toBeNull()
+    await waitFor(() => expect(releaseOutlineSegmenterMock).toHaveBeenCalledTimes(1))
   })
 
   it('logs one outline-pass diagnostics line on done, in a dev build', async () => {

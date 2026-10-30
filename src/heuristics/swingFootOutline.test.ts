@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import {
   OUTLINE_CHECKING_CAVEAT,
-  OUTLINE_NOTE,
   clampOutlineCrop,
   cropRectFor,
   measureFrameOutline,
@@ -303,7 +302,7 @@ describe('summarizeSwingFootOutline', () => {
     ]), DEFAULT_HEURISTICS_CONFIG)
     expect(result.value).toBe(0)
     expect(result.outline).toMatchObject({ floor: 0, usableCount: 4, insideCount: 4, outsideCount: 0, stanceFrames: 16 })
-    expect(result.caveat).toBe(`No sideways foot travel past your leg's outline (4 of 4 swings). ${OUTLINE_NOTE}`)
+    expect(result.caveat).toBe("No sideways foot travel past your leg's outline in all 4 swings.")
     expect(result.sampleSize).toBe(4)
     expect(result.confidence).toBe(1)
     expect(result.frameCoverage).toBe(1)
@@ -323,8 +322,43 @@ describe('summarizeSwingFootOutline', () => {
     ]), DEFAULT_HEURISTICS_CONFIG)
     expect(result.value).toBeCloseTo(0.123, 10)
     expect(result.outline).toMatchObject({ reportedSide: 'right', outsideCount: 4, perSide: { left: 0.05, right: 0.123 } })
-    expect(result.caveat).toBe(`Your right foot stuck out past its leg's outline by 12.3% of hip width (4 of 4 swings). ${OUTLINE_NOTE}`)
+    // Counts the reported foot's swings only, and shows the floor the value cleared.
+    expect(result.caveat).toBe(
+      "Your right foot stuck out past its leg's outline by 12.3% of hip width in 2 of 2 right-foot swings, above this clip's noise floor of 1.0%.",
+    )
     expect(result.exemplars?.[0].side).toBe('right')
+  })
+
+  it('names the remainder when a 0 hides a window that went past the floor', () => {
+    const p = plan(fourWindows)
+    const result = summarizeSwingFootOutline(p, measured([
+      [fourWindows[0].swingTimestamps, 'left', 0],
+      [fourWindows[2].swingTimestamps, 'left', 0],
+      // One right window above the 0.15 floor, one inside: the right median (0.1) stays inside.
+      [fourWindows[1].swingTimestamps, 'right', 0.2],
+      [fourWindows[3].swingTimestamps, 'right', 0],
+      ...fourWindows.map((w): [number[], 'left' | 'right', number] => [w.stanceTimestamps, w.side, 0.15]),
+    ]), DEFAULT_HEURISTICS_CONFIG)
+    expect(result.value).toBe(0)
+    expect(result.outline).toMatchObject({ insideCount: 3, outsideCount: 1, usableCount: 4 })
+    expect(result.caveat).toBe(
+      "No sideways foot travel past your leg's outline in 3 of 4 swings; the other one went only slightly past it, not on most swings of either foot.",
+    )
+  })
+
+  it('counts only the reported foot in the stuck-out sentence', () => {
+    const p = plan(fourWindows)
+    const result = summarizeSwingFootOutline(p, measured([
+      [fourWindows[0].swingTimestamps, 'left', 0.3],
+      [fourWindows[2].swingTimestamps, 'left', 0.1],
+      [fourWindows[1].swingTimestamps, 'right', 0.05],
+      [fourWindows[3].swingTimestamps, 'right', 0],
+      ...fourWindows.map((w): [number[], 'left' | 'right', number] => [w.stanceTimestamps, w.side, 0.02]),
+    ]), DEFAULT_HEURISTICS_CONFIG)
+    expect(result.value).toBeCloseTo(0.2, 10)
+    expect(result.caveat).toBe(
+      "Your left foot stuck out past its leg's outline by 20.0% of hip width in 2 of 2 left-foot swings, above this clip's noise floor of 2.0%.",
+    )
   })
 
   it('maps a reading inside the floor to exactly 0', () => {
@@ -367,7 +401,7 @@ describe('summarizeSwingFootOutline', () => {
     const noWindow = summarizeSwingFootOutline(plan(fourWindows), measured([[range(0, 10), 'left', 0]]), DEFAULT_HEURISTICS_CONFIG)
     expect(noWindow.value).toBeNull()
     expect(noWindow.outline?.usableCount).toBe(0)
-    expect(noWindow.caveat).toContain(OUTLINE_NOTE)
+    expect(noWindow.caveat).toBe('No early swing had enough clear outline frames to check sideways foot travel.')
   })
 })
 

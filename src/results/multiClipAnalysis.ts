@@ -212,6 +212,14 @@ function samplingPathPending(clip: ClipSession): boolean {
   return clip.videoSource.status === 'loading' || clip.videoSource.status === 'ready'
 }
 
+export type BackgroundPassKind = 'scale' | 'outline'
+
+/** The background lane's grant, remembered by the session across renders. */
+export interface BackgroundPassLease {
+  clipId: string
+  pass: BackgroundPassKind
+}
+
 function isInFlight(status: ScalePassStatus): boolean {
   return status === 'pending' || status === 'running'
 }
@@ -292,11 +300,23 @@ export function nextActiveClipIndex(
 export function scalePassLeaseIndex(
   clips: ClipSession[],
   grantedClipId: string | null,
+  pass: BackgroundPassKind = 'scale',
 ): number | null {
   if (grantedClipId === null) return null
   const index = clips.findIndex((c) => c.clipId === grantedClipId)
   if (index === -1) return null
-  return hasBackgroundPassAhead(clips[index]) ? index : null
+  const { analysis } = clips[index]
+  if (analysis.phase !== 'ready') return null
+  // A lease is for ONE pass (`strides-uz48`): a scale lease ends with the scale pass, and never
+  // carries over into the same clip's outline pass, which must be granted on its own (step 6).
+  const status = pass === 'scale' ? analysis.scalePass.status : outlinePassStatus(analysis)
+  return isInFlight(status) ? index : null
+}
+
+/** Which background pass a grant to `clips[index]` is for: its scale pass while that is still due
+ * or running, otherwise its outline pass. */
+export function backgroundPassKindAt(clips: ClipSession[], index: number): BackgroundPassKind {
+  return isInFlight(clips[index].analysis.scalePass.status) ? 'scale' : 'outline'
 }
 
 /**
@@ -334,15 +354,22 @@ export function nextBackgroundPassClipIndex(
   clips: ClipSession[],
   activeClipIndex: number,
   leaseIndex: number | null = null,
+  leasePass: BackgroundPassKind = 'scale',
 ): number | null {
   const running = clips.findIndex(isBackgroundPassRunning)
   if (running !== -1) return running
   if (leaseIndex !== null) {
     const leased = clips[leaseIndex]
-    if (isWaitingForScalePass(leased)) return leaseIndex
-    // An outline pass keeps its lease only while no scale pass is due anywhere: every scale pass
-    // runs before any outline pass.
-    if (isWaitingForOutlinePass(leased) && !clips.some(isWaitingForScalePass)) return leaseIndex
+    if (leasePass === 'scale' && isWaitingForScalePass(leased)) return leaseIndex
+    // An outline lease (granted by step 6) holds only while no scale pass is due anywhere: every
+    // scale pass runs before any outline pass.
+    if (
+      leasePass === 'outline' &&
+      isWaitingForOutlinePass(leased) &&
+      !clips.some(isWaitingForScalePass)
+    ) {
+      return leaseIndex
+    }
   }
   if (clips.some((c) => c.analysis.phase === 'sampling' || c.analysis.phase === 'processing')) {
     return null

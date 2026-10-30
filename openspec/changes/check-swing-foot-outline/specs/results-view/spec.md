@@ -10,17 +10,24 @@ outline pass grafts sideways foot travel only".
 
 ### Requirement: Sideways foot travel appears as an outline check with no band
 
-Every view SHALL label `swingFootLateralExcursion` "Sideways foot travel" and SHALL format a value of
-exactly 0 as "None past the leg's outline" and any other value as "<v×100 to one decimal>% of hip
+Every view SHALL label `swingFootLateralExcursion` "Sideways foot travel" and SHALL format a value
+that rounds to 0.0% as "None past the leg's outline" and any other value as "<v×100 to one decimal>% of hip
 width outward", identically in the guided views, the classic panel and the runner label. The
 description SHALL say it checks early-swing sideways foot travel on front video, that a large
 outward flick just after toe-off is what coaches call heel whip, that it is an outline check that
-cannot see a flick hidden behind the thigh, and that it is not foot rotation or a diagnosis. The
-metric SHALL have no band. Its evidence SHALL be one early-swing frame ghosted against a stance
+cannot see a flick hidden behind the thigh, and that it is not foot rotation or a diagnosis; that
+limit SHALL be stated once per card, in the description. The metric SHALL have no band. When
+clips tie on this metric's confidence (as every clip does while an outline pass is pending), the
+fused result SHALL come from a clip that planned an outline check; no other metric's fusion
+changes. Its evidence SHALL be one early-swing frame ghosted against a stance
 frame of the same strike, with the thigh's outer edge, the leg's swing-side outline, the outermost
 lower-leg point (when one exists) and the hip midline drawn from the measured mask geometry, and no
 text on the image. While the outline pass is pending or running and the scale pass is not, the one
 completion status line SHALL add " Checking sideways foot travel with a closer look at the clip…".
+
+#### Scenario: A session's fused card while the front clip is still checking
+- **WHEN** a side clip and a front clip both read confidence 0 for this metric and only the front clip planned an outline check
+- **THEN** the fused card carries the front clip's caveat and source
 
 #### Scenario: Nothing left the outline
 - **WHEN** the metric's value is 0

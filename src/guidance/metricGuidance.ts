@@ -1223,9 +1223,8 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     noBandReason:
       "No reference range has been established for this image-based check of the leg's outline in early swing.",
     evidenceDirection: 'none-established',
-    mandatoryNotes: [
-      "This is an outline check: it reports a foot that sticks out past the outer edge of its leg's outline in early swing. A flick hidden behind the thigh can't be seen, so a small whip reads the same as none.",
-    ],
+    // The outline-check limit is stated once, in the description (`strides-uz48` review).
+    mandatoryNotes: [],
     speedSensitivity: null,
     research: [],
     remediation: [],
