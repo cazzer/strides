@@ -56,6 +56,11 @@
  *                         Waits for the line like --evidence does. Off by default so a report
  *                         without it stays byte-identical to one taken before the flag existed;
  *                         a view fidelity gate passes `--evidence --scale-pass`.
+ *   --outline-pass        Also capture the `[analysis-diagnostics:outline-pass]` line (the
+ *                         background outline pass sideways foot travel comes from, strides-uz48)
+ *                         as `outlinePass.*` rows, plus `outlinePass.lines`. Waits for the line;
+ *                         with --evidence, evidence quiescence is also gated on it, since the
+ *                         outline graft re-extracts evidence after the scale pass's.
  *   --perf                Also capture every dev-only `[perf-timings]` line as `perf.*` rows
  *                         (`src/results/perfTimings.ts`). Same settle wait as --evidence. Every
  *                         row is wall-clock, so expect spread; off by default so a report without
@@ -153,6 +158,7 @@ if (existsSync(PRIVATE_CLIP_DIR)) {
 
 const DIAGNOSTICS_PREFIX = '[analysis-diagnostics]'
 const SCALE_PASS_PREFIX = '[analysis-diagnostics:scale-pass]'
+const OUTLINE_PASS_PREFIX = '[analysis-diagnostics:outline-pass]'
 const EVIDENCE_PREFIX = '[evidence-coverage]'
 const PERF_PREFIX = '[perf-timings]'
 
@@ -271,6 +277,7 @@ const FIELD_GROUPS = [
   'metrics.',
   'evidence.',
   'scalePass.',
+  'outlinePass.',
   'perf.',
 ]
 
@@ -360,6 +367,7 @@ function parseArgs(argv) {
     reuseBrowser: false,
     evidence: false,
     scalePass: false,
+    outlinePass: false,
     perf: false,
     jsonPath: null,
   }
@@ -424,6 +432,9 @@ function parseArgs(argv) {
         break
       case '--scale-pass':
         options.scalePass = true
+        break
+      case '--outline-pass':
+        options.outlinePass = true
         break
       case '--perf':
         options.perf = true
@@ -634,6 +645,7 @@ async function runTrial(
     timeoutMs,
     evidence,
     scalePass,
+    outlinePass,
     perf,
   },
 ) {
@@ -666,6 +678,7 @@ async function runTrial(
     const scalePassLines = []
     let lastEvidenceAt = 0
     let scalePassSeen = false
+    const outlinePassLines = []
 
     // The last few console lines, kept only to explain a trial that never completes.
     const recentConsole = []
@@ -680,6 +693,14 @@ async function runTrial(
           scalePassLines.push(JSON.parse(text.slice(SCALE_PASS_PREFIX.length).trim()))
         } catch {
           // A malformed scale-pass line costs the scalePass rows, not the trial.
+        }
+        return
+      }
+      if (text.startsWith(OUTLINE_PASS_PREFIX)) {
+        try {
+          outlinePassLines.push(JSON.parse(text.slice(OUTLINE_PASS_PREFIX.length).trim()))
+        } catch {
+          // A malformed outline-pass line costs the outlinePass rows, not the trial.
         }
         return
       }
@@ -765,16 +786,19 @@ async function runTrial(
     // cannot settle in the gap before the graft's re-extraction starts.
     // `--scale-pass` alone waits only for its own line; with --evidence or --perf the stricter
     // evidence quiescence below already implies it.
-    if (evidence || perf || scalePass) {
+    if (evidence || perf || scalePass || outlinePass) {
       const deadline = Date.now() + EVIDENCE_MAX_WAIT_MS
       let settled = false
+      // The outline pass runs after the scale pass and grafts (and re-extracts) after it.
+      const outlineSeen = () => !outlinePass || outlinePassLines.length > 0
       while (!settled && Date.now() < deadline) {
         settled =
           evidence || perf
             ? evidenceLines.length > 0 &&
               scalePassSeen &&
+              outlineSeen() &&
               Date.now() - lastEvidenceAt > EVIDENCE_SETTLE_MS
-            : scalePassSeen
+            : (!scalePass || scalePassSeen) && outlineSeen()
         if (!settled) await new Promise((resolve) => setTimeout(resolve, 250))
       }
       // The cap yields whatever arrived rather than failing the trial, so say so — an
@@ -803,6 +827,12 @@ async function runTrial(
       Object.assign(fields, {
         'scalePass.lines': scalePassLines.length,
         ...(scalePassLines.length > 0 ? flatten('scalePass.', scalePassLines.at(-1)) : {}),
+      })
+    }
+    if (outlinePass) {
+      Object.assign(fields, {
+        'outlinePass.lines': outlinePassLines.length,
+        ...(outlinePassLines.length > 0 ? flatten('outlinePass.', outlinePassLines.at(-1)) : {}),
       })
     }
     return perf ? { ...fields, ...flattenPerfLines(perfLines) } : fields
@@ -1123,6 +1153,7 @@ async function main() {
               timeoutMs: options.timeoutMs,
               evidence: options.evidence,
               scalePass: options.scalePass,
+              outlinePass: options.outlinePass,
               perf: options.perf,
             })
             process.stderr.write(

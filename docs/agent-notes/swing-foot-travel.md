@@ -286,3 +286,77 @@ Artifacts (scratchpad `uz48-outline/`, not in the repo):
 
 The extracted frames were deleted. Re-extract them with
 `ffmpeg -i park-approach.mp4 -start_number 0 frames/n%03d.png` before regenerating overlays.
+
+---
+
+# Production: the outline check ships (`strides-uz48`, branch `feat/uz48-outline-check`)
+
+Built 2026-10-30 on main `45f9128f`; openspec change `check-swing-foot-outline` (not archived at
+the time of writing). The spike's method and constants are ported unchanged
+(`src/heuristics/swingFootOutline.ts`, each constant commented "tuned on park-approach; validated by
+strides-uz48.2"). Before building the browser path, the TypeScript port was run over the spike's own
+crop masks (`masks-c1/`, reduced to runs) and reproduced every per-frame reason and residual of
+`res-c1.json` to 1e-9, the floor (0.0, 24 stance frames) and every window's usability.
+
+## How it runs
+
+- **Primary pass plans, it does not measure.** On a front clip `computeSwingFootLateralExcursion`
+  returns `value: null`, the "Checking sideways foot travel…" caveat and an `outlinePlan` (T,
+  windows, and per frame the MoveNet hips/knees, the unclamped 7×12 HW crop and which leg(s) passed
+  the MoveNet-only gates). Side/ambiguous: no plan, view caveat, as before.
+- **Outline pass**, after the clip's scale pass and after EVERY clip's scale pass in a session
+  (`nextBackgroundPassClipIndex`): `sampleClipSequential` decodes the clip again and hands each
+  frame (full-frame canvas, the HLG-safe `drawImage(VideoFrame)` route) to `outlineFrameReader`, a
+  `PoseDetector` adapter. A planned timestamp (exact match — same sampler, same timestamps) is
+  cropped at native pixels onto a second canvas and segmented by a dedicated IMAGE-mode
+  PoseLandmarker with `outputSegmentationMasks` (`outlinePassDetector.ts`; same `.task`, no new
+  download). The mask is reduced in the loop to runs from the higher thigh band's top down,
+  measured, and the result closed. Unplanned frames: no inference.
+- **Graft** replaces only `swingFootLateralExcursion` (`swingFootOutlineGraft.ts`). Playback-path
+  clips skip (`reason: 'playback-path'`, "needs a clip the browser can decode frame by frame");
+  failure or the kill switch (`__STRIDES_OUTLINE_PASS_CONFIG_OVERRIDE__ = { enabled: false }`) shows
+  "couldn't run on this clip". Dev line: `[analysis-diagnostics:outline-pass]`;
+  `ab-person-selection.mjs --outline-pass` captures it as `outlinePass.*` and gates evidence
+  quiescence on it (the outline graft re-extracts evidence AFTER the scale pass's).
+
+## Live numbers (fresh Chromium, ANGLE Metal, M4 Pro, sequential path)
+
+`park-approach.mp4` uploaded alone — **reproduces the spike**: 65 frames planned and segmented,
+every one with a crop-sized mask; 4 usable windows (2 per side), every window 15/15 good frames,
+all P80 0.000, floor 0.000 over 24 stance frames, value **0**, confidence 1.0, caveat "No sideways
+foot travel past your leg's outline (4 of 4 swings). …". k4 (left, 1.584–1.832) runs past the clip
+end and is not segmented.
+
+| k | side | window | good/frames | P80 | closest approach (prod) | closest approach (spike) |
+|---|---|---|---|---|---|---|
+| 0 | left | 0.266–0.514 | 15/15 | 0 | −0.145 | −0.138 |
+| 1 | right | 0.599–0.848 | 15/15 | 0 | −0.075 | −0.094 |
+| 2 | left | 0.933–1.181 | 15/15 | 0 | −0.256 | −0.246 |
+| 3 | right | 1.267–1.515 | 15/15 | 0 | −0.0378 | −0.0378 |
+
+The small closest-approach differences are Chrome's decoded pixels vs ffmpeg's PNGs (risk 1 of the
+build plan); none crosses the edge. Three fresh trials: the outline line (timings dropped) is
+md5-identical (`84ae808f…`). Inside the 3-clip demo the front clip's line is byte-identical to the
+single-clip one; the two side clips log `skipped`/`not-front`; lane order was P1 P2 P3 S1 S2 S3 O3;
+the fused metric comes from clip 3 with planned evidence (`swingFootOutline`, left, base 0.284 /
+ghost 0.133, crop 360 px).
+
+**Cost** (`[perf-timings]` `pass: 'outline'`): 1.50–1.56 s start-to-done on park-approach, segmenter
+creation 63–66 ms (cached model bytes), segmentation p50 17.3 ms / p95 21.3 ms / max ~200 ms (first
+frame) per crop — much less than the spike's 95 ms per `detect`, which ran on `<img>`-decoded PNGs.
+It lands ~3.0 s after the primary's ready (after the 1.4 s scale pass).
+
+**No other metric moved:** `ab-person-selection.mjs --arm 'base={}' --evidence --scale-pass --trials
+2` on all four clips, main `45f9128f` (own worktree, own derived port) vs branch `dc6ce064` (plus
+`--outline-pass`): after dropping `elapsedMs`, `outlinePass.*` and every
+`swingFootLateralExcursion` field, all 8 trials are identical (390–423 fields each; `rtk proxy diff`
+empty, both normalized files md5 `12a58e58…`). Note the branch's primary `metrics.swingFoot…` row is
+the PLACEHOLDER (null): the primary diagnostics line is logged at ready, before the graft — read
+the value from the outline-pass line.
+
+## Still open
+
+- `strides-uz48.2`: footage with a real whip; nothing has yet shown that a blurred flicked shoe
+  stays in the mask and connected. Until then every constant above is a park-approach fit.
+- A flick hidden behind the thigh reads 0 by construction (thigh-width detection threshold).
+- Rear footage is not planned (front view only); playback-path (WebM/webcam) clips cannot run it.

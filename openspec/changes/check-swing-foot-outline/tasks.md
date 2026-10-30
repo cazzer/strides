@@ -22,7 +22,7 @@
 
 ## 4. Verification
 
-- [ ] 4.1 Live park-approach: 4 usable windows, all inside, value 0; two fresh trials identical on the outline line
-- [ ] 4.2 3-clip demo; 390 and 1280 px, tour/summary/classic screenshots
-- [ ] 4.3 A/B main vs branch (`--evidence --scale-pass --outline-pass --trials 2`, all four clips): identical apart from `elapsedMs` and this metric
-- [ ] 4.4 `docs/agent-notes/swing-foot-travel.md` Production section
+- [x] 4.1 Live park-approach: 4 usable windows, all inside, value 0; two fresh trials identical on the outline line
+- [x] 4.2 3-clip demo; 390 and 1280 px, tour/summary/classic screenshots
+- [x] 4.3 A/B main vs branch (`--evidence --scale-pass --outline-pass --trials 2`, all four clips): identical apart from `elapsedMs` and this metric
+- [x] 4.4 `docs/agent-notes/swing-foot-travel.md` Production section

@@ -1221,7 +1221,7 @@ export const METRIC_GUIDANCE: Record<MetricId, MetricGuidance> = {
     displayRank: 13,
     band: null,
     noBandReason:
-      'No reference range has been established for this image-based ankle path measurement.',
+      "No reference range has been established for this image-based check of the leg's outline in early swing.",
     evidenceDirection: 'none-established',
     mandatoryNotes: [
       "This is an outline check: it reports a foot that sticks out past the outer edge of its leg's outline in early swing. A flick hidden behind the thigh can't be seen, so a small whip reads the same as none.",
