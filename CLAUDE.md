@@ -165,6 +165,7 @@ Unit tests mock the detector, so **verify UI/pipeline changes live** before call
 | `backlog.md` | tracking crop, person-of-interest, deferred VO normalization work |
 | `slow-motion.md` | `containerTiming.ts`, `slowMotionDetection.ts`, `bounceSpectrum.ts`, `redNoiseNull.ts` |
 | `dynamic-valgus.md` | segmentation-based lower-leg proxies (no-go record) |
+| `swing-foot-travel.md` | `swingFootLateralExcursion`, signed/early-swing foot travel, heel whip (no-go probe record) |
 
 New long-form findings go in the matching note (or a new one added to this index), not here.
 
