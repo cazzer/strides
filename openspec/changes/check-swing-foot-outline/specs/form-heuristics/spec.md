@@ -39,7 +39,7 @@ of stance protrusion pooled over every strike, null below 6 frames. Each side's 
 median of its usable windows; the larger side SHALL be reported, as exactly 0 when it does not
 exceed the floor, and null when no window is usable or the floor is null. The caveat SHALL always
 be non-null. At 0 it SHALL say "in all n swings" only when no usable window exceeded the floor,
-and otherwise name the swings that went slightly past it; above 0 it SHALL name the reported foot,
+and otherwise name the swings that went past it; above 0 it SHALL name the reported foot,
 count only that foot's usable swings, and state the floor the value cleared.
 
 #### Scenario: Every swing stays inside the leg's outline

@@ -342,7 +342,7 @@ describe('summarizeSwingFootOutline', () => {
     expect(result.value).toBe(0)
     expect(result.outline).toMatchObject({ insideCount: 3, outsideCount: 1, usableCount: 4 })
     expect(result.caveat).toBe(
-      "No sideways foot travel past your leg's outline in 3 of 4 swings; the other one went only slightly past it, not on most swings of either foot.",
+      "No sideways foot travel past your leg's outline in 3 of 4 swings; the other one went past it, but not on most swings of either foot.",
     )
   })
 

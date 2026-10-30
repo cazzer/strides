@@ -572,7 +572,7 @@ function formatPercent(value: number): string {
 
 /**
  * The value-0 sentence (`strides-uz48` review). "In all N swings" only when no usable window went
- * past the floor; a 0 can also come from one foot's few slightly-outside windows sitting under its
+ * past the floor; a 0 can also come from one foot's few outside windows sitting under its
  * median, and then the remainder is named rather than hidden in the count.
  */
 function insideCaveat(insideCount: number, usableCount: number): string {
@@ -584,8 +584,8 @@ function insideCaveat(insideCount: number, usableCount: number): string {
   const others = usableCount - insideCount
   return (
     `No sideways foot travel past your leg's outline in ${insideCount} of ${usableCount} swings; ` +
-    `${others === 1 ? 'the other one' : `the other ${others}`} went only slightly past it, ` +
-    'not on most swings of either foot.'
+    `${others === 1 ? 'the other one' : `the other ${others}`} went past it, ` +
+    'but not on most swings of either foot.'
   )
 }
 
