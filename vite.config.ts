@@ -2,6 +2,23 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { execSync } from 'node:child_process'
+
+// Which code produced a saved assessment (save-assessments-to-runner-storage, D5). Read by
+// src/storage/buildInfo.ts as import.meta.env.VITE_STRIDES_COMMIT; vite exposes VITE_* from
+// process.env. GITHUB_SHA on the Pages deploy, else this checkout's short sha, else unset.
+function resolveBuildCommit(): string | undefined {
+  if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA.slice(0, 8)
+  try {
+    return execSync('git rev-parse --short=8 HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim()
+  } catch {
+    return undefined
+  }
+}
+const buildCommit = resolveBuildCommit()
+if (buildCommit && !process.env.VITE_STRIDES_COMMIT) process.env.VITE_STRIDES_COMMIT = buildCommit
 
 // https://vite.dev/config/
 export default defineConfig({

@@ -25,6 +25,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+        env:
+          # Google OAuth web client ID for saving to the runner's Drive (strides-w85q). A repository
+          # VARIABLE, not a secret: client IDs are public. Unset = saving shows as not set up.
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

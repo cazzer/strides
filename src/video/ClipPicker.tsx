@@ -131,7 +131,8 @@ export function ClipPicker({ onSource, onRecordingStateChange }: ClipPickerProps
       <div className="text-sm text-neutral-700 dark:text-neutral-300">
         <p>
           <strong>Video handling:</strong> Your clip is analyzed in this browser. The app does not
-          upload your video to a server.
+          upload your video to a server. Nothing is kept unless you press Save, which saves to your
+          own Google Drive.
         </p>
         <details className="mt-1">
           <summary className="w-fit cursor-pointer underline underline-offset-2">
@@ -141,6 +142,12 @@ export function ClipPicker({ onSource, onRecordingStateChange }: ClipPickerProps
             Clips and generated stills remain in this page&apos;s memory while you use them. Removing
             a clip removes it from this session; an uploaded original stays on your device. The app
             downloads analysis models and fonts separately from your video.
+          </p>
+          <p className="mt-2">
+            Saving is optional. It writes the numbers to a Strides folder in your Google Drive, never
+            to a Strides server, and includes the video only if you tick that box. Strides can see
+            only the files it created there. Disconnecting stops its access; saved files stay in your
+            Drive until you delete them.
           </p>
         </details>
       </div>

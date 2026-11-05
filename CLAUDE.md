@@ -166,6 +166,7 @@ Unit tests mock the detector, so **verify UI/pipeline changes live** before call
 | `slow-motion.md` | `containerTiming.ts`, `slowMotionDetection.ts`, `bounceSpectrum.ts`, `redNoiseNull.ts` |
 | `dynamic-valgus.md` | segmentation-based lower-leg proxies (no-go record) |
 | `swing-foot-travel.md` | `swingFootLateralExcursion` (now the outline check + background outline pass), heel whip; no-go joint probe, mask spike, production numbers |
+| `runner-storage.md` | `src/storage`, `src/progress`, methodology versions, saving to Drive, the fake-provider override, the progress page |
 
 New long-form findings go in the matching note (or a new one added to this index), not here.
 

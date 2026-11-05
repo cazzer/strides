@@ -1,4 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { SaveAssessmentPanel } from '../storage/SaveAssessmentPanel'
+import { ProgressPage } from '../progress/ProgressPage'
+import { ProgressHeaderEntry } from '../progress/ProgressHeaderEntry'
+import {
+  pushProgressPage,
+  replaceWithSessionPage,
+  resolveSessionPage,
+  sessionPageFromHistoryState,
+  stampProgressPage,
+  type SessionPage,
+} from '../progress/progressPageRoute'
 import type { RefObject } from 'react'
 import type { PoseDetector } from '../pose/detector'
 import type { ModelLoadStates } from '../pose/modelLoadState'
@@ -271,6 +282,32 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
     }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+  // The progress page (strides-w85q, design D6): a page state, not a route. Only `main`'s content
+  // switches; the header and every clip's <video> stay mounted (never conceal a clip's video).
+  const [page, setPage] = useState<SessionPage>(() => resolveSessionPage(window.location.search))
+  const pushedProgressRef = useRef(false)
+  useEffect(() => {
+    if (resolveSessionPage(window.location.search) === 'progress') stampProgressPage()
+    const onPopState = (event: PopStateEvent) => setPage(sessionPageFromHistoryState(event.state))
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+  const openProgress = useCallback(() => {
+    if (sessionPageFromHistoryState(window.history.state) === 'progress') return
+    pushProgressPage()
+    pushedProgressRef.current = true
+    setPage('progress')
+    window.scrollTo({ top: 0, behavior: 'instant' })
+  }, [])
+  const closeProgress = useCallback(() => {
+    if (pushedProgressRef.current && sessionPageFromHistoryState(window.history.state) === 'progress') {
+      pushedProgressRef.current = false
+      window.history.back() // popstate sets the page
+      return
+    }
+    replaceWithSessionPage()
+    setPage('session')
   }, [])
   const leaveTour = useCallback(() => {
     writeResultsLanding()
@@ -687,11 +724,16 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
             a moment with two file inputs, two Upload tabs or two pairs of demo buttons on the page
             for a test or a reader to pick between.
           */}
+          <ProgressHeaderEntry onOpen={openProgress} current={page === 'progress'} />
           {anyClipVideoReady && <AddClipAction onSource={addClip} openRequest={addClipRequest} />}
         </div>
       </header>
 
       <main ref={mainRef} className="mx-auto max-w-6xl px-4 sm:px-6 py-10 space-y-8">
+        {page === 'progress' ? (
+          <ProgressPage onBack={closeProgress} hasResults={anyClipVideoReady} />
+        ) : (
+        <>
         {/*
           What a reader has to be able to READ about a clip cannot live in a 96x72 strip entry: the
           load-error alert and its Try again in particular, which `video-input`'s "Clear error
@@ -800,6 +842,22 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
         )}
 
         {/*
+          Save to the runner's own storage (strides-w85q). After the view region, once the session's
+          analysis is complete; the panel itself holds Save until the background passes finish, since
+          their grafts can still change three readings. Reads the finished aggregate only and writes
+          nothing back into the session.
+        */}
+        {anyClipVideoReady && aggregate.phase === 'ready' && aggregate.heuristics && (
+          <SaveAssessmentPanel
+            aggregate={aggregate}
+            clips={clips}
+            sourceIndices={sourceIndices}
+            resultKey={clipIds.join(' ')}
+            onOpenProgress={openProgress}
+          />
+        )}
+
+        {/*
           The in-body "Add another clip" block used to mount here. It is gone, not moved:
           `video-input` requires that no add-a-clip affordance remain in the page body, and what
           was here offered upload alone — the header's `AddClipAction` offers recording and the
@@ -815,6 +873,8 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
           leave the first showing an empty box. The cards are the evidence surface now.
           `EvidenceGallery.tsx` was retired by `strides-ac9.3`; `useSessionEvidence` owns extraction now.
         */}
+        </>
+        )}
       </main>
     </>
   )
