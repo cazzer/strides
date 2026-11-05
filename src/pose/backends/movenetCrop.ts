@@ -216,6 +216,116 @@ export function isBoundingBoxAreaRatioWithin(
   return ratio >= 1 / maxRatio && ratio <= maxRatio
 }
 
+/**
+ * The shrink half of scale continuity (`strides-p1qt.18`): whether `candidate` is no smaller than
+ * `recentPeakAreaPx / maxRatio`, where `recentPeakAreaPx` is the largest box the SAME track has
+ * produced over a short recent window.
+ *
+ * `isBoundingBoxAreaRatioWithin` compares against the previous frame only, which makes it a
+ * ratchet: a subject whose box shrinks a little per frame -- leaving through a frame edge, or
+ * walking behind someone -- can be followed all the way down to a much smaller box, and from there
+ * onto whoever was beside them. On private IMG_9345 the runner exits left at 244k -> 97k px^2 over
+ * five frames (each step within 3x), and the next frame is a background runner at 45k (within 3x of
+ * 97k), whom both the online gate and retroactive segmentation then follow for 20 frames.
+ *
+ * Every cause of a box being too small -- clipping at an edge, occlusion, keypoints dropping below
+ * the confidence floor -- only ever SHRINKS it; nothing makes a person's box spuriously larger than
+ * the person. So the recent peak, not the last frame, is the measure of how big this person is, and
+ * shrinkage is judged against it. Growth is left to the frame-to-frame test, so an approaching or
+ * entering runner is unaffected. `null` (no history) passes, and so does a box the frame edge
+ * truncates (see `isTruncatedByFrameEdge`) when the caller supplies `frame`.
+ */
+export function isAboveRecentPeakFloor(
+  candidate: BoundingBoxPx,
+  recentPeakAreaPx: number | null,
+  maxRatio: number,
+  frame: FrameSizePx | null = null,
+): boolean {
+  if (recentPeakAreaPx === null || !(recentPeakAreaPx > 0)) return true
+  // A box the frame edge truncates is a lower bound on the person's size: the edge already
+  // explains why it is small (a runner leaving the frame), so it is no evidence of a different
+  // person. Only an UNtruncated box far below the recent peak is.
+  if (frame !== null && isTruncatedByFrameEdge(candidate, frame)) return true
+  return bboxArea(candidate) * maxRatio >= recentPeakAreaPx
+}
+
+export interface FrameSizePx {
+  width: number
+  height: number
+}
+
+/**
+ * How close (as a fraction of the frame's SHORTER side) a keypoint hull may come to an edge and
+ * still count as cut off by it. A hull spans joints, not the body's silhouette -- hands, feet and
+ * head reach beyond it -- so a body leaving through an edge shows a hull that stops short of the
+ * edge, not one that touches it. Measured (strides-p1qt.18, 4K and 1080p): runners' last frames
+ * before exiting end 7–31 px from the edge; the smallest gap on a person who is fully in frame
+ * next to an exiting runner was 76 px (IMG_9345 f115). 2% is 43 px at 2160 and 22 px at 1080.
+ */
+export const FRAME_EDGE_TRUNCATION_MARGIN_FRACTION = 0.02
+
+/** Whether `box` comes within `FRAME_EDGE_TRUNCATION_MARGIN_FRACTION` of any frame edge. */
+export function isTruncatedByFrameEdge(
+  box: BoundingBoxPx,
+  frame: FrameSizePx,
+): boolean {
+  const margin =
+    FRAME_EDGE_TRUNCATION_MARGIN_FRACTION * Math.min(frame.width, frame.height)
+  return (
+    box.minX <= margin ||
+    box.minY <= margin ||
+    box.maxX >= frame.width - margin ||
+    box.maxY >= frame.height - margin
+  )
+}
+
+/**
+ * The largest area among `history` entries no older than `windowSeconds` before `atSeconds` --
+ * the reference `isAboveRecentPeakFloor` needs. `null` when the window is disabled (`<= 0`) or
+ * nothing in `history` falls inside it.
+ */
+export function recentPeakAreaPx(
+  history: readonly { timestamp: number; areaPx: number }[],
+  atSeconds: number,
+  windowSeconds: number,
+): number | null {
+  if (!(windowSeconds > 0)) return null
+  let peak: number | null = null
+  for (const entry of history) {
+    if (entry.timestamp < atSeconds - windowSeconds) continue
+    if (entry.timestamp > atSeconds) continue
+    if (peak === null || entry.areaPx > peak) peak = entry.areaPx
+  }
+  return peak
+}
+
+/**
+ * The position half of `isBoundingBoxContinuous`: any bbox overlap at all, OR a center
+ * displacement within the speed bound. Exported on its own for a caller whose candidate has no
+ * meaningful scale — the retroactive selector's check on a sub-`minConfidentKeypoints` keypoint
+ * hull, whose area says how many joints were confident, not how far away the person is.
+ *
+ * IoU is strictly positive only for a positive-area intersection, so a degenerate (point or line)
+ * candidate never passes the first term, even lying wholly inside `reference`; only the speed term
+ * can carry it.
+ */
+export function isPositionContinuous(
+  candidate: BoundingBoxPx,
+  reference: BoundingBoxPx,
+  elapsedSeconds: number,
+  maxCenterSpeedSidesPerSecond: number,
+): boolean {
+  return (
+    computeBoundingBoxIoU(candidate, reference) > 0 ||
+    isWithinCenterSpeedBound(
+      candidate,
+      reference,
+      maxCenterSpeedSidesPerSecond,
+      elapsedSeconds,
+    )
+  )
+}
+
 /** The two thresholds `isBoundingBoxContinuous` needs. Structurally a subset of
  * `ContinuityGateConfig` (which adds its own `enabled` flag) and of
  * `RetroactivePersonSelectionConfig`, so either can be passed straight in — the shape is declared
@@ -229,7 +339,9 @@ export interface BoundingBoxContinuityBounds {
 /**
  * Whether `candidate` could plausibly be the same person as `reference`, `elapsedSeconds` later:
  * position continuity (any bbox overlap at all, OR a center displacement within the speed bound)
- * AND scale continuity (area ratio inside the symmetric band). Purely the composition of the two
+ * AND scale continuity (area ratio inside the symmetric band, and -- when the caller supplies the
+ * track's `recentPeakArea` -- not shrunk below it by more than the same band; see
+ * `isAboveRecentPeakFloor`). Purely the composition of the two
  * geometric tests — it holds no opinion about whether continuity should be *consulted*, which is
  * each caller's own business (the online gate has its own `enabled`/no-anchor/suspended early
  * returns; the retroactive selector applies its area floor before ever asking).
@@ -245,19 +357,18 @@ export function isBoundingBoxContinuous(
   reference: BoundingBoxPx,
   elapsedSeconds: number,
   bounds: BoundingBoxContinuityBounds,
+  recentPeakArea: number | null = null,
+  frame: FrameSizePx | null = null,
 ): boolean {
-  const positionContinuous =
-    computeBoundingBoxIoU(candidate, reference) > 0 ||
-    isWithinCenterSpeedBound(
+  return (
+    isPositionContinuous(
       candidate,
       reference,
-      bounds.maxCenterSpeedSidesPerSecond,
       elapsedSeconds,
-    )
-
-  return (
-    positionContinuous &&
-    isBoundingBoxAreaRatioWithin(candidate, reference, bounds.maxAreaRatio)
+      bounds.maxCenterSpeedSidesPerSecond,
+    ) &&
+    isBoundingBoxAreaRatioWithin(candidate, reference, bounds.maxAreaRatio) &&
+    isAboveRecentPeakFloor(candidate, recentPeakArea, bounds.maxAreaRatio, frame)
   )
 }
 

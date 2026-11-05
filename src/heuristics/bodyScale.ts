@@ -22,6 +22,24 @@ export interface HipWidth {
 const WINDOW_BOUNDARY_EPSILON_SECONDS = 1e-6
 
 /**
+ * Half-width, in SECONDS, of the window a LOCAL torso length is the median over
+ * (`estimateLocalTorsoLengths`). Shared by every consumer that needs the runner's on-screen size to
+ * follow an approach: `viewDetection.ts`'s sagittal range and `hipBounce.ts`'s scale-normalized
+ * bounce series. A module constant rather than a `HeuristicsConfig` key because it describes the
+ * estimator's own sample, not a threshold anyone should sweep against this corpus.
+ *
+ * - Time, not frames: the corpus spans 25, 30 and 60 fps, and a frame-count window would smooth the
+ *   same physical motion over a different duration at each.
+ * - 1 s in total covers at least one full stride at any running cadence (≥ 120 steps/min, so a
+ *   stride ≤ 1 s) — and so at least one full bounce cycle even at the spectral fit's 1.2 Hz band
+ *   floor (a 0.83 s period) — so the torso's own within-stride flex and the shoulder/hip jitter
+ *   average out rather than leaking into whatever is divided by it, yet it is short enough to
+ *   follow a runner approaching the camera, whose on-screen size can grow several-fold within a
+ *   clip.
+ */
+export const LOCAL_TORSO_HALF_WINDOW_SECONDS = 0.5
+
+/**
  * One frame's torso length in pixels — shoulder-mid to hip-mid via `resolveMidpoint` — or `null`
  * when either midpoint cannot resolve. The per-frame sample that both `estimateBodyScale`
  * (clip-wide median) and `estimateLocalTorsoLengths` (windowed median) reduce over, so the two can

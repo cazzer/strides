@@ -2,6 +2,11 @@ import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import type { HeuristicsConfig } from './types'
 import { resolveMidpoint } from './keypoints'
+import {
+  estimateBodyScale,
+  estimateLocalTorsoLengths,
+  LOCAL_TORSO_HALF_WINDOW_SECONDS,
+} from './bodyScale'
 import { fitBounceSpectrum } from './bounceSpectrum'
 import type { SpectralFitResult, SpectralSample } from './spectralFit'
 
@@ -27,9 +32,10 @@ export interface HipBounceAnalysis {
   /** `interpolatedCount / resolvedCount`. `0` when `resolvedCount` is `0` (guarded, not `0/0`). */
   interpolatedFraction: number
   /** The shared spectral fit over the resolvable hip-mid samples. Typed success/failure — see
-   * `spectralFit.ts`. Since the two-pass fit (`bounceSpectrum.ts`) this may be a fit from BELOW the
-   * human-gait band; `subFloorRhythm` is how a caller tells, and is the only way to tell without
-   * comparing `frequencyHz` against a config key. */
+   * `spectralFit.ts`. Since the multi-pass fit (`bounceSpectrum.ts`) this may be a fit from BELOW
+   * the human-gait band (`subFloorRhythm`, the only way to tell without comparing `frequencyHz`
+   * against a config key), or a fit of the SCALE-NORMALIZED series rather than the raw one
+   * (`scaleNormalized`, which changes the units of `peakToPeakAmplitude`). At most one is true. */
   fit: SpectralFitResult
   /**
    * `true` when `fit` came from the sub-floor retry — the clip's on-screen bounce is slower than
@@ -43,6 +49,23 @@ export interface HipBounceAnalysis {
    * rate read off a retimed clock is wrong by exactly the factor nothing here measures.
    */
   subFloorRhythm: boolean
+  /**
+   * `true` when `fit` came from the last-resort SCALE-NORMALIZED retry — neither the in-band nor
+   * the sub-floor fit of the raw series was adopted, and the same motion re-expressed at one torso
+   * scale cleared the gate in band. The case it exists for is a runner approaching the camera,
+   * whose pixel bounce grows several-fold across the clip. See `bounceSpectrum.ts` ("The
+   * scale-normalized pass") for why it runs last and in band only. Mutually exclusive with
+   * `subFloorRhythm`.
+   *
+   * ⚠️ Units: when `true`, `fit.peakToPeakAmplitude` is in pixels AT THE CLIP-MEDIAN TORSO SCALE,
+   * not raw image pixels, and `fit.sampleCount` may be less than `resolvedCount` (frames without a
+   * local torso are dropped from that series). `hipY` is raw either way.
+   *
+   * `verticalRatio` is the one reader that withholds on it: its denominator is a raw-pixel stride
+   * length, which a median-scale amplitude cannot be divided by. Frequency and phase readers
+   * (cadence, footstrike timing) need no change — normalization leaves both where they were.
+   */
+  scaleNormalized: boolean
 }
 
 /**
@@ -53,20 +76,23 @@ export interface HipBounceAnalysis {
  * shared spectral sinusoid to the resolvable subset over the
  * `spectralFitMinFrequencyHz`/`spectralFitMaxFrequencyHz`/`spectralFitFrequencyStepHz` grid.
  *
- * ## The fit is TWO-PASS, and the second pass detects retimed footage
+ * ## The fit is MULTI-PASS: the second pass detects retimed footage, the third follows an approach
  *
  * The fit goes through `bounceSpectrum.ts`'s `fitBounceSpectrum` rather than straight to
  * `fitSpectralSinusoid`. On any clip whose in-band fit clears the shared quality gate that is
  * exactly the call this module used to make, bit for bit. Only when the in-band grid yields nothing
  * trustworthy is a second, DISJOINT grid below the human-gait floor tried, and only if THAT clears
- * the same gate is its fit adopted — reported as `subFloorRhythm`. A clip whose ordinary fit
- * succeeds cannot be affected by any of it. See that module for the disjointness argument and for
- * why no new threshold is involved.
+ * the same gate is its fit adopted — reported as `subFloorRhythm`. Only when neither is adopted is
+ * a third, last-resort series fitted on the in-band grid: the same motion re-expressed at one torso
+ * scale (`buildScaleNormalizedSamples`), adopted only if it clears the same gate — reported as
+ * `scaleNormalized`. A clip whose ordinary fit succeeds cannot be affected by any of it. See that
+ * module for the disjointness argument, the ordering, and why no new threshold is involved.
  *
  * `verticalOscillationCm.calibrate` fits its own per-run metre series through the same function, so
- * the whole vertical-oscillation family reaches the same verdict about whether a clip has a
- * measurable rhythm — the coherence `verticalOscillationMinFitR2`'s doc argues for, extended to
- * cover which BAND that verdict was reached in.
+ * the whole vertical-oscillation family is governed by the same RULE about whether a clip has a
+ * measurable rhythm (not necessarily the same answer — `bounceSpectrum.ts` explains why). The one
+ * exception is the last-resort SCALE-NORMALIZED pass (`scaleNormalized`), which is pixel-path only:
+ * the metre series is already delta-integrated over a per-frame scale, so it omits that pass.
  *
  * `pair` defaults to `['left_hip', 'right_hip']` — cadence (`analyzeHipBounce`, below) always
  * gets that default and never varies it, since cadence stays hip-pinned regardless of vertical
@@ -124,7 +150,9 @@ export function analyzeBounceSignal(
     if (y !== null) fitSamples.push({ t: frame.timestamp, v: y })
   })
 
-  const { fit, subFloor } = fitBounceSpectrum(fitSamples, config)
+  const { fit, subFloor, scaleNormalized } = fitBounceSpectrum(fitSamples, config, () =>
+    buildScaleNormalizedSamples(frames, hipY),
+  )
 
   return {
     hipY,
@@ -134,7 +162,60 @@ export function analyzeBounceSignal(
     interpolatedFraction,
     fit,
     subFloorRhythm: subFloor,
+    scaleNormalized,
   }
+}
+
+/**
+ * The scale-normalized series `fitBounceSpectrum` falls back to: the same vertical motion, with
+ * every frame-to-frame step re-expressed at ONE torso scale, so a runner who grows several-fold in
+ * frame contributes a bounce of constant size and a descent the fit's trend can follow.
+ *
+ * Built by integrating normalized deltas rather than by dividing each sample by its local torso,
+ * because the latter would also rescale the runner's absolute image position: a hip-mid sitting
+ * 1000 px down the frame, divided by a torso that doubles, sweeps 500 px in "normalized" space with
+ * no motion at all. A delta divided by the scale AT that delta carries only the motion.
+ *
+ * - Each kept step `a → b` is divided by the mean of the two frames' local torso lengths
+ *   (`estimateLocalTorsoLengths`, `LOCAL_TORSO_HALF_WINDOW_SECONDS`) and the running sum is
+ *   multiplied back up by the clip-median torso, so the fit's amplitude reads in pixels at the
+ *   clip's typical scale.
+ * - Image-y sign is KEPT (`y[b] − y[a]`, not flipped), so the fitted phase means the same thing it
+ *   means on the raw series and `footstrikes.ts`/`bounceInstants.ts` read it unchanged.
+ * - Frames with no signal or no local torso are skipped, and the integral does NOT reset across
+ *   such a gap: the step spanning it is one normalized delta like any other.
+ *
+ * Not to be confused with `verticalOscillationCm.ts`'s `buildMetricSeries`, which also integrates
+ * per-frame deltas but in METRES over the detector's per-frame scale and with the sign flipped
+ * upward-positive.
+ *
+ * Returns `null` — declining the fallback — when frames are out of presentation order
+ * (`estimateLocalTorsoLengths` requires that order and would throw) or when no torso resolves at
+ * all.
+ */
+function buildScaleNormalizedSamples(
+  frames: RobustPoseFrame[],
+  signalY: ReadonlyArray<number | null>,
+): SpectralSample[] | null {
+  for (let i = 1; i < frames.length; i += 1) {
+    if (!(frames[i].timestamp >= frames[i - 1].timestamp)) return null
+  }
+  const medianTorsoPx = estimateBodyScale(frames)?.torsoLengthPx ?? null
+  if (medianTorsoPx === null || !(medianTorsoPx > 0)) return null
+  const localTorsoPx = estimateLocalTorsoLengths(frames, LOCAL_TORSO_HALF_WINDOW_SECONDS)
+
+  const samples: SpectralSample[] = []
+  let previous: { y: number; local: number } | null = null
+  let normalizedY = 0
+  for (let i = 0; i < frames.length; i += 1) {
+    const y = signalY[i]
+    const local = localTorsoPx[i]
+    if (y === null || local === null || !Number.isFinite(local) || !(local > 0)) continue
+    if (previous !== null) normalizedY += (y - previous.y) / ((previous.local + local) / 2)
+    samples.push({ t: frames[i].timestamp, v: normalizedY * medianTorsoPx })
+    previous = { y, local }
+  }
+  return samples
 }
 
 /**

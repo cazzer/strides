@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { MAX_RETIMING_FACTOR, fitBounceSpectrum } from './bounceSpectrum'
 import { fitSpectralSinusoid } from './spectralFit'
 import type { SpectralSample } from './spectralFit'
@@ -325,5 +325,100 @@ describe('fitBounceSpectrum', () => {
         CONFIG.spectralFitMinFrequencyHz / MAX_RETIMING_FACTOR,
       )
     }
+  })
+})
+
+describe('fitBounceSpectrum — the last-resort scale-normalized pass', () => {
+  const IN_BAND = {
+    minFrequencyHz: CONFIG.spectralFitMinFrequencyHz,
+    maxFrequencyHz: CONFIG.spectralFitMaxFrequencyHz,
+    frequencyStepHz: CONFIG.spectralFitFrequencyStepHz,
+  }
+
+  /** White noise with no rhythm anywhere — the raw series that fails BOTH prior passes (the
+   * "NEITHER pass" test above pins that premise for this exact seed and length). */
+  function whiteNoise(seed: number, count = 200, fps = 30): SpectralSample[] {
+    const random = mulberry32(seed)
+    const samples: SpectralSample[] = []
+    for (let i = 0; i < count; i += 1) samples.push({ t: i / fps, v: 50 * (random() - 0.5) })
+    return samples
+  }
+
+  it('a raw fit that clears the gate is returned bit for bit, and the series is never built', () => {
+    const samples = sinusoid(2.5, { fps: 60, durationSec: 4 })
+    const thunk = vi.fn(() => sinusoid(3, { fps: 60, durationSec: 4 }))
+
+    const result = fitBounceSpectrum(samples, CONFIG, thunk)
+
+    expect(result).toStrictEqual({
+      fit: fitSpectralSinusoid(samples, IN_BAND),
+      subFloor: false,
+      scaleNormalized: false,
+    })
+    expect(thunk).not.toHaveBeenCalled()
+  })
+
+  it('an adopted sub-floor fit wins over the scale-normalized pass, which is never consulted', () => {
+    const samples = sinusoid(0.433, { fps: 30, durationSec: 12 })
+    const thunk = vi.fn(() => sinusoid(3, { fps: 30, durationSec: 12 }))
+
+    const result = fitBounceSpectrum(samples, CONFIG, thunk)
+
+    expect(result.subFloor).toBe(true)
+    expect(result.scaleNormalized).toBe(false)
+    expect(thunk).not.toHaveBeenCalled()
+  })
+
+  it('when neither prior pass is adopted, a normalized series that clears the gate is adopted', () => {
+    const samples = whiteNoise(11)
+    const normalized = sinusoid(3, { fps: 30, durationSec: 200 / 30, noise: 4, seed: 3 })
+    const thunk = vi.fn(() => normalized)
+
+    // Preconditions: the raw in-band fit fails the gate, and the two-pass fit adopts nothing —
+    // otherwise this would pass without ever reaching the third pass.
+    const rawInBand = fitSpectralSinusoid(samples, IN_BAND)
+    expect(rawInBand.ok && rawInBand.sinusoidR2 >= CONFIG.verticalOscillationMinFitR2).toBe(false)
+    expect(fitBounceSpectrum(samples, CONFIG).subFloor).toBe(false)
+
+    const result = fitBounceSpectrum(samples, CONFIG, thunk)
+
+    expect(thunk).toHaveBeenCalledTimes(1)
+    expect(result.subFloor).toBe(false)
+    expect(result.scaleNormalized).toBe(true)
+    expect(result.fit).toStrictEqual(fitSpectralSinusoid(normalized, IN_BAND))
+    expect(result.fit.ok && result.fit.sinusoidR2 >= CONFIG.verticalOscillationMinFitR2).toBe(true)
+  })
+
+  it('a normalized series that fails the gate changes nothing', () => {
+    const samples = whiteNoise(11)
+    const normalized = whiteNoise(29)
+    const thunk = vi.fn(() => normalized)
+    const normalizedFit = fitSpectralSinusoid(normalized, IN_BAND)
+    expect(normalizedFit.ok && normalizedFit.sinusoidR2 >= CONFIG.verticalOscillationMinFitR2).toBe(
+      false,
+    )
+
+    const result = fitBounceSpectrum(samples, CONFIG, thunk)
+
+    expect(thunk).toHaveBeenCalledTimes(1)
+    expect(result).toStrictEqual({
+      fit: fitSpectralSinusoid(samples, IN_BAND),
+      subFloor: false,
+      scaleNormalized: false,
+    })
+  })
+
+  it('a thunk that declines (null), or no thunk at all, returns the pass-1 result untouched', () => {
+    const samples = whiteNoise(11)
+    const expected = {
+      fit: fitSpectralSinusoid(samples, IN_BAND),
+      subFloor: false,
+      scaleNormalized: false,
+    }
+    const declining = vi.fn(() => null)
+
+    expect(fitBounceSpectrum(samples, CONFIG, declining)).toStrictEqual(expected)
+    expect(declining).toHaveBeenCalledTimes(1)
+    expect(fitBounceSpectrum(samples, CONFIG)).toStrictEqual(expected)
   })
 })

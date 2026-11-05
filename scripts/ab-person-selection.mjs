@@ -66,6 +66,40 @@
  *                         row is wall-clock, so expect spread; off by default so a report without
  *                         it stays byte-identical to one taken before the line existed.
  *   --json <path>         Also write the aggregate + every raw per-trial record here.
+ *   --android [serial]    Drive Chrome on an adb-attached Android phone instead of a local Chromium
+ *                         (serial defaults to $ANDROID_SERIAL). Opt-in; without it nothing below
+ *                         applies and a desktop report is byte-identical to one taken before the
+ *                         flag existed. The dev server starts here as usual and is reached from the
+ *                         phone through `adb reverse`, so the phone opens the same
+ *                         http://localhost:<port>/strides/ address (a secure context, which
+ *                         WebCodecs needs). CDP rides `adb forward tcp:9222
+ *                         localabstract:chrome_devtools_remote` + `connectOverCDP`. "Fresh process
+ *                         per trial" becomes `am force-stop` + relaunch + reconnect, one new tab per
+ *                         trial in Chrome's default context (Android Chrome cannot create browser
+ *                         contexts), with this origin's localStorage/IndexedDB/service workers
+ *                         cleared before each trial; the HTTP cache and Cache Storage (model files)
+ *                         are NOT cleared, so a phone trial is a cold process with warm model
+ *                         caches. Clips go over CDP as byte buffers (Playwright's 50 MB cap), and
+ *                         `elapsedMs` starts when that upload resolves — wireless adb moves ~1.5 MB/s,
+ *                         which would otherwise dominate it. Adds `device.*` rows: battery/skin
+ *                         temperature and thermal status before and after each trial, the upload
+ *                         time, page-clock time from the file input's `change` to "Analysis
+ *                         complete" and to each background pass, and main-thread long-task totals.
+ *                         The header's renderer line becomes a device line (model, Chrome version,
+ *                         WebGL renderer — software rendering still refuses — battery temperature).
+ *                         Keeps the screen on for the run (`svc power stayon`, restored after).
+ *   --decoder-hint <h>    `prefer-software` | `prefer-hardware` | `no-preference`, written into every
+ *                         `VideoDecoder.configure()` the page makes (init script; app code unchanged).
+ *                         A same-device PERTURBATION arm (strides-p1qt.16): on the M4 Pro,
+ *                         `prefer-software` swaps VideoToolbox NV12 for FFmpeg I420, which moves the
+ *                         drawn pixels by ~0.005 levels on average — and moves the metrics about as
+ *                         much as running on a Galaxy S21 does. Use it to tell "this change is
+ *                         robust" from "this change happened to land on one decoder's rounding". On
+ *                         Android, `prefer-software` is also the only route to YUV bytes: the
+ *                         hardware decoder hands out already-converted RGBA frames. Opt-in; the
+ *                         header gains a `# decoder hint:` line only when it is set.
+ *   --cool-below <°C>     Android only: before each trial, wait (phone idle, Chrome stopped) until
+ *                         the battery reads below this and thermal status is 0. Default 36.
  *
  * Example:
  *   node scripts/ab-person-selection.mjs \
@@ -85,7 +119,7 @@
  * rather than leaving it to be inferred from the numbers.
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
@@ -205,6 +239,7 @@ const ARM_KEYS = {
     maxAreaRatio: null,
     maxCenterSpeedSidesPerSecond: null,
     maxContinuityGapSeconds: null,
+    shrinkReferenceWindowSeconds: null,
   },
 }
 
@@ -235,7 +270,18 @@ const BACKEND_ARM_KEYS = {
       enabled: null,
       maxCenterSpeedSidesPerSecond: null,
       maxAreaRatio: null,
+      shrinkReferenceWindowSeconds: null,
     },
+    identityChallenge: {
+      enabled: null,
+      tentativeIntervalFrames: null,
+      confirmationsToSettle: null,
+      tentativeMinAreaRatio: null,
+      settledIntervalFrames: null,
+      minAreaRatio: null,
+      minConsecutiveWins: null,
+    },
+    seedHandOff: null,
   },
 }
 
@@ -279,6 +325,8 @@ const FIELD_GROUPS = [
   'scalePass.',
   'outlinePass.',
   'perf.',
+  // Android only (--android). Last, so a desktop report's row order is unchanged.
+  'device.',
 ]
 
 function requireValue(flag, value) {
@@ -370,7 +418,11 @@ function parseArgs(argv) {
     outlinePass: false,
     perf: false,
     jsonPath: null,
+    android: null,
+    coolBelowC: 36,
+    decoderHint: null,
   }
+  let timeoutGiven = false
 
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i]
@@ -411,6 +463,35 @@ function parseArgs(argv) {
         options.timeoutMs = Number(requireValue(flag, value))
         if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) {
           throw new Error(`--timeout needs a positive number of ms, got: ${value}`)
+        }
+        timeoutGiven = true
+        i += 1
+        break
+      case '--android':
+        // The serial is optional: a following value that is not itself a flag is the serial.
+        if (value !== undefined && !value.startsWith('--')) {
+          options.android = { serial: value }
+          i += 1
+        } else {
+          options.android = { serial: process.env.ANDROID_SERIAL || null }
+        }
+        if (!options.android.serial) {
+          throw new Error('--android needs a device serial, or ANDROID_SERIAL set in the environment')
+        }
+        break
+      case '--decoder-hint':
+        options.decoderHint = requireValue(flag, value)
+        if (!['prefer-software', 'prefer-hardware', 'no-preference'].includes(options.decoderHint)) {
+          throw new Error(
+            `--decoder-hint needs prefer-software | prefer-hardware | no-preference, got: ${value}`,
+          )
+        }
+        i += 1
+        break
+      case '--cool-below':
+        options.coolBelowC = Number(requireValue(flag, value))
+        if (!Number.isFinite(options.coolBelowC) || options.coolBelowC <= 0) {
+          throw new Error(`--cool-below needs a temperature in °C, got: ${value}`)
         }
         i += 1
         break
@@ -492,6 +573,12 @@ function parseArgs(argv) {
   // backend plane at all" — the latter suppresses the header lines entirely.
   options.usesBackendPlane = options.backendArms.length > 0
   options.usesViewPlane = options.viewArms.length > 0
+  if (options.android) {
+    if (options.reuseBrowser) throw new Error('--reuse-browser is not supported with --android')
+    // A phone takes ~10-20x as long as an M-series desktop; the desktop default would cut off a
+    // trial that is merely slow.
+    if (!timeoutGiven) options.timeoutMs = 900_000
+  }
   return options
 }
 
@@ -618,6 +705,207 @@ async function warmUpAndReadRenderer(launchArgs, baseURL) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// --android: an adb-attached phone's Chrome, driven over CDP. Nothing below runs without the flag.
+// ---------------------------------------------------------------------------------------------
+
+const ANDROID_CHROME_PACKAGE = 'com.android.chrome'
+const ANDROID_CHROME_ACTIVITY = `${ANDROID_CHROME_PACKAGE}/com.google.android.apps.chrome.Main`
+const ANDROID_CDP_PORT = 9222
+/** How long a cooling wait may last before the trial runs anyway (and says so in its rows). */
+const ANDROID_COOL_MAX_WAIT_MS = 15 * 60_000
+/** Phone-scale versions of the settle constants above: every background pass is ~10-20x slower. */
+const ANDROID_EVIDENCE_SETTLE_MS = 15_000
+const ANDROID_EVIDENCE_MAX_WAIT_MS = 600_000
+const ANDROID_DIAGNOSTICS_WAIT_MS = 60_000
+
+function adb(serial, args, { timeout = 60_000 } = {}) {
+  // stderr piped, not inherited: an expected failure (removing a forward that does not exist)
+  // would otherwise print into the progress log. It still reaches the thrown error.
+  return execFileSync('adb', ['-s', serial, ...args], {
+    encoding: 'utf8',
+    timeout,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim()
+}
+
+/** Battery temperature, thermal status and the HAL's skin/AP readings — one snapshot. */
+function readThermal(serial) {
+  const battery = adb(serial, ['shell', 'dumpsys', 'battery'])
+  const tenths = Number(/temperature:\s*(-?\d+)/.exec(battery)?.[1])
+  const thermal = adb(serial, ['shell', 'dumpsys', 'thermalservice'])
+  const status = Number(/Thermal Status:\s*(\d+)/.exec(thermal)?.[1])
+  // The "Current temperatures from HAL" block; the cached block above it can be stale.
+  const hal = thermal.split('Current temperatures from HAL:')[1] ?? thermal
+  const halTemp = (name) => {
+    const match = new RegExp(`mValue=(-?[\\d.]+), mType=\\d+, mName=${name},`).exec(hal)
+    return match ? Number(match[1]) : null
+  }
+  return {
+    batteryC: Number.isFinite(tenths) ? tenths / 10 : null,
+    thermalStatus: Number.isFinite(status) ? status : null,
+    skinC: halTemp('SKIN'),
+    apC: halTemp('AP'),
+  }
+}
+
+/**
+ * Waits, with Chrome stopped so the phone is idle, until the battery reads below `belowC` and the
+ * thermal service reports no throttling. A throttled SoC slows every timing row and none of them
+ * look it. Gives up after ANDROID_COOL_MAX_WAIT_MS and runs anyway — the waited time and the
+ * temperature at start are rows, so a hot trial is visible rather than silent.
+ */
+async function waitForCool(serial, belowC) {
+  const startedAt = Date.now()
+  let reading = readThermal(serial)
+  const cool = () =>
+    (reading.batteryC === null || reading.batteryC < belowC) && !(reading.thermalStatus > 0)
+  if (!cool()) {
+    adb(serial, ['shell', 'am', 'force-stop', ANDROID_CHROME_PACKAGE])
+    process.stderr.write(
+      `(cooling: battery ${reading.batteryC} °C, thermal status ${reading.thermalStatus}) `,
+    )
+  }
+  while (!cool() && Date.now() - startedAt < ANDROID_COOL_MAX_WAIT_MS) {
+    await new Promise((resolve) => setTimeout(resolve, 20_000))
+    reading = readThermal(serial)
+  }
+  return { ...reading, waitedMs: Date.now() - startedAt, cooled: cool() }
+}
+
+async function cdpIsUp() {
+  try {
+    const response = await fetch(`http://localhost:${ANDROID_CDP_PORT}/json/version`)
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The phone's "fresh process": force-stop Chrome, relaunch it on about:blank, re-forward the
+ * DevTools socket (the abstract socket is recreated by the new process) and reconnect. Tabs a
+ * previous harness run left on a localhost /strides/ address are closed — Chrome restores tabs
+ * across a force-stop, and a stale copy of this app would otherwise share the process.
+ */
+async function launchAndroidChrome(serial) {
+  adb(serial, ['shell', 'am', 'force-stop', ANDROID_CHROME_PACKAGE])
+  try {
+    adb(serial, ['forward', '--remove', `tcp:${ANDROID_CDP_PORT}`])
+  } catch {
+    // No forward yet.
+  }
+  adb(serial, ['shell', 'am', 'start', '-n', ANDROID_CHROME_ACTIVITY, '-d', 'about:blank'])
+  const deadline = Date.now() + 60_000
+  for (;;) {
+    try {
+      adb(serial, ['forward', `tcp:${ANDROID_CDP_PORT}`, 'localabstract:chrome_devtools_remote'])
+    } catch {
+      // The socket may not exist yet; retried below.
+    }
+    if (await cdpIsUp()) break
+    if (Date.now() > deadline) throw new Error('phone Chrome DevTools socket never came up')
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  const browser = await chromium.connectOverCDP(`http://localhost:${ANDROID_CDP_PORT}`, {
+    timeout: 60_000,
+  })
+  const context = browser.contexts()[0]
+  for (const stale of context.pages()) {
+    if (/^https?:\/\/localhost:\d+\/strides\//.test(stale.url())) {
+      await stale.close().catch(() => {})
+    }
+  }
+  return { browser, context }
+}
+
+/** One-time device setup: reverse the dev-server port, keep the screen on, read the stamp. */
+function prepareAndroid(serial, baseURL) {
+  const port = new URL(baseURL).port
+  adb(serial, ['reverse', `tcp:${port}`, `tcp:${port}`])
+  const stayOnBefore = adb(serial, ['shell', 'settings', 'get', 'global', 'stay_on_while_plugged_in'])
+  // A screen that times out hides the tab, which pauses rAF and video and stalls the analysis.
+  adb(serial, ['shell', 'svc', 'power', 'stayon', 'true'])
+  const chromeVersion =
+    /versionName=(\S+)/.exec(adb(serial, ['shell', 'dumpsys', 'package', ANDROID_CHROME_PACKAGE]))?.[1] ??
+    'unknown'
+  return {
+    serial,
+    port,
+    model: adb(serial, ['shell', 'getprop', 'ro.product.model']),
+    androidVersion: adb(serial, ['shell', 'getprop', 'ro.build.version.release']),
+    chromeVersion,
+    restore() {
+      try {
+        adb(serial, ['shell', 'settings', 'put', 'global', 'stay_on_while_plugged_in', stayOnBefore || '0'])
+        adb(serial, ['reverse', '--remove', `tcp:${port}`])
+        adb(serial, ['forward', '--remove', `tcp:${ANDROID_CDP_PORT}`])
+      } catch {
+        // Best effort; the device may have dropped.
+      }
+    },
+  }
+}
+
+/** The phone's warmup: same job as `warmUpAndReadRenderer` (vite transforms, renderer string). */
+async function androidWarmUpAndReadRenderer(device, baseURL) {
+  const { browser, context } = await launchAndroidChrome(device.serial)
+  try {
+    const page = await context.newPage()
+    await page.goto(baseURL, { timeout: 180_000 })
+    await page.waitForLoadState('networkidle', { timeout: 180_000 }).catch(() => {})
+    const renderer = await page.evaluate(readRendererInPage)
+    await page.close()
+    return renderer
+  } finally {
+    await browser.close().catch(() => {})
+  }
+}
+
+/**
+ * Installed on the phone's trial page only. Records when the file input fires `change` (the
+ * analysis start, on the page clock — unlike the driver's clock it excludes the CDP upload) and
+ * every main-thread long task, which is the UI-freeze measure (strides-6i6).
+ */
+function installDeviceProbes() {
+  window.__stridesDevice = { changeAt: null, longTasks: [] }
+  document.addEventListener(
+    'change',
+    (event) => {
+      if (event.target?.type === 'file' && window.__stridesDevice.changeAt === null) {
+        window.__stridesDevice.changeAt = performance.now()
+      }
+    },
+    true,
+  )
+  try {
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        window.__stridesDevice.longTasks.push([entry.startTime, entry.duration])
+      }
+    }).observe({ type: 'longtask', buffered: true })
+  } catch {
+    // No longtask support: the rows read null rather than zero.
+    window.__stridesDevice.longTasks = null
+  }
+}
+
+/** Runs in the page: elapsed since `change`, visibility, and long tasks since `change`. */
+function readDeviceProbes() {
+  const probe = window.__stridesDevice
+  if (!probe || probe.changeAt === null) return null
+  const now = performance.now()
+  const since = probe.longTasks?.filter(([start]) => start >= probe.changeAt) ?? null
+  return {
+    sinceChangeMs: Math.round(now - probe.changeAt),
+    changeAt: probe.changeAt,
+    hidden: document.hidden,
+    longTaskCount: since ? since.length : null,
+    longTaskTotalMs: since ? Math.round(since.reduce((sum, [, d]) => sum + d, 0)) : null,
+    longTaskMaxMs: since ? Math.round(Math.max(0, ...since.map(([, d]) => d))) : null,
+  }
+}
+
 /**
  * One analysis run: fresh context (so the override is installed before any page script runs),
  * drive the clip, capture the PRIMARY diagnostics line, return the fields we compare on.
@@ -647,22 +935,58 @@ async function runTrial(
     scalePass,
     outlinePass,
     perf,
+    decoderHint = null,
+    device = null,
   },
 ) {
-  const context = await browser.newContext()
+  // --android: the phone's default context (Android Chrome cannot create browser contexts), one
+  // new tab, init scripts on the PAGE so they cannot accumulate on the shared context. `browser`
+  // is then `{ context }` from launchAndroidChrome.
+  const context = device ? browser.context : await browser.newContext()
+  const androidPage = device ? await context.newPage() : null
   try {
     // Both override planes go in via `addInitScript`, never `evaluate` (the view plane is the
     // address `goto` opens, below): auto-analyze can start before an
     // `evaluate()` after `goto()` lands, and the backend override is read once per detector
     // creation — earlier still than the sampling one.
-    await context.addInitScript((value) => {
+    const scriptTarget = androidPage ?? context
+    await scriptTarget.addInitScript((value) => {
       window.__STRIDES_SAMPLING_ROBUSTNESS_CONFIG_OVERRIDE__ = value
     }, override)
-    await context.addInitScript((value) => {
+    await scriptTarget.addInitScript((value) => {
       window.__STRIDES_POSE_BACKEND_OVERRIDE__ = value
     }, backendOverride)
+    // --decoder-hint: every VideoDecoder the page configures (primary, scale pass, evidence,
+    // posters) gets this hint. See the flag's doc block for why it is a perturbation arm.
+    if (decoderHint) {
+      await scriptTarget.addInitScript((hint) => {
+        const configure = VideoDecoder.prototype.configure
+        VideoDecoder.prototype.configure = function (config) {
+          return configure.call(this, { ...config, hardwareAcceleration: hint })
+        }
+      }, decoderHint)
+    }
 
-    const page = await context.newPage()
+    if (androidPage) {
+      await androidPage.addInitScript(installDeviceProbes)
+      androidPage.setDefaultTimeout(180_000)
+      // A fresh desktop context has empty storage; the phone's default context does not. The
+      // results landing view, for one, is remembered in localStorage. Cache Storage (model files)
+      // and the HTTP cache are left warm — see the --android doc.
+      const cdp = await context.newCDPSession(androidPage)
+      await cdp.send('Storage.clearDataForOrigin', {
+        origin: new URL(baseURL).origin,
+        storageTypes: 'local_storage,session_storage,indexeddb,service_workers,file_systems',
+      })
+      await cdp.detach()
+    }
+    const page = androidPage ?? (await context.newPage())
+    // A renderer that dies mid-trial goes silent rather than failing: every later console line
+    // is simply absent, which reads exactly like a pass that hung (strides-p1qt.4).
+    let pageCrashed = false
+    page.on('crash', () => {
+      pageCrashed = true
+    })
 
     let resolveDiagnostics
     let rejectDiagnostics
@@ -682,6 +1006,36 @@ async function runTrial(
 
     // The last few console lines, kept only to explain a trial that never completes.
     const recentConsole = []
+
+    // --android: a phone renderer killed for memory is reloaded by Chrome, and a dev-server full
+    // reload replaces the document too; either reads as a stall until the full timeout. Detected
+    // by the page's own probe: every document gets a fresh `__stridesDevice` with no `change`
+    // recorded, so once the upload has landed, a probe without one means the document the
+    // analysis ran in is gone. (Counting navigation events races the new tab's own about:blank
+    // load, and the app's History API rewrites fire `framenavigated` — both tried, both wrong.)
+    const pageLoss = { crashed: false, replaced: false }
+    if (androidPage) {
+      page.on('crash', () => {
+        pageLoss.crashed = true
+      })
+    }
+    let lossCheckedAt = 0
+    const pageLost = async () => {
+      if (!androidPage) return false
+      if (pageLoss.crashed || pageLoss.replaced) return true
+      if (Date.now() - lossCheckedAt < 5_000) return false
+      lossCheckedAt = Date.now()
+      // Bounded: an evaluate against a wedged renderer never settles, and an unbounded one here
+      // stalls this loop past its own deadline (hit on the S21: a trial hung 41 min, strides-p1qt.22).
+      // No answer is not evidence of a replaced document; the deadline below handles a wedge.
+      pageLoss.replaced = await evaluateWithin(
+        page,
+        () => !window.__stridesDevice || window.__stridesDevice.changeAt === null,
+        PAGE_LIVENESS_TIMEOUT_MS,
+        false,
+      )
+      return pageLoss.replaced
+    }
 
     page.on('console', (message) => {
       const text = message.text()
@@ -738,22 +1092,50 @@ async function runTrial(
 
     await page.goto(viewURL(baseURL, viewOverride))
 
-    const startedAt = Date.now()
+    let startedAt = Date.now()
     // Every clip routes through Upload now — see CLIPS. The demo-button branch, and the
     // "couldn't load the demo video" race that guarded it, are both gone: nothing this harness
     // drives fetches over the network any more, so a download simply cannot be what fails.
     await page.getByRole('button', { name: 'Upload' }).click()
-    await page.locator('input[type=file]').setInputFiles(clip.file)
+    let uploadMs
+    if (device) {
+      // A path would make the phone's Chrome look for a file on the PHONE; bytes go over CDP
+      // instead, and the clock restarts once they have landed (see the --android doc).
+      const uploadStartedAt = Date.now()
+      await page.locator('input[type=file]').setInputFiles({
+        name: path.basename(clip.file),
+        mimeType: 'video/mp4',
+        buffer: readFileSync(clip.file),
+      })
+      startedAt = Date.now()
+      uploadMs = startedAt - uploadStartedAt
+    } else {
+      await page.locator('input[type=file]').setInputFiles(clip.file)
+    }
 
     try {
-      await page.getByText(/analysis complete/i).waitFor({ timeout: timeoutMs })
+      if (androidPage) {
+        const deadline = Date.now() + timeoutMs
+        for (;;) {
+          if (await pageLost()) throw new Error(`page lost (${JSON.stringify(pageLoss)})`)
+          const done = await page
+            .getByText(/analysis complete/i)
+            .waitFor({ timeout: Math.min(5_000, Math.max(1, deadline - Date.now())) })
+            .then(() => true, (waitError) => {
+              if (Date.now() >= deadline) throw waitError
+              return false
+            })
+          if (done) break
+        }
+      } else {
+        await page.getByText(/analysis complete/i).waitFor({ timeout: timeoutMs })
+      }
     } catch (error) {
       // A bare Playwright timeout names a selector, not a clip. On a four-clip matrix that leaves
       // the reader to work out which trial died from the progress log's ordering.
       // The page's state at the deadline goes in the message (it reaches the report's `# FAILED`
       // row), since a stalled trial does not reproduce on demand (strides-trn2.6).
-      const snapshot = await page
-        .evaluate(() => ({
+      const snapshot = await evaluateWithin(page, () => ({
           status: [...document.querySelectorAll('[role=status]')]
             .map((element) => element.textContent?.trim().slice(0, 120))
             .filter(Boolean),
@@ -764,40 +1146,49 @@ async function runTrial(
             readyState: video.readyState,
           })),
           hidden: document.hidden,
-        }))
-        .catch((snapshotError) => ({ snapshotError: snapshotError.message }))
+        }), PAGE_LIVENESS_TIMEOUT_MS, { snapshotError: 'page did not answer (renderer wedged?)' })
       throw new Error(
         `${clipName}: never reached "Analysis complete" — page ${JSON.stringify(snapshot)}; ` +
-          `last console ${JSON.stringify(recentConsole)}`,
+          `last console ${JSON.stringify(recentConsole)}` +
+          // On a phone the cause is often not the timeout (a lost page), so it is named.
+          (device ? `; cause: ${error.message.split('\n')[0].slice(0, 200)}` : ''),
         { cause: error },
       )
     }
     const elapsedMs = Date.now() - startedAt
+    const atComplete = device ? await evaluateWithin(page, readDeviceProbes, PAGE_LIVENESS_TIMEOUT_MS, null) : null
 
     const diagnostics = await Promise.race([
       diagnosticsPromise,
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('no [analysis-diagnostics] line')), 15_000),
+        setTimeout(
+          () => reject(new Error('no [analysis-diagnostics] line')),
+          device ? ANDROID_DIAGNOSTICS_WAIT_MS : 15_000,
+        ),
       ),
     ])
+    const settleMs = device ? ANDROID_EVIDENCE_SETTLE_MS : EVIDENCE_SETTLE_MS
+    const maxWaitMs = device ? ANDROID_EVIDENCE_MAX_WAIT_MS : EVIDENCE_MAX_WAIT_MS
 
     // Wait for the evidence stream to go quiet rather than for a line count: see
     // EVIDENCE_SETTLE_MS. Quiescence is gated on the scale pass having reported, so a fast machine
     // cannot settle in the gap before the graft's re-extraction starts.
     // `--scale-pass` alone waits only for its own line; with --evidence or --perf the stricter
     // evidence quiescence below already implies it.
+    // Set only when the settle wait below gives up, so a settled trial's rows are unchanged.
+    let pageAtSettleTimeout
     if (evidence || perf || scalePass || outlinePass) {
-      const deadline = Date.now() + EVIDENCE_MAX_WAIT_MS
+      const deadline = Date.now() + maxWaitMs
       let settled = false
       // The outline pass runs after the scale pass and grafts (and re-extracts) after it.
       const outlineSeen = () => !outlinePass || outlinePassLines.length > 0
-      while (!settled && Date.now() < deadline) {
+      while (!settled && Date.now() < deadline && !(await pageLost())) {
         settled =
           evidence || perf
             ? evidenceLines.length > 0 &&
               scalePassSeen &&
               outlineSeen() &&
-              Date.now() - lastEvidenceAt > EVIDENCE_SETTLE_MS
+              Date.now() - lastEvidenceAt > settleMs
             : (!scalePass || scalePassSeen) && outlineSeen()
         if (!settled) await new Promise((resolve) => setTimeout(resolve, 250))
       }
@@ -805,9 +1196,14 @@ async function runTrial(
       // un-settled capture may be the pre-graft line, which reports a grafted metric as
       // `metric-excluded`, and that must not be mistaken for a coverage regression.
       if (!settled) {
+        pageAtSettleTimeout = await probePageLiveness(page, () => pageCrashed)
         process.stderr.write(
-          `\n  WARNING: [evidence-coverage] did not settle in ${EVIDENCE_MAX_WAIT_MS}ms ` +
-            `(${evidenceLines.length} line(s), scale pass ${scalePassSeen ? 'reported' : 'SILENT'}) `,
+          `\n  WARNING: [evidence-coverage] did not settle in ${maxWaitMs}ms ` +
+            `(${evidenceLines.length} line(s), scale pass ${scalePassSeen ? 'reported' : 'SILENT'}` +
+            `${outlinePass ? `, outline pass ${outlinePassLines.length > 0 ? 'reported' : 'SILENT'}` : ''}; ` +
+            `page ${pageAtSettleTimeout}` +
+            `${(await pageLost()) ? `, PAGE LOST ${JSON.stringify(pageLoss)}` : ''}; ` +
+            `last console ${JSON.stringify(recentConsole)}) `,
         )
       }
     }
@@ -835,10 +1231,97 @@ async function runTrial(
         ...(outlinePassLines.length > 0 ? flatten('outlinePass.', outlinePassLines.at(-1)) : {}),
       })
     }
+    if (pageAtSettleTimeout !== undefined) fields['harness.pageAtSettleTimeout'] = pageAtSettleTimeout
+    if (device) {
+      const atSettled = await evaluateWithin(page, readDeviceProbes, PAGE_LIVENESS_TIMEOUT_MS, null)
+      // Page-clock milestones relative to the input's `change`, from the perf lines' `atMs`.
+      const changeAt = atComplete?.changeAt ?? atSettled?.changeAt ?? null
+      const perfAt = (match) => {
+        const line = perfLines.findLast(match)
+        return line && changeAt !== null ? Math.round(line.atMs - changeAt) : null
+      }
+      Object.assign(fields, {
+        'device.uploadMs': uploadMs,
+        'device.pageCrashed': pageLoss.crashed,
+        'device.pageReplaced': pageLoss.replaced,
+        'device.pageHiddenAtComplete': atComplete?.hidden ?? null,
+        'device.completeSinceChangeMs': atComplete?.sinceChangeMs ?? null,
+        'device.primaryReadySinceChangeMs': perfAt(
+          (line) => line.stage === 'analysis-pass' && line.pass === 'primary',
+        ),
+        'device.scalePassDoneSinceChangeMs': perfAt(
+          (line) => line.stage === 'analysis-pass' && line.pass === 'scale',
+        ),
+        'device.outlinePassDoneSinceChangeMs': perfAt(
+          (line) => line.stage === 'analysis-pass' && line.pass === 'outline',
+        ),
+        'device.lastEvidenceExtractionSinceChangeMs': perfAt(
+          (line) => line.stage === 'evidence-extraction',
+        ),
+        // Driver clock: when the last [evidence-coverage] line arrived, from the upload landing.
+        'device.evidenceSettledMs': lastEvidenceAt > 0 ? lastEvidenceAt - startedAt : null,
+        'device.longTasks.toComplete.count': atComplete?.longTaskCount ?? null,
+        'device.longTasks.toComplete.totalMs': atComplete?.longTaskTotalMs ?? null,
+        'device.longTasks.toComplete.maxMs': atComplete?.longTaskMaxMs ?? null,
+        'device.longTasks.toSettled.count': atSettled?.longTaskCount ?? null,
+        'device.longTasks.toSettled.totalMs': atSettled?.longTaskTotalMs ?? null,
+        'device.longTasks.toSettled.maxMs': atSettled?.longTaskMaxMs ?? null,
+      })
+    }
     return perf ? { ...fields, ...flattenPerfLines(perfLines) } : fields
   } finally {
-    await context.close()
+    // Bounded on the phone: closing a wedged tab can hang too, and the next trial force-stops
+    // Chrome anyway.
+    if (androidPage) {
+      await Promise.race([
+        androidPage.close().catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, PAGE_LIVENESS_TIMEOUT_MS)),
+      ])
+    } else await context.close()
   }
+}
+
+/** How long a page that is still running JS gets to answer the liveness probe. */
+const PAGE_LIVENESS_TIMEOUT_MS = 5_000
+
+/**
+ * Why a trial's console went quiet, asked once its settle wait has given up: `crashed` (the
+ * renderer died), `unresponsive` (alive but its main thread did not run a trivial evaluate within
+ * PAGE_LIVENESS_TIMEOUT_MS), or `live` (the page answers, so the silence is the app's own).
+ */
+/**
+ * `page.evaluate` with a deadline. Playwright gives `evaluate` no timeout of its own, so against a
+ * renderer whose main thread never yields it neither resolves nor rejects. `fallback` is returned
+ * on a timeout or a rejection.
+ */
+async function evaluateWithin(page, fn, ms, fallback) {
+  let timer
+  try {
+    return await Promise.race([
+      page.evaluate(fn).catch(() => fallback),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function probePageLiveness(page, crashed) {
+  if (crashed()) return 'crashed'
+  let timer
+  const answer = await Promise.race([
+    page.evaluate(() => performance.now()).then(
+      () => 'live',
+      () => (crashed() ? 'crashed' : 'unresponsive'),
+    ),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(crashed() ? 'crashed' : 'unresponsive'), PAGE_LIVENESS_TIMEOUT_MS)
+    }),
+  ])
+  clearTimeout(timer)
+  return answer
 }
 
 /** The address a trial opens: the bare baseURL, or with `?view=` when the arm names a view. */
@@ -961,7 +1444,10 @@ function flattenPerfLines(lines) {
 function fieldSortKey(field) {
   const group = FIELD_GROUPS.findIndex((prefix) => field.startsWith(prefix))
   const name = field.replace(/\.value$/, '.0').replace(/\.confidence$/, '.1')
-  return `${group === -1 ? FIELD_GROUPS.length : group}|${name}`
+  // Zero-padded: the keys compare as strings, and with ten or more groups an unpadded "10|" would
+  // sort before "2|" (the ungrouped `elapsedMs` row jumped to the middle when `device.` was added).
+  const rank = String(group === -1 ? FIELD_GROUPS.length : group).padStart(2, '0')
+  return `${rank}|${name}`
 }
 
 function median(sorted) {
@@ -1016,18 +1502,30 @@ function renderTable(header, rows) {
   return [line(header), line(widths.map((width) => '-'.repeat(width))), ...rows.map(line)]
 }
 
-function report({ renderer, baseURL, provenance, commit, options, results }) {
+function report({ renderer, baseURL, provenance, commit, options, results, device = null }) {
   const armLabels = options.arms.map((arm) => arm.label)
   const lines = [
     '# scripts/ab-person-selection.mjs',
     `# baseURL: ${baseURL} (${provenance})`,
     `# commit: ${commit}`,
-    `# renderer: ${renderer}`,
+    // On a phone the device IS the renderer's provenance; the temperature is the run's starting
+    // point (each trial's own reading is a `device.*` row).
+    device
+      ? `# device: ${device.model} (Android ${device.androidVersion}), Chrome ${device.chromeVersion}, ` +
+        `renderer ${renderer}, battery ${device.startThermal.batteryC} °C / skin ` +
+        `${device.startThermal.skinC} °C / thermal status ${device.startThermal.thermalStatus} at start`
+      : `# renderer: ${renderer}`,
     // Provenance, same as the baseURL and commit lines above it: the browser regime changes what
     // gets measured on Demo 2 (strides-9wp), so a diff of two reports has to surface it on a line
     // rather than leave it to be inferred from the numbers.
-    `# browser: ${options.reuseBrowser ? 'ONE process reused across trials (--reuse-browser)' : 'fresh process per trial'}`,
+    device
+      ? '# browser: fresh Chrome process per trial (am force-stop + relaunch, new tab, origin ' +
+        'storage cleared; HTTP cache + Cache Storage warm); elapsedMs from upload landing, ' +
+        `cooled below ${options.coolBelowC} °C between trials`
+      : `# browser: ${options.reuseBrowser ? 'ONE process reused across trials (--reuse-browser)' : 'fresh process per trial'}`,
     `# trials: ${options.trials}`,
+    // Only when set, so a report without the flag stays byte-identical to one taken before it.
+    ...(options.decoderHint ? [`# decoder hint: hardwareAcceleration=${options.decoderHint}`] : []),
     ...options.arms.map((arm) => `# arm ${arm.label}: ${JSON.stringify(arm.override)}`),
     // Emitted only when this run used the backend plane at all, so a report produced without
     // `--backend-arm` is byte-identical to one produced before that flag existed — `> before.txt`
@@ -1116,8 +1614,19 @@ async function main() {
 
   const { stop: stopServer, provenance } = await startDevServer(webServer, options.reuseServer)
   let sharedBrowser
+  let device = null
   try {
-    const renderer = await warmUpAndReadRenderer(launchArgs, baseURL)
+    if (options.android) {
+      device = prepareAndroid(options.android.serial, baseURL)
+      device.startThermal = readThermal(device.serial)
+      process.stderr.write(
+        `device: ${device.model} Android ${device.androidVersion} Chrome ${device.chromeVersion}, ` +
+          `battery ${device.startThermal.batteryC} °C, thermal status ${device.startThermal.thermalStatus}\n`,
+      )
+    }
+    const renderer = device
+      ? await androidWarmUpAndReadRenderer(device, baseURL)
+      : await warmUpAndReadRenderer(launchArgs, baseURL)
     process.stderr.write(`renderer: ${renderer}\n`)
     assertHardwareRenderer(renderer)
 
@@ -1141,9 +1650,25 @@ async function main() {
         for (const arm of options.arms) {
           process.stderr.write(`run: ${clipName} / ${arm.label} / trial ${trial}… `)
           const record = { trial }
-          const browser = sharedBrowser ?? (await chromium.launch({ args: launchArgs }))
+          let before = null
+          let browser
+          if (device) {
+            try {
+              before = await waitForCool(device.serial, options.coolBelowC)
+              // `{ browser, context }`, which runTrial takes in place of a Browser.
+              browser = await launchAndroidChrome(device.serial)
+            } catch (error) {
+              record.error = `launch: ${error.message}`
+              process.stderr.write(`FAILED: ${record.error}\n`)
+              results.get(`${clipName}|${arm.label}`).push(record)
+              continue
+            }
+          } else {
+            browser = sharedBrowser ?? (await chromium.launch({ args: launchArgs }))
+          }
           try {
             record.fields = await runTrial(browser, {
+              device,
               baseURL,
               clip: CLIPS[clipName],
               clipName,
@@ -1155,7 +1680,23 @@ async function main() {
               scalePass: options.scalePass,
               outlinePass: options.outlinePass,
               perf: options.perf,
+              decoderHint: options.decoderHint,
             })
+            if (device) {
+              const after = readThermal(device.serial)
+              Object.assign(record.fields, {
+                'device.batteryBeforeC': before.batteryC,
+                'device.skinBeforeC': before.skinC,
+                'device.apBeforeC': before.apC,
+                'device.thermalStatusBefore': before.thermalStatus,
+                'device.coolWaitMs': before.waitedMs,
+                'device.cooledBeforeTrial': before.cooled,
+                'device.batteryAfterC': after.batteryC,
+                'device.skinAfterC': after.skinC,
+                'device.apAfterC': after.apC,
+                'device.thermalStatusAfter': after.thermalStatus,
+              })
+            }
             process.stderr.write(
               `detected ${record.fields['sampling.detectedFrames']}/${record.fields['sampling.totalSamples']} in ${record.fields.elapsedMs}ms\n`,
             )
@@ -1163,7 +1704,8 @@ async function main() {
             record.error = error.message
             process.stderr.write(`FAILED: ${error.message}\n`)
           } finally {
-            if (!sharedBrowser) await browser.close()
+            if (device) await browser.browser.close().catch(() => {})
+            else if (!sharedBrowser) await browser.close()
           }
           results.get(`${clipName}|${arm.label}`).push(record)
         }
@@ -1172,7 +1714,7 @@ async function main() {
 
     const commit = headCommit()
     process.stdout.write(
-      `${report({ renderer, baseURL, provenance, commit, options, results })}\n`,
+      `${report({ renderer, baseURL, provenance, commit, options, results, device })}\n`,
     )
 
     if (options.jsonPath) {
@@ -1187,6 +1729,19 @@ async function main() {
             browserProvenance: options.reuseBrowser ? 'one process reused' : 'fresh per trial',
             commit,
             renderer,
+            // Present only on an --android run, so a desktop JSON keeps its shape.
+            ...(device
+              ? {
+                  device: {
+                    serial: device.serial,
+                    model: device.model,
+                    androidVersion: device.androidVersion,
+                    chromeVersion: device.chromeVersion,
+                    startThermal: device.startThermal,
+                    coolBelowC: options.coolBelowC,
+                  },
+                }
+              : {}),
             trials: options.trials,
             // Each entry carries BOTH planes (`override`, `backendOverride`), so a record read
             // back months later says which arm set what without needing the command line.
@@ -1208,6 +1763,7 @@ async function main() {
     }
   } finally {
     await sharedBrowser?.close()
+    device?.restore()
     stopServer()
   }
 }

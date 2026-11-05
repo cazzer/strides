@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { computeVerticalOscillation } from './verticalOscillation'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { framesFromHipTrace, seededNormals } from './__fixtures__/hipTraceFrames'
+import { APPROACH, generateApproachingRunner } from './__fixtures__/approachingRunner'
 import { applyRobustness } from '../pose/robustness/interpolate'
 import type { PoseSample, RobustPoseFrame } from '../pose/robustness/types'
 import { COMMON_KEYPOINT_NAMES } from '../pose/types'
@@ -64,6 +65,21 @@ describe('computeVerticalOscillation', () => {
     expect(result.fit?.frequencyHz).toBeCloseTo(2.83, 1)
     expect(result.fit?.sinusoidR2).toBeGreaterThan(0.99)
     expect(result.fit?.peakToPeakAmplitudePx).toBeCloseTo(20, 1)
+    expect(result.fit?.scaleNormalized).toBe(false)
+  })
+
+  it('an approaching runner: a value from the scale-normalized fit, near the true relative bounce', () => {
+    // The torso grows six-fold across the clip and the bounce is a fixed fraction of it, so the
+    // true torso-normalized peak-to-peak is 2·relativeAmplitude throughout. The raw pixel fit
+    // fails the gate here (`hipBounce.test.ts` pins that), so this value exists only because of
+    // the fallback.
+    const result = computeVerticalOscillation(generateApproachingRunner(), 'front')
+
+    const expected = 2 * APPROACH.relativeAmplitude
+    expect(result.value).not.toBeNull()
+    expect(result.value!).toBeGreaterThan(expected * 0.85)
+    expect(result.value!).toBeLessThan(expected * 1.15)
+    expect(result.fit?.scaleNormalized).toBe(true)
   })
 
   it('a front-view clip: still a reasonable value, confidence discounted by the 0.85 multiplier', () => {

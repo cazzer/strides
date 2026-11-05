@@ -3,10 +3,12 @@ import { DEFAULT_TRACKING_CROP_CONFIG } from './backends/trackingCropConfig'
 import type { TrackingCropConfig } from './backends/trackingCropConfig'
 import {
   DEFAULT_CONTINUITY_GATE_CONFIG,
+  DEFAULT_IDENTITY_CHALLENGE_CONFIG,
   DEFAULT_PERSON_OF_INTEREST_CONFIG,
 } from './backends/personOfInterestConfig'
 import type {
   ContinuityGateConfig,
+  IdentityChallengeConfig,
   PersonOfInterestConfig,
 } from './backends/personOfInterestConfig'
 
@@ -29,8 +31,9 @@ declare global {
       Omit<PoseDetectorConfig, 'trackingCrop' | 'personOfInterest'> & {
         trackingCrop: Partial<TrackingCropConfig>
         personOfInterest: Partial<
-          Omit<PersonOfInterestConfig, 'continuityGate'> & {
+          Omit<PersonOfInterestConfig, 'continuityGate' | 'identityChallenge'> & {
             continuityGate: Partial<ContinuityGateConfig>
+            identityChallenge: Partial<IdentityChallengeConfig>
           }
         >
       }
@@ -69,6 +72,10 @@ export function resolvePoseDetectorConfig(): PoseDetectorConfig {
       continuityGate: {
         ...DEFAULT_CONTINUITY_GATE_CONFIG,
         ...override.personOfInterest?.continuityGate,
+      },
+      identityChallenge: {
+        ...DEFAULT_IDENTITY_CHALLENGE_CONFIG,
+        ...override.personOfInterest?.identityChallenge,
       },
     },
   }

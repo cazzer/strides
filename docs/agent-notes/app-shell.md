@@ -51,3 +51,27 @@ a product decision inside it — today's full-width cards are why inline evidenc
 description on a desktop, which is the behaviour the evidence epic was asked for. **Left open
 deliberately; do not "fix" it as a typo.**
 
+
+## Poster seek on a phone: count the timeout only while the main thread runs (2026-11-05, `strides-p1qt.19`)
+
+The poster is derived on a detached `<video>` **during** sampling, and on the Galaxy S21 the first
+MoveNet inference blocks the main thread for 4.7–7.2 s. With `seekTo`'s 2 s wall-clock timer, the
+poster failed on 9 of 9 clips at 01c4ef04 and 5 of 5 second-runner clips on the integration branch.
+It also failed on the 4K `park-side-landscape.mp4` in the 3-clip demo. A dev-only probe showed the
+seek had **succeeded** during the stall (`seeking` false, `readyState` 4). The expired timer's task
+simply ran before the `seeked` task, which followed 80–280 ms later.
+
+The poster now uses `seekToThroughStalls` (`videoElement.ts`): the budget is sampled every 100 ms
+and each sample credits at most 200 ms, so a stalled page doesn't use it up. A 30 s wall-clock
+ceiling still ends the wait. **`seekTo` is unchanged, and evidence extraction still uses it**: its
+seeks run after `'ready'`, and the desktop 9-clip `--evidence --scale-pass --outline-pass` gate was
+identical apart from wall-clock rows.
+
+Results on the phone:
+- Posters derive on 5/5 second-runner clips and 3/3 demo clips (before: 0/5 and 2/3).
+- Time to "Analysis complete" did not move in an interleaved ABBA run (IMG_9345 after 17.8/17.6 s
+  vs before 17.0/23.5 s; IMG_9348 after 16.1/16.2 s vs before 17.1/24.9 s).
+- ⚠️ A first, **block-ordered** before/after pair showed the after arm 1.4–6.4 s slower. That was
+  thermal state: those trials' MoveNet detect p50 rose to 68–72 ms, and the same inflation shows up
+  in the before arm once the order is interleaved. Don't compare phone timings across
+  block-ordered arms.

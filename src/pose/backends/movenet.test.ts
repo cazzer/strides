@@ -7,6 +7,8 @@ const {
   multiPoseEstimatePoses,
   multiPoseDispose,
   multiPoseReset,
+  challengeEstimatePoses,
+  challengeDispose,
   createDetectorMock,
 } = vi.hoisted(() => ({
   estimatePoses: vi.fn(),
@@ -15,6 +17,8 @@ const {
   multiPoseEstimatePoses: vi.fn(),
   multiPoseDispose: vi.fn(),
   multiPoseReset: vi.fn(),
+  challengeEstimatePoses: vi.fn(),
+  challengeDispose: vi.fn(),
   createDetectorMock: vi.fn(),
 }))
 
@@ -39,12 +43,13 @@ vi.mock('@tensorflow-models/pose-detection', async (importOriginal) => {
 })
 
 import * as poseDetection from '@tensorflow-models/pose-detection'
-import { createMoveNetDetector } from './movenet'
+import { createMoveNetDetector, decideIdentityChallenge } from './movenet'
 import { MOVENET_RAW_KEYPOINTS } from './__fixtures__/movenet-keypoints.fixture'
 import { COMMON_KEYPOINT_NAMES } from '../types'
 import { DEFAULT_TRACKING_CROP_CONFIG } from './trackingCropConfig'
 import type { TrackingCropConfig } from './trackingCropConfig'
 import {
+  DEFAULT_IDENTITY_CHALLENGE_CONFIG,
   DEFAULT_PERSON_OF_INTEREST_CONFIG,
   POST_ACQUISITION_SETTLE_FRAMES,
   REVERIFICATION_INTERVAL_FRAMES,
@@ -262,12 +267,31 @@ beforeEach(() => {
   multiPoseEstimatePoses.mockReset()
   multiPoseDispose.mockReset()
   multiPoseReset.mockReset()
+  challengeEstimatePoses.mockReset()
+  // The identity challenge's own stateless multi-pose instance sees no one unless a test says
+  // otherwise -- an empty check is no evidence, so every pre-existing scenario runs unchanged.
+  challengeEstimatePoses.mockResolvedValue([])
+  challengeDispose.mockReset()
   createDetectorMock.mockReset()
   // Model-type-aware: MULTIPOSE_LIGHTNING calls get their own fake detector/mocks, independent of
   // the single-pose fake -- needed so acquisition/reacquisition tests can return multiple
   // distinct candidates without also controlling the single-pose steady-state fixture.
   createDetectorMock.mockImplementation(
-    async (_model: unknown, config?: { modelType?: string }) => {
+    async (
+      _model: unknown,
+      config?: { modelType?: string; enableTracking?: boolean },
+    ) => {
+      if (
+        config?.modelType ===
+          poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING &&
+        config.enableTracking === false
+      ) {
+        return {
+          estimatePoses: challengeEstimatePoses,
+          dispose: challengeDispose,
+          reset: vi.fn(),
+        }
+      }
       if (
         config?.modelType ===
         poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING
@@ -335,12 +359,13 @@ describe('createMoveNetDetector', () => {
     await createMoveNetDetector()
 
     const configs = createDetectorMock.mock.calls.map((call) => call[1])
-    expect(configs).toHaveLength(2)
+    // Single-pose, multi-pose, and the identity challenge's own multi-pose instance.
+    expect(configs).toHaveLength(3)
     for (const config of configs) {
       expect(typeof config.modelUrl).toBe('object')
       expect(typeof config.modelUrl.load).toBe('function')
     }
-    expect(configs[0].modelUrl).not.toBe(configs[1].modelUrl)
+    expect(new Set(configs.map((config) => config.modelUrl)).size).toBe(3)
   })
 
   it('maps a single-frame estimate to a PoseFrame using the shared fixture', async () => {
@@ -1126,10 +1151,11 @@ describe('person-of-interest acquisition/reacquisition', () => {
       const detector = await createMoveNetDetector()
 
       // Eager, parallel creation (see `createMoveNetDetector`'s doc comment) means
-      // `createDetectorMock` was already called exactly twice (raw + multi-pose attempt) by the
-      // time `createMoveNetDetector()` above resolved -- there is no lazy retry mechanism left to
-      // exercise, unlike the pre-eager-creation version of this test.
-      expect(createDetectorMock).toHaveBeenCalledTimes(2)
+      // `createDetectorMock` was already called exactly three times (raw + multi-pose attempt +
+      // the identity challenge's own multi-pose attempt) by the time `createMoveNetDetector()`
+      // above resolved -- there is no lazy retry mechanism left to exercise, unlike the
+      // pre-eager-creation version of this test.
+      expect(createDetectorMock).toHaveBeenCalledTimes(3)
 
       // Three consecutive frames, each failing to seed an anchor via the single-pose fallback too
       // (so every one of them would, under the OLD lazy design, have re-evaluated "should I
@@ -1140,7 +1166,7 @@ describe('person-of-interest acquisition/reacquisition', () => {
         await detector.estimatePose(videoFrameSource(makeVideo(i)))
       }
 
-      expect(createDetectorMock).toHaveBeenCalledTimes(2)
+      expect(createDetectorMock).toHaveBeenCalledTimes(3)
     })
 
     it('the whole detector still constructs successfully, and single-pose tracking keeps working across many calls, when multi-pose creation fails', async () => {
@@ -1189,7 +1215,17 @@ describe('person-of-interest acquisition/reacquisition', () => {
     it('disposes an already-created multi-pose detector if single-pose creation subsequently fails, instead of leaking it', async () => {
       let rejectRawDetector!: (err: Error) => void
       createDetectorMock.mockImplementation(
-        async (_model: unknown, config?: { modelType?: string }) => {
+        async (
+          _model: unknown,
+          config?: { modelType?: string; enableTracking?: boolean },
+        ) => {
+          if (config?.enableTracking === false) {
+            return {
+              estimatePoses: challengeEstimatePoses,
+              dispose: challengeDispose,
+              reset: vi.fn(),
+            }
+          }
           if (
             config?.modelType ===
             poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING
@@ -1220,6 +1256,8 @@ describe('person-of-interest acquisition/reacquisition', () => {
 
       await expect(creation).rejects.toThrow('single-pose model load failed')
       expect(multiPoseDispose).toHaveBeenCalledTimes(1)
+      // The identity challenge's own multi-pose instance is reclaimed the same way.
+      expect(challengeDispose).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -2301,6 +2339,59 @@ describe('person-of-interest acquisition/reacquisition', () => {
       ).toBe(600)
     })
 
+    it('refuses a subject walked down below a third of its recent peak, even when each step is within the scale bound (strides-p1qt.18)', async () => {
+      /** LARGE_CANDIDATE_KEYPOINTS scaled about its own centre by `s` (area x s^2). */
+      const scaled = (s: number) =>
+        LARGE_CANDIDATE_KEYPOINTS.map((k) => ({
+          ...k,
+          x: 750 + (k.x - 750) * s,
+          y: 400 + (k.y - 400) * s,
+        }))
+      async function run(shrinkReferenceWindowSeconds: number) {
+        multiPoseEstimatePoses.mockReset()
+        estimatePoses.mockReset()
+        const detector = await createMoveNetDetector(undefined, undefined, {
+          ...DEFAULT_PERSON_OF_INTEREST_CONFIG,
+          continuityGate: {
+            ...DEFAULT_PERSON_OF_INTEREST_CONFIG.continuityGate,
+            shrinkReferenceWindowSeconds,
+          },
+        })
+        multiPoseEstimatePoses.mockResolvedValueOnce([
+          { keypoints: LARGE_CANDIDATE_KEYPOINTS, score: 0.9 },
+        ])
+        await detector.estimatePose(videoFrameSource(makeVideo(0, 1280, 720)))
+        for (let i = 0; i < POST_ACQUISITION_SETTLE_FRAMES; i += 1) {
+          estimatePoses.mockResolvedValueOnce([
+            { keypoints: CROP_SPACE_LARGE_ANCHOR_KEYPOINTS, score: 0.9 },
+          ])
+          await detector.estimatePose(
+            videoFrameSource(makeVideo((i + 1) * 0.05, 1280, 720)),
+          )
+        }
+        // 64%, 36%, then 25% of the peak area: each step within 3x of the one before it.
+        const steps = [0.8, 0.6, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+        for (let i = 0; i < steps.length; i += 1) {
+          estimatePoses.mockResolvedValueOnce([
+            { keypoints: scaled(steps[i]), score: 0.9 },
+          ])
+          multiPoseEstimatePoses.mockResolvedValueOnce([
+            { keypoints: LARGE_CANDIDATE_KEYPOINTS, score: 0.9 },
+          ])
+          await detector.estimatePose(
+            videoFrameSource(makeVideo(0.2 + i * 0.05, 1280, 720)),
+          )
+        }
+        return multiPoseEstimatePoses.mock.calls.length
+      }
+
+      // The frame-to-frame ratchet follows the subject all the way down: no loss, no reacquisition.
+      expect(await run(0)).toBe(1)
+      // Against the recent peak, the quarter-size boxes are refused, and the loss streak hands the
+      // next call to multi-pose reacquisition.
+      expect(await run(0.5)).toBeGreaterThan(1)
+    })
+
     it('accepts ordinary frame-to-frame motion, resetting the counters exactly as before the gate existed', async () => {
       const detector = await detectorAnchoredOnLargeSubject()
       const multiPoseCallsBefore = multiPoseEstimatePoses.mock.calls.length
@@ -2519,5 +2610,442 @@ describe('person-of-interest acquisition/reacquisition', () => {
     // failed to create -- before `createMoveNetDetector`'s own promise resolves, so there is no
     // longer any way for a caller to hold a `PoseDetector` handle while multi-pose creation is
     // still pending.
+  })
+})
+
+describe('identity challenge decision (decideIdentityChallenge)', () => {
+  const config = DEFAULT_IDENTITY_CHALLENGE_CONFIG
+
+  /** A usable candidate with the given box; the acquisition score is area x `confidence`. */
+  function candidate(
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+    confidence = 0.9,
+  ) {
+    return {
+      frame: {
+        timestamp: 0,
+        keypoints: [
+          { name: 'left_hip' as const, x: minX, y: minY, score: confidence },
+        ],
+      },
+      box: { minX, minY, maxX, maxY },
+      poseScore: confidence,
+    }
+  }
+
+  // The tracked anchor: 100 x 200 = 20 000 px^2 at x 1000-1100.
+  const anchor = { minX: 1000, minY: 400, maxX: 1100, maxY: 600 }
+  const anchorMatch = () => candidate(1005, 405, 1095, 600)
+
+  describe('tentative', () => {
+    it('confirms when the anchor itself wins acquisition', () => {
+      const verdict = decideIdentityChallenge(
+        [anchorMatch(), candidate(200, 400, 260, 500)],
+        anchor,
+        true,
+        null,
+        0,
+        config,
+      )
+      expect(verdict.confirmed).toBe(true)
+      expect(verdict.switchTo).toBeNull()
+    })
+
+    it('switches to someone clearly larger than the anchor', () => {
+      const larger = candidate(2000, 300, 2150, 600) // 45 000 px^2, 2.25x
+      const verdict = decideIdentityChallenge(
+        [anchorMatch(), larger],
+        anchor,
+        true,
+        null,
+        0,
+        config,
+      )
+      expect(verdict.switchTo).toBe(larger)
+    })
+
+    it('keeps the incumbent on a near-tie, even when the other person wins acquisition', () => {
+      const slightlyLarger = candidate(2000, 400, 2120, 600) // 24 000 px^2, 1.2x
+      const verdict = decideIdentityChallenge(
+        [anchorMatch(), slightlyLarger],
+        anchor,
+        true,
+        null,
+        0,
+        config,
+      )
+      expect(verdict.switchTo).toBeNull()
+      expect(verdict.confirmed).toBe(false)
+    })
+
+    it('measures the margin against the tracked anchor box, not a collapsed multi-pose match', () => {
+      // IMG_9345 f22: the runner's multi-pose box collapsed to a quarter of her tracked size, which
+      // made a bystander look 2.6x larger than her. Against her tracked box he is smaller.
+      const collapsedMatch = candidate(1040, 500, 1090, 600) // 5 000 px^2
+      const bystander = candidate(200, 400, 280, 600) // 16 000 px^2: 3.2x the match, 0.8x the anchor
+      const verdict = decideIdentityChallenge(
+        [collapsedMatch, bystander],
+        anchor,
+        true,
+        null,
+        0,
+        config,
+      )
+      expect(verdict.switchTo).toBeNull()
+    })
+
+    it('when the check cannot see the anchor, yields to someone of comparable size but not to someone much smaller', () => {
+      const comparable = candidate(2000, 400, 2090, 600) // 18 000 px^2, 0.9x
+      expect(
+        decideIdentityChallenge([comparable], anchor, true, null, 0, config)
+          .switchTo,
+      ).toBe(comparable)
+
+      const muchSmaller = candidate(2000, 400, 2050, 600) // 10 000 px^2, 0.5x
+      expect(
+        decideIdentityChallenge([muchSmaller], anchor, true, null, 0, config)
+          .switchTo,
+      ).toBeNull()
+    })
+  })
+
+  describe('settled', () => {
+    const dominant = () => candidate(2000, 200, 2200, 600) // 80 000 px^2, 4x
+
+    it('needs the same dominant challenger on consecutive checks before switching', () => {
+      const first = decideIdentityChallenge(
+        [anchorMatch(), dominant()],
+        anchor,
+        false,
+        null,
+        0,
+        config,
+      )
+      expect(first.switchTo).toBeNull()
+      expect(first.streak).toBe(1)
+
+      const again = dominant()
+      const second = decideIdentityChallenge(
+        [anchorMatch(), again],
+        anchor,
+        false,
+        first.challenger?.box ?? null,
+        first.streak,
+        config,
+      )
+      expect(second.switchTo).toBe(again)
+    })
+
+    it('restarts the streak when the dominant candidate is a different person', () => {
+      const first = decideIdentityChallenge(
+        [anchorMatch(), dominant()],
+        anchor,
+        false,
+        null,
+        0,
+        config,
+      )
+      const elsewhere = candidate(3200, 200, 3400, 600)
+      const second = decideIdentityChallenge(
+        [anchorMatch(), elsewhere],
+        anchor,
+        false,
+        first.challenger?.box ?? null,
+        first.streak,
+        config,
+      )
+      expect(second.switchTo).toBeNull()
+      expect(second.streak).toBe(1)
+    })
+
+    it('a check that sees no one leaves the streak alone; one that sees no qualifying challenger ends it', () => {
+      const first = decideIdentityChallenge(
+        [anchorMatch(), dominant()],
+        anchor,
+        false,
+        null,
+        0,
+        config,
+      )
+      const empty = decideIdentityChallenge(
+        [],
+        anchor,
+        false,
+        first.challenger?.box ?? null,
+        first.streak,
+        config,
+      )
+      expect(empty.streak).toBe(1)
+
+      const anchorOnly = decideIdentityChallenge(
+        [anchorMatch(), candidate(200, 400, 260, 500)],
+        anchor,
+        false,
+        first.challenger?.box ?? null,
+        first.streak,
+        config,
+      )
+      expect(anchorOnly.streak).toBe(0)
+      expect(anchorOnly.challenger).toBeNull()
+    })
+
+    it('counts a dominant challenger even when the check cannot see the (small) anchor', () => {
+      const first = decideIdentityChallenge(
+        [dominant()],
+        anchor,
+        false,
+        null,
+        0,
+        config,
+      )
+      expect(first.streak).toBe(1)
+      const second = decideIdentityChallenge(
+        [dominant()],
+        anchor,
+        false,
+        first.challenger?.box ?? null,
+        first.streak,
+        config,
+      )
+      expect(second.switchTo).not.toBeNull()
+    })
+
+    it('never treats the anchor\'s own match as a challenger, however large', () => {
+      const bigMatch = candidate(950, 100, 1150, 700) // overlaps the anchor, 6x its area
+      const verdict = decideIdentityChallenge(
+        [bigMatch],
+        anchor,
+        false,
+        null,
+        0,
+        config,
+      )
+      expect(verdict.challenger).toBeNull()
+      expect(verdict.switchTo).toBeNull()
+    })
+  })
+})
+
+describe('identity challenge and seeded hand-off (createMoveNetDetector)', () => {
+  /**
+   * Acquires SMALL_DISTANT_CANDIDATE_KEYPOINTS at t=0, then runs the settle-in window's crop calls
+   * (t=1..POST_ACQUISITION_SETTLE_FRAMES) on that same person. The next call is the crop ->
+   * full-frame hand-off.
+   */
+  async function detectorThroughSettleWindow(
+    personOfInterest: PersonOfInterestConfig = DEFAULT_PERSON_OF_INTEREST_CONFIG,
+  ) {
+    const detector = await createMoveNetDetector(
+      undefined,
+      undefined,
+      personOfInterest,
+    )
+    multiPoseEstimatePoses.mockResolvedValueOnce([
+      { keypoints: SMALL_DISTANT_CANDIDATE_KEYPOINTS, score: 0.9 },
+    ])
+    await detector.estimatePose(videoFrameSource(makeVideo(0, 1280, 720)))
+    for (let i = 1; i <= POST_ACQUISITION_SETTLE_FRAMES; i += 1) {
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: CROP_SPACE_SMALL_ANCHOR_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(i, 1280, 720)))
+    }
+    return detector
+  }
+
+  /** A single-pose double carrying the library's private `cropRegion` field, so seeding can act. */
+  function useSeedableSinglePose() {
+    const singlePose = {
+      estimatePoses,
+      dispose,
+      cropRegion: null as null | Record<string, number>,
+      reset: vi.fn(() => {
+        singlePose.cropRegion = null
+      }),
+    }
+    createDetectorMock.mockImplementation(
+      async (
+        _model: unknown,
+        config?: { modelType?: string; enableTracking?: boolean },
+      ) => {
+        if (config?.enableTracking === false) {
+          return {
+            estimatePoses: challengeEstimatePoses,
+            dispose: challengeDispose,
+            reset: vi.fn(),
+          }
+        }
+        if (
+          config?.modelType ===
+          poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING
+        ) {
+          return {
+            estimatePoses: multiPoseEstimatePoses,
+            dispose: multiPoseDispose,
+            reset: multiPoseReset,
+          }
+        }
+        return singlePose
+      },
+    )
+    return singlePose
+  }
+
+  it('creates the challenge detector as a separate multi-pose instance with tracking and smoothing off', async () => {
+    await createMoveNetDetector()
+    expect(createDetectorMock).toHaveBeenCalledWith(
+      poseDetection.SupportedModels.MoveNet,
+      {
+        modelType: poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING,
+        multiPoseMaxDimension: 448,
+        enableTracking: false,
+        enableSmoothing: false,
+        modelUrl: expect.objectContaining({ load: expect.any(Function) }),
+      },
+    )
+  })
+
+  it('identityChallenge.enabled: false creates no challenge detector and never checks', async () => {
+    const detector = await detectorThroughSettleWindow({
+      ...DEFAULT_PERSON_OF_INTEREST_CONFIG,
+      identityChallenge: {
+        ...DEFAULT_IDENTITY_CHALLENGE_CONFIG,
+        enabled: false,
+      },
+    })
+    expect(createDetectorMock).toHaveBeenCalledTimes(2)
+    for (let t = 4; t < 20; t += 1) {
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_MOVED_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      await detector.estimatePose(videoFrameSource(makeVideo(t, 1280, 720)))
+    }
+    expect(challengeEstimatePoses).not.toHaveBeenCalled()
+  })
+
+  it('checks every tentativeIntervalFrames ordinary calls after the settle-in window, and a check that does not switch still runs the ordinary call for the same frame', async () => {
+    const detector = await detectorThroughSettleWindow()
+    expect(challengeEstimatePoses).not.toHaveBeenCalled() // never inside the settle-in window
+
+    // t=4: the hand-off call (interval not yet elapsed); t=5: due.
+    for (let t = 4; t <= 5; t += 1) {
+      estimatePoses.mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_MOVED_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      const frame = await detector.estimatePose(
+        videoFrameSource(makeVideo(t, 1280, 720)),
+      )
+      expect(frame?.keypoints.find((k) => k.name === 'left_shoulder')?.x).toBe(
+        115,
+      )
+    }
+    expect(challengeEstimatePoses).toHaveBeenCalledTimes(1)
+    expect(estimatePoses).toHaveBeenCalledTimes(
+      POST_ACQUISITION_SETTLE_FRAMES + 2,
+    )
+    expectFullFrameCall(
+      estimatePoses.mock.calls[estimatePoses.mock.calls.length - 1],
+      makeVideo(5, 1280, 720),
+    )
+  })
+
+  it('a tentative check that finds someone clearly larger switches to them: returns their frame, resets rawDetector, and settles in around them', async () => {
+    const detector = await detectorThroughSettleWindow()
+    estimatePoses.mockResolvedValueOnce([
+      { keypoints: SMALL_DISTANT_MOVED_CANDIDATE_KEYPOINTS, score: 0.9 },
+    ])
+    await detector.estimatePose(videoFrameSource(makeVideo(4, 1280, 720)))
+    reset.mockClear()
+    const ordinaryCallsBefore = estimatePoses.mock.calls.length
+
+    challengeEstimatePoses.mockResolvedValueOnce([
+      { keypoints: SMALL_DISTANT_MOVED_CANDIDATE_KEYPOINTS, score: 0.9 },
+      { keypoints: LARGE_CANDIDATE_KEYPOINTS, score: 0.9 },
+    ])
+    const switched = await detector.estimatePose(
+      videoFrameSource(makeVideo(5, 1280, 720)),
+    )
+
+    expect(switched?.keypoints.find((k) => k.name === 'left_shoulder')?.x).toBe(
+      600,
+    )
+    expect(estimatePoses).toHaveBeenCalledTimes(ordinaryCallsBefore)
+    expect(reset).toHaveBeenCalledTimes(1)
+
+    // The next call is a settle-in crop around the NEW person.
+    estimatePoses.mockResolvedValueOnce([
+      { keypoints: CROP_SPACE_LARGE_ANCHOR_KEYPOINTS, score: 0.9 },
+    ])
+    await detector.estimatePose(videoFrameSource(makeVideo(6, 1280, 720)))
+    expectCropCall(
+      estimatePoses.mock.calls[estimatePoses.mock.calls.length - 1],
+      makeVideo(6, 1280, 720),
+    )
+  })
+
+  it('seeded hand-off: when the plain post-settle reset finds someone else, retries the same frame with MoveNet\'s crop started from the anchor', async () => {
+    const singlePose = useSeedableSinglePose()
+    const detector = await detectorThroughSettleWindow()
+
+    estimatePoses
+      .mockResolvedValueOnce([
+        { keypoints: FAR_SMALL_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+      .mockResolvedValueOnce([
+        { keypoints: SMALL_DISTANT_MOVED_CANDIDATE_KEYPOINTS, score: 0.9 },
+      ])
+    const callsBefore = estimatePoses.mock.calls.length
+    const frame = await detector.estimatePose(
+      videoFrameSource(makeVideo(4, 1280, 720)),
+    )
+
+    expect(estimatePoses).toHaveBeenCalledTimes(callsBefore + 2)
+    for (const call of estimatePoses.mock.calls.slice(callsBefore)) {
+      expectFullFrameCall(call, makeVideo(4, 1280, 720))
+    }
+    // Seeded around the anchor (hips at x 105-125 of 1280), not the centre square.
+    expect(singlePose.cropRegion).not.toBeNull()
+    expect(singlePose.cropRegion?.xMin).toBeLessThan(0.1)
+    expect(frame?.keypoints.find((k) => k.name === 'left_shoulder')?.x).toBe(
+      115,
+    )
+  })
+
+  it('seeded hand-off leaves a hand-off that already found the anchor untouched', async () => {
+    const singlePose = useSeedableSinglePose()
+    const detector = await detectorThroughSettleWindow()
+    const resetsBefore = singlePose.reset.mock.calls.length
+
+    estimatePoses.mockResolvedValueOnce([
+      { keypoints: SMALL_DISTANT_MOVED_CANDIDATE_KEYPOINTS, score: 0.9 },
+    ])
+    const callsBefore = estimatePoses.mock.calls.length
+    await detector.estimatePose(videoFrameSource(makeVideo(4, 1280, 720)))
+
+    expect(estimatePoses).toHaveBeenCalledTimes(callsBefore + 1)
+    // Only the ordinary crop -> full-frame transition reset.
+    expect(singlePose.reset.mock.calls.length - resetsBefore).toBe(1)
+  })
+
+  it('seedHandOff: false keeps the plain reset result', async () => {
+    useSeedableSinglePose()
+    const detector = await detectorThroughSettleWindow({
+      ...DEFAULT_PERSON_OF_INTEREST_CONFIG,
+      seedHandOff: false,
+    })
+    estimatePoses.mockResolvedValueOnce([
+      { keypoints: FAR_SMALL_CANDIDATE_KEYPOINTS, score: 0.9 },
+    ])
+    const callsBefore = estimatePoses.mock.calls.length
+    const frame = await detector.estimatePose(
+      videoFrameSource(makeVideo(4, 1280, 720)),
+    )
+    expect(estimatePoses).toHaveBeenCalledTimes(callsBefore + 1)
+    expect(frame?.keypoints.find((k) => k.name === 'left_shoulder')?.x).toBe(
+      700,
+    )
   })
 })

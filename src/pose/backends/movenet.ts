@@ -16,8 +16,9 @@ import {
   isBoundingBoxAreaRatioWithin,
   isBoundingBoxContinuous,
   isWithinProximityThreshold,
+  recentPeakAreaPx,
 } from './movenetCrop'
-import type { BoundingBoxPx, CropRectPx } from './movenetCrop'
+import type { BoundingBoxPx, CropRectPx, FrameSizePx } from './movenetCrop'
 import { DEFAULT_TRACKING_CROP_CONFIG } from './trackingCropConfig'
 import type { TrackingCropConfig } from './trackingCropConfig'
 import {
@@ -26,7 +27,15 @@ import {
   REACQUISITION_PROXIMITY_DISTANCE_MULTIPLE,
   REVERIFICATION_INTERVAL_FRAMES,
 } from './personOfInterestConfig'
-import type { PersonOfInterestConfig } from './personOfInterestConfig'
+import type {
+  IdentityChallengeConfig,
+  PersonOfInterestConfig,
+} from './personOfInterestConfig'
+import {
+  computeSinglePoseCropRegionSeed,
+  resetSinglePoseDetector,
+} from './movenetCropRegionSeed'
+import type { Keypoint } from '../types'
 
 export type MoveNetModelType = 'lightning' | 'thunder'
 
@@ -179,6 +188,24 @@ function selectByReacquisitionHeuristic(
   candidates: (Candidate & { box: BoundingBoxPx })[],
   lastKnownBox: BoundingBoxPx,
 ): { candidate: Candidate; continuous: boolean } {
+  const match = findContinuousMatch(candidates, lastKnownBox)
+  if (match !== null) return { candidate: match, continuous: true }
+  return {
+    candidate: selectByAcquisitionHeuristic(candidates),
+    continuous: false,
+  }
+}
+
+/**
+ * The candidate `selectByReacquisitionHeuristic` treats as the same person as `lastKnownBox` --
+ * highest nonzero IoU, else the closest within the proximity threshold -- or `null` when no
+ * candidate qualifies. Shared verbatim with the identity challenge so "who is the anchor in this
+ * multi-pose frame" has one definition.
+ */
+function findContinuousMatch(
+  candidates: (Candidate & { box: BoundingBoxPx })[],
+  lastKnownBox: BoundingBoxPx,
+): (Candidate & { box: BoundingBoxPx }) | null {
   let bestIoU = 0
   let bestIoUCandidate: (Candidate & { box: BoundingBoxPx }) | null = null
   for (const candidate of candidates) {
@@ -188,9 +215,7 @@ function selectByReacquisitionHeuristic(
       bestIoUCandidate = candidate
     }
   }
-  if (bestIoUCandidate !== null) {
-    return { candidate: bestIoUCandidate, continuous: true }
-  }
+  if (bestIoUCandidate !== null) return bestIoUCandidate
 
   const withinProximity = candidates.filter((candidate) =>
     isWithinProximityThreshold(
@@ -206,12 +231,95 @@ function selectByReacquisitionHeuristic(
         ? candidate
         : closest,
     )
-    return { candidate: closest, continuous: true }
+    return closest
+  }
+  return null
+}
+
+/** What one identity-challenge check concluded. `switchTo` is set only when the anchor should move
+ * to a different person; `confirmed` when the check re-picked the anchor itself. */
+interface IdentityChallengeVerdict {
+  switchTo: (Candidate & { box: BoundingBoxPx }) | null
+  confirmed: boolean
+  /** Settled regime only: this check's qualifying challenger, carried to the next check so a win
+   * streak counts only consecutive wins by the SAME person. */
+  challenger: (Candidate & { box: BoundingBoxPx }) | null
+}
+
+function bboxAreaPx(box: BoundingBoxPx): number {
+  return Math.max(0, box.maxX - box.minX) * Math.max(0, box.maxY - box.minY)
+}
+
+/**
+ * The identity challenge's decision for one multi-pose frame (`IdentityChallengeConfig` documents
+ * the two regimes). Pure: the caller owns all state.
+ *
+ * Every scale comparison is against `anchor` -- the tracked box from the single-pose detector's
+ * own high-resolution crop -- never against the anchor's multi-pose match. The multi-pose pass sees
+ * the whole frame at low resolution, and a moving runner's box there routinely collapses to a
+ * quarter of her true size for a frame (motion blur), which made a bystander look 2.6x larger than
+ * the very runner being tracked (IMG_9345 f22). The match is used only to answer WHO the anchor is
+ * in this frame. A collapsed multi-pose box can therefore only make a challenger look smaller,
+ * never larger: the comparison errs toward keeping the incumbent.
+ *
+ * `previousChallenger` is the settled regime's last qualifying challenger and `streak` how many
+ * consecutive checks it has won. A check in which multi-pose sees no one is no evidence either way
+ * and leaves the streak as it was; a check that sees people but no qualifying challenger ends it.
+ */
+export function decideIdentityChallenge(
+  candidates: Candidate[],
+  anchor: BoundingBoxPx,
+  tentative: boolean,
+  previousChallenger: BoundingBoxPx | null,
+  streak: number,
+  config: IdentityChallengeConfig,
+): IdentityChallengeVerdict & { streak: number } {
+  const boxed = candidates.filter(
+    (c): c is Candidate & { box: BoundingBoxPx } => c.box !== null,
+  )
+  if (boxed.length === 0) {
+    return { switchTo: null, confirmed: false, challenger: null, streak }
+  }
+  const none = { switchTo: null, confirmed: false, challenger: null, streak: 0 }
+  const anchorArea = bboxAreaPx(anchor)
+  const match = findContinuousMatch(boxed, anchor)
+
+  if (tentative) {
+    // Re-run acquisition over everyone visible. The anchor's own match winning is a confirmation.
+    // Anyone else needs a clear scale margin over the anchor -- or, when this whole-frame pass
+    // cannot see the anchor at all, merely a comparable size: a tentative pick that the stronger
+    // detector cannot find while it does find someone as large has no history worth defending.
+    const winner = selectByAcquisitionHeuristic(boxed) as Candidate & {
+      box: BoundingBoxPx
+    }
+    if (winner === match) return { ...none, confirmed: true }
+    const minArea =
+      match === null
+        ? anchorArea / config.tentativeMinAreaRatio
+        : anchorArea * config.tentativeMinAreaRatio
+    if (bboxAreaPx(winner.box) < minArea) return none
+    return { ...none, switchTo: winner }
   }
 
+  // Settled: someone other than the anchor, at least `minAreaRatio` times its size, persistently.
+  let challenger: (Candidate & { box: BoundingBoxPx }) | null = null
+  for (const c of boxed) {
+    if (c === match) continue
+    if (bboxAreaPx(c.box) < config.minAreaRatio * anchorArea) continue
+    if (challenger === null || bboxAreaPx(c.box) > bboxAreaPx(challenger.box)) {
+      challenger = c
+    }
+  }
+  if (challenger === null) return none
+  const sameChallenger =
+    previousChallenger !== null &&
+    findContinuousMatch([challenger], previousChallenger) !== null
+  const nextStreak = sameChallenger ? streak + 1 : 1
   return {
-    candidate: selectByAcquisitionHeuristic(candidates),
-    continuous: false,
+    switchTo: nextStreak >= config.minConsecutiveWins ? challenger : null,
+    confirmed: false,
+    challenger,
+    streak: nextStreak,
   }
 }
 
@@ -361,6 +469,31 @@ export async function createMoveNetDetector(
         })
         .catch(() => null)
     : Promise.resolve(null)
+  // The identity challenge's own multi-pose instance (`strides-p1qt.15`), with the library's
+  // per-person tracker and keypoint smoothing OFF. A separate, stateless instance is what makes a
+  // check that changes nothing a true no-op: the shared instance above keeps a BoundingBoxTracker
+  // and one-euro filters that every call advances, so borrowing it for checks drifted later
+  // acquisition/re-verification output on clips where no check ever switched (measured, strides-d90).
+  // Created in parallel with the others; a failure degrades to "no challenge", never to a
+  // rejected detector.
+  const challengeDetectorPromise: Promise<Awaited<
+    ReturnType<typeof poseDetection.createDetector>
+  > | null> =
+    personOfInterestConfig.enabled &&
+    personOfInterestConfig.identityChallenge.enabled
+      ? poseDetection
+          .createDetector(poseDetection.SupportedModels.MoveNet, {
+            modelType: poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING,
+            multiPoseMaxDimension: MULTIPOSE_MAX_DIMENSION,
+            enableTracking: false,
+            enableSmoothing: false,
+            modelUrl: createMoveNetModelLoader(
+              MOVENET_MODEL_URLS['multipose-lightning'],
+              options.onAssetProgress,
+            ),
+          })
+          .catch(() => null)
+      : Promise.resolve(null)
 
   // Both fetches stay in flight together (still parallel -- `multiPoseDetectorPromise` was
   // already kicked off above, before this `await`), but the SINGLE-pose promise's own rejection
@@ -377,9 +510,11 @@ export async function createMoveNetDetector(
     rawDetector = await rawDetectorPromise
   } catch (err) {
     void multiPoseDetectorPromise.then((created) => created?.dispose())
+    void challengeDetectorPromise.then((created) => created?.dispose())
     throw err
   }
   const multiPoseDetector = await multiPoseDetectorPromise
+  const challengeDetector = await challengeDetectorPromise
 
   const targetInputSize = MODEL_INPUT_RESOLUTION[modelType]
   const cropCanvas = document.createElement('canvas')
@@ -403,6 +538,28 @@ export async function createMoveNetDetector(
   // across runs (`lastSeenTime`, see the new-run check below) and a stale, late-resolving call
   // clobbering a newer one's progress (`generation`, see the reentrancy guard below).
   let lastBoundingBox: BoundingBoxPx | null = null
+  // The keypoints `lastBoundingBox` was derived from -- what the seeded hand-off starts MoveNet's
+  // own crop from (`personOfInterestConfig.seedHandOff`). Always written together with the box.
+  let lastAnchorKeypoints: Keypoint[] | null = null
+  // Areas of the boxes the CURRENT identity has been anchored at, for the continuity gate's shrink
+  // reference (`continuityGate.shrinkReferenceWindowSeconds`). Emptied whenever the anchor starts
+  // referring to someone else (`beginNewIdentity`), so the peak is never another person's.
+  let anchorAreaHistory: { timestamp: number; areaPx: number }[] = []
+
+  /** Records `box` as the anchor at `timestamp` into the shrink-reference history. */
+  function recordAnchorArea(box: BoundingBoxPx, timestamp: number): void {
+    anchorAreaHistory.push({ timestamp, areaPx: bboxAreaPx(box) })
+    // Bounded: only the last window is ever read; keep a little slack for timestamp jitter.
+    const keepAfter =
+      timestamp -
+      2 * personOfInterestConfig.continuityGate.shrinkReferenceWindowSeconds
+    while (
+      anchorAreaHistory.length > 0 &&
+      anchorAreaHistory[0].timestamp < keepAfter
+    ) {
+      anchorAreaHistory.shift()
+    }
+  }
   let consecutiveLowConfidence = 0
   let previousRawDetectorUsage: RawDetectorUsage = 'fullFrame'
   let lastSeenTime: number | null = null
@@ -445,11 +602,31 @@ export async function createMoveNetDetector(
   // different person without ever tripping the confidence-based reacquisition trigger).
   let callsSinceLastVerification = 0
 
+  // Identity-challenge state (`IdentityChallengeConfig`). `anchorConfirmations` counts checks that
+  // re-picked the CURRENT identity; any change of identity zeroes it (`beginNewIdentity`), so a
+  // freshly chosen person is always tentative first. `challengerStreak`/`lastChallengerBox` carry
+  // the settled regime's consecutive-win count between checks.
+  let callsSinceIdentityChallenge = 0
+  let anchorConfirmations = 0
+  let challengerStreak = 0
+  let lastChallengerBox: BoundingBoxPx | null = null
+
+  /** The anchor now refers to a different person than before (or to someone, after no one). */
+  function beginNewIdentity(): void {
+    anchorAreaHistory = []
+    callsSinceIdentityChallenge = 0
+    anchorConfirmations = 0
+    challengerStreak = 0
+    lastChallengerBox = null
+  }
+
   /** Clears all anchor and multi-pose-episode state -- used both for a genuine "no one is
    * trackable" reset and as the internals of "giving up" (which additionally suspends
    * multi-pose dispatch, see call sites). */
   function clearAnchor(): void {
     lastBoundingBox = null
+    lastAnchorKeypoints = null
+    beginNewIdentity()
     consecutiveLowConfidence = 0
     anchorWasReacquired = false
     consecutiveEmptyReacquisitions = 0
@@ -506,6 +683,8 @@ export async function createMoveNetDetector(
     derived: BoundingBoxPx,
     anchor: BoundingBoxPx | null,
     elapsedSeconds: number,
+    atSeconds: number,
+    frame: FrameSizePx,
   ): boolean {
     const gate = personOfInterestConfig.continuityGate
     if (!gate.enabled || anchor === null || personOfInterestSuspended) {
@@ -516,7 +695,18 @@ export async function createMoveNetDetector(
     // with the retroactive person-selection stage's segmentation criterion. Only the three early
     // returns above are this gate's own -- they decide WHETHER continuity is consulted, which the
     // offline stage answers differently and must not inherit.
-    return isBoundingBoxContinuous(derived, anchor, elapsedSeconds, gate)
+    return isBoundingBoxContinuous(
+      derived,
+      anchor,
+      elapsedSeconds,
+      gate,
+      recentPeakAreaPx(
+        anchorAreaHistory,
+        atSeconds,
+        gate.shrinkReferenceWindowSeconds,
+      ),
+      frame,
+    )
   }
 
   /**
@@ -536,6 +726,7 @@ export async function createMoveNetDetector(
   ): void {
     if (settleFramesRemaining > 0) settleFramesRemaining -= 1
     if (incrementVerificationCounter) callsSinceLastVerification += 1
+    callsSinceIdentityChallenge += 1
   }
 
   return {
@@ -834,8 +1025,13 @@ export async function createMoveNetDetector(
           } else if (usable) {
             if (isCurrent) {
               lastBoundingBox = selected.box
+              lastAnchorKeypoints = selected.frame.keypoints
               consecutiveLowConfidence = 0
               consecutiveEmptyReacquisitions = 0
+              if (dispatchReason === 'acquisition' || !continuous) {
+                beginNewIdentity()
+              }
+              recordAnchorArea(selected.box as BoundingBoxPx, currentTime)
               // A bounded settle-in window only starts (or restarts) when this selection carries
               // NEW identity information -- a fresh acquisition, or a reacquisition/re-verification
               // that switched to a genuinely different (non-continuous) person (review F4). A
@@ -909,6 +1105,68 @@ export async function createMoveNetDetector(
         }
       }
 
+      // Identity challenge (`IdentityChallengeConfig`): lowest priority of the multi-pose triggers --
+      // only on a call nothing else claimed, against a healthy anchor, outside a settle-in window
+      // (which exists to let the single-pose detector lock onto a just-chosen person; challenging
+      // inside it could ping-pong identity). A check that does not switch changes nothing but its
+      // own counters and falls through to the ordinary single-pose call for this same frame, so
+      // every other counter -- re-verification's interval included -- advances exactly as if the
+      // check had not run.
+      const challengeConfig = personOfInterestConfig.identityChallenge
+      const identityTentative =
+        anchorConfirmations < challengeConfig.confirmationsToSettle
+      if (
+        personOfInterestConfig.enabled &&
+        challengeDetector !== null &&
+        dispatchReason === null &&
+        !dispatchMultiPose &&
+        !personOfInterestSuspended &&
+        giveUpBoxAtStart !== null &&
+        settleFramesRemainingAtStart === 0 &&
+        callsSinceIdentityChallenge >=
+          (identityTentative
+            ? challengeConfig.tentativeIntervalFrames
+            : challengeConfig.settledIntervalFrames)
+      ) {
+        const challengePoses = await challengeDetector.estimatePoses(
+          source.image,
+        )
+        if (myGeneration === generation) {
+          callsSinceIdentityChallenge = 0
+          const verdict = decideIdentityChallenge(
+            toCandidates(challengePoses, currentTime, trackingCropConfig),
+            giveUpBoxAtStart,
+            identityTentative,
+            lastChallengerBox,
+            challengerStreak,
+            challengeConfig,
+          )
+          challengerStreak = verdict.streak
+          if (verdict.challenger !== null || verdict.streak === 0) {
+            lastChallengerBox = verdict.challenger?.box ?? null
+          }
+          if (verdict.confirmed) anchorConfirmations += 1
+          if (verdict.switchTo !== null) {
+            // Same hand-over as a non-continuous re-verification switch: re-seed the anchor, start
+            // a settle-in window on the new person, and reset `rawDetector`, whose own crop was
+            // built tracking the person just displaced.
+            const chosen = verdict.switchTo
+            lastBoundingBox = chosen.box
+            lastAnchorKeypoints = chosen.frame.keypoints
+            consecutiveLowConfidence = 0
+            consecutiveEmptyReacquisitions = 0
+            anchorWasReacquired = false
+            settleFramesRemaining = POST_ACQUISITION_SETTLE_FRAMES
+            callsSinceLastVerification = 0
+            beginNewIdentity()
+            recordAnchorArea(chosen.box, currentTime)
+            rawDetector.reset()
+            commitCallProgress(null)
+            return chosen.frame
+          }
+        }
+      }
+
       // `usingCrop`/`rawDetectorUsage`/the transition-reset decision are computed HERE, using the
       // FINAL value of `dispatchMultiPose` -- not just its initial, pre-await value -- so a call
       // that started as a multi-pose dispatch attempt but ended up falling through to the
@@ -923,6 +1181,13 @@ export async function createMoveNetDetector(
       const rawDetectorUsage: RawDetectorUsage = usingCrop
         ? 'crop'
         : 'fullFrame'
+
+      // A crop-mode stretch (settle-in) ending: the transition reset below is what can lose the anchor
+      // (see `PersonOfInterestConfig.seedHandOff`).
+      const handOffFromCrop =
+        !dispatchMultiPose &&
+        rawDetectorUsage === 'fullFrame' &&
+        previousRawDetectorUsage === 'crop'
 
       // `rawDetector` is reused across calls, so its own internal cropRegion/smoothing-filter
       // state (computed relative to whatever canvas we fed it on its LAST ACTUAL invocation)
@@ -1018,6 +1283,55 @@ export async function createMoveNetDetector(
         )
       }
 
+      // Seeded hand-off: the plain reset above restarted MoveNet from its centre-square guess. If
+      // what it found there is not the anchor, retry this frame once with MoveNet's crop started
+      // from the anchor -- the region MoveNet itself would have tracked next had it been following
+      // the anchor all along. A hand-off that already confirmed the anchor is never touched, and
+      // neither is one with no usable seed (torso not visible, or a body too large to crop).
+      if (
+        handOffFromCrop &&
+        personOfInterestConfig.enabled &&
+        personOfInterestConfig.seedHandOff &&
+        myGeneration === generation &&
+        !personOfInterestSuspended &&
+        lastBoundingBox !== null &&
+        lastAnchorKeypoints !== null
+      ) {
+        const firstBox =
+          poses.length === 0
+            ? null
+            : deriveBoundingBox(
+                toPoseFrame(poses[0].keypoints, currentTime).keypoints,
+                trackingCropConfig.minKeypointConfidence,
+                trackingCropConfig.minConfidentKeypoints,
+              )
+        const sinceLastCall =
+          lastSeenTime === null ? 0 : currentTime - lastSeenTime
+        const handOffKeptAnchor =
+          firstBox !== null &&
+          isContinuousWithAnchor(
+            firstBox,
+            lastBoundingBox,
+            sinceLastCall,
+            currentTime,
+            source,
+          )
+        const seed = handOffKeptAnchor
+          ? null
+          : computeSinglePoseCropRegionSeed(
+              lastAnchorKeypoints,
+              source.width,
+              source.height,
+            )
+        if (seed !== null && resetSinglePoseDetector(rawDetector, seed)) {
+          poses = await rawDetector.estimatePoses(
+            source.image,
+            undefined,
+            timestampMs,
+          )
+        }
+      }
+
       const isCurrent = myGeneration === generation
 
       if (poses.length === 0) {
@@ -1048,9 +1362,21 @@ export async function createMoveNetDetector(
           lastSeenTime === null ? 0 : currentTime - lastSeenTime
         if (
           derived !== null &&
-          isContinuousWithAnchor(derived, lastBoundingBox, elapsedSeconds)
+          isContinuousWithAnchor(
+            derived,
+            lastBoundingBox,
+            elapsedSeconds,
+            currentTime,
+            source,
+          )
         ) {
+          // No anchor before, or one installed past a suspended identity: a new person either way.
+          if (lastBoundingBox === null || personOfInterestSuspended) {
+            beginNewIdentity()
+          }
           lastBoundingBox = derived
+          lastAnchorKeypoints = frame.keypoints
+          recordAnchorArea(derived, currentTime)
           consecutiveLowConfidence = 0
           // An ordinary single-pose detection re-established a confident anchor on its own --
           // whatever multi-pose "give up" state was active no longer applies to this fresh
@@ -1085,6 +1411,7 @@ export async function createMoveNetDetector(
       // special-case.
       rawDetector.dispose()
       multiPoseDetector?.dispose()
+      challengeDetector?.dispose()
     },
   }
 }

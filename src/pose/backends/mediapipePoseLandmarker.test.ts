@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
   forVisionTasksMock,
@@ -35,6 +35,8 @@ vi.mock('../modelAssetCache', () => ({
 import {
   MODEL_ASSET_PATH,
   POSE_LANDMARKER_MODEL_VERSION,
+  OutlineSegmenterUnavailableError,
+  createMediaPipeOutlineSegmenter,
   createMediaPipePoseLandmarkerDetector,
   resolveMediaPipePoseLandmarkerAssetUrls,
 } from './mediapipePoseLandmarker'
@@ -381,5 +383,99 @@ describe('resolveMediaPipePoseLandmarkerAssetUrls', () => {
       url: MODEL_ASSET_PATH,
       version: POSE_LANDMARKER_MODEL_VERSION,
     })
+  })
+})
+
+describe('createMediaPipeOutlineSegmenter', () => {
+  /** A stand-in WebGL context: the mocked GPU graph "links" programs through it. */
+  class FakeGL {
+    readonly LINK_STATUS = 0x8b82
+    linkProgram(program: { ok: boolean }): void {
+      void program
+    }
+    getProgramParameter(program: { ok: boolean }): boolean {
+      return program.ok
+    }
+  }
+  const g = globalThis as unknown as Record<string, unknown>
+  const gpuClose = vi.fn()
+  const pose = { landmarks: [[{ x: 0.5, y: 0.5 }]], segmentationMasks: [{ width: 1, height: 1 }] }
+  const detect = vi.fn()
+  const image = {} as HTMLCanvasElement
+
+  /** `atBuild` programs fail while the graph is created, `atFirstPose` on the first detect that
+   * returns a pose (the landmark model's first run, as on Adreno 660). */
+  function graphLinking({ atBuild = 0, atFirstPose = 0, noPoseFirst = 0 } = {}) {
+    let calls = 0
+    const resultClose = vi.fn()
+    detect.mockImplementation(() => {
+      calls += 1
+      if (calls <= noPoseFirst) return { landmarks: [], segmentationMasks: [], close: resultClose }
+      const gl = new FakeGL()
+      if (calls === noPoseFirst + 1) for (let i = 0; i < atFirstPose; i++) gl.linkProgram({ ok: false })
+      gl.linkProgram({ ok: true })
+      return { ...pose, close: resultClose }
+    })
+    createFromOptionsMock.mockImplementation(async () => {
+      const gl = new FakeGL()
+      gl.linkProgram({ ok: true })
+      for (let i = 0; i < atBuild; i++) gl.linkProgram({ ok: false })
+      return { detect, close: gpuClose }
+    })
+    return { resultClose }
+  }
+
+  beforeEach(() => {
+    g.WebGL2RenderingContext = FakeGL
+    gpuClose.mockReset()
+    detect.mockReset()
+  })
+  afterEach(() => {
+    delete g.WebGL2RenderingContext
+  })
+
+  it('builds the GPU graph with unchanged options, and segments, when every program links', async () => {
+    graphLinking()
+    const segmenter = await createMediaPipeOutlineSegmenter()
+
+    expect(createFromOptionsMock).toHaveBeenCalledTimes(1)
+    expect(createFromOptionsMock.mock.calls[0][1]).toEqual({
+      baseOptions: { modelAssetBuffer: new Uint8Array([1, 2, 3]), delegate: 'GPU' },
+      runningMode: 'IMAGE',
+      numPoses: 1,
+      outputSegmentationMasks: true,
+    })
+    const segmentation = await segmenter.segment(image)
+    expect(segmentation.landmarks).toEqual(pose.landmarks[0])
+    expect(segmenter.gpuLinkFailures).toBe(0)
+  })
+
+  it('rejects creation, closing the graph, when a program fails to link at build', async () => {
+    graphLinking({ atBuild: 1 })
+    await expect(createMediaPipeOutlineSegmenter()).rejects.toBeInstanceOf(OutlineSegmenterUnavailableError)
+    expect(gpuClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('discards the result and goes unavailable when a program fails to link on the first pose', async () => {
+    const { resultClose } = graphLinking({ atFirstPose: 1, noPoseFirst: 1 })
+    const segmenter = await createMediaPipeOutlineSegmenter()
+
+    await segmenter.segment(image) // no pose yet: the landmark model has not run
+    await expect(segmenter.segment(image)).rejects.toBeInstanceOf(OutlineSegmenterUnavailableError)
+    expect(resultClose).toHaveBeenCalledTimes(1)
+    expect(segmenter.gpuLinkFailures).toBe(1)
+    await expect(segmenter.segment(image)).rejects.toBeInstanceOf(OutlineSegmenterUnavailableError)
+    expect(detect).toHaveBeenCalledTimes(2) // no inference once unavailable
+  })
+
+  it('stops watching once a pose has come back with every program linked', async () => {
+    graphLinking()
+    const linkBefore = FakeGL.prototype.linkProgram
+    const segmenter = await createMediaPipeOutlineSegmenter()
+    expect(FakeGL.prototype.linkProgram).toBe(linkBefore)
+    await segmenter.segment(image)
+    await segmenter.segment(image)
+    expect(FakeGL.prototype.linkProgram).toBe(linkBefore)
+    expect(segmenter.gpuLinkFailures).toBe(0)
   })
 })

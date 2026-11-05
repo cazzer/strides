@@ -58,7 +58,8 @@ export interface AnalysisDiagnostics {
   /** Vertical oscillation's spectral-fit internals — fitted frequency, fit quality, cycle count.
    * `null` whenever that metric reported no value, per its own `fit`/`value` invariant. Broken out
    * rather than folded into `metrics.verticalOscillation` because `MetricDiagnostics` is uniform
-   * across all thirteen metrics on purpose, and only this one has a fit behind it. */
+   * across all thirteen metrics on purpose, and only this one has a fit behind it. Its
+   * `scaleNormalized` says whether the bounce fit came from the scale-normalized fallback. */
   verticalOscillationFit: VerticalOscillationFit | null
   /**
    * Present only when the detection backend measured a real-world scale (today: MediaPipe Pose

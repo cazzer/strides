@@ -1178,6 +1178,12 @@ export function useVideoAnalysis(
       if (abortedLocally || runIdRef.current !== runId) return
       if (outlineHandleRef.current === handle) outlineHandleRef.current = null
       const sampledAt = performance.now()
+      // The GPU graph proved broken on its first inference (strides-p1qt.22): its masks are garbage,
+      // so report nothing rather than whatever was measured.
+      if (reader.stats().segmenterUnavailable) {
+        failPass('The outline-pass segmenter failed to link its GPU programs.')
+        return
+      }
 
       try {
         const summarized = summarizeSwingFootOutline(plan, reader.measurements(), DEFAULT_HEURISTICS_CONFIG)
@@ -1203,6 +1209,7 @@ export function useVideoAnalysis(
           path: 'sequential',
           ...perfClipIdentity(metadata, sourceBlob),
           plannedFrames: plan.frames.length,
+          gpuLinkFailures: segmenter.gpuLinkFailures,
           framesSegmented: stats.framesSegmented,
           framesWithoutMask: stats.framesWithoutMask,
           segmenterWaitMs: roundMs(segmenterReadyAt - passStartedAt),
@@ -1217,9 +1224,16 @@ export function useVideoAnalysis(
       } catch (err) {
         failPass(err instanceof Error ? err.message : 'Outline pass failed unexpectedly.')
       }
-    })().finally(() => {
-      void acquisition.finally(releaseOutlineSegmenter)
-    })
+    })()
+      // A throw before the watchdog is armed (reader or sampler setup) would otherwise leave the
+      // pass 'running' forever, with no outline-pass line and the evidence never settling
+      // (strides-p1qt.4). Every later path already lands on 'done' or 'failed' itself.
+      .catch((err: unknown) => {
+        failPass(err instanceof Error ? err.message : 'Outline pass failed unexpectedly.')
+      })
+      .finally(() => {
+        void acquisition.finally(releaseOutlineSegmenter)
+      })
   }, [state.phase, state.outlinePass?.status, state.heuristics, metadata, sourceBlob])
 
   // Auto-starts analysis the moment a freshly loaded clip is ready and a detector exists — no

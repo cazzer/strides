@@ -215,3 +215,80 @@ built:
   which half-cycles even get detected varies between identical runs (GPU non-determinism). No
   normalization scheme can be responsibly validated against a single short run of this clip.
 
+
+## Online person-of-interest loses the runner after a near-tie acquisition (`strides-p1qt.3`, 2026-11-05)
+
+Private front-approach clip (portrait 4K60, runner ~10% of frame height early, a stationary
+bystander standing ~0.5× her size to one side). Primary pass: winner segment starts at f74 of 151;
+f0–3 and f22–71 are the bystander. **The loss is in the online POI state machine in `movenet.ts`,
+not in MoveNet itself and not in retroactive selection**: with `personOfInterest.enabled: false`,
+plain single-pose MoveNet holds the runner from f5 (winner 147 frames from 0.10 s). Traced with a
+temporary `[poi-probe]` (reverted), the chain is:
+
+1. **Acquisition at f0 is a near-tie that multi-pose cannot resolve at this scale.** Multi-pose
+   returns ONE pose per call on this clip (scores 0.26–0.28, just over the library's 0.25
+   `minPoseScore`). With the floor lowered to 0.05 the runner IS the second candidate (0.215), but
+   area×confidence still ties (10,655 bystander vs 10,231 runner). Raising
+   `MULTIPOSE_MAX_DIMENSION` to 640 still picks the bystander (16,220 vs 12,793).
+2. **Gate rejects the true subject** f5–9 (continuity with the wrong anchor), then reacquisition
+   corrects to the runner at f13. Correct so far.
+3. **Every crop→full-frame hand-off calls `rawDetector.reset()`**, which sets the library's
+   internal `cropRegion` to `null` → its next call starts from a centre-square guess and re-picks
+   by saliency. After the settle window it found nobody (f16–20); after the next continuous
+   reacquisition it found the bystander (f22–26).
+4. **The give-up rule installs the gate-rejected detection**: anchor stale twice after a
+   reacquisition → `personOfInterestSuspended`, and the bystander becomes the anchor.
+5. Held until periodic re-verification (45 calls) switched to the runner at f74.
+
+**Measured and NOT shipped:**
+- *Seeding the library's crop region from the anchor instead of blanking it* (a port of its
+  `determineNextCropRegion`, written into the private `cropRegion` after `reset()`). It works as a
+  mechanism, because single-pose then holds whoever is anchored. Here that is the bystander, so it
+  only moves the segment start 1.233 → 0.800 s. On 9 clips it is mixed: 9347 +19 detected frames
+  (segment start 0.70 → 0.03 s), 9348 +26, 9346 cadence recovered (181.2, GT 182), but
+  side-landscape −16, multiperson −8 (cadence 174 → 168), 9345 −14 with a wrong cadence of 72.
+  Follow-up `strides-p1qt.6`. This likely also explains `strides-d90`'s unresolved "settle-in
+  then reset picks the worker again" contradiction. Patch + table kept privately (the second-runner baseline in `fixtures-private/`, folder `strides-p1qt.3/`).
+- *Lower multi-pose `minPoseScore` / higher multi-pose resolution*: both reach a 0.117 s start on
+  this clip, but only through event-order luck. The acquisition still picks the bystander, and the
+  give-up rule then happens to hand over to a single-pose detector that is on the runner. Not a fix.
+
+What would discriminate: the bystander is **stationary** for ~1 s while the runner's box grows and
+moves (the same motion/persistence cue `area-floor.md` points at). Follow-up: `strides-p1qt.5`.
+
+## Identity challenge + seeded hand-off shipped (`strides-p1qt.15`, 2026-11-05)
+
+Resolves the near-tie loss above (`.5`), the reset hand-off (`.6`), the late-entering runner on
+IMG_9345 (`.10`), and most of `strides-d90`. Openspec change `challenge-locked-bystanders` (design.md
+has the per-frame evidence). Both halves default ON and switch off independently through
+`personOfInterest.identityChallenge.enabled` / `personOfInterest.seedHandOff`. With both off, the gate
+is bit-identical to the integration branch (IMG_9345: 0 differing fields).
+
+- **One root cause.** Identity came from ONE multi-pose frame and was then defended by continuity.
+  Every failing clip (IMG_9345, 9348, 9117, side-landscape, multiperson) had a bystander anchored
+  before the runner was visible to multi-pose. Separately, every settle-in exit reset MoveNet to
+  `initCropRegion`'s centre square (x 840–3000 of 3840), which a runner at a frame edge is outside.
+- **side-landscape and multiperson are the SAME footage** (4K vs 1080p; keyframes at 2.0 s are
+  identical). Both anchored the fence walker until the runner entered. Their values now move
+  together: multiperson VO 0.220 → 0.150 agrees with side-landscape's 0.160 (base 0.154). Base
+  multiperson's 0.220 was the outlier, not a reference.
+- **Never compare a challenger against the anchor's multi-pose box.** At 448 px input a runner's
+  multi-pose box collapses to ¼ of her single-pose crop box under blur (IMG_9345 f22: 55k vs
+  204k). Comparing against it made a bystander "2.6× larger" than the runner and flip-flopped
+  identity. Compare against the tracked (single-pose) box.
+- **The challenge uses its own stateless multi-pose instance** (tracking and smoothing off).
+  Sharing the main one drifts later output even when nothing switches (`strides-d90`).
+- **The seeded hand-off retries only on failure.** Seeding unconditionally moved front-approach VO
+  (p1qt.3). As shipped, front-approach and 9349 are bit-identical to base.
+- **Gate (78a6ccb9 vs integration 43c81dd7, `--evidence --scale-pass --outline-pass --perf`):**
+  9348 segment start 1.233 → 0.250 s (138 frames vs 79; cadence 180, GT 176). 9347 67 → 86 runner
+  frames. 9346 cadence 176.4 → 180 (GT 182). IMG_9117 segment start 2.733 → 2.433 s, 95 → 113
+  frames. side-landscape start 1.800 → 1.667 s. multiperson start 2.133 → 1.600 s, with cadence,
+  VO and VR caveated → normal. side-portrait +1 frame. 9348 cadence and VO go normal → caveated (a
+  longer, less steady window).
+- **Still open: IMG_9345 cadence.** The runner is tracked from f13. But as she exits left
+  (f107–114) her box shrinks 213k → 72k, and at f115 MoveNet slides onto the background runner who
+  was overlapping her (38k is within 3× of 72k), through f137. The hip trace steps ~200 px and
+  the fit locks onto 1.2 Hz. Dropping 1.94–2.30 s gives cadence 186 (GT 190). The frame-to-frame
+  scale ratchet is shared by the online gate and retroactive segmentation, so a fix must reach
+  both. Follow-up bead under `strides-p1qt`.

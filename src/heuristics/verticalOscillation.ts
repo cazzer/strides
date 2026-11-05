@@ -241,6 +241,7 @@ export function computeVerticalOscillation(
     sampleCount: spectralFit.sampleCount,
     spanSeconds: spectralFit.spanSeconds,
     observedCycles: spectralFit.observedCycles,
+    scaleNormalized: bounceSignal.scaleNormalized,
   }
 
   const value = fit.peakToPeakAmplitudePx / torsoLengthPx
@@ -283,8 +284,8 @@ export function computeVerticalOscillation(
     )
   }
 
-  // `maximumIs: 'lowest'` — `analyzeBounceSignal` fits RAW image-y, which grows downward, so the
-  // fitted maximum is the runner at the BOTTOM of the bounce. The centimetre sibling fits
+  // `maximumIs: 'lowest'` — `analyzeBounceSignal` fits image-y (raw, or scale-normalized with the
+  // same sign), which grows downward, so the fitted maximum is the runner at the BOTTOM of the bounce. The centimetre sibling fits
   // upward-positive deltas and passes the opposite answer for the same body; see
   // `bounceInstants.ts`'s module doc.
   const spanCenterSeconds = resolvedSpanCenter(frames, rawSignalY)

@@ -375,9 +375,61 @@ the value from the outline-pass line.
   residuals, floor, value 0); only the caveat text changed. 3-clip demo: the fused classic card is
   clip 3's ("Measured from Clip 3 of 3", "…in all 4 swings. Combined from clip 3 of 3.").
 
+## Broken GPU graphs fail closed (strides-p1qt.22, 2026-11-05)
+
+On the Galaxy S21 (Adreno 660) one MediaPipe GPU-delegate kernel fails to link, and the masks come out
+as garbage (GPU-vs-CPU IoU 0.06–0.26; desktop 0.77–0.98). The pass then reported "0 sideways travel,
+confidence 1" on front-approach. The segmenter now watches WebGL program links
+(`glProgramLinkWatch.ts`) while it is built **and on each segmentation until one returns a pose**. On
+the S21 the build shows 0 failures; the bad kernel links on the first detect that runs the landmark
+model. On any failure the pass ends `failed` with the unavailable caveat
+(`outlinePass.error`: "The outline-pass segmenter failed to link its GPU programs.").
+- **No CPU-delegate fallback, on measurement.** The CPU graph with `outputSegmentationMasks`, created
+  after closing the GPU one, aborts the WASM module on its first crop:
+  `F image_frame.cc:415 Check failed: 1 == ChannelSize() (1 vs. 4)`, then `Aborted()`. The page's
+  main thread then spins at 100% CPU, uninterruptible by `Debugger.pause`; it hung a trial for
+  41 min. Follow-up: strides-p1qt.23.
+- S21, front-approach, after the fix: Analysis complete at 10.6 s, evidence settled at 23.8 s, outline
+  `failed`. Desktop: every program links, so the segmenter behaves exactly as before (9-clip gate).
+
 ## Still open
 
 - `strides-uz48.2`: footage with a real whip; nothing has yet shown that a blurred flicked shoe
   stays in the mask and connected. Until then every constant above is a park-approach fit.
 - A flick hidden behind the thigh reads 0 by construction (thigh-width detection threshold).
 - Rear footage is not planned (front view only); playback-path (WebM/webcam) clips cannot run it.
+
+# "The outline pass never reports" on private IMG_9348 (`strides-p1qt.4`, 2026-11-05)
+
+The desktop second-runner baseline at `01c4ef04` (all 9 clips, `--evidence --scale-pass --outline-pass
+--perf`) recorded 9348 (front, 2160×3840, 151 frames) with no `[analysis-diagnostics:outline-pass]`
+line and `[evidence-coverage]` unsettled after 180 s. **It did not reproduce.** I ran about 55 fresh
+Chromium trials: the driver (2), a standalone probe, a cold Vite dep cache run in the baseline's
+clip order (9345→9348), and stress runs at 4, 5 and 8 parallel browsers. None of them stalled. Every
+"stall" in the stress runs was MoveNet's tfhub/kaggle download failing CORS, so the primary never
+started. A healthy run: primary ready → scale pass +1.8 s → outline claim +5 ms → segmenter in
+75 ms → 52 planned frames segmented → done +3.5 s. The reading: 3 usable windows, left 7.0%, floor
+2.4%.
+
+Why it reads as the page going silent, not the pass hanging: every primary and scale-pass field of
+the baseline trial matches the repros exactly. Yet three things a live page always emits after the
+scale graft were all missing:
+
+1. **The outline line.** A lane that granted the scale pass stays granted, and the watchdog bounds
+   both segmenter creation and sampling at 30 s.
+2. **The scale graft's evidence re-extraction perf line.** It starts ~5 ms after the graft, doesn't
+   queue behind the outline pass, and logs on finish or abort.
+3. **A second `[evidence-coverage]` line.**
+
+So the page most likely stopped running JS (renderer crash or frozen main thread) about 2 s after
+the scale-pass line. The driver now reports this (`harness.pageAtSettleTimeout`, see `harness.md`),
+so the next occurrence names its cause.
+
+**What shipped anyway:** the RCA found that the pass body had no catch. A throw before the watchdog
+is armed (reader or sampler setup) left `outlinePass` 'running' forever, with no line and evidence
+that never settled. It now ends 'failed' with the couldn't-run caveat (regression test in
+`useVideoAnalysis.outline.test.ts`; openspec `outline-pass-always-terminal`).
+
+**Side observation:** under 5–8 parallel GPU-heavy browsers, 3 of 44 trials of 9348 came out
+`skipped`/`not-front`, so the primary's view label flipped under contention. Fresh-process
+determinism holds only on an unloaded machine.

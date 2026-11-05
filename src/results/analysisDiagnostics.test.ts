@@ -21,6 +21,7 @@ function makePersonSelection(
     rejectedBelowFloor: 0,
     rejectedOtherSegment: 0,
     rejectedOutsideEvidence: 0,
+    rejectedDiscontinuousBoxless: 0,
     segmentCount: 0,
     bridgedCuts: 0,
     segments: [],
@@ -349,6 +350,7 @@ describe('computeAnalysisDiagnostics', () => {
       sampleCount: 84,
       spanSeconds: 3.9,
       observedCycles: 11.08,
+      scaleNormalized: false,
     }
     const heuristics = makeHeuristics()
     const diagnostics = computeAnalysisDiagnostics(

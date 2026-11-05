@@ -68,19 +68,46 @@ function detected(
 }
 
 /** A sample whose frame exists but yields NO bounding box — fewer confident keypoints than
- * `minConfidentKeypoints`. Distinct from `{ frame: null }` (no detection at all). */
-function boxless(timestamp: number): PoseSample {
+ * `minConfidentKeypoints`. Distinct from `{ frame: null }` (no detection at all).
+ *
+ * Every keypoint sits at `(x, y)`, so its confident-keypoint hull is that single point. The
+ * default `(250, 250)` is the centre of `detected(…, 100, 100, 300)`, the track most cases use, so
+ * an interior boxless frame is position-continuous with its neighbours unless a case moves it. */
+function boxless(timestamp: number, x = 250, y = 250): PoseSample {
+  return withConfidentPoints(timestamp, [
+    // Only three confident points — one below minConfidentKeypoints: 4.
+    [x, y],
+    [x, y],
+    [x, y],
+  ])
+}
+
+/** A sample with confident keypoints at exactly `points` (on the first `points.length`
+ * COMMON_KEYPOINT_NAMES entries, none head/foot-excluded) and every other keypoint at score 0. */
+function withConfidentPoints(timestamp: number, points: [number, number][]): PoseSample {
+  const [fallbackX, fallbackY] = points[0] ?? [0, 0]
   return {
     timestamp,
     frame: {
       timestamp,
-      keypoints: COMMON_KEYPOINT_NAMES.map((name, i) => ({
-        name,
-        x: 500,
-        y: 500,
-        // Only three confident points — one below minConfidentKeypoints: 4.
-        score: i < 3 ? 0.9 : 0,
-      })),
+      keypoints: COMMON_KEYPOINT_NAMES.map((name, i) => {
+        const point = points[i]
+        return point
+          ? { name, x: point[0], y: point[1], score: 0.9 }
+          : { name, x: fallbackX, y: fallbackY, score: 0 }
+      }),
+    },
+  }
+}
+
+/** A sample whose frame carries every keypoint at `(x, y)` but NONE above the confidence gate, so
+ * even a 1-point hull is empty. */
+function unscored(timestamp: number, x: number, y: number): PoseSample {
+  return {
+    timestamp,
+    frame: {
+      timestamp,
+      keypoints: COMMON_KEYPOINT_NAMES.map((name) => ({ name, x, y, score: 0.1 })),
     },
   }
 }
@@ -593,6 +620,51 @@ describe('selectRetroactivePersonOfInterest', () => {
     })
   })
 
+  describe('shrink reference (strides-p1qt.18)', () => {
+    const dt = 1 / 60
+    /** A runner (400x400) whose box shrinks frame by frame -- each step inside maxAreaRatio --
+     * then a smaller person overlapping the last box takes over for six frames. `x0` places the
+     * shrinking boxes' left edge. */
+    function walkedDown(x0: number, handOverX: number): PoseSample[] {
+      const runner = [0, 1, 2, 3, 4, 5].map((i) => detected(i * dt, x0, 300, 400, 400))
+      const shrinking = [
+        detected(6 * dt, x0, 300, 300, 400), // 120 000
+        detected(7 * dt, x0, 300, 250, 350), //  87 500
+        detected(8 * dt, x0, 300, 200, 300), //  60 000
+      ]
+      const other = [9, 10, 11, 12, 13, 14].map((i) =>
+        detected(i * dt, handOverX, 400, 150, 200), // 30 000: 2x the last box, 5.3x below the peak
+      )
+      return [...runner, ...shrinking, ...other]
+    }
+
+    it('cuts where a shrunk track is handed to a smaller, fully visible person', () => {
+      const samples = walkedDown(600, 650)
+
+      const ratchet = select(samples, { ...CONFIG, shrinkReferenceWindowSeconds: 0 })
+      expect(ratchet.diagnostics.segmentCount).toBe(1) // the frame-to-frame ratchet follows it down
+
+      const { samples: out, diagnostics } = select(samples)
+      expect(diagnostics.segmentCount).toBe(2)
+      expect(diagnostics.rejectedOtherSegment).toBe(6)
+      expect(out.slice(9).every((sample) => sample.frame === null)).toBe(true)
+      expect(out.slice(0, 9)).toEqual(samples.slice(0, 9))
+    })
+
+    it('does not cut a track whose small boxes are truncated by the frame edge', () => {
+      // The same sizes, but leaving through the left edge: the edge explains the shrinkage.
+      const samples = walkedDown(0, 0)
+      expect(select(samples).diagnostics.segmentCount).toBe(1)
+    })
+
+    it('never cuts on growth', () => {
+      const growing = [0, 1, 2, 3, 4, 5].map((i) =>
+        detected(i * dt, 600, 300, 100 + 60 * i, 100 + 60 * i),
+      )
+      expect(select(growing).diagnostics.segmentCount).toBe(1)
+    })
+  })
+
   describe('splice tolerance', () => {
     // The measured Demo 1 wedge, scaled into this file's fixture space. On the real clip a
     // collapsed 24,473 px² detection at t=4.32, displaced ~400px from where the runner actually
@@ -759,7 +831,7 @@ describe('selectRetroactivePersonOfInterest', () => {
       expect(diagnostics.rejectedOtherSegment).toBe(0)
       expect(diagnostics.rejectedBelowFloor).toBe(0)
 
-      // Interior: rides along, by reference, exactly as before.
+      // Interior: rides along, by reference -- its keypoints sit inside both neighbouring boxes.
       expect(out[2]).toBe(samples[2])
       // Leading and trailing: inside the winner's partition span, outside its box evidence.
       expect(out[0]).toEqual({ timestamp: 0, frame: null })
@@ -828,6 +900,204 @@ describe('selectRetroactivePersonOfInterest', () => {
         detected(0.05, 105, 100, 300),
       ])
       expect(diagnostics.rejectedOutsideEvidence).toBe(0)
+    })
+  })
+
+  describe('an interior boxless frame must be position-continuous with an adjacent box', () => {
+    // A far, sparsely-detected spectator wedged between two runner boxes 0.05s apart: the shape of
+    // private clip IMG_9346's t=0.8833 frame, whose hips spiked the hip trace by ~475 px.
+    const TRACK_WITH = (middle: PoseSample): PoseSample[] => [
+      detected(0, 100, 100, 300),
+      middle,
+      detected(0.1, 110, 100, 300),
+    ]
+
+    it('nulls a far 3-point intruder and counts it in its own bucket, leaving segmentation alone', () => {
+      const withIntruder = select(TRACK_WITH(intruder(0.05, 3)))
+      const withGap = select(TRACK_WITH(missing(0.05)))
+
+      expect(withIntruder.samples[1]).toEqual({ timestamp: 0.05, frame: null })
+      expect(withIntruder.diagnostics.rejectedDiscontinuousBoxless).toBe(1)
+      expect(withIntruder.diagnostics.rejectedBelowFloor).toBe(0)
+      expect(withIntruder.diagnostics.rejectedOtherSegment).toBe(0)
+      expect(withIntruder.diagnostics.rejectedOutsideEvidence).toBe(0)
+      expect(withIntruder.diagnostics.detectedSamplesOut).toBe(2)
+      // A boxless frame never shaped a segment, so nulling it after scoring cannot change one.
+      expect(withIntruder.diagnostics.segments).toEqual(withGap.diagnostics.segments)
+      expect(withIntruder.diagnostics.segmentCount).toBe(withGap.diagnostics.segmentCount)
+      expect(withIntruder.diagnostics.bridgedCuts).toBe(withGap.diagnostics.bridgedCuts)
+      expect(withIntruder.diagnostics.separationRatio).toBe(withGap.diagnostics.separationRatio)
+    })
+
+    it("keeps the runner's own boxless frame when its hull overlaps a neighbour", () => {
+      // Hull [350, 700] x [200, 600]: positive-area overlap with the first box, while its centre is
+      // ~313px from that box's -- far outside the 60px speed budget, so the overlap is what keeps it.
+      const samples = TRACK_WITH(
+        withConfidentPoints(0.05, [
+          [350, 200],
+          [700, 200],
+          [350, 600],
+        ]),
+      )
+
+      const { samples: out, diagnostics } = select(samples)
+
+      expect(out[1]).toBe(samples[1])
+      expect(diagnostics.rejectedDiscontinuousBoxless).toBe(0)
+    })
+
+    it('keeps a boxless frame with no confident keypoint at all -- there is nothing to place', () => {
+      const samples = TRACK_WITH(unscored(0.05, 1500, 700))
+
+      const { samples: out, diagnostics } = select(samples)
+
+      expect(out[1]).toBe(samples[1])
+      expect(diagnostics.rejectedDiscontinuousBoxless).toBe(0)
+    })
+
+    it("keeps a point hull on a neighbour box's corner -- contact counts, though IoU is 0", () => {
+      // (400, 400) is the first box's bottom-right corner. A point has zero area, so IoU is 0, and
+      // it is ~212px / ~205px from the two box centres against a 60px budget: only contact keeps it.
+      const samples = TRACK_WITH(boxless(0.05, 400, 400))
+
+      const { samples: out, diagnostics } = select(samples)
+
+      expect(out[1]).toBe(samples[1])
+      expect(diagnostics.rejectedDiscontinuousBoxless).toBe(0)
+    })
+
+    it('keeps a point hull continuous with only the PREVIOUS neighbour', () => {
+      // (120, 120) is inside the first box and ~401px from the second's centre (60px budget), and
+      // it touches nothing of the second. Either neighbour is enough.
+      const samples: PoseSample[] = [
+        detected(0, 100, 100, 300),
+        boxless(0.05, 120, 120),
+        detected(0.1, 350, 100, 300),
+      ]
+
+      const { samples: out, diagnostics } = select(samples)
+
+      expect(diagnostics.segmentCount).toBe(1)
+      expect(out[1]).toBe(samples[1])
+      expect(diagnostics.rejectedDiscontinuousBoxless).toBe(0)
+    })
+
+    it('keeps a point hull continuous with only the NEXT neighbour', () => {
+      // The mirror of the case above: (120, 120) is inside the second box and ~401px from the
+      // first's centre (60px budget), touching nothing of it.
+      const samples: PoseSample[] = [
+        detected(0, 350, 100, 300),
+        boxless(0.05, 120, 120),
+        detected(0.1, 100, 100, 300),
+      ]
+
+      const { samples: out, diagnostics } = select(samples)
+
+      expect(diagnostics.segmentCount).toBe(1)
+      expect(out[1]).toBe(samples[1])
+      expect(diagnostics.rejectedDiscontinuousBoxless).toBe(0)
+    })
+
+    it('keeps a disjoint hull inside the centre-speed budget and nulls it just outside', () => {
+      // Neighbours 0.5s apart, boxless frame halfway: |dt| 0.25s, side 300, 4 sides/s, so the
+      // budget is 300px from either centre ((250, 250) and (260, 250)). Both points sit below
+      // both boxes (y > 400), so neither touches: only the speed term decides.
+      const at = (y: number): PoseSample[] => [
+        detected(0, 100, 100, 300),
+        boxless(0.25, 250, y),
+        detected(0.5, 110, 100, 300),
+      ]
+      const inside = at(545) // 295px / ~295.2px
+      const outside = at(555) // 305px / ~305.2px
+
+      const kept = select(inside)
+      const nulled = select(outside)
+
+      expect(kept.samples[1]).toBe(inside[1])
+      expect(kept.diagnostics.rejectedDiscontinuousBoxless).toBe(0)
+      expect(nulled.samples[1]).toEqual({ timestamp: 0.25, frame: null })
+      expect(nulled.diagnostics.rejectedDiscontinuousBoxless).toBe(1)
+    })
+
+    it('nulls a far intruder with a single confident keypoint', () => {
+      // IMG_9346's t=0.9 frame: one confident joint is still enough to place it.
+      const { samples: out, diagnostics } = select(
+        TRACK_WITH(withConfidentPoints(0.05, [[1500, 700]])),
+      )
+
+      expect(out[1]).toEqual({ timestamp: 0.05, frame: null })
+      expect(diagnostics.rejectedDiscontinuousBoxless).toBe(1)
+    })
+
+    it('nulls a boxless frame whose confident keypoints are all NaN', () => {
+      const { samples: out, diagnostics } = select(
+        TRACK_WITH(withConfidentPoints(0.05, [[Number.NaN, Number.NaN]])),
+      )
+
+      expect(out[1]).toEqual({ timestamp: 0.05, frame: null })
+      expect(diagnostics.rejectedDiscontinuousBoxless).toBe(1)
+    })
+
+    it('never claims a boxless frame across a segment cut -- the existing buckets do', () => {
+      // 1.6s between surviving boxes cuts on the time gap, so the intruder is never inside an
+      // evidenced interior. Earlier segment wins: it is in the winner's tail.
+      const earlierWins = select([
+        detected(0, 100, 100, 300),
+        detected(0.05, 105, 100, 300),
+        intruder(0.8, 3),
+        detected(1.6, 110, 100, 300),
+      ])
+      expect(earlierWins.diagnostics.segmentCount).toBe(2)
+      expect(earlierWins.samples[2]).toEqual({ timestamp: 0.8, frame: null })
+      expect(earlierWins.diagnostics.rejectedOutsideEvidence).toBe(1)
+      expect(earlierWins.diagnostics.rejectedDiscontinuousBoxless).toBe(0)
+
+      // Later segment wins: it is in the loser's partition.
+      const laterWins = select([
+        detected(0, 100, 100, 300),
+        intruder(0.8, 3),
+        detected(1.6, 110, 100, 300),
+        detected(1.65, 115, 100, 300),
+      ])
+      expect(laterWins.diagnostics.segmentCount).toBe(2)
+      expect(laterWins.samples[1]).toEqual({ timestamp: 0.8, frame: null })
+      expect(laterWins.diagnostics.rejectedOtherSegment).toBe(2)
+      expect(laterWins.diagnostics.rejectedDiscontinuousBoxless).toBe(0)
+    })
+
+    it("consecutive winner boxes are within maxContinuityGapSeconds, across a bridge too -- why the check has no gap term", () => {
+      // The invariant the rule leans on instead of re-checking time: an interior boxless frame lies
+      // between two consecutive winner boxes, so its |dt| to either is bounded by their gap. The
+      // bridged fixture is the wedge spread out to near the gap limit: (a, b) fails on scale, the
+      // bridge (a, c) holds at 0.95s, so b stays in the segment between a and c.
+      const fixtures: PoseSample[][] = [
+        [
+          detected(0, 100, 100, 400),
+          boxless(0.25, 250, 250),
+          detected(0.5, 800, 100, 150),
+          detected(0.95, 180, 100, 320),
+        ],
+        [
+          detected(0, 100, 100, 300),
+          detected(0.9, 105, 100, 300),
+          detected(1.8, 110, 100, 300),
+          detected(3, 110, 100, 300),
+        ],
+      ]
+      const isWinnerBox = (sample: PoseSample) =>
+        sample.frame !== null &&
+        sample.frame.keypoints.filter((k) => k.score >= CONFIG.minKeypointConfidence).length >=
+          CONFIG.minConfidentKeypoints
+
+      const results = fixtures.map((samples) => select(samples))
+      expect(results[0].diagnostics.bridgedCuts).toBe(1)
+      for (const { samples: out } of results) {
+        const kept = out.filter(isWinnerBox).map((s) => s.timestamp)
+        expect(kept.length).toBeGreaterThan(1)
+        for (let k = 1; k < kept.length; k += 1) {
+          expect(kept[k] - kept[k - 1]).toBeLessThanOrEqual(CONFIG.maxContinuityGapSeconds)
+        }
+      }
     })
   })
 
@@ -971,15 +1241,17 @@ describe('selectRetroactivePersonOfInterest', () => {
       expect(diagnostics.separationRatio).toBeNull()
     })
 
-    it('detectedSamplesOut equals detectedSamplesIn minus all three rejection counts', () => {
-      // A boxless frame in each of the three positions that can be rejected differently -- index 1
-      // is inside the winner but before its first surviving detection, index 6 is inside a losing
-      // segment -- so all three buckets are non-zero and the identity is exercised, not merely
-      // satisfied by two of the terms being 0.
+    it('detectedSamplesOut equals detectedSamplesIn minus all four rejection counts', () => {
+      // A boxless frame in each of the positions that can be rejected differently -- index 0 is
+      // inside the winner but before its first surviving detection, index 3 is a far intruder
+      // inside the winner's evidenced interior, index 6 is inside a losing segment -- plus two
+      // sub-floor boxes, so all four buckets are non-zero and the identity is exercised, not merely
+      // satisfied by some of the terms being 0.
       const samples: PoseSample[] = [
         boxless(0),
         detected(0.05, 100, 100, 300),
         detected(0.1, 100, 100, BELOW_FLOOR_SIDE),
+        intruder(0.125, 3),
         detected(0.15, 105, 100, 300),
         detected(0.2, 1500, 700, 60),
         boxless(0.25),
@@ -991,11 +1263,13 @@ describe('selectRetroactivePersonOfInterest', () => {
       expect(diagnostics.rejectedBelowFloor).toBeGreaterThan(0)
       expect(diagnostics.rejectedOtherSegment).toBeGreaterThan(0)
       expect(diagnostics.rejectedOutsideEvidence).toBeGreaterThan(0)
+      expect(diagnostics.rejectedDiscontinuousBoxless).toBeGreaterThan(0)
       expect(diagnostics.detectedSamplesOut).toBe(
         diagnostics.detectedSamplesIn -
           diagnostics.rejectedBelowFloor -
           diagnostics.rejectedOtherSegment -
-          diagnostics.rejectedOutsideEvidence,
+          diagnostics.rejectedOutsideEvidence -
+          diagnostics.rejectedDiscontinuousBoxless,
       )
       expect(out.filter((s) => s.frame !== null)).toHaveLength(diagnostics.detectedSamplesOut)
     })

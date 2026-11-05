@@ -8,7 +8,11 @@ import { stubRequestVideoFrameCallback } from '../test/videoFrameCallbackTestUti
 import { extractClipEvidence } from './extractFrames'
 import { deriveClipPoster } from './posterFrame'
 import type { VideoMetadata } from './types'
-import { waitForPresentedFrame, withDecodedVideo } from './videoElement'
+import {
+  seekToThroughStalls,
+  waitForPresentedFrame,
+  withDecodedVideo,
+} from './videoElement'
 
 /**
  * The shared `<video>` plumbing, and the one property that only this file can assert: that a poster
@@ -75,6 +79,100 @@ describe('waitForPresentedFrame', () => {
       await expect(waitForPresentedFrame(video, 5)).resolves.toBe('timed-out')
     } finally {
       vi.unstubAllGlobals()
+    }
+  })
+})
+
+describe('seekToThroughStalls', () => {
+  /**
+   * A controllable clock and a `<video>` whose seek never announces itself until the test says so.
+   * A main-thread STALL is the clock jumping ahead with no timer having run in between — exactly
+   * what a 5 s synchronous inference does to every pending timer.
+   */
+  function setup() {
+    vi.useFakeTimers()
+    let clock = 0
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => clock)
+    const video = document.createElement('video')
+    let currentTime = 0
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      get: () => currentTime,
+      set: (value: number) => {
+        currentTime = value
+      },
+    })
+    const run = (ms: number) => {
+      // Ticks one interval at a time so the mocked clock and the fake timers move together.
+      for (let elapsed = 0; elapsed < ms; elapsed += 100) {
+        clock += 100
+        vi.advanceTimersByTime(100)
+      }
+    }
+    const stall = (ms: number) => {
+      clock += ms
+    }
+    const restore = () => {
+      now.mockRestore()
+      vi.useRealTimers()
+    }
+    return { video, run, stall, restore }
+  }
+
+  it('lands a seek that completed during a main-thread stall longer than the whole budget', async () => {
+    const { video, run, stall, restore } = setup()
+    try {
+      const outcome = seekToThroughStalls(video, 1.5, 2000)
+      run(300)
+      // Measured on the S21: a 7.2 s stall, `seeked` delivered after the stall's first timer task.
+      stall(7200)
+      run(100)
+      video.dispatchEvent(new Event('seeked'))
+      await expect(outcome).resolves.toBe('seeked')
+    } finally {
+      restore()
+    }
+  })
+
+  it('still times out a seek that never lands on a responsive page, at the budget', async () => {
+    const { video, run, restore } = setup()
+    try {
+      let settled: string | null = null
+      void seekToThroughStalls(video, 1.5, 2000).then((outcome) => {
+        settled = outcome
+      })
+      run(1900)
+      await Promise.resolve()
+      expect(settled).toBeNull()
+      run(100)
+      await Promise.resolve()
+      expect(settled).toBe('timed-out')
+    } finally {
+      restore()
+    }
+  })
+
+  it('gives up at the wall-clock ceiling when the page never frees up', async () => {
+    const { video, run, stall, restore } = setup()
+    try {
+      const outcome = seekToThroughStalls(video, 1.5, 2000, 30_000)
+      for (let index = 0; index < 5; index += 1) {
+        stall(7000)
+        run(100)
+      }
+      await expect(outcome).resolves.toBe('timed-out')
+    } finally {
+      restore()
+    }
+  })
+
+  it('short-circuits when the element is already at the target', async () => {
+    const { video, restore } = setup()
+    try {
+      video.currentTime = 1.5
+      await expect(seekToThroughStalls(video, 1.5)).resolves.toBe('already-there')
+    } finally {
+      restore()
     }
   })
 })

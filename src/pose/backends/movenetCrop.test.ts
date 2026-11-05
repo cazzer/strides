@@ -7,7 +7,11 @@ import {
   computeCropRect,
   deriveBoundingBox,
   isBoundingBoxAreaRatioWithin,
+  isAboveRecentPeakFloor,
   isBoundingBoxContinuous,
+  isTruncatedByFrameEdge,
+  recentPeakAreaPx,
+  isPositionContinuous,
   isWithinCenterSpeedBound,
   isWithinProximityThreshold,
   meanConfidence,
@@ -365,6 +369,58 @@ describe('isBoundingBoxAreaRatioWithin', () => {
   })
 })
 
+describe('isPositionContinuous', () => {
+  // side 100, center (50, 50)
+  const reference: BoundingBoxPx = { minX: 0, minY: 0, maxX: 100, maxY: 100 }
+
+  it('accepts any positive-area overlap regardless of elapsed time', () => {
+    const candidate: BoundingBoxPx = { minX: 90, minY: 90, maxX: 400, maxY: 400 }
+
+    expect(isPositionContinuous(candidate, reference, 0, 3)).toBe(true)
+  })
+
+  it('accepts a disjoint candidate within the speed bound and rejects it outside', () => {
+    // 250px of center displacement: 300px allowed at 3 sides/s over 1s, 150px over 0.5s.
+    const candidate: BoundingBoxPx = { minX: 250, minY: 0, maxX: 350, maxY: 100 }
+
+    expect(isPositionContinuous(candidate, reference, 1, 3)).toBe(true)
+    expect(isPositionContinuous(candidate, reference, 0.5, 3)).toBe(false)
+  })
+
+  it('ignores scale entirely', () => {
+    // ~1/400 the reference's area, fully inside it.
+    const candidate: BoundingBoxPx = { minX: 40, minY: 40, maxX: 45, maxY: 45 }
+
+    expect(isPositionContinuous(candidate, reference, 0.05, 3)).toBe(true)
+  })
+
+  it('point hull inside a box has IoU 0, so only the speed term can carry it', () => {
+    const point: BoundingBoxPx = { minX: 90, minY: 90, maxX: 90, maxY: 90 }
+
+    expect(computeBoundingBoxIoU(point, reference)).toBe(0)
+    // 56.6px from the reference centre: outside the 15px budget at 3 sides/s over 0.05s...
+    expect(isPositionContinuous(point, reference, 0.05, 3)).toBe(false)
+    // ...inside the 300px budget over 1s.
+    expect(isPositionContinuous(point, reference, 1, 3)).toBe(true)
+  })
+
+  it('is exactly the position half of isBoundingBoxContinuous', () => {
+    const generous = { maxCenterSpeedSidesPerSecond: 3, maxAreaRatio: Infinity }
+    const candidates: BoundingBoxPx[] = [
+      { minX: 5, minY: 5, maxX: 105, maxY: 105 },
+      { minX: 250, minY: 0, maxX: 350, maxY: 100 },
+      { minX: 900, minY: 900, maxX: 925, maxY: 925 },
+    ]
+    for (const candidate of candidates) {
+      for (const elapsed of [0, 0.05, 0.5, 1]) {
+        expect(isBoundingBoxContinuous(candidate, reference, elapsed, generous)).toBe(
+          isPositionContinuous(candidate, reference, elapsed, 3),
+        )
+      }
+    }
+  })
+})
+
 describe('isBoundingBoxContinuous', () => {
   // side 100, center (50, 50), area 10000
   const reference: BoundingBoxPx = { minX: 0, minY: 0, maxX: 100, maxY: 100 }
@@ -458,5 +514,94 @@ describe('isBoundingBoxContinuous', () => {
         maxAreaRatio: 4,
       }),
     ).toBe(true)
+  })
+})
+
+describe('recentPeakAreaPx', () => {
+  const history = [
+    { timestamp: 0.0, areaPx: 900 },
+    { timestamp: 0.4, areaPx: 500 },
+    { timestamp: 0.6, areaPx: 300 },
+  ]
+
+  it('is the largest area inside the window ending at the query time', () => {
+    expect(recentPeakAreaPx(history, 0.45, 0.5)).toBe(900)
+    expect(recentPeakAreaPx(history, 0.7, 0.5)).toBe(500)
+  })
+
+  it('ignores entries after the query time', () => {
+    expect(recentPeakAreaPx(history, 0.5, 0.5)).toBe(900)
+    expect(recentPeakAreaPx(history, 0.2, 0.1)).toBeNull()
+  })
+
+  it('is null for a disabled window or an empty history', () => {
+    expect(recentPeakAreaPx(history, 0.45, 0)).toBeNull()
+    expect(recentPeakAreaPx([], 0.45, 0.5)).toBeNull()
+  })
+})
+
+describe('isTruncatedByFrameEdge', () => {
+  const frame = { width: 3840, height: 2160 } // margin = 2% of 2160 = 43.2 px
+
+  it('counts a hull stopping short of an edge by less than the margin', () => {
+    expect(
+      isTruncatedByFrameEdge({ minX: 3519, minY: 1507, maxX: 3809, maxY: 1843 }, frame),
+    ).toBe(true) // 31 px from the right edge (IMG_9346 exit)
+    expect(
+      isTruncatedByFrameEdge({ minX: 8, minY: 1319, maxX: 228, maxY: 1759 }, frame),
+    ).toBe(true)
+  })
+
+  it('does not count a person fully in frame near an edge', () => {
+    expect(
+      isTruncatedByFrameEdge({ minX: 76, minY: 1309, maxX: 241, maxY: 1581 }, frame),
+    ).toBe(false) // IMG_9345 f115: 76 px in
+  })
+
+  it('scales the margin with the frame', () => {
+    const portrait = { width: 1080, height: 1920 } // margin 21.6 px
+    expect(
+      isTruncatedByFrameEdge({ minX: 1011, minY: 973, maxX: 1073, maxY: 1129 }, portrait),
+    ).toBe(true)
+    expect(
+      isTruncatedByFrameEdge({ minX: 500, minY: 973, maxX: 1050, maxY: 1129 }, portrait),
+    ).toBe(false)
+  })
+})
+
+describe('isAboveRecentPeakFloor', () => {
+  const small = { minX: 100, minY: 100, maxX: 200, maxY: 200 } // 10 000 px^2
+
+  it('passes with no history', () => {
+    expect(isAboveRecentPeakFloor(small, null, 3)).toBe(true)
+  })
+
+  it('refuses a box more than the ratio below the recent peak, and accepts one within it', () => {
+    expect(isAboveRecentPeakFloor(small, 30_001, 3)).toBe(false)
+    expect(isAboveRecentPeakFloor(small, 30_000, 3)).toBe(true)
+  })
+
+  it('exempts a box the frame edge truncates, but only when the frame is supplied', () => {
+    const atEdge = { minX: 0, minY: 100, maxX: 100, maxY: 200 }
+    expect(isAboveRecentPeakFloor(atEdge, 100_000, 3)).toBe(false)
+    expect(
+      isAboveRecentPeakFloor(atEdge, 100_000, 3, { width: 1920, height: 1080 }),
+    ).toBe(true)
+  })
+})
+
+describe('isBoundingBoxContinuous with a recent peak', () => {
+  const bounds = { maxCenterSpeedSidesPerSecond: 3, maxAreaRatio: 3 }
+  const previous = { minX: 600, minY: 300, maxX: 800, maxY: 600 } // 60 000
+  const shrunk = { minX: 650, minY: 400, maxX: 800, maxY: 600 } // 30 000: 2x below previous
+
+  it('is unchanged without a peak (frame-to-frame only)', () => {
+    expect(isBoundingBoxContinuous(shrunk, previous, 1 / 60, bounds)).toBe(true)
+  })
+
+  it('refuses the same pair when the track was recently much larger', () => {
+    expect(
+      isBoundingBoxContinuous(shrunk, previous, 1 / 60, bounds, 160_000),
+    ).toBe(false)
   })
 })

@@ -4,6 +4,7 @@ import { analyzeHipBounce } from './hipBounce'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { buildFrame } from './__fixtures__/testFrames'
 import { framesFromHipTrace, seededNormals } from './__fixtures__/hipTraceFrames'
+import { APPROACH, generateApproachingRunner } from './__fixtures__/approachingRunner'
 import { detectFootstrikes } from './footstrikes'
 import { mean } from './mathUtils'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
@@ -319,6 +320,23 @@ describe('computeCadence — retimed (slow-motion) footage', () => {
     expect(result.value).toBeCloseTo(BASE_PARAMS.cadenceStepsPerMin, 0)
     expect(result.confidence).toBeGreaterThan(0.7)
     expect(result.caveat ?? '').not.toMatch(/slow-motion/i)
+  })
+})
+
+describe('computeCadence — an approaching runner', () => {
+  it('reports the step rate from the scale-normalized fit, not a slow-motion or irregular caveat', () => {
+    const frames = generateApproachingRunner()
+    // Precondition: this is the fallback path, not an ordinary fit.
+    expect(analyzeHipBounce(frames, DEFAULT_HEURISTICS_CONFIG).scaleNormalized).toBe(true)
+
+    const result = computeCadence(frames, 'front')
+
+    expect(result.value).not.toBeNull()
+    expect(Math.abs(result.value! - APPROACH.bounceHz * 60)).toBeLessThanOrEqual(
+      DEFAULT_HEURISTICS_CONFIG.spectralFitFrequencyStepHz * 60 + 1e-9,
+    )
+    expect(result.caveat ?? '').not.toMatch(/slow-motion/i)
+    expect(result.caveat ?? '').not.toMatch(/too irregular/i)
   })
 })
 

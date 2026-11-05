@@ -6,7 +6,9 @@ import type { SpectralFitResult, SpectralSample } from './spectralFit'
 /**
  * Two-pass hip-bounce spectral fit: the shipped human-gait band first, and — only when that band
  * yields nothing trustworthy — a second, DISJOINT grid below it, whose adoption is itself the
- * evidence that the footage was retimed.
+ * evidence that the footage was retimed. When neither is adopted, a caller may offer a third,
+ * last-resort series — the same motion re-expressed at one torso scale — fitted on the in-band grid
+ * only ("The scale-normalized pass", below).
  *
  * ## Why this is a layer of its own
  *
@@ -99,6 +101,35 @@ import type { SpectralFitResult, SpectralSample } from './spectralFit'
  * sub-floor rhythm is unambiguous AMONG SUB-FLOOR CANDIDATES; it says nothing about whether an
  * in-band rhythm also explains the series. What bounds that is the adoption rule itself: pass 2 is
  * only reachable because the whole in-band grid already failed the same gate.
+ *
+ * ## The scale-normalized pass, and why it comes LAST
+ *
+ * A runner approaching a handheld camera can grow several-fold in frame within a clip. Their pixel
+ * hip-mid then carries two things the fit's quadratic trend was never meant to absorb: a bounce
+ * whose AMPLITUDE grows with the runner (≈9× across private `IMG_9349`), and a perspective descent
+ * that is not quadratic in time. The in-band grid can land on the right frequency (3.08 Hz there)
+ * and still score a partial R² far under the gate (0.100), because the residual the sinusoid is
+ * compared against is dominated by everything the trend could not follow. An optional third pass
+ * re-expresses the same motion at ONE scale — each frame-to-frame step divided by the local torso,
+ * then integrated and multiplied back up by the clip-median torso (`hipBounce.ts` builds it) — and
+ * fits that instead.
+ *
+ * - **Last, and only when neither prior pass is adopted.** Pass 1 is unchanged, so every clip that
+ *   clears the gate today is bit-identical; pass 2 runs before it, so a retimed clip is still
+ *   reported as retimed rather than "recovered" at some in-band alias. The series is supplied as a
+ *   THUNK so it is never built for a clip that does not reach this point.
+ * - **In-band only, at the same gate.** It answers "is there a human-gait rhythm under a
+ *   perspective-distorted trace", not "is the clock wrong", so the sub-floor grid and its red-noise
+ *   null have no role here. It is held to exactly the same in-band grid and the same
+ *   `verticalOscillationMinFitR2` as pass 1 — no new threshold, no wider grid — so it can only
+ *   ever turn a withheld rhythm into one that clears the SAME bar every other clip clears.
+ * - **Pixel path only.** `verticalOscillationCm.calibrate` omits the thunk on purpose: its metre
+ *   series is already delta-integrated over a per-frame scale, which is this normalization by
+ *   another name, so a fallback there would refit what it already fits.
+ *
+ * ⚠️ An adopted scale-normalized fit's `peakToPeakAmplitude` is in pixels AT THE CLIP-MEDIAN
+ * TORSO SCALE, not raw image pixels, and its `sampleCount` may be below the caller's resolved
+ * count (frames without a local torso are dropped). `scaleNormalized` is how a caller tells.
  */
 
 /**
@@ -139,14 +170,20 @@ export const MAX_RETIMING_FACTOR = 8
 
 export interface BounceSpectrumResult {
   /** The adopted fit: pass 1's whenever it cleared the gate, otherwise pass 2's if THAT cleared
-   * both the gate and the red-noise null, otherwise pass 1's result untouched (success or failure)
-   * exactly as it was before this module existed. */
+   * both the gate and the red-noise null, otherwise the scale-normalized pass's if the caller
+   * supplied that series and its in-band fit cleared the gate, otherwise pass 1's result untouched
+   * (success or failure) exactly as it was before this module existed. */
   fit: SpectralFitResult
   /** `true` only when a sub-floor fit was adopted — i.e. the in-band band failed the gate, the
    * sub-floor band cleared both the gate and the red-noise null, and the returned `fit` is the
    * sub-floor one. Since the two grids are disjoint, this is equivalent to "`fit.frequencyHz` is
    * below `spectralFitMinFrequencyHz`" without anyone having to compare two numbers. */
   subFloor: boolean
+  /** `true` only when the last-resort scale-normalized fit was adopted — i.e. neither prior pass
+   * was, the caller supplied a series, and its in-band fit cleared the same gate. Mutually
+   * exclusive with `subFloor`. When `true`, `fit` describes the NORMALIZED series (see the module
+   * doc for its units). */
+  scaleNormalized: boolean
 }
 
 /**
@@ -161,19 +198,28 @@ export interface BounceSpectrumResult {
  * since all three failure modes are properties of the samples rather than of the band, and the one
  * that is band-dependent (`insufficient-cycles`) can only get worse on a grid of lower frequencies.
  * Stating the condition that way keeps it a single predicate rather than two.
+ *
+ * `scaleNormalizedSamples`, when given, is consulted only after both of those passes fail to be
+ * adopted, is called at most once, and may return `null` to decline (no resolvable torso, frames
+ * out of order). Its in-band fit is adopted only if it clears the same gate; otherwise pass 1's
+ * result is returned untouched. See "The scale-normalized pass" in the module doc.
  */
 export function fitBounceSpectrum(
   samples: ReadonlyArray<SpectralSample>,
   config: HeuristicsConfig,
+  scaleNormalizedSamples?: () => ReadonlyArray<SpectralSample> | null,
 ): BounceSpectrumResult {
-  const inBand = fitSpectralSinusoid(samples, {
+  const inBandOptions = {
     minFrequencyHz: config.spectralFitMinFrequencyHz,
     maxFrequencyHz: config.spectralFitMaxFrequencyHz,
     frequencyStepHz: config.spectralFitFrequencyStepHz,
-  })
+  }
+  const inBand = fitSpectralSinusoid(samples, inBandOptions)
 
   const gate = config.verticalOscillationMinFitR2
-  if (inBand.ok && inBand.sinusoidR2 >= gate) return { fit: inBand, subFloor: false }
+  if (inBand.ok && inBand.sinusoidR2 >= gate) {
+    return { fit: inBand, subFloor: false, scaleNormalized: false }
+  }
 
   // Strictly below pass 1's own minimum, by construction — a grid never emits a candidate above
   // the maximum it was given. A configuration whose sub-floor minimum meets or exceeds this
@@ -190,8 +236,18 @@ export function fitBounceSpectrum(
       subFloorFit.spanSeconds,
       bandPower,
     )
-    if (verdict?.cleared === true) return { fit: subFloorFit, subFloor: true }
+    if (verdict?.cleared === true) {
+      return { fit: subFloorFit, subFloor: true, scaleNormalized: false }
+    }
   }
 
-  return { fit: inBand, subFloor: false }
+  const normalizedSamples = scaleNormalizedSamples?.() ?? null
+  if (normalizedSamples !== null) {
+    const normalizedFit = fitSpectralSinusoid(normalizedSamples, inBandOptions)
+    if (normalizedFit.ok && normalizedFit.sinusoidR2 >= gate) {
+      return { fit: normalizedFit, subFloor: false, scaleNormalized: true }
+    }
+  }
+
+  return { fit: inBand, subFloor: false, scaleNormalized: false }
 }

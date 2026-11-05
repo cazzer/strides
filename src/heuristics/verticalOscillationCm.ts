@@ -378,6 +378,8 @@ function calibrate(
     // reaches — see this module's "Config" section. The `subFloor` flag is deliberately dropped
     // here: it is `cadence`'s alone to act on, and this metric is a DISTANCE, unaffected by the
     // clock (`cadence.ts`, "Why a sub-floor rhythm withholds this metric and only this metric").
+    // No scale-normalized thunk, deliberately: this metre series is already delta-integrated
+    // over per-frame scale, which IS that normalization (`bounceSpectrum.ts`).
     const { fit } = fitBounceSpectrum(buildMetricSeries(run, runScales), config)
     if (!fit.ok) {
       refusals.push({ frameCount: run.hipY.length, reason: fit.reason })

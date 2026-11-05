@@ -517,7 +517,9 @@ export interface VerticalOscillationFit {
   /** Winning candidate frequency from the configured grid, Hz. This is BOUNCE frequency — two
    * bounces per gait cycle, so roughly twice stride frequency. */
   frequencyHz: number
-  /** Fitted peak-to-peak bounce, in raw image pixels. `value` is this divided by `torsoLengthPx`. */
+  /** Fitted peak-to-peak bounce, in raw image pixels — or, when `scaleNormalized`, in pixels at the
+   * clip-median torso scale. `value` is this divided by `torsoLengthPx`. Under the `earMid`
+   * signal this describes that signal's fit, not the hip's. */
   peakToPeakAmplitudePx: number
   /** Partial R² of the sinusoid terms over a trend-only baseline — the number
    * `verticalOscillationMinFitR2` gates on and the one that feeds confidence. */
@@ -536,6 +538,12 @@ export interface VerticalOscillationFit {
   spanSeconds: number
   /** `spanSeconds × frequencyHz`, fractional. `sampleSize` is this floored. */
   observedCycles: number
+  /** `true` when this fit came from the last-resort scale-normalized retry
+   * (`HipBounceAnalysis.scaleNormalized`, `bounceSpectrum.ts`) — the raw pixel series failed the
+   * gate, and the same motion re-expressed at one torso scale cleared it. When `true`,
+   * `peakToPeakAmplitudePx` is at the clip-median torso scale and `sampleCount` may be below the
+   * signal's resolved count. Always present; `false` on every fit of the raw series. */
+  scaleNormalized: boolean
 }
 
 export interface VerticalOscillationResult extends MetricResult {

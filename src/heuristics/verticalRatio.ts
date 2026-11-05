@@ -291,6 +291,17 @@ export function computeVerticalRatio(
     )
   }
 
+  // A scale-normalized fit's amplitude is in pixels at the clip-MEDIAN torso scale, while the
+  // stride length below is raw pixels measured wherever the strides happened to fall. On a clip
+  // whose runner changed size enough to need that fit, the two are not in the same pixel space,
+  // so their ratio would be wrong by however much the runner grew — withheld rather than mixed.
+  if (bounceSignal.scaleNormalized) {
+    return nullResult(
+      viewFitEntry.fit,
+      "The runner's distance from the camera changed too much to compare bounce height with stride length.",
+    )
+  }
+
   // The denominator is validated against the SAME fit the numerator is measured from. `fit` is
   // already computed and already past its quality gate by this point, so this costs nothing extra.
   // `fit.frequencyHz` is the STEP frequency (cadence reports it as `× 60` spm) and a stride is two
@@ -353,8 +364,9 @@ export function computeVerticalRatio(
     )
   }
 
-  // Numerator exemplar. `maximumIs: 'lowest'` because `analyzeHipBounce` fits raw
-  // downward-positive image-y — see `bounceInstants.ts`'s module doc on the sign trap.
+  // Numerator exemplar. `maximumIs: 'lowest'` because `analyzeHipBounce` fits downward-positive
+  // image-y (raw, or scale-normalized with the same sign) — see `bounceInstants.ts`'s module doc on
+  // the sign trap.
   const spanCenterSeconds = resolvedSpanCenter(frames, bounceSignal.hipY)
   const bounceExemplars =
     spanCenterSeconds === null

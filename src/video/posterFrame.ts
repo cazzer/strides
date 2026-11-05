@@ -1,7 +1,7 @@
 import {
   LOAD_TIMEOUT_MS,
   queueDetachedDecode,
-  seekTo,
+  seekToThroughStalls,
   waitForPresentedFrame,
   withDecodedVideo,
 } from './videoElement'
@@ -109,7 +109,8 @@ export interface PosterDerivationOptions {
   maxSidePx?: number
   /** Bounded wait for `loadeddata` on the detached element. */
   loadTimeoutMs?: number
-  /** Bounded wait for the seek. A seek that exhausts it yields no poster. */
+  /** Bounded wait for the seek, counted only while the event loop runs (`seekToThroughStalls`).
+   * A seek that exhausts it yields no poster. */
   seekTimeoutMs?: number
   /** Backstop on the post-seek presentation grace period. Exhausting it is not a failure. */
   presentationTimeoutMs?: number
@@ -181,7 +182,9 @@ async function seekToFirstReachable(
   options: PosterDerivationOptions,
 ): Promise<number | null> {
   for (const candidate of candidates) {
-    const outcome = await seekTo(video, candidate, options.seekTimeoutMs)
+    // Through stalls, not on wall clock: this seek runs DURING sampling, whose first inference can
+    // hold the main thread longer than the whole budget (`strides-p1qt.19`).
+    const outcome = await seekToThroughStalls(video, candidate, options.seekTimeoutMs)
     if (outcome === 'timed-out') continue
     // `'already-there'` skips the wait rather than shortening it: no seek means no new frame is
     // coming, so every arm but the backstop is dead and waiting could only burn the timeout.

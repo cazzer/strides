@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createOutlineFrameReader } from './outlineFrameReader'
 import type { CropDrawer } from './outlineFrameReader'
 import type { OutlineSegmentation, OutlineSegmenter } from '../pose/backends/mediapipePoseLandmarker'
+import { OutlineSegmenterUnavailableError } from '../pose/backends/mediapipePoseLandmarker'
 import type { PoseFrameSource } from '../pose/detector'
 import type { SwingFootOutlineFramePlan, SwingFootOutlinePlan } from '../heuristics/types'
 
@@ -59,7 +60,8 @@ function fakeSegmenter(maskSize = { width: CROP.width, height: CROP.height }) {
   const closes: number[] = []
   const reads = vi.fn(() => maskValues())
   const segmenter: OutlineSegmenter = {
-    segment: vi.fn((): OutlineSegmentation => ({
+    gpuLinkFailures: 0,
+    segment: vi.fn(async (): Promise<OutlineSegmentation> => ({
       landmarks: landmarks(),
       mask: { ...maskSize, getAsFloat32Array: reads },
       close: () => closes.push(1),
@@ -129,10 +131,34 @@ describe('createOutlineFrameReader', () => {
     expect(closes).toHaveLength(1)
   })
 
+  it('stops segmenting and flags the pass when the segmenter becomes unavailable', async () => {
+    const { segmenter } = fakeSegmenter()
+    segmenter.segment = vi.fn(async () => {
+      throw new OutlineSegmenterUnavailableError(1)
+    })
+    const reader = createOutlineFrameReader(plan, segmenter, () => canvas)
+    await expect(reader.detector.estimatePose(source(0.5))).resolves.toBeNull()
+    await reader.detector.estimatePose(source(0.6))
+    expect(reader.stats().segmenterUnavailable).toBe(true)
+    expect(segmenter.segment).toHaveBeenCalledTimes(1)
+    expect(reader.stats().framesSegmented).toBe(0)
+  })
+
+  it('lets any other segmentation error through to the sampler', async () => {
+    const { segmenter } = fakeSegmenter()
+    segmenter.segment = vi.fn(async () => {
+      throw new Error('detect threw')
+    })
+    const reader = createOutlineFrameReader(plan, segmenter, () => canvas)
+    await expect(reader.detector.estimatePose(source(0.5))).rejects.toThrow('detect threw')
+    expect(reader.stats().segmenterUnavailable).toBe(false)
+  })
+
   it('closes the segmentation even when measuring throws', async () => {
     const closes: number[] = []
     const segmenter: OutlineSegmenter = {
-      segment: () => ({
+      gpuLinkFailures: 0,
+      segment: async () => ({
         landmarks: landmarks(),
         mask: { width: CROP.width, height: CROP.height, getAsFloat32Array: () => { throw new Error('gpu') } },
         close: () => closes.push(1),

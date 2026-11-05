@@ -2,7 +2,11 @@ import type { KeypointName } from '../pose/types'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import type { HeuristicsConfig, View, ViewDetectionResult } from './types'
-import { estimateBodyScale, estimateLocalTorsoLengths } from './bodyScale'
+import {
+  estimateBodyScale,
+  estimateLocalTorsoLengths,
+  LOCAL_TORSO_HALF_WINDOW_SECONDS,
+} from './bodyScale'
 import { resolveBilateralPair, resolvePoint } from './keypoints'
 import { clamp01, mean, median, percentile } from './mathUtils'
 import {
@@ -24,20 +28,6 @@ import {
  * `computeSagittalRange`'s docstring is literally true for the first time.
  */
 const MIN_SAGITTAL_RANGE_SAMPLES = 21
-
-/**
- * Half-width, in SECONDS, of the window each sagittal sample's local torso length is the median
- * over (`estimateLocalTorsoLengths`). A module constant rather than a `HeuristicsConfig` key because
- * it describes the estimator's own sample, not a threshold anyone should sweep against this corpus.
- *
- * - Time, not frames: the corpus spans 25, 30 and 60 fps, and a frame-count window would smooth the
- *   same physical motion over a different duration at each.
- * - 1 s in total covers at least one full stride at any running cadence (≥ 120 steps/min, so a
- *   stride ≤ 1 s), so the torso's own within-stride flex and the shoulder/hip jitter average out
- *   rather than leaking into the extreme quantile — yet it is short enough to follow a runner
- *   approaching the camera, whose on-screen size can grow several-fold within a clip.
- */
-const LOCAL_TORSO_HALF_WINDOW_SECONDS = 0.5
 
 interface SagittalRange {
   /** The p95-p5 spread in pixels, or `null` iff `detectedSamples < MIN_SAGITTAL_RANGE_SAMPLES`. */

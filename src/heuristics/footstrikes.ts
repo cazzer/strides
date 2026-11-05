@@ -641,8 +641,8 @@ function attributeSides(
  * coefficient and no per-runner tuning.
  *
  * For a sinusoid the inflections are its zero crossings, a quarter period either side of each
- * extremum. `analyzeHipBounce` fits raw image-y, which grows DOWNWARD, so the fitted MAXIMUM is
- * the body's LOWEST point (midstance), and:
+ * extremum. `analyzeHipBounce` fits image-y (raw, or scale-normalized with the same sign), which
+ * grows DOWNWARD, so the fitted MAXIMUM is the body's LOWEST point (midstance), and:
  *
  * ```
  * lowest_k   = tMeanSeconds + (π/2 − φ)/ω + k·T      ω = 2π·f,  T = 1/f

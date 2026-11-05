@@ -7,6 +7,7 @@ import { DEFAULT_HEURISTICS_CONFIG } from './types'
 import { generateSyntheticGait } from './__fixtures__/syntheticGait'
 import { framesFromHipTrace, seededNormals } from './__fixtures__/hipTraceFrames'
 import { buildFrame } from './__fixtures__/testFrames'
+import { generateApproachingRunner } from './__fixtures__/approachingRunner'
 import type { RobustPoseFrame } from '../pose/robustness/types'
 
 const BASE_PARAMS = {
@@ -222,6 +223,26 @@ describe('computeVerticalRatio', () => {
         expect(Number.isFinite(result.sampleSize)).toBe(true)
         if (result.value === null) expect(result.confidence).toBe(0)
       }
+    }
+  })
+})
+
+describe('computeVerticalRatio — a scale-normalized bounce fit', () => {
+  it('withholds rather than dividing a median-scale amplitude by a raw-pixel stride', () => {
+    const frames = generateApproachingRunner()
+    // Precondition: the bounce fit really came from the scale-normalized fallback and cleared the
+    // gate, so the null below is this rule and not a failed fit.
+    const bounce = analyzeHipBounce(frames, DEFAULT_HEURISTICS_CONFIG)
+    expect(bounce.scaleNormalized).toBe(true)
+    expect(bounce.fit.ok).toBe(true)
+
+    for (const view of ['side', 'front'] as const) {
+      const result = computeVerticalRatio(frames, view)
+      expect(result.value).toBeNull()
+      expect(result.confidence).toBe(0)
+      expect(result.caveat).toBe(
+        "The runner's distance from the camera changed too much to compare bounce height with stride length.",
+      )
     }
   })
 })

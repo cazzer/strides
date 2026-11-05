@@ -81,3 +81,60 @@ carries `skip_specs: true` — the sizing requirement drafted for it is **withdr
 measurement shows it is unsatisfiable on this repo's own footage and weakening it to fit would be
 editing a criterion to match a result.
 
+
+## Boxless intruders inside the evidenced interior — closed (2026-11-05, strides-p1qt.2)
+
+The "residual inversion" recorded in `restrict-boxless-survival` (a boxless detection between the
+winner's first and last box was kept unchecked — "nulled at 5 confident keypoints, kept at 3") hit
+a metric for real on private side clip **IMG_9346** (4K60, runner in frame ~1.2 s). At t=0.8833 s
+MoveNet returned a far fence-line spectator (hips at y≈1103 vs the runner's ≈1580) with exactly 3
+confident box-set keypoints (both hips 0.341, right knee 0.331); t=0.9 had 1. Robustness kept the
+two hips, the hip-mid trace took a single −475 px spike, and the hip-bounce partial R² fell from
+0.825 to **0.209 < `cadenceMinFitR2` 0.30** — cadence, VO and vertical ratio withheld ("step rhythm
+was too irregular"). The MediaPipe scale pass, which never saw that frame, read 184.8 spm.
+
+**Rule** (`check-interior-boxless-continuity`): a boxless interior frame's confident box-set
+keypoints are hulled (`deriveBoundingBox(…, 1)`); it is kept only if the hull touches or is
+position-continuous (`isPositionContinuous`: IoU or the existing `maxCenterSpeedSidesPerSecond`
+bound) with the nearest surviving box before OR after it, else nulled and counted in
+`rejectedDiscontinuousBoxless`. No new radius — this reuses the segmentation bound, which is what
+D1's objection to a proximity radius was about. Runs after scoring, so segments, `bridgedCuts` and
+`separationRatio` cannot move.
+
+**Live gate** (8b1cf0db vs 01c4ef04, fresh process, `--evidence --scale-pass --outline-pass`, gate
+lock held, one trial per clip):
+
+| clip | nulled | cadence | VO | other |
+|---|---|---|---|---|
+| side-landscape / side-portrait / front-approach / multiperson | 0 | unchanged | unchanged | every field identical |
+| IMG_9345 / 9347 / 9349 | 0 | unchanged | unchanged | every field identical |
+| IMG_9346 | 2 (t=0.8833, 0.9) | null → **176.4** (GT ≈182 ±5) | null → 0.168 | footstrikes now from the fitted phase, so footStrikePattern/overstriding/stepWidth moved |
+| IMG_9348 | 0 | unchanged | unchanged | only the outline-pass settle flake (strides-p1qt.4) differed |
+
+`multiperson`'s ~4 interior boxless frames all passed the check (counter 0). Still admitted: an
+intruder inside the speed budget of the runner box, a frame whose only confident points are head or
+foot points (null hull), a bridged box acting as the neighbour, and sparse sampling widening the
+budget with Δt. IMG_9346's residual −5.6 spm vs GT is the MoveNet hip trace over a 1.18 s window
+(the scale pass reads 184.8 on the same window), not selection.
+
+## Shrinkage is judged against the segment's recent peak (strides-p1qt.18, 2026-11-05)
+
+Not a floor change: the 4K area floor above stays closed. This is a continuity rule. The
+frame-to-frame scale test (`isBoundingBoxContinuous`) was a ratchet. On IMG_9345 the runner leaves
+through the left edge at 244k → 97k px² in five bounded steps. The next frame is the background
+runner who had been overlapping her, at 45k, within 4× of 97k, and segmentation followed him for 20
+frames. The hip trace stepped ~200 px and cadence was withheld. Now
+(`personSelection.shrinkReferenceWindowSeconds: 0.5`), a detection more than `maxAreaRatio` below
+the segment's largest box in the last 0.5 s cuts. Growth is still frame to frame.
+
+- **Edge-truncated boxes are exempt** (`isTruncatedByFrameEdge`, hull within 2% of the shorter
+  frame side). Without it the rule cut runners' own last exit frames on four clips. A hull stops
+  short of the edge: runners' last frames end 7–31 px from it, the 9345 intruder is 76 px in.
+- **Result:** IMG_9345 cadence 188.4 (GT 190), VO 0.167. All other 9 clips are value-identical;
+  extra cuts land only inside losing fence-walker segments.
+- **The same rule exists on the online continuity gate but ships OFF**
+  (`continuityGate.shrinkReferenceWindowSeconds: 0`). On it added nothing on 9345, and it moved
+  multiperson's cadence/VO/VR from normal to caveated (two earlier partial edge-entry frames).
+- Offline replica of segmentation for screening rules against saved probe traces:
+  `strides-p1qt.18/sim.mjs` in the second-runner baseline under `fixtures-private/` (it matched the
+  live driver on every clip).

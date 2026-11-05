@@ -101,7 +101,7 @@ function heuristicsWithPlan(plan: SwingFootOutlinePlan | null): FormHeuristicsRe
   }
 }
 
-const segmenter: OutlineSegmenter = { segment: vi.fn(), close: vi.fn() }
+const segmenter: OutlineSegmenter = { segment: vi.fn(), close: vi.fn(), gpuLinkFailures: 0 }
 
 beforeEach(() => {
   for (const mock of [sampleClipMock, applyRobustnessMock, computeFormHeuristicsMock, getScalePassDetectorMock,
@@ -154,6 +154,28 @@ describe('the background outline pass (strides-uz48)', () => {
     const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
 
     await waitFor(() => expect(result.current.outlinePass?.status).toBe('failed'))
+    expect(result.current.heuristics!.swingFootLateralExcursion).toMatchObject({
+      value: null,
+      caveat: OUTLINE_FAILED_CAVEAT,
+    })
+    await waitFor(() => expect(releaseOutlineSegmenterMock).toHaveBeenCalledTimes(1))
+  })
+
+  it('fails, rather than staying running, when the pass throws before its watchdog is armed (strides-p1qt.4)', async () => {
+    computeFormHeuristicsMock.mockReturnValue(heuristicsWithPlan(PLAN))
+    sampleClipSequentialMock
+      .mockImplementationOnce(() => ({
+        promise: Promise.resolve([{ timestamp: 0.1, frame: null }]),
+        handle: handle(),
+      }))
+      .mockImplementationOnce(() => {
+        throw new Error('decoder setup threw synchronously')
+      })
+    const videoSource = makeVideoSource()
+    const { result } = renderHook(() => useVideoAnalysis(videoSource, detector))
+
+    await waitFor(() => expect(result.current.outlinePass?.status).toBe('failed'))
+    expect(result.current.outlinePass?.error).toBe('decoder setup threw synchronously')
     expect(result.current.heuristics!.swingFootLateralExcursion).toMatchObject({
       value: null,
       caveat: OUTLINE_FAILED_CAVEAT,

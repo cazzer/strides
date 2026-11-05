@@ -104,6 +104,78 @@ export function seekTo(
   })
 }
 
+/**
+ * How often `seekToThroughStalls` samples the event loop, and the most one sample may add to the
+ * budget it is spending. A tick that arrives late arrived late because the main thread was busy, and
+ * the time it was late is time the seek's own `seeked` task could not have run in either.
+ */
+export const STALL_TOLERANT_TICK_MS = 100
+export const STALL_TOLERANT_MAX_CREDIT_PER_TICK_MS = 2 * STALL_TOLERANT_TICK_MS
+
+/**
+ * The wall-clock ceiling on `seekToThroughStalls`, so a page whose main thread never frees up still
+ * gives the caller an answer and its decoder back. Well above the longest stall measured on the S21
+ * (7.2 s, the first MoveNet inference on a 4K clip, `strides-p1qt.19`).
+ */
+export const STALL_TOLERANT_HARD_CAP_MS = 30_000
+
+/**
+ * `seekTo`, with its timeout spent only while the event loop is actually running (`strides-p1qt.19`).
+ *
+ * `seekTo`'s wall-clock timer cannot tell a seek that never landed from a main thread that was too
+ * busy to hear it land. On a phone the poster's seek runs DURING sampling, where the first pose
+ * inference holds the main thread for 4.7-7.2 s: measured on the S21, the seek had completed inside
+ * that stall (`seeking` already false, `readyState` 4), but the expired timer's task ran ahead of the
+ * `seeked` task — which followed 80-280 ms later — so every poster on the phone failed.
+ *
+ * Here the budget is counted in samples of `STALL_TOLERANT_TICK_MS`, each credited with the time
+ * since the last one but never more than `STALL_TOLERANT_MAX_CREDIT_PER_TICK_MS`: a responsive page
+ * spends it at wall-clock rate, a stalled one does not spend it at all while stalled. A seek that
+ * genuinely never lands on a responsive page still times out after `budgetMs`, and
+ * `hardCapMs` of wall clock ends the wait regardless.
+ *
+ * Same outcomes and same never-rejects/never-hangs contract as `seekTo`. Deliberately a separate
+ * function rather than a mode of `seekTo`: evidence extraction's seeks run after analysis, are not
+ * starved this way, and their timing stays exactly what it was.
+ */
+export function seekToThroughStalls(
+  video: HTMLVideoElement,
+  time: number,
+  budgetMs: number = SEEK_TIMEOUT_MS,
+  hardCapMs: number = STALL_TOLERANT_HARD_CAP_MS,
+): Promise<SeekOutcome> {
+  return new Promise((resolve) => {
+    if (Math.abs(video.currentTime - time) < 0.001) {
+      resolve('already-there')
+      return
+    }
+    const tickMs = Math.max(1, Math.min(STALL_TOLERANT_TICK_MS, budgetMs))
+    const maxCreditMs = Math.max(tickMs, Math.min(STALL_TOLERANT_MAX_CREDIT_PER_TICK_MS, budgetMs))
+    const startedAt = performance.now()
+    let lastTickAt = startedAt
+    let spentMs = 0
+    const cleanup = () => {
+      clearInterval(ticker)
+      video.removeEventListener('seeked', onSeeked)
+    }
+    const onSeeked = () => {
+      cleanup()
+      resolve('seeked')
+    }
+    const ticker = setInterval(() => {
+      const now = performance.now()
+      spentMs += Math.min(now - lastTickAt, maxCreditMs)
+      lastTickAt = now
+      if (spentMs >= budgetMs || now - startedAt >= hardCapMs) {
+        cleanup()
+        resolve('timed-out')
+      }
+    }, tickMs)
+    video.addEventListener('seeked', onSeeked)
+    video.currentTime = time
+  })
+}
+
 /** Which arm of `waitForPresentedFrame` resolved it. Reported for observability — no arm is a
  * failure, so the caller draws regardless of which one won. */
 export type FramePresentationSignal =

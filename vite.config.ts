@@ -7,6 +7,17 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   base: '/strides/',
   plugins: [react(), tailwindcss()],
+  server: {
+    watch: {
+      // Agent worktrees nest inside this checkout. Without this, a `vite build` in one of them
+      // rewrites its dist/index.html and this dev server full-reloads every open page — which
+      // silently kills any analysis in flight (hit for real on a phone run, strides-p1qt).
+      // Anchored to THIS config's directory: a bare `**/.claude/worktrees/**` also matches a
+      // worktree's own root when vite runs inside one, and then vite never sees the harness
+      // identity marker written to public/ at startup, so the provenance guard refuses.
+      ignored: [fileURLToPath(new URL('./.claude/worktrees/**', import.meta.url))],
+    },
+  },
   resolve: {
     alias: {
       // See src/pose/backends/__shims__/mediapipe-pose.ts: @mediapipe/pose isn't a real

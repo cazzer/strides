@@ -1,5 +1,6 @@
 import type { PoseDetector, PoseFrameSource } from '../pose/detector'
-import type { OutlineSegmenter } from '../pose/backends/mediapipePoseLandmarker'
+import { OutlineSegmenterUnavailableError } from '../pose/backends/mediapipePoseLandmarker'
+import type { OutlineSegmenter, OutlineSegmentation } from '../pose/backends/mediapipePoseLandmarker'
 import {
   clampOutlineCrop,
   measureFrameOutline,
@@ -42,6 +43,9 @@ export interface OutlineReaderStats {
   segmentMs: number[]
   /** Segmentations whose mask was missing or not crop-sized. */
   framesWithoutMask: number
+  /** The segmenter's GPU graph proved broken (strides-p1qt.22): the pass must fail rather than
+   * report what was measured. */
+  segmenterUnavailable: boolean
 }
 
 export interface OutlineFrameReader {
@@ -66,7 +70,7 @@ export function createOutlineFrameReader(
 ): OutlineFrameReader {
   const planned = new Map(plan.frames.map((frame) => [frame.timestamp, frame]))
   const measurements: SwingFootOutlineFrameMeasurement[] = []
-  const stats: OutlineReaderStats = { framesSegmented: 0, segmentMs: [], framesWithoutMask: 0 }
+  const stats: OutlineReaderStats = { framesSegmented: 0, segmentMs: [], framesWithoutMask: 0, segmenterUnavailable: false }
 
   const detector: PoseDetector = {
     async estimatePose(source) {
@@ -78,8 +82,16 @@ export function createOutlineFrameReader(
         measurements.push(measureFrameOutline(frame, null, null, plan.hipWidthMedianPx))
         return null
       }
+      if (stats.segmenterUnavailable) return null
       const startedAt = performance.now()
-      const segmentation = segmenter.segment(image)
+      let segmentation: OutlineSegmentation
+      try {
+        segmentation = await segmenter.segment(image)
+      } catch (err) {
+        if (!(err instanceof OutlineSegmenterUnavailableError)) throw err
+        stats.segmenterUnavailable = true
+        return null
+      }
       try {
         const landmarks = segmentation.landmarks
         const at = (index: number) => ({

@@ -2,6 +2,8 @@ import {
   bboxArea,
   deriveBoundingBox,
   isBoundingBoxContinuous,
+  recentPeakAreaPx,
+  isPositionContinuous,
 } from '../pose/backends/movenetCrop'
 import type { BoundingBoxPx } from '../pose/backends/movenetCrop'
 import type { PoseSample } from '../pose/robustness/types'
@@ -44,6 +46,14 @@ export interface RetroactivePersonSelectionConfig {
    * boundary regardless of geometry: across a long enough gap the speed bound degenerates to
    * "anything is reachable", so continuity stops meaning anything. */
   maxContinuityGapSeconds: number
+  /**
+   * Shrink reference window (`strides-p1qt.18`): a detection also cuts the segment when it is more
+   * than `maxAreaRatio` SMALLER than the largest surviving box the segment produced in the last
+   * `shrinkReferenceWindowSeconds`, not just smaller than the previous one. Stops a track being
+   * walked down to a much smaller box over a few frames (a subject leaving through an edge) and
+   * then handed to whoever was beside it. `0` disables. See `isAboveRecentPeakFloor`.
+   */
+  shrinkReferenceWindowSeconds: number
 }
 
 /**
@@ -125,6 +135,14 @@ export interface RetroactivePersonSelectionConfig {
  * than a narrower interval: a second, untunable radius governing the same question the
  * segmentation bounds already answer is worse than the residue it would remove.
  * Primary/scale-pass selection divergence (#56) is still open and still live.
+ *
+ * UPDATE (strides-p1qt.2): the interior residue above is CLOSED, without the radius D1 rejected.
+ * A boxless frame inside the evidenced interior now has to be position-continuous (touch, IoU or
+ * the existing `maxCenterSpeedSidesPerSecond` bound) with the nearest surviving box either side
+ * of it, judged on the hull of its confident keypoints; one that is not is nulled and counted in
+ * `rejectedDiscontinuousBoxless`. It reuses the segmentation bound, so it adds no tunable. Found
+ * on a private clip where a far spectator's 1-3-point skeleton rode through mid-track, spiked the
+ * hip trace by ~475 px and got cadence and VO withheld by the R² gate.
  *
  * `minBoundingBoxAreaFraction: 2e-4` — 415 px² at 1080p, 1659 px² at 4K. Originally derived as
  * roughly the geometric mean of the largest measured garbage detection on the repro clip (183 px²)
@@ -221,6 +239,7 @@ export const DEFAULT_RETROACTIVE_PERSON_SELECTION_CONFIG: RetroactivePersonSelec
   maxAreaRatio: 4,
   maxCenterSpeedSidesPerSecond: 4,
   maxContinuityGapSeconds: 1.0,
+  shrinkReferenceWindowSeconds: 0.5,
 }
 
 export interface PersonSelectionSegmentDiagnostics {
@@ -297,6 +316,15 @@ export interface PersonSelectionDiagnostics {
    * changes bucket. Without that, a clip where the rule fired and a clip where it had nothing to
    * do would report identically — the same reason `bridgedCuts` exists. */
   rejectedOutsideEvidence: number
+  /** Boxless detections (as above: fewer than `minConfidentKeypoints` confident points) INSIDE
+   * the winner's evidenced interior that were nulled because the hull of their confident keypoints
+   * is position-continuous with neither adjacent surviving box. Before strides-p1qt.2 every such
+   * frame rode along unchecked, so a sub-floor intruder there was nulled at 5 confident points
+   * and kept at 3. A boxless frame with no confident box-set keypoint (non-head, non-foot) has
+   * nothing to place and is still kept — including one whose only confident points are head or
+   * foot points. Disjoint from the other three buckets: it can only be reached by a frame that
+   * none of them claims. */
+  rejectedDiscontinuousBoxless: number
   segmentCount: number
   /** How many times a cut was DECLINED because the surviving detections either side of the
    * offending one were continuous with each other. Counts bridge EVENTS, not boundaries: one event
@@ -345,6 +373,7 @@ function skipped(
       rejectedBelowFloor: 0,
       rejectedOtherSegment: 0,
       rejectedOutsideEvidence: 0,
+      rejectedDiscontinuousBoxless: 0,
       segmentCount: 0,
       bridgedCuts: 0,
       segments: [],
@@ -391,7 +420,12 @@ function skipped(
  *     partition tail — it is nulled and counted in `rejectedOutsideEvidence`. Nulling stays
  *     TOTAL: the partition is untouched and still decides which segment every frame belongs to,
  *     and therefore which rejection bucket it lands in. Only the SURVIVAL of an unverifiable frame
- *     narrows.
+ *     narrows. Survival inside the interior is subject to step 6.
+ *  6. Inside the interior, a boxless frame must still be where the winner is: the hull of its
+ *     confident keypoints has to touch, overlap or be within the segmentation speed bound of the
+ *     nearest surviving box before or after it, or it is nulled and counted in
+ *     `rejectedDiscontinuousBoxless`. This runs after scoring and only nulls frames that never
+ *     contributed to a segment, so segments, `bridgedCuts` and `separationRatio` cannot move.
  *
  * Losing frames become `{ timestamp, frame: null }` — a real gap — and NEVER another person's
  * keypoints. `applyRobustness` interpolates across gaps with no identity check whatsoever, so
@@ -482,6 +516,16 @@ export function selectRetroactivePersonOfInterest(
   // is the inverse of `isBoundingBoxContinuous`'s own `(candidate, reference)` argument order.
   // The relation is NOT symmetric: the speed bound normalises displacement by the REFERENCE's own
   // side length, so swapping the pair can change the answer.
+  // The current segment's accepted chain -- every surviving index that became the reference, with
+  // its area -- for the shrink reference (`shrinkReferenceWindowSeconds`). A bridged frame never
+  // joins it (it never becomes the reference either), and a cut starts a fresh one, so the peak is
+  // always this segment's own, never a neighbour's.
+  let chain: { timestamp: number; areaPx: number }[] = []
+  const chainEntry = (index: number) => ({
+    timestamp: samples[index].timestamp,
+    areaPx: survivingAreaPx[index],
+  })
+
   const isContinuousPair = (
     referenceIndex: number,
     candidateIndex: number,
@@ -496,6 +540,12 @@ export function selectRetroactivePersonOfInterest(
         surviving[referenceIndex] as BoundingBoxPx,
         elapsedSeconds,
         config,
+        recentPeakAreaPx(
+          chain,
+          samples[candidateIndex].timestamp,
+          config.shrinkReferenceWindowSeconds,
+        ),
+        { width: frameWidth, height: frameHeight },
       )
     )
   }
@@ -518,10 +568,12 @@ export function selectRetroactivePersonOfInterest(
     if (previousIndex === -1) {
       segmentStarts.push(i)
       previousIndex = i
+      chain = [chainEntry(i)]
       continue
     }
     if (isContinuousPair(previousIndex, i)) {
       previousIndex = i
+      chain.push(chainEntry(i))
       continue
     }
     // Splice tolerance: one collapsed detection is a measurement failure on a single frame, not
@@ -542,6 +594,7 @@ export function selectRetroactivePersonOfInterest(
     }
     segmentStarts.push(i)
     previousIndex = i
+    chain = [chainEntry(i)]
   }
 
   if (segmentStarts.length === 0) {
@@ -603,17 +656,69 @@ export function selectRetroactivePersonOfInterest(
     if (segment.integratedAreaPx > winner.integratedAreaPx) winner = segment
   }
 
+  // Nearest surviving index at or before / at or after each index (-1 if none), so step 6's
+  // neighbour lookup is O(1) per frame rather than a scan.
+  const prevSurviving: number[] = new Array(samples.length).fill(-1)
+  const nextSurviving: number[] = new Array(samples.length).fill(-1)
+  for (let i = 0, last = -1; i < samples.length; i += 1) {
+    if (surviving[i] !== null) last = i
+    prevSurviving[i] = last
+  }
+  for (let i = samples.length - 1, last = -1; i >= 0; i -= 1) {
+    if (surviving[i] !== null) last = i
+    nextSurviving[i] = last
+  }
+
+  // Closed-interval overlap. `isPositionContinuous`'s IoU term is 0 for a point or line hull even
+  // on a box edge or inside it, and a 1-point hull is exactly what a sparsely detected runner
+  // yields, so contact has to count on its own. It also subsumes that IoU term (positive IoU
+  // implies touching), so below only the speed term adds anything.
+  const touches = (a: BoundingBoxPx, b: BoundingBoxPx): boolean =>
+    a.minX <= b.maxX && b.minX <= a.maxX && a.minY <= b.maxY && b.minY <= a.maxY
+
+  // Only ever called for a boxless index strictly inside the winner's evidenced interior, whose
+  // ends are surviving, so both neighbours exist and are winner boxes — though either may be a
+  // bridged (collapsed or spliced) box the segment kept rather than a clean one.
+  //
+  // No time-gap term, deliberately: those two neighbours are consecutive surviving boxes of ONE
+  // segment, so they are within `maxContinuityGapSeconds` of each other — the adjacent check
+  // enforces it directly, and a bridged frame lies between a pair the bridge checked against the
+  // same gap — and the boxless frame lies between them.
+  const isContinuousWithNeighbour = (index: number, hull: BoundingBoxPx): boolean =>
+    [prevSurviving[index], nextSurviving[index]].some((neighbour) => {
+      const reference = surviving[neighbour] as BoundingBoxPx
+      return (
+        touches(hull, reference) ||
+        isPositionContinuous(
+          hull,
+          reference,
+          Math.abs(samples[index].timestamp - samples[neighbour].timestamp),
+          config.maxCenterSpeedSidesPerSecond,
+        )
+      )
+    })
+
   let rejectedOtherSegment = 0
   let rejectedOutsideEvidence = 0
+  let rejectedDiscontinuousBoxless = 0
   const selected = samples.map((sample, i) => {
     if (sample.frame === null) return sample
     // `inEvidence` implies `inWinner`: the interval's ends are themselves surviving indices inside
-    // `[winner.from, winner.to]`. So this ONE test is simultaneously the old behaviour for a
-    // detection that yielded a box — every surviving index in the winner is inside the winner's
-    // own first/last by definition — and the new, narrower behaviour for one that did not. No
-    // branch distinguishes the two, so they cannot drift apart.
+    // `[winner.from, winner.to]`. So every surviving index in the winner passes this test by
+    // definition, and only a boxless frame can fail it.
     const inEvidence = i >= winner.evidenceFrom && i <= winner.evidenceTo
-    if (inEvidence && !belowFloor[i]) return sample
+    if (inEvidence && !belowFloor[i]) {
+      if (surviving[i] !== null) return sample
+      // Hulled at a count of 1 so even a single confident joint is placed. A null hull means no
+      // confident limb or torso joint (head and foot points are excluded, as from every box here):
+      // nothing to place, so nothing to judge it on.
+      const hull = deriveBoundingBox(sample.frame.keypoints, config.minKeypointConfidence, 1)
+      // All-NaN confident points leave the ±Infinity sentinel hull, which touches nothing and has
+      // a NaN centre, so it is nulled here as discontinuous — the conservative answer.
+      if (hull === null || isContinuousWithNeighbour(i, hull)) return sample
+      rejectedDiscontinuousBoxless += 1
+      return { timestamp: sample.timestamp, frame: null }
+    }
     if (!belowFloor[i]) {
       // Partition membership decides the bucket, and it is asked FIRST, so every frame that was
       // already being rejected keeps the bucket it had. `rejectedOutsideEvidence` therefore counts
@@ -646,10 +751,12 @@ export function selectRetroactivePersonOfInterest(
         detectedSamplesIn -
         rejectedBelowFloor -
         rejectedOtherSegment -
-        rejectedOutsideEvidence,
+        rejectedOutsideEvidence -
+        rejectedDiscontinuousBoxless,
       rejectedBelowFloor,
       rejectedOtherSegment,
       rejectedOutsideEvidence,
+      rejectedDiscontinuousBoxless,
       segmentCount: scored.length,
       bridgedCuts,
       segments: ranked.slice(0, MAX_REPORTED_SEGMENTS).map((segment) => ({

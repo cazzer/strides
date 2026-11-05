@@ -1,9 +1,10 @@
-import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision'
+import { FilesetResolver, PoseLandmarker, type PoseLandmarkerResult } from '@mediapipe/tasks-vision'
 import type { DetectorCreationOptions, PoseDetector, PoseFrameSource } from '../detector'
 import { fetchModelAsset, hasCachedModelAsset, type ModelAssetSpec } from '../modelAssetCache'
 import type { PoseFrame } from '../types'
 import type { RawKeypoint } from './common'
 import { toPoseFrame } from './common'
+import { watchProgramLinks } from './glProgramLinkWatch'
 
 /**
  * Pinned to the installed package version — floating on a CDN "latest" tag would let the WASM
@@ -270,10 +271,23 @@ export interface OutlineSegmentation {
   close(): void
 }
 
+/** Thrown by `segment()` once the GPU graph proved broken (strides-p1qt.22). */
+export class OutlineSegmenterUnavailableError extends Error {
+  constructor(linkFailures: number) {
+    super(
+      `The outline segmenter's GPU graph failed to link ${linkFailures} WebGL program(s); its masks cannot be trusted.`,
+    )
+    this.name = 'OutlineSegmenterUnavailableError'
+  }
+}
+
 /** The outline pass's detector (`strides-uz48`): one image in, one segmentation out. */
 export interface OutlineSegmenter {
-  segment(image: HTMLCanvasElement): OutlineSegmentation
+  /** Rejects with `OutlineSegmenterUnavailableError` once the GPU graph has proved broken. */
+  segment(image: HTMLCanvasElement): Promise<OutlineSegmentation>
   close(): void
+  /** WebGL program links that failed while the GPU graph was built or first ran. */
+  readonly gpuLinkFailures: number
 }
 
 /**
@@ -282,24 +296,71 @@ export interface OutlineSegmenter {
  * VIDEO-mode instance on purpose: IMAGE mode has no timestamp state to poison, and each
  * MoveNet-guided crop is an independent image. The full-frame VIDEO-mode mask is what failed the
  * spike on the far frames (`docs/agent-notes/swing-foot-travel.md`).
+ *
+ * **A GPU graph that does not link is never trusted (strides-p1qt.22).** On Adreno 660 one of the
+ * GPU delegate's kernels fails to link, and the masks then come out as garbage (IoU 0.06-0.26
+ * against the CPU delegate). MediaPipe reports nothing. The kernel links lazily, at the first
+ * inference that runs the landmark model, not at graph build. So the graph is watched
+ * (`glProgramLinkWatch.ts`) while it is built and on every segmentation until one has returned a
+ * pose. A failure at build rejects creation. A failure on a segmentation discards that result, and
+ * every later `segment()` rejects with `OutlineSegmenterUnavailableError`. Either way the pass ends
+ * with the unavailable caveat and reports nothing.
+ *
+ * Not a CPU-delegate fallback: on the S21 the CPU graph aborts the WASM module on its first masked
+ * detect (`image_frame.cc:415 Check failed: 1 == ChannelSize() (1 vs. 4)`), and the renderer then
+ * spins at 100% CPU. Where every program links (desktop), the GPU graph segments exactly as before.
  */
 export async function createMediaPipeOutlineSegmenter(): Promise<OutlineSegmenter> {
   const wasmFileset = await FilesetResolver.forVisionTasks(WASM_BASE_PATH)
   const modelAssetBuffer = await fetchModelAsset(POSE_LANDMARKER_MODEL_ASSET)
-  const landmarker = await PoseLandmarker.createFromOptions(wasmFileset, {
-    baseOptions: { modelAssetBuffer, delegate: 'GPU' },
-    runningMode: 'IMAGE',
-    numPoses: 1,
-    outputSegmentationMasks: true,
+  let gpuLinkFailures = 0
+  const creation = watchProgramLinks()
+  let landmarker: PoseLandmarker
+  try {
+    landmarker = await PoseLandmarker.createFromOptions(wasmFileset, {
+      baseOptions: { modelAssetBuffer, delegate: 'GPU' },
+      runningMode: 'IMAGE',
+      numPoses: 1,
+      outputSegmentationMasks: true,
+    })
+  } finally {
+    gpuLinkFailures += creation.failures()
+    creation.stop()
+  }
+  if (gpuLinkFailures > 0) {
+    landmarker.close()
+    throw new OutlineSegmenterUnavailableError(gpuLinkFailures)
+  }
+
+  let verified = false
+  const read = (result: PoseLandmarkerResult): OutlineSegmentation => ({
+    landmarks: result.landmarks[0] ?? null,
+    mask: result.segmentationMasks?.[0] ?? null,
+    close: () => result.close(),
   })
+
   return {
-    segment(image) {
-      const result = landmarker.detect(image)
-      return {
-        landmarks: result.landmarks[0] ?? null,
-        mask: result.segmentationMasks?.[0] ?? null,
-        close: () => result.close(),
+    get gpuLinkFailures() {
+      return gpuLinkFailures
+    },
+    async segment(image) {
+      if (gpuLinkFailures > 0) throw new OutlineSegmenterUnavailableError(gpuLinkFailures)
+      if (verified) return read(landmarker.detect(image))
+      // `detect` is synchronous, so nothing else can link a program inside this watch.
+      const watch = watchProgramLinks()
+      let result: PoseLandmarkerResult
+      try {
+        result = landmarker.detect(image)
+      } finally {
+        gpuLinkFailures += watch.failures()
+        watch.stop()
       }
+      if (gpuLinkFailures > 0) {
+        result.close()
+        throw new OutlineSegmenterUnavailableError(gpuLinkFailures)
+      }
+      if (result.landmarks.length > 0) verified = true
+      return read(result)
     },
     close: () => landmarker.close(),
   }

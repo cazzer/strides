@@ -6,6 +6,7 @@ import {
 import { DEFAULT_TRACKING_CROP_CONFIG } from './backends/trackingCropConfig'
 import {
   DEFAULT_CONTINUITY_GATE_CONFIG,
+  DEFAULT_IDENTITY_CHALLENGE_CONFIG,
   DEFAULT_PERSON_OF_INTEREST_CONFIG,
 } from './backends/personOfInterestConfig'
 
@@ -134,5 +135,37 @@ describe('resolvePoseDetectorConfig', () => {
 
     expect(resolved.personOfInterest?.enabled).toBe(true)
     expect(resolved.personOfInterest?.continuityGate.enabled).toBe(false)
+  })
+
+  it('merges a partial identityChallenge override one level deeper, preserving its sibling fields', () => {
+    window.__STRIDES_POSE_BACKEND_OVERRIDE__ = {
+      personOfInterest: { identityChallenge: { minAreaRatio: 2 } },
+    }
+
+    const resolved = resolvePoseDetectorConfig()
+
+    expect(resolved.personOfInterest?.identityChallenge).toEqual({
+      ...DEFAULT_IDENTITY_CHALLENGE_CONFIG,
+      minAreaRatio: 2,
+    })
+    expect(resolved.personOfInterest?.seedHandOff).toBe(true)
+  })
+
+  it('can turn the seeded hand-off and the identity challenge off independently', () => {
+    window.__STRIDES_POSE_BACKEND_OVERRIDE__ = {
+      personOfInterest: {
+        seedHandOff: false,
+        identityChallenge: { enabled: false },
+      },
+    }
+
+    const resolved = resolvePoseDetectorConfig()
+
+    expect(resolved.personOfInterest?.enabled).toBe(true)
+    expect(resolved.personOfInterest?.seedHandOff).toBe(false)
+    expect(resolved.personOfInterest?.identityChallenge.enabled).toBe(false)
+    expect(resolved.personOfInterest?.continuityGate).toEqual(
+      DEFAULT_CONTINUITY_GATE_CONFIG,
+    )
   })
 })

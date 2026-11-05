@@ -28,6 +28,60 @@ export interface ContinuityGateConfig {
   /** Scale bound: the candidate/anchor bounding-box area ratio must lie in
    * `[1 / maxAreaRatio, maxAreaRatio]`. */
   maxAreaRatio: number
+  /**
+   * Shrink reference window (`strides-p1qt.18`): a detection is also refused when it is more than
+   * `maxAreaRatio` smaller than the largest box the CURRENT identity produced in the last
+   * `shrinkReferenceWindowSeconds` -- so an anchor cannot be walked down, frame by frame, from a
+   * runner leaving through an edge onto a smaller person beside her. `0` disables, and is the
+   * default (see `DEFAULT_CONTINUITY_GATE_CONFIG`). See `isAboveRecentPeakFloor` (movenetCrop.ts).
+   */
+  shrinkReferenceWindowSeconds: number
+}
+
+/**
+ * The identity challenge (`strides-p1qt.15`): a periodic, side-effect-free multi-pose look at the
+ * whole frame that can move the anchor to a different person. Exists because every other
+ * multi-pose trigger either fires only when the anchor is missing or stale, or (re-verification)
+ * is scored by continuity and so reconfirms whoever is already anchored. Nothing else ever lets a
+ * subject who enters AFTER acquisition, or who lost a near-tie on the acquisition frame, take the
+ * anchor from a bystander who is still confidently tracked.
+ *
+ * Two regimes, by how well the current identity has been established:
+ *
+ *  - TENTATIVE (fewer than `confirmationsToSettle` checks have re-picked it): one multi-pose frame
+ *    is weak evidence of who the subject is -- people below the pose-score floor are invisible to
+ *    it, and the runner may not have entered yet. So each check re-runs the acquisition heuristic
+ *    over everyone visible. The anchor winning is a confirmation. Anyone else takes the anchor with
+ *    a clear scale margin (`tentativeMinAreaRatio`), or at comparable size when the check cannot
+ *    see the anchor at all.
+ *  - SETTLED: a switch needs a candidate at least `minAreaRatio` times the anchor's tracked box, on
+ *    `minConsecutiveWins` consecutive checks, by the same person. Persistence absorbs single-frame
+ *    box noise.
+ *
+ * All scale comparisons are against the anchor's own tracked (single-pose) box; see
+ * `decideIdentityChallenge` for why never against its multi-pose match.
+ */
+export interface IdentityChallengeConfig {
+  /** `false` removes the check entirely: no extra model, no extra calls. */
+  enabled: boolean
+  /** Ordinary calls between checks while the identity is tentative. */
+  tentativeIntervalFrames: number
+  /** How many checks must re-pick the anchor before it counts as settled. */
+  confirmationsToSettle: number
+  /**
+   * Tentative regime: a candidate other than the anchor needs at least this many times the anchor's
+   * bounding-box area to take over -- the same scale test the settled regime applies, at a lower
+   * bar; a near-tie in one multi-pose frame is box noise, not evidence, and the incumbent keeps it.
+   * When the check cannot see the anchor at all, the winner needs only `1 / tentativeMinAreaRatio`
+   * of its area (comparable size): see `decideIdentityChallenge`.
+   */
+  tentativeMinAreaRatio: number
+  /** Ordinary calls between checks once the identity is settled. */
+  settledIntervalFrames: number
+  /** Settled regime: challenger/anchor bounding-box area ratio needed to win a check. */
+  minAreaRatio: number
+  /** Settled regime: consecutive winning checks (by the same challenger) needed to switch. */
+  minConsecutiveWins: number
 }
 
 export interface PersonOfInterestConfig {
@@ -41,6 +95,18 @@ export interface PersonOfInterestConfig {
   enabled: boolean
   /** See `ContinuityGateConfig`. */
   continuityGate: ContinuityGateConfig
+  /** See `IdentityChallengeConfig`. */
+  identityChallenge: IdentityChallengeConfig
+  /**
+   * Seeded hand-off (`strides-p1qt.15`). When a crop-mode stretch (the settle-in window) ends, the
+   * single-pose detector must be reset, and a reset MoveNet restarts its own crop from a
+   * centre-square guess and re-picks whoever is most salient there -- often not the anchor (a
+   * runner entering at a frame edge sits outside that square). With this on, a hand-off call whose
+   * result does not confirm the anchor is retried once, on the same frame, with MoveNet's crop
+   * started from the anchor instead (`movenetCropRegionSeed.ts`). A hand-off that already found the
+   * anchor is left exactly as it was.
+   */
+  seedHandOff: boolean
 }
 
 /**
@@ -68,6 +134,11 @@ export const DEFAULT_CONTINUITY_GATE_CONFIG: ContinuityGateConfig = {
   enabled: true,
   maxCenterSpeedSidesPerSecond: 3,
   maxAreaRatio: 3,
+  // OFF by default (strides-p1qt.18): the retroactive stage's own window (same rule, same 0.5 s)
+  // is what fixes the measured failure. Turned on here too it changed nothing on IMG_9345 but
+  // moved multiperson's cadence/VO/VR from normal to caveated, by admitting two partial edge-entry
+  // frames earlier. Kept as a measured, overridable option.
+  shrinkReferenceWindowSeconds: 0,
 }
 
 /**
@@ -78,9 +149,28 @@ export const DEFAULT_CONTINUITY_GATE_CONFIG: ContinuityGateConfig = {
  * feature stays fully disableable via `window.__STRIDES_POSE_BACKEND_OVERRIDE__ =
  * { personOfInterest: { enabled: false } }` for A/B comparison against the pre-existing baseline.
  */
+/**
+ * Reasoned defaults, measured in `openspec/changes/challenge-locked-bystanders/design.md`:
+ * `minAreaRatio: 3` equals the continuity gate's `maxAreaRatio`, so a settled-regime challenger is
+ * by construction someone the steady-state gate would refuse to merge with the anchor. The two
+ * intervals trade reaction time against one extra multi-pose call per interval (sequential sampler:
+ * wall-clock only, no lost frames).
+ */
+export const DEFAULT_IDENTITY_CHALLENGE_CONFIG: IdentityChallengeConfig = {
+  enabled: true,
+  tentativeIntervalFrames: 4,
+  confirmationsToSettle: 3,
+  tentativeMinAreaRatio: 1.5,
+  settledIntervalFrames: 10,
+  minAreaRatio: 3,
+  minConsecutiveWins: 2,
+}
+
 export const DEFAULT_PERSON_OF_INTEREST_CONFIG: PersonOfInterestConfig = {
   enabled: true,
   continuityGate: DEFAULT_CONTINUITY_GATE_CONFIG,
+  identityChallenge: DEFAULT_IDENTITY_CHALLENGE_CONFIG,
+  seedHandOff: true,
 }
 
 /**

@@ -237,3 +237,78 @@ baseline, ear-mid's theoretical advantage had nothing left to add. **Default sta
 decision rule, and the gate-by-gate evaluation are in
 `openspec/changes/widen-keypoints-selectable-vo-signal/design.md`. GitHub issue #30.
 
+
+## Scale-normalized bounce fallback for approaching runners (2026-11-05, `strides-p1qt.1`)
+
+**Problem.** Private `IMG_9349` (front approach; torso ~114 px at the start, ~600 px at the end of
+3.3 s) withheld cadence and VO on both passes ("too irregular"). Hand ground truth is ~182 spm.
+
+**Root cause (live probe; the probe was then reverted).** The shared hip-bounce fit chose the right
+frequency, 3.08 Hz = 184.8 spm, but its partial R² was **0.100** on the primary pass and **0.087** on
+the scale pass, against the 0.30 gate. Two effects compound:
+- The pixel bounce grows ~9× with the approach. Peak-to-peak is 19 px in frames 0–40 and 174 px in
+  frames 160–197; a constant-amplitude sinusoid can't follow that.
+- The quadratic trend can't follow the perspective descent of hip-y (1818 → 2482 px). Its residual
+  misfit is 20–43 px RMS, more than the whole early bounce.
+
+An offline replica, which reproduces the pipeline fit to the digit on all 9 clips, separates the two:
+- Fixing only the trend shape gives 0.39.
+- Fixing both gives 0.73.
+- The shipped series below gives 0.379 (primary) and 0.357 (scale pass).
+
+**Fix.** `fitBounceSpectrum` gains a third pass, run as a last resort. It is consulted only when
+neither the raw in-band fit nor the sub-floor fit was adopted. It searches the in-band grid only,
+against the same gate, on a scale-normalized series:
+- Integrate image-y DELTAS divided by the local torso: `estimateLocalTorsoLengths`, ±0.5 s, the same
+  window view detection uses.
+- Multiply by the clip-median torso, so every consumer of the fit keeps its units.
+
+Adoption is flagged `scaleNormalized`; it is visible as `verticalOscillationFit.scaleNormalized`.
+`verticalRatio` withholds on such a fit rather than mix scales. The metre series
+(`verticalOscillationCm`) never takes this pass. Design and spec:
+`openspec/changes/archive/*-scale-normalized-bounce-fallback/`.
+
+**Window: chosen on principle, not tuned.** The window is ±0.5 s, about one bounce cycle at the
+1.2 Hz band floor. Shorter windows score higher on 9349, so don't "improve" it on this clip:
+
+| half-window (s) | 0.1 | 0.2 | 0.33 | 0.5 | 0.75 | 1.0 |
+|---|---|---|---|---|---|---|
+| 9349 primary R² | 0.492 | 0.469 | 0.437 | **0.379** | 0.291 | 0.244 |
+| 9349 scale R² | 0.474 | 0.450 | 0.414 | **0.357** | 0.271 | 0.232 |
+
+The truncated windowed median lags a monotonic approach at the clip ends, which biases VO up by about
+10% on the synthetic fixture. The alternative is armSwing's log-quadratic trend
+(`resolveScaleStabilizer`). On 9349 it scores better: 0.476 / 183.6 spm. But it also flips
+front-approach's scale pass over the gate (raw 0.279 → 0.337, adopting 188.4 spm), so it would move
+grafted metrics on a public anchor clip. Deferred to a follow-up bead.
+
+**Live gate.** Both arms ran under `/tmp/strides-ab-gate.lock`, `--evidence --scale-pass
+--outline-pass`, fresh process, with 01c4ef04 against the branch:
+- 8 of 9 clips are value-identical (side-landscape, side-portrait, front-approach, multiperson,
+  9345–9348). The only addition is `scaleNormalized:false` wherever a VO fit is reported.
+- On front-approach, the scale pass is the closest call: normalized 0.298 against the 0.30 gate, so
+  it is not adopted.
+
+`IMG_9349`, base → branch:
+
+| metric | primary | scale pass |
+|---|---|---|
+| cadence | null → **184.8** (conf 0.135) | null → **184.8** (conf 0.098) |
+| verticalOscillation | null → 0.171 | null → 0.160 (fit R² 0.357, `scaleNormalized` true) |
+| armSwingAmplitude | null → 0.820 (conf 0.25) | null → 0.732 |
+| stepWidth | 0.198 → 0.233 | 0.246 → 0.331 (stepWidthCm 4.98 → 6.29) |
+| overstriding / footStrikePattern | move (front view: unsuitable, conf ≤ 0.1) | move |
+| verticalRatio | null (now the mixed-scale caveat) | null |
+| outline pass | skipped → done: 8/8 swings inside the outline, conf 0.99 | — |
+
+Every change after the first two rows follows from the fit now clearing the gate:
+- Footstrikes switch from the ankle fallback to the phase path (`strides-cjl`).
+- armSwing gets its frequency anchor.
+- The outline pass gets its swing windows.
+
+⚠️ **The phase-path touchdowns on 9349 land ~8.6 frames (~0.44 of a step) AFTER the hand-marked
+strikes.** This is NOT introduced here: the raw-series phase gives the same offset (+0.41 period).
+On 9347 and 9348 the phase path already lags ground truth by about 3 frames (+0.14 to +0.20 period).
+So 9349's footstrike-derived readings come from late stance, still in ground contact, and its
+outline windows sit late in swing. Tracked as a follow-up bead. The armSwing 0.82 has no ground
+truth to check it against.

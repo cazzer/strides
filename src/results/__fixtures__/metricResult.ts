@@ -191,6 +191,7 @@ export function makeVerticalOscillation(
       sampleCount: SAMPLE_COUNT,
       spanSeconds: SPAN_SECONDS,
       observedCycles: OBSERVED_CYCLES,
+      scaleNormalized: false,
     },
     ...overrides,
     metric: 'verticalOscillation',

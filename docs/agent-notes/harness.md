@@ -151,7 +151,7 @@ In development builds only, `useVideoAnalysis` auto-logs TWO console lines per r
    ALWAYS present (unlike `scaleCalibration`):
    `{ status: 'selected'|'skipped', skipReason, minBoundingBoxAreaPx, totalSamples,
    detectedSamplesIn, detectedSamplesOut, rejectedBelowFloor, rejectedOtherSegment,
-   rejectedOutsideEvidence, segmentCount,
+   rejectedOutsideEvidence, rejectedDiscontinuousBoxless, segmentCount,
    bridgedCuts, segments (ranked by integrated area DESC, capped at 10, `[0]` is the winner),
    separationRatio }` — `src/results/retroactivePersonSelection.ts`.
 
@@ -163,7 +163,16 @@ In development builds only, `useVideoAnalysis` auto-logs TWO console lines per r
    winner's whole back- and forward-extended partition span carrying `status: 'detected'`. Note the
    two windows now DIFFER: `segments[k].startTimestamp`/`endTimestamp` still report the PARTITION
    span, never the evidenced interior, so do not read that span as "the frames that were kept".
-   `detectedSamplesOut` is `detectedSamplesIn` minus all THREE rejection counts.
+   `detectedSamplesOut` is `detectedSamplesIn` minus all FOUR rejection counts.
+
+   **`rejectedDiscontinuousBoxless`** (strides-p1qt.2) counts boxless frames INSIDE that evidenced
+   interior that were nulled because the hull of their confident keypoints is continuous with
+   neither adjacent surviving box (touch, overlap, or within the `maxCenterSpeedSidesPerSecond`
+   bound) — a far spectator's 1-3-point skeleton mid-track, which used to ride through unchecked
+   (private clip IMG_9346: 2 frames, whose hips spiked the hip trace by ~475 px and got cadence +
+   VO withheld). A boxless frame with no confident non-head, non-foot (box-set) keypoint is still
+   kept, including one whose only confident points are head, heel or foot_index. It runs after
+   scoring, so `segments`, `bridgedCuts` and `separationRatio` cannot move with it.
 
    **`bridgedCuts`** (#54) counts how many cuts the splice-tolerance rule DECLINED, because the
    surviving detections either side of an offending one were continuous with each other. It counts
@@ -372,6 +381,12 @@ node scripts/ab-person-selection.mjs \
   the scale-pass graft triggers a correct re-extraction and a second line; see "Take the LAST
   `[evidence-coverage]` line" below. Off by default — the settle wait costs real seconds per
   trial, and with it off the report is byte-identical to what the driver printed before.
+  **When the settle wait gives up** (180 s), the WARNING line names which background lines are
+  missing, the page's state and the last 8 console lines, and the trial gains one row:
+  `harness.pageAtSettleTimeout` = `crashed` (Playwright `crash` event), `unresponsive` (a trivial
+  `page.evaluate` didn't answer in 5 s, so the main thread is frozen) or `live` (the page answers,
+  so the silence is the app's own). A settled trial gets no such row (`strides-p1qt.4`). Before
+  this, a renderer that died mid-trial looked exactly like a pass that hung.
 - Prints the `WEBGL_debug_renderer_info` renderer string once per invocation and **refuses to run**
   on SwiftShader/software rendering rather than quietly producing unrepresentative numbers.
 - Captures `sampling.*`, `view.*`, every metric's `value`/`confidence`, and the whole
@@ -536,6 +551,15 @@ scaffolding in the shipped pipeline between experiments or after concluding one 
 this session followed exactly this cycle (add, measure, revert) rather than accumulating dead
 debug code.
 
+**Private test clips live in a PRIVATE repo, never here.** `fixtures-private/` (gitignored) is a
+clone of the private, LFS-backed `cazzer/strides-fixtures`:
+`git clone https://github.com/cazzer/strides-fixtures.git fixtures-private`. It holds footage of
+people who did not agree to publication. This repo and the Pages site are public, and LFS files in a
+public repo are publicly downloadable, so never commit, LFS-track, bundle or upload these clips
+anywhere else. Clip filenames and measured numbers in notes are fine; frames, crops and pixel
+coordinates are not. Add a new clip with `prep.sh raw/<file>.MOV`, then commit and push it in that
+repo.
+
 **Externally-sourced test clips (Google Drive links, phone recordings).** Google Drive direct-
 download works with plain `curl` for files small enough to skip the virus-scan interstitial —
 `curl -sL -c cookies.txt "https://drive.google.com/uc?export=download&id=<FILE_ID>" -o out.mov`;
@@ -565,3 +589,69 @@ worked example (manual grid-pixel measurement landed close to, and in two cases 
 app's own calculated hip-bounce figures, which was evidence *against* the hip signal being
 noisy/inflated).
 
+
+### Android phone runs (`--android`, strides-p1qt, 2026-11-05)
+
+`node scripts/ab-person-selection.mjs --android [serial] ...` drives an adb-attached phone's Chrome
+(doc block at the top of the driver for the mechanics). Things that cost time to learn:
+- **Phone runs are deterministic too**, in every non-timing field, across fresh processes. They are
+  NOT the desktop's values: on the S21 (Adreno 660) every clip differs from the M4 Pro, including
+  withholding flips (`android-report.md` in the second-runner baseline under `fixtures-private/`). Don't compare phone and
+  desktop rows as if one were a noisy copy of the other.
+- **Why phone ≠ desktop (strides-p1qt.16, measured stage by stage on front-approach with a
+  throwaway probe page; HLG 9348 and an SDR transcode agree):** the first stage that differs is the
+  **decoded frame itself**. The S21's hardware decoder hands WebCodecs an already-converted `RGBA`
+  frame (desktop: `NV12`), so YUV→RGB and HLG→SDR happen in the Android media/GPU stack. Drawn
+  canvas pixels then differ on ~30% of channels, mostly by 1–3 levels, and the phone is darker by
+  0.37/0.18/0.07 levels (R/G/B) on average. Everything downstream follows. What was ruled out:
+  - **GPU math is not it.** Fed desktop's exact MoveNet input tensors, the phone's outputs differ
+    by ≤2.2e-6 (<0.001 source px). TFJS flags match apart from timer/flush/max-texture-size; both
+    have highp = fp32 (but fragment `mediump` is fp16 on Adreno, fp32 on Apple; see MediaPipe below).
+  - **The decoder is not it either.** With `hardwareAcceleration: 'prefer-software'` (supported on
+    the S21) the phone's I420 bytes are bit-identical to desktop's software decode and to ffmpeg.
+    But `drawImage(frame)` of those identical bytes still differs by the same darkening: the
+    colour conversion inside Chrome's canvas draw is device-dependent.
+  - **SDR shows it too**, smaller: 17% of channels, mostly ±1, mean −0.095 on R.
+  - **The gap is the pipeline's own sensitivity, not a phone defect.** Same desktop, decoder
+    swapped (`--decoder-hint prefer-software`, which moves the drawn pixels by ~0.005 levels): just as many
+    metrics move, and withholding flips too (9346 cadence 176→72; front-approach kneeFlexion
+    106→159; side-landscape VO 0.154→0.237). Per-keypoint, desktop HW vs SW is p50 0.98 px on a
+    3840-px frame; desktop vs phone is p50 1.26 px.
+  - **Bit-parity is achievable:** software-decode, then convert I420→sRGB with integer/LUT math
+    instead of `drawImage`, and the drawn pixels match exactly on both devices (99/99 frames). The
+    keypoint gap drops to p50 0.02 px. What is left comes from TFJS's GPU `cropAndResize`
+    (bilinear in float, then truncated to int), about 24 of 110,592 input values off by 1. The JS
+    converter costs 96 ms per 4K frame on desktop and 423 ms on the S21, so it is a proof, not a
+    candidate (`bd human` on strides-p1qt.16).
+  - `VideoFrame.copyTo({format:'RGBA', colorSpace:'srgb'})` is not a shortcut: ~700 ms per 4K
+    frame on desktop, and its output depends on the decoder format.
+  - Decode itself is cheap on the phone either way: decode+draw 17.2 ms/frame HW, 14.9 SW (4K 9348).
+- MediaPipe (scale and outline passes) logs `GL_INVALID_OPERATION` / `program not valid` on Adreno
+  only; desktop logs none. **Cause:** one of the GPU delegate's ~82 programs fails to link on
+  Adreno, with an empty info log. It is a 4-output (MRT) bilinear-resize-plus-add kernel. Every
+  draw with it then errors (`missing fragment shader outputs`). The rest of the graph still runs:
+  landmarks are produced, and on front-approach the phone's GPU landmarks agree with its CPU
+  delegate better (27–90 px) than desktop's GPU does with desktop's CPU (150–416 px, VIDEO mode).
+  The GPU delegate also computes in `mediump`, which is genuinely fp16 on Adreno.
+  **The segmentation masks are what breaks** (IMAGE mode with masks, the outline pass's setup, full
+  frames every 10th, front-approach and 9348). On the S21 the GPU mask's foreground fraction is
+  14–52% against 1–12% from the CPU delegate on the same frame, with GPU-vs-CPU IoU 0.06–0.26. On
+  desktop the same comparison gives IoU 0.77–0.98. **So the outline pass is invalid on this phone.** It now fails closed there (strides-p1qt.22, `swing-foot-travel.md`).
+  The scale pass's landmarks are not visibly affected: hip/knee/ankle GPU-vs-CPU gaps are about the
+  same size on both devices. On the baseline clips `swingFootLateralExcursion` is withheld on the
+  phone and desktop alike, so no user-visible number came from a bad mask there.
+- **A sibling worktree under `.claude/worktrees/` running `vite build` full-reloaded the page**
+  mid-analysis (vite `page reload .claude/worktrees/<x>/dist/index.html`). `vite.config.ts` now ignores
+  that path. A 30–45 s phone trial is far more exposed than a 4 s desktop one.
+- **A wedged phone renderer used to hang the driver forever.** Playwright's `page.evaluate` has no
+  timeout, so a renderer main thread spinning in native code (the CPU-delegate abort in
+  strides-p1qt.22) blocked the page-loss check, and the 900 s trial timeout was never re-checked
+  (41-minute hang). Every phone-page `evaluate` and the tab close now race a 5 s timer. Diagnose a
+  wedge with raw CDP on the page's `webSocketDebuggerUrl`: `connectOverCDP` itself hangs on a wedged
+  target. Then `adb shell top -H -p <renderer pid>`: a 100% main thread with no answer to
+  `Debugger.pause` means native code.
+- Don't detect a lost page by counting `framenavigated` (the app's History API rewrites fire it) or
+  `domcontentloaded` (races the new tab's about:blank). The driver checks its own per-document probe.
+- Clips go over CDP as buffers (~1 MB/s on wireless adb; 38 MB takes ~48 s), so `elapsedMs` starts after
+  the upload. Every 4K trial heats the battery to ~36 °C / thermal status 1, and the driver waits
+  60–160 s between trials to cool.

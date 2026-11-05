@@ -341,6 +341,7 @@ describe('fuseFormHeuristicsResults', () => {
       sampleCount: 50,
       spanSeconds: 2,
       observedCycles: 3,
+      scaleNormalized: false,
     }
     const series = [{ timestamp: 0, value: 0.1 }]
     const clip0 = makeResult(0.2)
