@@ -131,7 +131,8 @@ test('at 390 px only the page scrolls, in every results view', async ({ page }) 
   await expect(save).toBeEnabled({ timeout: 90_000 })
   await expectPageOnlyScroll(page, 'save panel, ready')
   await save.click()
-  await expect(save).toBeHidden({ timeout: 90_000 })
+  // The button leaves as soon as the save starts; the index is written only at the end.
+  await page.getByText(/^Saved to Test storage/).waitFor({ timeout: 90_000 })
   await expectPageOnlyScroll(page, 'save panel, saved')
 
   // The progress page.
