@@ -26,7 +26,9 @@ What this changes for anything driving or reading the app:
   Session status stays a single announced line.
 - **The in-body "Add another clip" block is gone**, replaced by an add-a-clip action in the header
   (`AddClipAction.tsx`), an in-flow disclosure that grows the header downward rather than an
-  overlay. Asserted structurally: once a clip is loaded, `main` contains no `input[type=file]` and
+  overlay. Since `strides-jet8` it has no height cap or scroll of its own: the header is `static`
+  while it is open (`has-[#add-clip-panel]:static`), the header-height property reads 0 then, and
+  opening it scrolls its trigger into view. Asserted structurally: once a clip is loaded, `main` contains no `input[type=file]` and
   no text matching `/add (another|a) clip/i`.
 - **Recording and demo clips are now reachable for clips 2..N** — they were not. Every `addClip`
   records a `pendingLoad`, so the new slot's own picker (gated on `status === 'empty'`) never

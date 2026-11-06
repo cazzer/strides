@@ -93,7 +93,8 @@ const TOUR_BAR_ROW_ACTIONS_CLASS = 'flex min-w-0 flex-1 items-start justify-betw
  *   translucent surface;
  * - `--rt-clear`: the top of the floor that no panel covers at rest (85% of it). The camera centres
  *   its target (the focus body part) in the drawing and the focus parts reach no lower than that,
- *   so the panel's height is capped to leave it clear (`TOUR_PANEL_CLASS`);
+ *   so each stop's slot is padded at its top to leave it clear (`TOUR_STOP_CLASS`) and a longer
+ *   panel runs on below the fold rather than over it;
  * - `--rt-reserve`: how much of the bottom of the viewport the active stop's panel covers at rest.
  *   The drawing stops above it whenever that still leaves it its floor, so the camera's target sits
  *   in the uncovered part. Measured (`usePanelReserveProperty`); the value here is the fallback.

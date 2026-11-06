@@ -2,8 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { ClipPicker } from './ClipPicker'
 
-/** Ties the trigger's `aria-controls` to the region it reveals. */
-const PANEL_ID = 'add-clip-panel'
+/**
+ * Ties the trigger's `aria-controls` to the region it reveals. Also how the header knows the panel
+ * is open (`has-[#add-clip-panel]:static` and `useHeaderHeightProperty` in
+ * `MultiClipVideoSession`): while it is, the header is not sticky.
+ */
+export const ADD_CLIP_PANEL_ID = 'add-clip-panel'
+const PANEL_ID = ADD_CLIP_PANEL_ID
 
 export interface AddClipActionProps {
   /**
@@ -47,6 +52,13 @@ export interface AddClipActionProps {
  *
  * The strip's own row is unchanged, so opening this grows the header downward and pushes `<main>`
  * down; it never paints over the row above.
+ *
+ * ### Why the panel is not capped
+ *
+ * It has no height cap and no scroll of its own (`strides-jet8`: only the page scrolls). A sticky
+ * header taller than the screen would hide the picker's end for good, so the header stops sticking
+ * while the panel is open (`MultiClipVideoSession`), and opening the panel brings the trigger back
+ * into view, since a header that has just stopped sticking is at the top of the page.
  */
 export function AddClipAction({ onSource, openRequest = 0 }: AddClipActionProps) {
   const [isOpen, setIsOpen] = useState(false)
@@ -81,6 +93,12 @@ export function AddClipAction({ onSource, openRequest = 0 }: AddClipActionProps)
     triggerRef.current?.focus()
     triggerRef.current?.scrollIntoView?.({ block: 'nearest' })
   }, [handledOpenRequest, mountOpenRequest])
+
+  // The header stops sticking as the panel opens, so a reader who opened it part-way down the page
+  // would otherwise be left looking at the results with the picker above the fold.
+  useEffect(() => {
+    if (isOpen) triggerRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [isOpen])
 
   useEffect(() => {
     if (isOpen || !shouldReturnFocusRef.current) return
@@ -133,8 +151,8 @@ export function AddClipAction({ onSource, openRequest = 0 }: AddClipActionProps)
           // `basis-full` is what puts this on its own line under the strip (the header row is
           // `flex-wrap`); the strip itself is `flex-1`, i.e. `flex-basis: 0`, so it never
           // contributes to that wrap decision and never gets pushed off its own line by this.
-          // Capped and scrollable so a tall picker cannot grow the sticky header without bound.
-          className="basis-full max-h-[60vh] overflow-y-auto border-t-2 border-black dark:border-white pt-4"
+          // Not capped: the header stops sticking while this is open, so the page scrolls past it.
+          className="basis-full border-t-2 border-black dark:border-white pt-4"
         >
           {/* `ClipPicker` returns a fragment and inherits its host's vertical rhythm, so the
               spacing lives here — the same `space-y-4` the full-page presentation applies. The

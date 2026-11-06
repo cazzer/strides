@@ -543,9 +543,13 @@ Change: `openspec/changes/slow-knees-and-draw-vertical-ratio` (design D1–D8).
   both would make a single stacking context, so the runner could not sit under the panels while
   its controls sit over them. The drawing is inset by `--rt-reserve` (the active panel's measured
   height) but never below its floor `--rt-draw-min` = `max(40svh, 200px)`; a longer panel overlaps
-  the drawing's bottom and is capped (`max-h`, scrolls inside) to leave the top 85% of the floor
+  the drawing's bottom, its top at rest held at the line that leaves the top 85% of the floor
   (`--rt-clear`) uncovered: the focus joints measured live reach 74–82% of the drawing's height,
-  posture lowest (`strides-xsl3`). The document snaps (`y proximity`) to slot ends except the first.
+  posture lowest (`strides-xsl3`). **No panel is capped or scrolls inside itself** (`strides-jet8`):
+  the line is the slot's top padding (`--rt-draw-top + --rt-clear`), so a long panel grows its slot
+  past the screen and is read by scrolling the page. The document snaps (`y proximity`) to slot
+  STARTS (under the bar, via `scroll-mt`) except the first; for a slot exactly one screen tall that
+  is the old slot-end position. Guarded by `noInnerScroll.test.ts` and `e2e/phonePageScroll.spec.ts`.
 - **A short phone (< 64rem wide, ≤ 720 px tall, `useShortPhoneLayout`) has no separate control
   row.** The dots and Skip render in a sticky row that is a cell of the BODY's grid (the bar keeps
   only the sr-only heading, 0 px), and the runner's controls are laid over that row's start
@@ -599,3 +603,19 @@ summary → open the first row and wait for its evidence canvas → Classic tabl
   at 375×548/600/667 and 390×844, focus above the panel; the panel window at 375×548 is 96 px
   (scrolls inside) until `strides-pmvo` slims the 200 px session header.
 - Screenshots: `trn26-*.png` in the trn2.6 session scratchpad (not committed).
+
+## Page-only scroll on phones, 2026-11-05 (`strides-jet8`, change `page-scroll-only-panels`)
+
+Before (45b35bca, 390×844, 3-clip demo, real GPU): six of seven stop panels scrolled inside a 229 px
+cap (content 238–344 px), and the header's add-a-clip panel inside a 506 px cap (528 px; "Demo (3
+clips)" cut off). Summary, guided cards, classic, save panel and progress had no inner scroller.
+
+After: none anywhere at 390×844, 375×548, 375×667, 360×740, 430×932 or 1280×800; no sideways page
+scroll. Panel top at rest is unchanged (390×844: 603 px; 375×548: 444 px = the clear line); a long
+panel now continues below the fold (375×548 shows ~104 px of it at rest). The header is `static`
+while add-a-clip is open, and `--motion-story-header-height` reads 0 then (user decision).
+
+⚠️ A 60 px wheel/drag nudge on a stop snaps back to the same stop under `y proximity`: that is the
+snap, not an inner scroll. The e2e uses a 400 px swipe and also asserts no element's `scrollTop`
+moved. This supersedes the "panel window … (scrolls inside)" lines in the `strides-trn2.6`,
+`strides-xki9` and `strides-xsl3` entries above.

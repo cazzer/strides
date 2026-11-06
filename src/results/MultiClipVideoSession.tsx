@@ -13,7 +13,7 @@ import {
 import type { RefObject } from 'react'
 import type { PoseDetector } from '../pose/detector'
 import type { ModelLoadStates } from '../pose/modelLoadState'
-import { AddClipAction } from '../video/AddClipAction'
+import { ADD_CLIP_PANEL_ID, AddClipAction } from '../video/AddClipAction'
 import { ClipLoadStatus } from '../video/ClipLoadStatus'
 import { ClipPicker } from '../video/ClipPicker'
 import { releaseClipPoster } from '../video/posterFrame'
@@ -64,6 +64,10 @@ const NO_EVIDENCE: readonly EvidenceSection[] = []
  * every card. On `<main>` rather than on the stage, because the stage renders beside the classic
  * view only; set there, every other view's scroll targets would fall back to the 88 px guess and
  * land under a header that is often taller.
+ *
+ * It is the header's STUCK height: 0 while the add-a-clip panel is open, because the header is not
+ * sticky then (`AddClipAction`), and an offset of its full height would leave that much of a gap
+ * above every sticky element once the header has scrolled away.
  */
 function useHeaderHeightProperty(
   headerRef: RefObject<HTMLElement | null>,
@@ -74,9 +78,10 @@ function useHeaderHeightProperty(
     const main = mainRef.current
     if (!header || !main) return
     const update = () => {
+      const stuck = !header.querySelector(`#${ADD_CLIP_PANEL_ID}`)
       main.style.setProperty(
         '--motion-story-header-height',
-        `${Math.ceil(header.getBoundingClientRect().height)}px`,
+        `${stuck ? Math.ceil(header.getBoundingClientRect().height) : 0}px`,
       )
     }
     update()
@@ -620,7 +625,7 @@ export function MultiClipVideoSession({ detector, modelLoad }: MultiClipVideoSes
 
   return (
     <>
-      <header ref={headerRef} className="sticky top-0 z-10 border-b-2 border-black dark:border-white bg-white dark:bg-black px-4 sm:px-6 py-4">
+      <header ref={headerRef} className="sticky top-0 z-10 has-[#add-clip-panel]:static border-b-2 border-black dark:border-white bg-white dark:bg-black px-4 sm:px-6 py-4">
         {/*
           `flex-wrap` exists for the add-a-clip panel and nothing else: it is the one item allowed
           to take a line of its own (`basis-full`), which is what keeps it BELOW the strip instead

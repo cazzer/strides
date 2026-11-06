@@ -412,7 +412,7 @@ export function MetricsPanel({
   // tier 2 alike, with the caveated share reported parenthetically INSIDE it.
   const measuredCount = metrics.length - excluded.length
 
-  // One quiet line so a user who never scrolls the (height-capped) results pane still learns
+  // One quiet line so a user who never scrolls down the results still learns
   // that some metrics carry caveats or were excluded — the deleted LowConfidenceBanner's one
   // real job. Rendered only when there's something to say; an all-normal run stays clean.
   // "With caveats" now spans the whole sub-0.7 confidence range, since the caveated tier lost
