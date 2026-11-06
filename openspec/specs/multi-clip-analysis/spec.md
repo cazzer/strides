@@ -263,9 +263,10 @@ The strip SHALL remain usable when the session holds more clips than fit the hea
 scrolling within its own bounds rather than by wrapping the header onto additional lines or
 overflowing the page.
 
-Any layout offset derived from the header's height — sticky positioning, height caps on scrolling
-regions — SHALL track the header's actually-rendered height, including the difference between a
-header with a clip strip and one without, rather than a hardcoded pixel constant.
+Any layout offset derived from the header's height — sticky positioning, scroll margins — SHALL
+track the height the header actually occupies while stuck, including the difference between a
+header with a clip strip and one without, rather than a hardcoded pixel constant; while the header
+is not sticky (the add-a-clip panel is open) that height is 0.
 
 #### Scenario: One entry per clip, in fusion order
 
@@ -291,7 +292,8 @@ header with a clip strip and one without, rather than a hardcoded pixel constant
 
 #### Scenario: Layout offsets follow the header's real height
 
-- **WHEN** the header's height changes because the clip strip appears, disappears, or changes size
+- **WHEN** the header's height changes because the clip strip appears, disappears, or changes size,
+  or the header stops or starts sticking as the add-a-clip panel opens or closes
 - **THEN** every layout offset derived from the header height follows it, with no stale gap or
   overlap at any viewport width
 

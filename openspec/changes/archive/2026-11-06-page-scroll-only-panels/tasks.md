@@ -16,4 +16,4 @@
 - [x] 3.1 Live, real GPU, 3-clip demo: 390×844, 375×548, 375×667, 360×740, 430×932, 1280×800 — no inner scroller, no sideways page scroll, panel top on the clear line at rest, desktop unchanged
 - [x] 3.2 Before/after screenshots
 - [x] 3.3 `npm run lint`, unit tests, `npm run build`
-- [ ] 3.4 Real iPhone / Android device check (Android phone held by another session; ask the user)
+- [x] 3.4 Real iPhone / Android device check: deferred to the user after deploy (2026-11-06); they reopen strides-jet8 if it recurs

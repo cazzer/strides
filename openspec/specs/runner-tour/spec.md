@@ -267,9 +267,10 @@ and over every colour the runner paints with, in light and dark. The runner's dr
 least `max(40svh, 200px)` tall at every stop (or the whole stage, if that is less) and SHALL NOT be
 shrunk below that to make room for a panel. It SHALL be framed above the active stop's panel as
 measured at rest when that leaves it its floor; otherwise the panel SHALL overlap the drawing's
-bottom on its translucent surface, its height capped so the top 85% of the floor stays uncovered at
-rest (but never below 6rem), and a longer panel SHALL scroll inside itself; while it does, it SHALL
-be focusable, named by its stop's heading and show a focus ring, so the keyboard can scroll it.
+bottom on its translucent surface, its top at rest no higher than the line that leaves the top 85%
+of the floor uncovered. A panel SHALL NOT have a height cap or a scroll area of its own: a panel
+taller than the room below that line SHALL continue below the screen's foot and be read by
+scrolling the page, which SHALL be able to bring its end on screen and leave it there.
 Either way, on a viewport at least 500 px tall, the camera's target, the focus body part, SHALL be
 visible above the panel at rest, and the landing stop's feet sit above its panel. Except on a short
 phone, the runner's controls (Skip intro while the intro runs, and Pause or Play) SHALL stay stuck
@@ -281,7 +282,8 @@ dots, Skip), and Pause MAY show its icon alone, keeping its accessible name. The
 SHALL be visually hidden, remaining its entry point, so that, except on a short phone, the bar is
 one row of progress dots and Skip. The stop the runner shows SHALL be the stop at rest: the reading
 line SHALL NOT sit above the bottom of the stuck bar. A scroll SHALL settle, by proximity snapping,
-with a stop's panel at rest and the runner clear above it; the first stop SHALL NOT be a snap
+with a stop's panel at rest and the runner clear above it (a stop taller than the screen settles
+with its start under the tour's bar); the first stop SHALL NOT be a snap
 point, so the page never moves on its own as the tour appears and its top stays reachable. The tour
 SHALL NOT scroll horizontally at widths from 360 to 430 px.
 
@@ -308,6 +310,13 @@ the move.
 - **WHEN** the tour renders at 375×548 and a stop's panel is at rest
 - **THEN** the drawing is at least 40% of the viewport's height, the stop's focus body part is
   above the panel, and that stop is the one the runner shows
+
+#### Scenario: A panel taller than the room below the runner
+
+- **WHEN** the tour renders at 390×844 and a stop's panel is taller than the room below the line
+  that keeps the top 85% of the drawing's floor uncovered
+- **THEN** at rest the panel's top is on that line, the panel has no scroll of its own, a swipe that
+  starts on the panel moves the page, and scrolling the page brings the panel's end on screen
 
 #### Scenario: Crossing the breakpoint
 

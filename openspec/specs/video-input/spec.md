@@ -266,6 +266,10 @@ indistinguishable downstream from the first.
 The action SHALL be keyboard reachable and carry an accessible name stating what it does. No
 add-a-clip affordance SHALL remain in the page body.
 
+The panel the action opens SHALL NOT have a height cap or a scroll area of its own. While it is
+open the header SHALL NOT be sticky, so the page scrolls past a picker of any height, and opening it
+SHALL bring the action into view; the header SHALL stick again once the panel closes.
+
 #### Scenario: An empty session shows the full picker
 
 - **WHEN** the session holds no loaded clip
@@ -289,6 +293,12 @@ add-a-clip affordance SHALL remain in the page body.
 - **WHEN** the reader navigates the header by keyboard
 - **THEN** the add-a-clip action can be reached and activated, and exposes an accessible name saying
   it adds a clip
+
+#### Scenario: A tall picker is read by scrolling the page
+
+- **WHEN** the reader opens the add-a-clip panel at 390 px wide, part-way down the results
+- **THEN** the action is on screen, the panel has no scroll of its own, the header is not sticky,
+  and scrolling the page brings the panel's end on screen
 
 ### Requirement: One transient video decoder across every feature that opens one
 
